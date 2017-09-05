@@ -53,6 +53,8 @@
 #include <unistd.h>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/is_sorted.hpp>
+#include "test_services.hh"
 
 using namespace sstables;
 
@@ -1648,6 +1650,8 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 SEASTAR_TEST_CASE(test_counter_write) {
     return test_setup::do_with_test_directory([] {
         return seastar::async([] {
+            storage_service_for_tests ssft;
+
             auto s = schema_builder(some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
@@ -3764,4 +3768,78 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
+        // CREATE TABLE IF NOT EXISTS scylla_bench.test_counters (
+        //     pk bigint,
+        //     ck bigint,
+        //     c1 counter,
+        //     c2 counter,
+        //     c3 counter,
+        //     c4 counter,
+        //     c5 counter,
+        //     PRIMARY KEY(pk, ck)
+        // ) WITH compression = { }
+        //
+        // Populated with:
+        // scylla-bench -mode counter_update -workload uniform -duration 15s
+        //      -replication-factor 3 -partition-count 2 -clustering-row-count 4
+        // on a three-node Scylla 1.7.4 cluster.
+        return seastar::async([] {
+            auto s = schema_builder("scylla_bench", "test_counters")
+                    .with_column("pk", long_type, column_kind::partition_key)
+                    .with_column("ck", long_type, column_kind::clustering_key)
+                    .with_column("c1", counter_type)
+                    .with_column("c2", counter_type)
+                    .with_column("c3", counter_type)
+                    .with_column("c4", counter_type)
+                    .with_column("c5", counter_type)
+                    .build();
+
+            auto sst = make_lw_shared<sstable>(s, "tests/sstables/wrong_counter_shard_order", 2, sstables::sstable::version_types::ka, big);
+            sst->load().get0();
+            auto reader = sstable_reader(sst, s);
+
+            auto verify_row = [] (mutation_fragment_opt mfopt, int64_t expected_value) {
+                BOOST_REQUIRE(bool(mfopt));
+                auto& mf = *mfopt;
+                BOOST_REQUIRE(mf.is_clustering_row());
+                auto& row = mf.as_clustering_row();
+                size_t n = 0;
+                row.cells().for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
+                    auto acv = ac_o_c.as_atomic_cell();
+                    auto ccv = counter_cell_view(acv);
+                    counter_shard_view::less_compare_by_id cmp;
+                    BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp), ccv << " is expected to be sorted");
+                    BOOST_REQUIRE_EQUAL(ccv.total_value(), expected_value);
+                    n++;
+                });
+                BOOST_REQUIRE_EQUAL(n, 5);
+            };
+
+            {
+                auto smopt = reader().get0();
+                BOOST_REQUIRE(smopt);
+                auto& sm = *smopt;
+                verify_row(sm().get0(), 28545);
+                verify_row(sm().get0(), 27967);
+                verify_row(sm().get0(), 28342);
+                verify_row(sm().get0(), 28325);
+                BOOST_REQUIRE(!sm().get0());
+            }
+
+            {
+                auto smopt = reader().get0();
+                BOOST_REQUIRE(smopt);
+                auto& sm = *smopt;
+                verify_row(sm().get0(), 28386);
+                verify_row(sm().get0(), 28378);
+                verify_row(sm().get0(), 28129);
+                verify_row(sm().get0(), 28260);
+                BOOST_REQUIRE(!sm().get0());
+            }
+
+            BOOST_REQUIRE(!reader().get0());
+        });
 }

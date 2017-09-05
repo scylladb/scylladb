@@ -36,6 +36,10 @@ class counter_id {
     int64_t _least_significant;
     int64_t _most_significant;
 public:
+    static_assert(std::is_same<decltype(std::declval<utils::UUID>().get_least_significant_bits()), int64_t>::value
+            &&  std::is_same<decltype(std::declval<utils::UUID>().get_most_significant_bits()), int64_t>::value,
+        "utils::UUID is expected to work with two signed 64-bit integers");
+
     counter_id() = default;
     explicit counter_id(utils::UUID uuid) noexcept
         : _least_significant(uuid.get_least_significant_bits())
@@ -49,12 +53,20 @@ public:
     bool operator<(const counter_id& other) const {
         return to_uuid() < other.to_uuid();
     }
+    bool operator>(const counter_id& other) const {
+        return other.to_uuid() < to_uuid();
+    }
     bool operator==(const counter_id& other) const {
         return to_uuid() == other.to_uuid();
     }
     bool operator!=(const counter_id& other) const {
         return !(*this == other);
     }
+public:
+    // (Wrong) Counter ID ordering used by Scylla 1.7.4 and earlier.
+    struct less_compare_1_7_4 {
+        bool operator()(const counter_id& a, const counter_id& b) const;
+    };
 public:
     static counter_id local();
 
@@ -139,6 +151,22 @@ private:
     static void write(const T& value, bytes::iterator& out) {
         out = std::copy_n(reinterpret_cast<const signed char*>(&value), sizeof(T), out);
     }
+private:
+    // Shared logic for applying counter_shards and counter_shard_views.
+    // T is either counter_shard or basic_counter_shard_view<U>.
+    template<typename T>
+    GCC6_CONCEPT(requires requires(T shard) {
+        { shard.value() } -> int64_t;
+        { shard.logical_clock() } -> int64_t;
+    })
+    counter_shard& do_apply(T&& other) noexcept {
+        auto other_clock = other.logical_clock();
+        if (_logical_clock < other_clock) {
+            _logical_clock = other_clock;
+            _value = other.value();
+        }
+        return *this;
+    }
 public:
     counter_shard(counter_id id, int64_t value, int64_t logical_clock) noexcept
         : _id(id)
@@ -163,12 +191,11 @@ public:
     }
 
     counter_shard& apply(counter_shard_view other) noexcept {
-        auto other_clock = other.logical_clock();
-        if (_logical_clock < other_clock) {
-            _logical_clock = other_clock;
-            _value = other.value();
-        }
-        return *this;
+        return do_apply(other);
+    }
+
+    counter_shard& apply(const counter_shard& other) noexcept {
+        return do_apply(other);
     }
 
     static size_t serialized_size() {
@@ -183,6 +210,9 @@ public:
 
 class counter_cell_builder {
     std::vector<counter_shard> _shards;
+    bool _sorted = true;
+private:
+    void do_sort_and_remove_duplicates();
 public:
     counter_cell_builder() = default;
     counter_cell_builder(size_t shard_count) {
@@ -191,6 +221,21 @@ public:
 
     void add_shard(const counter_shard& cs) {
         _shards.emplace_back(cs);
+    }
+
+    void add_maybe_unsorted_shard(const counter_shard& cs) {
+        add_shard(cs);
+        if (_sorted && _shards.size() > 1) {
+            auto current = _shards.rbegin();
+            auto previous = std::next(current);
+            _sorted = current->id() > previous->id();
+        }
+    }
+
+    void sort_and_remove_duplicates() {
+        if (!_sorted) {
+            do_sort_and_remove_duplicates();
+        }
     }
 
     size_t serialized_size() const {
@@ -338,6 +383,9 @@ public:
 
 struct counter_cell_view : basic_counter_cell_view<bytes_view> {
     using basic_counter_cell_view::basic_counter_cell_view;
+
+    // Returns counter shards in an order that is compatible with Scylla 1.7.4.
+    std::vector<counter_shard> shards_compatible_with_1_7_4() const;
 
     // Reversibly applies two counter cells, at least one of them must be live.
     // Returns true iff dst was modified.

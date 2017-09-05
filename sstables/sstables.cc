@@ -1456,11 +1456,20 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         for (auto i = 0u; i < shard_count; i++) {
             write<int16_t>(out, std::numeric_limits<int16_t>::min() + i);
         }
-        for (auto&& s : ccv.shards()) {
+        auto write_shard = [&] (auto&& s) {
             auto uuid = s.id().to_uuid();
             write(out, int64_t(uuid.get_most_significant_bits()),
                   int64_t(uuid.get_least_significant_bits()),
                   int64_t(s.logical_clock()), int64_t(s.value()));
+        };
+        if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
+            for (auto&& s : ccv.shards()) {
+                write_shard(s);
+            }
+        } else {
+            for (auto&& s : ccv.shards_compatible_with_1_7_4()) {
+                write_shard(s);
+            }
         }
 
         _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());

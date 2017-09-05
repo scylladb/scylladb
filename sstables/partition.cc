@@ -438,8 +438,9 @@ public:
             auto id_lo = in.read<int64_t>();
             auto clock = in.read<int64_t>();
             auto value = in.read<int64_t>();
-            ccb.add_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
+            ccb.add_maybe_unsorted_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
         }
+        ccb.sort_and_remove_duplicates();
         return ccb.build(timestamp);
     }
 
