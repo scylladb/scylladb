@@ -90,6 +90,8 @@ public:
 
     std::vector<session_info> get_all_session_info();
     std::vector<session_info> get_peer_session_info(inet_address peer);
+
+    void abort_all_stream_sessions();
 };
 
 } // namespace streaming

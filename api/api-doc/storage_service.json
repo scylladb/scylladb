@@ -953,6 +953,22 @@
          ]
       },
       {
+         "path":"/storage_service/force_terminate_repair",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force terminate all repair sessions",
+               "type":"void",
+               "nickname":"force_terminate_all_repair_sessions_new",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/decommission",
          "operations":[
             {

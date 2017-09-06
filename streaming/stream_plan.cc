@@ -72,12 +72,20 @@ future<stream_state> stream_plan::execute() {
         stream_state state(_plan_id, _description, std::vector<session_info>());
         return make_ready_future<stream_state>(std::move(state));
     }
+    if (_aborted) {
+        throw std::runtime_error(sprint("steam_plan %s is aborted", _plan_id));
+    }
     return stream_result_future::init_sending_side(_plan_id, _description, _handlers, _coordinator);
 }
 
 stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers) {
     std::copy(handlers.begin(), handlers.end(), std::back_inserter(_handlers));
     return *this;
+}
+
+void stream_plan::abort() {
+    _aborted = true;
+    _coordinator->abort_all_stream_sessions();
 }
 
 }

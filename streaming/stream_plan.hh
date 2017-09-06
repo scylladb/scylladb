@@ -68,6 +68,7 @@ private:
     std::vector<stream_event_handler*> _handlers;
     shared_ptr<stream_coordinator> _coordinator;
     bool _range_added = false;
+    bool _aborted = false;
 public:
 
     /**
@@ -142,6 +143,8 @@ public:
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
     future<stream_state> execute();
+
+    void abort();
 };
 
 } // namespace streaming

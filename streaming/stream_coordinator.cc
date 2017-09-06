@@ -96,6 +96,12 @@ std::set<inet_address> stream_coordinator::get_peers() {
     return results;
 }
 
+void stream_coordinator::abort_all_stream_sessions() {
+    for (auto& session : get_all_stream_sessions()) {
+        session->abort();
+    }
+}
+
 void stream_coordinator::connect_all_stream_sessions() {
     for (auto& x : _peer_sessions) {
         auto& session = x.second;
