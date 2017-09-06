@@ -1148,14 +1148,14 @@ SEASTAR_TEST_CASE(test_user_type) {
 //
 SEASTAR_TEST_CASE(test_duration_restrictions) {
     auto validate_request_failure = [] (cql_test_env& env, const sstring& request, const sstring& expected_message) {
-        BOOST_REQUIRE_EXCEPTION(env.execute_cql(request).get(),
-                                exceptions::invalid_request_exception,
-                                [&expected_message](auto &&ire) {
-                                    BOOST_REQUIRE_EQUAL(expected_message, ire.what());
-                                    return true;
-                                });
-
-        return make_ready_future<>();
+        return futurize_apply([&] { return env.execute_cql(request); }).then_wrapped([expected_message] (auto f) {
+            BOOST_REQUIRE_EXCEPTION(f.get(),
+                exceptions::invalid_request_exception,
+                [&expected_message](auto &&ire) {
+                    BOOST_REQUIRE_EQUAL(expected_message, ire.what());
+                    return true;
+                });
+        });
     };
 
     return do_with_cql_env([&] (cql_test_env& env) {
