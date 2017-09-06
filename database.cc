@@ -1103,7 +1103,10 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                     auto gen = cf.calculate_generation_for_new_table();
 
                     // Read toc content as it will be needed for moving and deleting a sstable.
-                    return sst->read_toc().then([sst] {
+                    return sst->read_toc().then([sst, s = cf.schema()] {
+                        if (s->is_counter() && !sst->has_scylla_component()) {
+                            return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
+                        }
                         return sst->mutate_sstable_level(0);
                     }).then([&cf, sst, gen] {
                         return sst->create_links(cf._config.datadir, gen);
