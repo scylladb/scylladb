@@ -342,9 +342,7 @@ public:
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
-            try {
-                env.local_db().find_keyspace(ks_name);
-            } catch (const no_such_keyspace&) {
+            if (!env.local_db().has_keyspace(ks_name)) {
                 env.create_keyspace(ks_name).get();
             }
 
