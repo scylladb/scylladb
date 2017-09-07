@@ -1,6 +1,7 @@
 #!/usr/bin/stap
 
-# usage: stap scylla_row_cache_report.stp <scylla binary>
+# usage: stap -c <cmd> scylla_row_cache_report.stp
+#    or: stap -x <pid> scylla_row_cache_report.stp
 #
 global batch_start_time
 global batch_latencies;
@@ -10,11 +11,11 @@ global start_time
 global latencies;
 
 
-probe process(@1).mark("row_cache_update_one_batch_start") {
+probe process.mark("row_cache_update_one_batch_start") {
     batch_start_time[tid()] = gettimeofday_ns()
 }
 
-probe process(@1).mark("row_cache_update_one_batch_end") {
+probe process.mark("row_cache_update_one_batch_end") {
     if (batch_start_time[tid()]) {
         lat = (gettimeofday_ns() - batch_start_time[tid()]);
         batch_latencies <<< lat;
@@ -23,11 +24,11 @@ probe process(@1).mark("row_cache_update_one_batch_end") {
     }
 }
 
-probe process(@1).mark("row_cache_update_start") {
+probe process.mark("row_cache_update_start") {
     start_time[tid()] = gettimeofday_us()
 }
 
-probe process(@1).mark("row_cache_update_end") {
+probe process.mark("row_cache_update_end") {
     if (start_time[tid()]) {
         lat = (gettimeofday_us() - start_time[tid()]);
         latencies <<< lat;
