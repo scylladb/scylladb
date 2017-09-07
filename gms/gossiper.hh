@@ -404,7 +404,7 @@ public:
      */
     int compare_endpoint_startup(inet_address addr1, inet_address addr2);
 
-    void notify_failure_detector(std::map<inet_address, endpoint_state> remoteEpStateMap);
+    void notify_failure_detector(const std::map<inet_address, endpoint_state>& remoteEpStateMap);
 
 
     void notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state);

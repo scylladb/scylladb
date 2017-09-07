@@ -1138,7 +1138,7 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
 }
 
-void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> remoteEpStateMap) {
+void gossiper::notify_failure_detector(const std::map<inet_address, endpoint_state>& remoteEpStateMap) {
     for (auto& entry : remoteEpStateMap) {
         notify_failure_detector(entry.first, entry.second);
     }
