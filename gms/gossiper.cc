@@ -407,7 +407,8 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
 }
 
 future<> gossiper::apply_state_locally(const std::map<inet_address, endpoint_state>& map) {
-    return seastar::async([this, g = this->shared_from_this(), map] () mutable {
+    return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, g = this->shared_from_this(), map] {
+    return seastar::async([this, g, map = std::move(map)] () mutable {
         std::vector<inet_address> endpoints;
         boost::copy(map | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
         std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
@@ -464,6 +465,7 @@ future<> gossiper::apply_state_locally(const std::map<inet_address, endpoint_sta
                 handle_major_state_change(ep, remote_state);
             }
         }
+    });
     });
 }
 
