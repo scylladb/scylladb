@@ -202,7 +202,6 @@ public:
         uint64_t partition_evictions;
         uint64_t partition_removals;
         uint64_t partitions;
-        uint64_t modification_count;
         uint64_t mispopulations;
         uint64_t underlying_recreations;
         uint64_t underlying_partition_skips;
@@ -240,7 +239,6 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
-    uint64_t modification_count() const { return _stats.modification_count; }
     uint64_t partitions() const { return _stats.partitions; }
     const stats& get_stats() const { return _stats; }
 };
@@ -500,6 +498,9 @@ public:
         return _partitions.size();
     }
     const cache_tracker& get_cache_tracker() const {
+        return _tracker;
+    }
+    cache_tracker& get_cache_tracker() {
         return _tracker;
     }
 

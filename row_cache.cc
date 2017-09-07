@@ -76,7 +76,6 @@ cache_tracker::cache_tracker() {
             evict_last(_lru);
             --_stats.partitions;
             ++_stats.partition_evictions;
-            ++_stats.modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
             // Bad luck, linearization during partition removal caused us to
@@ -139,7 +138,7 @@ void cache_tracker::clear() {
     });
     _stats.partition_removals += _stats.partitions;
     _stats.partitions = 0;
-    ++_stats.modification_count;
+    allocator().invalidate_references();
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -159,7 +158,7 @@ void cache_tracker::insert(cache_entry& entry) {
 void cache_tracker::on_erase() {
     --_stats.partitions;
     ++_stats.partition_removals;
-    ++_stats.modification_count;
+    allocator().invalidate_references();
 }
 
 void cache_tracker::on_merge() {
@@ -218,7 +217,6 @@ class partition_range_cursor final {
     dht::ring_position_view _end_pos;
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
-    size_t _last_modification_count;
 private:
     void set_position(cache_entry& e) {
         // FIXME: make ring_position_view convertible to ring_position, so we can use e.position()
@@ -239,7 +237,6 @@ public:
         , _start_pos(dht::ring_position_view::for_range_start(range))
         , _end_pos(dht::ring_position_view::for_range_end(range))
         , _last_reclaim_count(std::numeric_limits<uint64_t>::max())
-        , _last_modification_count(std::numeric_limits<size_t>::max())
     { }
 
     // Ensures that cache entry reference is valid.
@@ -247,10 +244,8 @@ public:
     // Returns true if and only if the position of the cursor changed.
     // Strong exception guarantees.
     bool refresh() {
-        auto reclaim_count = _cache.get().get_cache_tracker().region().reclaim_counter();
-        auto modification_count = _cache.get().get_cache_tracker().modification_count();
-
-        if (reclaim_count == _last_reclaim_count && modification_count == _last_modification_count) {
+        auto reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
+        if (reclaim_count == _last_reclaim_count) {
             return true;
         }
 
@@ -263,7 +258,6 @@ public:
         auto same = !cmp(_start_pos, _it->position());
         set_position(*_it);
         _last_reclaim_count = reclaim_count;
-        _last_modification_count = modification_count;
         return same;
     }
 
