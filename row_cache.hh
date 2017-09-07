@@ -124,6 +124,7 @@ public:
     }
 
     cache_entry(cache_entry&&) noexcept;
+    ~cache_entry();
 
     bool is_evictable() { return _lru_link.is_linked(); }
     const dht::decorated_key& key() const { return _key; }

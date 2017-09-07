@@ -854,7 +854,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,
             // which has to always be continuous.
             cache_entry& e = *cache_i;
-            e.partition() = partition_entry(mutation_partition::make_incomplete(*e.schema(), mem_e.partition().partition_tombstone()));
+            e.partition().evict(); // FIXME: evict gradually
         } else {
             _tracker.clear_continuity(*cache_i);
         }
@@ -964,6 +964,10 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
         container_type::node_algorithms::replace_node(o._cache_link.this_ptr(), _cache_link.this_ptr());
         container_type::node_algorithms::init(o._cache_link.this_ptr());
     }
+}
+
+cache_entry::~cache_entry() {
+    _pe.evict();
 }
 
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
