@@ -355,10 +355,7 @@ private:
         previous_entry_pointer() = default; // Represents dht::ring_position_view::min()
         previous_entry_pointer(dht::decorated_key key) : _key(std::move(key)) {};
 
-        // TODO: Currently inserting an entry to the cache increases
-        // modification counter. That doesn't seem to be necessary and if we
-        // didn't do that we could store iterator here to avoid key comparison
-        // (not to mention avoiding lookups in just_cache_scanning_reader.
+        // TODO: store iterator here to avoid key comparison
     };
 
     template<typename CreateEntry, typename VisitEntry>

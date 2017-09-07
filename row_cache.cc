@@ -153,7 +153,6 @@ void cache_tracker::touch(cache_entry& e) {
 void cache_tracker::insert(cache_entry& entry) {
     ++_stats.partition_insertions;
     ++_stats.partitions;
-    ++_stats.modification_count;
     _lru.push_front(entry);
 }
 
