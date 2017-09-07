@@ -101,8 +101,7 @@ private:
         return *this;
     }
 
-    uint64_t _reclaim_counter;
-    unsigned _version_count = 0;
+    partition_snapshot::change_mark _change_mark;
 private:
     void refresh_iterators() {
         _clustering_rows.clear();
@@ -207,10 +206,10 @@ private:
             }
         }
 
-        if (!_in_ck_range || _lsa_region.reclaim_counter() != _reclaim_counter || _snapshot->version_count() != _version_count) {
+        auto mark = _snapshot->get_change_mark();
+        if (!_in_ck_range || mark != _change_mark) {
             refresh_iterators();
-            _reclaim_counter = _lsa_region.reclaim_counter();
-            _version_count = _snapshot->version_count();
+            _change_mark = mark;
         }
 
         while (!is_end_of_stream() && !is_buffer_full()) {

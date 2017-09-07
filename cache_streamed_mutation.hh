@@ -141,7 +141,7 @@ public:
         , _lower_bound(position_in_partition::before_all_clustered_rows())
         , _upper_bound(position_in_partition_view::before_all_clustered_rows())
         , _read_context(std::move(ctx))
-        , _next_row(*_schema, cache._tracker.region(), *_snp)
+        , _next_row(*_schema, *_snp)
     { }
     cache_streamed_mutation(const cache_streamed_mutation&) = delete;
     cache_streamed_mutation(cache_streamed_mutation&&) = delete;

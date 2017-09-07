@@ -52,13 +52,11 @@ class partition_snapshot_row_cursor final {
     };
 
     const schema& _schema;
-    logalloc::region& _region;
     partition_snapshot& _snp;
     std::vector<position_in_version> _heap;
     std::vector<position_in_version> _current_row;
     position_in_partition _position;
-    uint64_t _last_reclaim_count = 0;
-    size_t _last_versions_count = 0;
+    partition_snapshot::change_mark _change_mark;
 
     // Removes the next row from _heap and puts it into _current_row
     void recreate_current_row() {
@@ -72,9 +70,8 @@ class partition_snapshot_row_cursor final {
         _position = position_in_partition(_current_row[0].it->position());
     }
 public:
-    partition_snapshot_row_cursor(const schema& s, logalloc::region& region, partition_snapshot& snp)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp)
         : _schema(s)
-        , _region(region)
         , _snp(snp)
         , _position(position_in_partition::static_row_tag_t{})
     { }
@@ -85,7 +82,7 @@ public:
         return _current_row[0].it;
     }
     bool up_to_date() const {
-        return _region.reclaim_counter() == _last_reclaim_count && _last_versions_count == _snp.version_count();
+        return _snp.get_change_mark() == _change_mark;
     }
 
     // Brings back the cursor to validity.
@@ -130,8 +127,7 @@ public:
             ++version_no;
         }
         boost::range::make_heap(_heap, heap_less);
-        _last_reclaim_count = _region.reclaim_counter();
-        _last_versions_count = _snp.version_count();
+        _change_mark = _snp.get_change_mark();
         bool found = no_clustering_row_between(_schema, lower_bound, _heap[0].it->position());
         recreate_current_row();
         return found;
