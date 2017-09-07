@@ -991,7 +991,7 @@ streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
 
 // Assumes reader is in the corresponding partition
 streamed_mutation cache_entry::do_read(row_cache& rc, read_context& reader) {
-    auto snp = _pe.read(_schema, reader.phase());
+    auto snp = _pe.read(rc._tracker.region(), _schema, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto sm = make_cache_streamed_mutation(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
     if (reader.schema()->version() != _schema->version()) {

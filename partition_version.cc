@@ -530,13 +530,14 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to)
     remove_or_mark_as_unique_owner(old_version);
 }
 
-lw_shared_ptr<partition_snapshot> partition_entry::read(schema_ptr entry_schema, partition_snapshot::phase_type phase)
+lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
+    schema_ptr entry_schema, partition_snapshot::phase_type phase)
 {
     open_version(*entry_schema, phase);
     if (_snapshot) {
         return _snapshot->shared_from_this();
     } else {
-        auto snp = make_lw_shared<partition_snapshot>(entry_schema, this, phase);
+        auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, this, phase);
         _snapshot = snp.get();
         return snp;
     }

@@ -197,13 +197,15 @@ private:
     partition_version_ref _version;
     partition_entry* _entry;
     phase_type _phase;
+    logalloc::region& _region;
 
     friend class partition_entry;
 public:
     explicit partition_snapshot(schema_ptr s,
+                                logalloc::region& region,
                                 partition_entry* entry,
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -338,7 +340,7 @@ public:
     void upgrade(schema_ptr from, schema_ptr to);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema,
+    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     friend std::ostream& operator<<(std::ostream& out, partition_entry& e);

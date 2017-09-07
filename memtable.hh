@@ -158,6 +158,10 @@ public:
         return *this;
     }
 
+    logalloc::region& region() {
+        return *this;
+    }
+
     logalloc::region_group* region_group() {
         return group();
     }

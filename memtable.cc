@@ -403,7 +403,7 @@ public:
                     return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
                 } else {
                     auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), query::full_slice, e->key().key());
-                    auto snp = e->partition().read(schema());
+                    auto snp = e->partition().read(region(), schema());
                     auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr),
                             snp, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, _flushed_memory);
                     _flushed_memory.account_component(*e);
@@ -547,7 +547,7 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl,
         mutation m = mutation(target_schema, _key, std::move(mp));
         return streamed_mutation_from_mutation(std::move(m), fwd);
     }
-    auto snp = _pe.read(_schema);
+    auto snp = _pe.read(mtbl->region(), _schema);
     return make_partition_snapshot_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
 }
 

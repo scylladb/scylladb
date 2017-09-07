@@ -1585,6 +1585,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 
 SEASTAR_TEST_CASE(test_apply_to_incomplete) {
     return seastar::async([] {
+        logalloc::region r;
         simple_schema table;
         auto&& s = *table.schema();
 
@@ -1613,20 +1614,22 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
         auto ck2 = table.make_ckey(2);
 
         BOOST_TEST_MESSAGE("Check that insert falling into discontinuous range is dropped");
-        {
+        with_allocator(r.allocator(), [&] {
+            logalloc::reclaim_lock l(r);
             auto e = partition_entry(mutation_partition::make_incomplete(s));
             auto m = new_mutation();
             table.add_row(m, ck1, "v");
             apply(e, m);
             assert_equal(e.squashed(s), mutation_partition::make_incomplete(s));
-        }
+        });
 
         BOOST_TEST_MESSAGE("Check that continuity from latest version wins");
-        {
+        with_allocator(r.allocator(), [&] {
+            logalloc::reclaim_lock l(r);
             auto m1 = mutation_with_row(ck2);
             auto e = partition_entry(m1.partition());
 
-            auto snap1 = e.read(table.schema());
+            auto snap1 = e.read(r, table.schema());
 
             auto m2 = mutation_with_row(ck2);
             apply(e, m2);
@@ -1647,13 +1650,14 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             e2.apply_to_incomplete(s, std::move(e), s);
             assert_equal(snap1->squashed(), m1.partition());
             assert_equal(e2.squashed(s), (m2 + m3).partition());
-        }
+        });
     });
 
 }
 
 SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
     return seastar::async([] {
+        logalloc::region r;
         simple_schema table;
 
         auto new_mutation = [&] {
@@ -1678,13 +1682,15 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
             e.apply_to_incomplete(*e_schema, partition_entry(m.partition()), *m.schema());
         };
 
+      with_allocator(r.allocator(), [&] {
+        logalloc::reclaim_lock l(r);
         auto m1 = mutation_with_row(table.make_ckey(1));
         m1.partition().clustered_rows().begin()->set_continuous(is_continuous::no);
         m1.partition().set_static_row_continuous(false);
         m1.partition().ensure_last_dummy(*m1.schema());
 
         auto e = partition_entry(m1.partition());
-        auto rd1 = e.read(table.schema());
+        auto rd1 = e.read(r, table.schema());
 
         auto m2 = mutation_with_row(table.make_ckey(3));
         m2.partition().ensure_last_dummy(*m2.schema());
@@ -1705,5 +1711,6 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         apply(new_schema, e, m4);
 
         assert_entry_equal(new_schema, e, m1 + m2 + m3);
+      });
     });
 }
