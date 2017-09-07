@@ -370,7 +370,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 }
 
 
-void gossiper::notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state) {
+void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_state& remote_endpoint_state) {
     /*
      * If the local endpoint state exists then report to the FD only
      * if the versions workout.
