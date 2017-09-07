@@ -100,6 +100,7 @@ standard_migrator<T> standard_migrator<T>::object;
 class allocation_strategy {
 protected:
     size_t _preferred_max_contiguous_allocation = std::numeric_limits<size_t>::max();
+    uint64_t _invalidate_counter = 1;
 public:
     using migrate_fn = const migrate_fn_type*;
 
@@ -153,6 +154,18 @@ public:
 
     size_t preferred_max_contiguous_allocation() const {
         return _preferred_max_contiguous_allocation;
+    }
+
+    // Returns a number which is increased when references to objects managed by this allocator
+    // are invalidated, e.g. due to internal events like compaction or eviction.
+    // When the value returned by this method doesn't change, references obtained
+    // between invocations remain valid.
+    uint64_t invalidate_counter() const {
+        return _invalidate_counter;
+    }
+
+    void invalidate_references() {
+        ++_invalidate_counter;
     }
 };
 

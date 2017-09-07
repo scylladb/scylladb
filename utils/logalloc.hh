@@ -561,6 +561,7 @@ public:
     occupancy_stats occupancy() const;
 
     allocation_strategy& allocator();
+    const allocation_strategy& allocator() const;
 
     region_group* group();
 
@@ -586,7 +587,9 @@ public:
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
     // When the value returned by this method doesn't change, references remain valid.
-    uint64_t reclaim_counter() const;
+    uint64_t reclaim_counter() const {
+        return allocator().invalidate_counter();
+    }
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.

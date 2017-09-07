@@ -1078,7 +1078,6 @@ private:
     bool _reclaiming_enabled = true;
     bool _evictable = false;
     uint64_t _id;
-    uint64_t _reclaim_counter = 0;
     eviction_fn _eviction_fn;
 
     region_group::region_heap::handle_type _heap_handle;
@@ -1183,7 +1182,7 @@ private:
     }
 
     void compact(segment* seg, segment_descriptor& desc) {
-        ++_reclaim_counter;
+        ++_invalidate_counter;
 
         for_each_live(seg, [this] (const object_descriptor* desc, void* obj) {
             auto size = desc->live_size(obj);
@@ -1406,7 +1405,7 @@ public:
 
         // Make sure both regions will notice a future increment
         // to the reclaim counter
-        _reclaim_counter = std::max(_reclaim_counter, other._reclaim_counter);
+        _invalidate_counter = std::max(_invalidate_counter, other._invalidate_counter);
     }
 
     // Returns occupancy of the sparsest compactible segment.
@@ -1434,7 +1433,7 @@ public:
     }
 
     void migrate_segment(segment* src, segment_descriptor& src_desc, segment* dst, segment_descriptor& dst_desc) {
-        ++_reclaim_counter;
+        ++_invalidate_counter;
         size_t segment_size;
         if (src != _active) {
             _segment_descs.erase(src_desc);
@@ -1503,7 +1502,7 @@ public:
     }
 
     memory::reclaiming_result evict_some() {
-        ++_reclaim_counter;
+        ++_invalidate_counter;
         return _eviction_fn();
     }
 
@@ -1519,10 +1518,6 @@ public:
 
     const eviction_fn& evictor() const {
         return _eviction_fn;
-    }
-
-    uint64_t reclaim_counter() const {
-        return _reclaim_counter;
     }
 
     friend class region;
@@ -1644,16 +1639,16 @@ allocation_strategy& region::allocator() {
     return *_impl;
 }
 
+const allocation_strategy& region::allocator() const {
+    return *_impl;
+}
+
 void region::set_reclaiming_enabled(bool compactible) {
     _impl->set_reclaiming_enabled(compactible);
 }
 
 bool region::reclaiming_enabled() const {
     return _impl->reclaiming_enabled();
-}
-
-uint64_t region::reclaim_counter() const {
-    return _impl->reclaim_counter();
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
