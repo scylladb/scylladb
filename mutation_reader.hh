@@ -184,23 +184,6 @@ mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::par
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
-struct restricted_mutation_reader_config {
-    semaphore* sem = nullptr;
-    std::chrono::nanoseconds timeout = {};
-    size_t max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
-
-    static void default_raise_queue_overloaded_exception() {
-        throw std::runtime_error("restricted mutation reader queue overload");
-    }
-};
-
-// Restricts a given `mutation_reader` to a concurrency limited according to settings in
-// a restricted_mutation_reader_config.  These settings include a semaphore for limiting the number
-// of active concurrent readers, a timeout for inactive readers, and a maximum queue size for
-// inactive readers.
-mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base);
-
 /*
 template<typename T>
 concept bool StreamedMutationFilter() {
@@ -390,6 +373,23 @@ public:
 
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
+
+struct restricted_mutation_reader_config {
+    semaphore* sem = nullptr;
+    std::chrono::nanoseconds timeout = {};
+    size_t max_queue_length = std::numeric_limits<size_t>::max();
+    std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
+
+    static void default_raise_queue_overloaded_exception() {
+        throw std::runtime_error("restricted mutation reader queue overload");
+    }
+};
+
+// Restricts a given `mutation_reader` to a concurrency limited according to settings in
+// a restricted_mutation_reader_config.  These settings include a semaphore for limiting the number
+// of active concurrent readers, a timeout for inactive readers, and a maximum queue size for
+// inactive readers.
+mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config, unsigned weight, mutation_reader&& base);
 
 template<>
 struct move_constructor_disengages<mutation_source> {
