@@ -110,7 +110,11 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         inet_address endpoint = i.first;
         std::unordered_set<token>& tokens = i.second;
 
-        assert(!tokens.empty());
+        if (tokens.empty()) {
+            auto msg = sprint("tokens is empty in update_normal_tokens");
+            tlogger.error("{}", msg);
+            throw std::runtime_error(msg);
+        }
 
         for(auto it = _token_to_endpoint_map.begin(), ite = _token_to_endpoint_map.end(); it != ite;) {
             if(it->second == endpoint) {
@@ -141,7 +145,11 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
 }
 
 size_t token_metadata::first_token_index(const token& start) const {
-    assert(_sorted_tokens.size() > 0);
+    if (_sorted_tokens.empty()) {
+        auto msg = sprint("sorted_tokens is empty in first_token_index!");
+        tlogger.error("{}", msg);
+        throw std::runtime_error(msg);
+    }
     auto it = std::lower_bound(_sorted_tokens.begin(), _sorted_tokens.end(), start);
     if (it == _sorted_tokens.end()) {
         return 0;
@@ -292,7 +300,11 @@ void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet
 }
 
 void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
-    assert(!tokens.empty());
+    if (tokens.empty()) {
+        auto msg = sprint("tokens is empty in remove_bootstrap_tokens!");
+        tlogger.error("{}", msg);
+        throw std::runtime_error(msg);
+    }
     for (auto t : tokens) {
         _bootstrap_tokens.erase(t);
     }
@@ -320,7 +332,11 @@ void token_metadata::remove_from_moving(inet_address endpoint) {
 token token_metadata::get_predecessor(token t) {
     auto& tokens = sorted_tokens();
     auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
-    assert(it != tokens.end() && *it == t);
+    if (it == tokens.end() || *it != t) {
+        auto msg = sprint("token error in get_predecessor!");
+        tlogger.error("{}", msg);
+        throw std::runtime_error(msg);
+    }
     if (it == tokens.begin()) {
         // If the token is the first element, its preprocessor is the last element
         return tokens.back();
