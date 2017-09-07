@@ -67,7 +67,11 @@ public:
         return _digests;
     }
 
-    std::map<inet_address, endpoint_state> get_endpoint_state_map() const {
+    std::map<inet_address, endpoint_state>& get_endpoint_state_map() {
+        return _map;
+    }
+
+    const std::map<inet_address, endpoint_state>& get_endpoint_state_map() const {
         return _map;
     }
 

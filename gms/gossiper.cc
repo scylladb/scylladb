@@ -223,13 +223,13 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     }
 
     auto g_digest_list = ack_msg.get_gossip_digest_list();
-    auto ep_state_map = ack_msg.get_endpoint_state_map();
+    auto& ep_state_map = ack_msg.get_endpoint_state_map();
 
     auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
         /* Notify the Failure Detector */
         this->notify_failure_detector(ep_state_map);
-        f = this->apply_state_locally(ep_state_map);
+        f = this->apply_state_locally(std::move(ep_state_map));
     }
 
     return f.then([id, g_digest_list = std::move(g_digest_list), this] {
@@ -269,7 +269,7 @@ future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
     /* Notify the Failure Detector */
     notify_failure_detector(remote_ep_state_map);
-    return apply_state_locally(remote_ep_state_map);
+    return apply_state_locally(std::move(remote_ep_state_map));
 }
 
 future<> gossiper::handle_echo_msg() {
@@ -406,8 +406,8 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
     }
 }
 
-future<> gossiper::apply_state_locally(const std::map<inet_address, endpoint_state>& map) {
-    return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, g = this->shared_from_this(), map] {
+future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
+    return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, g = this->shared_from_this(), map = std::move(map)] {
     return seastar::async([this, g, map = std::move(map)] () mutable {
         std::vector<inet_address> endpoints;
         boost::copy(map | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
