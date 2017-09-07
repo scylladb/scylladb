@@ -575,3 +575,13 @@ std::ostream& operator<<(std::ostream& out, partition_entry& e) {
     out << "}";
     return out;
 }
+
+void partition_entry::evict() noexcept {
+    if (!_version) {
+        return;
+    }
+    for (auto&& v : versions()) {
+        v.partition().evict();
+    }
+    current_allocator().invalidate_references();
+}

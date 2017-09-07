@@ -307,6 +307,10 @@ public:
         return *this;
     }
 
+    // Removes all data marking affected ranges as discontinuous.
+    // Includes versions referenced by snapshots.
+    void evict() noexcept;
+
     partition_version_ref& version() {
         return _version;
     }
