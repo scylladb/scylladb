@@ -712,6 +712,10 @@ bool gossiper::seen_any_seed() {
     return false;
 }
 
+bool gossiper::is_seed(const gms::inet_address& endpoint) const {
+    return _seeds.count(endpoint);
+}
+
 void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
     _subscribers.push_back(subscriber);
 }

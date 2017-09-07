@@ -504,6 +504,7 @@ public:
     void dump_endpoint_state_map();
     void debug_show();
 public:
+    bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
