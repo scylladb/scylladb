@@ -69,23 +69,6 @@ namespace sstables {
 
 logging::logger clogger("compaction");
 
-class sstable_reader final : public ::mutation_reader::impl {
-    shared_sstable _sst;
-    mutation_reader _reader;
-public:
-    sstable_reader(shared_sstable sst, schema_ptr schema)
-            : _sst(std::move(sst))
-            , _reader(_sst->read_rows(schema, service::get_local_compaction_priority()))
-            {}
-    virtual future<streamed_mutation_opt> operator()() override {
-        return _reader.read().handle_exception([sst = _sst] (auto ep) {
-            clogger.error("Compaction found an exception when reading sstable {} : {}",
-                    sst->get_filename(), ep);
-            return make_exception_future<streamed_mutation_opt>(ep);
-        });
-    }
-};
-
 static api::timestamp_type get_max_purgeable_timestamp(const column_family& cf, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk) {
     auto timestamp = api::max_timestamp;
