@@ -204,8 +204,8 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
         } else {
             auto msg = sstring("This node was decommissioned and will not rejoin the ring unless override_decommission=true has been set,"
                                "or all existing data is removed and the node is bootstrapped again");
-            slogger.error(msg.c_str());
-            throw std::runtime_error(msg.c_str());
+            slogger.error("{}", msg);
+            throw std::runtime_error(msg);
         }
     }
     if (db().local().is_replacing() && !get_property_join_ring()) {
@@ -447,7 +447,7 @@ void storage_service::join_token_ring(int delay) {
         // bootstrap will block until finished
         if (_is_bootstrap_mode) {
             auto err = sprint("We are not supposed in bootstrap mode any more");
-            slogger.warn(err.c_str());
+            slogger.warn("{}", err);
             throw std::runtime_error(err);
         }
     } else {
@@ -496,7 +496,7 @@ void storage_service::join_token_ring(int delay) {
         }
         if (_token_metadata.sorted_tokens().empty()) {
             auto err = sprint("join_token_ring: Sorted token in token_metadata is empty");
-            slogger.error(err.c_str());
+            slogger.error("{}", err);
             throw std::runtime_error(err);
         }
         auth::auth::setup().get();
@@ -521,7 +521,7 @@ future<> storage_service::join_ring() {
                 slogger.info("Leaving write survey mode and joining ring at operator request");
                 if (ss._token_metadata.sorted_tokens().empty()) {
                     auto err = sprint("join_ring: Sorted token in token_metadata is empty");
-                    slogger.error(err.c_str());
+                    slogger.error("{}", err);
                     throw std::runtime_error(err);
                 }
                 auth::auth::setup().get();
@@ -891,20 +891,20 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
             if (!state) {
                 auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
-                slogger.warn(err.c_str());
+                slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
             auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
             if (!value) {
                 auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
-                slogger.warn(err.c_str());
+                slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
             std::vector<sstring> coordinator;
             boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
             if (coordinator.size() != 2) {
                 auto err = sprint("Can not split REMOVAL_COORDINATOR for endpoint=%s, value=%s", endpoint, value->value);
-                slogger.warn(err.c_str());
+                slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
             UUID host_id(coordinator[1]);
@@ -912,7 +912,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             auto ep = _token_metadata.get_endpoint_for_host_id(host_id);
             if (!ep) {
                 auto err = sprint("Can not find host_id=%s", host_id);
-                slogger.warn(err.c_str());
+                slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
             restore_replica_count(endpoint, ep.value()).get();
@@ -1381,7 +1381,7 @@ future<> storage_service::replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0) 
     return get_storage_service().invoke_on_all([](storage_service& local_ss) {
         if (!gms::get_gossiper().local_is_initialized()) {
             auto err = sprint("replicate_to_all_cores is called before gossiper is fully initialized");
-            slogger.warn(err.c_str());
+            slogger.warn("{}", err);
             throw std::runtime_error(err);
         }
     }).then([this, g0] {
@@ -1402,13 +1402,13 @@ future<> storage_service::replicate_to_all_cores() {
     // when gossiper has already been initialized.
     if (engine().cpu_id() != 0) {
         auto err = sprint("replicate_to_all_cores is not ran on cpu zero");
-        slogger.warn(err.c_str());
+        slogger.warn("{}", err);
         throw std::runtime_error(err);
     }
 
     if (!gms::get_gossiper().local_is_initialized()) {
         auto err = sprint("replicate_to_all_cores is called before gossiper on shard0 is initialized");
-        slogger.warn(err.c_str());
+        slogger.warn("{}", err);
         throw std::runtime_error(err);
     }
 
@@ -1666,7 +1666,7 @@ future<std::unordered_set<dht::token>> storage_service::get_local_tokens() {
         // should not be called before initServer sets this
         if (tokens.empty()) {
             auto err = sprint("get_local_tokens: tokens is empty");
-            slogger.error(err.c_str());
+            slogger.error("{}", err);
             throw std::runtime_error(err);
         }
         return tokens;
@@ -2887,7 +2887,7 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = sprint("get_new_source_ranges: sources=%s, my_address=%s", sources, my_address);
-            slogger.warn(err.c_str());
+            slogger.warn("{}", err);
             throw std::runtime_error(err);
         }
 
