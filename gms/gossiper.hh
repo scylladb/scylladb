@@ -105,6 +105,7 @@ private:
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
     semaphore _callback_running{1};
+    semaphore _apply_state_locally_semaphore{1};
 public:
     future<> timer_callback_lock() { return _callback_running.wait(); }
     void timer_callback_unlock() { _callback_running.signal(); }
@@ -404,10 +405,10 @@ public:
      */
     int compare_endpoint_startup(inet_address addr1, inet_address addr2);
 
-    void notify_failure_detector(std::map<inet_address, endpoint_state> remoteEpStateMap);
+    void notify_failure_detector(const std::map<inet_address, endpoint_state>& remoteEpStateMap);
 
 
-    void notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state);
+    void notify_failure_detector(inet_address endpoint, const endpoint_state& remote_endpoint_state);
 
 private:
     void mark_alive(inet_address addr, endpoint_state& local_state);
@@ -428,7 +429,7 @@ public:
     bool is_alive(inet_address ep);
     bool is_dead_state(const endpoint_state& eps) const;
 
-    future<> apply_state_locally(const std::map<inet_address, endpoint_state>& map);
+    future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
 
 private:
     void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
@@ -504,6 +505,7 @@ public:
     void dump_endpoint_state_map();
     void debug_show();
 public:
+    bool is_seed(const inet_address& endpoint) const;
     bool is_shutdown(const inet_address& endpoint) const;
     bool is_normal(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
