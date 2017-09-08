@@ -130,13 +130,15 @@ tombstone partition_entry::partition_tombstone() const {
 }
 
 partition_snapshot::~partition_snapshot() {
-    if (_version && _version.is_unique_owner()) {
-        auto v = &*_version;
-        _version = {};
-        remove_or_mark_as_unique_owner(v);
-    } else if (_entry) {
-        _entry->_snapshot = nullptr;
-    }
+    with_allocator(_region.allocator(), [this] {
+        if (_version && _version.is_unique_owner()) {
+            auto v = &*_version;
+            _version = {};
+            remove_or_mark_as_unique_owner(v);
+        } else if (_entry) {
+            _entry->_snapshot = nullptr;
+        }
+    });
 }
 
 void partition_snapshot::merge_partition_versions() {
