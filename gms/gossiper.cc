@@ -1132,7 +1132,7 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     auto ep2 = get_endpoint_state_for_endpoint(addr2);
     if (!ep1 || !ep2) {
         auto err = sprint("Can nod get endpoint_state for %s or %s", addr1, addr2);
-        logger.warn(err.c_str());
+        logger.warn("{}", err);
         throw std::runtime_error(err);
     }
     return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
@@ -1323,7 +1323,7 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
         auto local_gen = local_state.get_heart_beat_state().get_generation();
         if(remote_gen != local_gen) {
             auto err = sprint("Remote generation %d != local generation %d", remote_gen, local_gen);
-            logger.warn(err.c_str());
+            logger.warn("{}", err);
             throw std::runtime_error(err);
         }
 
@@ -1545,7 +1545,7 @@ future<> gossiper::add_local_application_state(application_state state, versione
             if (!gossiper.endpoint_state_map.count(ep_addr)) {
                 auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_state = %s, value = %s",
                                   ep_addr, state, value);
-                logger.error(err.c_str());
+                logger.error("{}", err);
                 throw std::runtime_error(err);
             }
             endpoint_state ep_state_before = gossiper.endpoint_state_map.at(ep_addr);
