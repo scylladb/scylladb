@@ -377,6 +377,9 @@ class restricting_mutation_reader : public mutation_reader::impl {
             _reader_or_mutation_source = std::move(reader);
 
             _config.resources_sem->signal(new_reader_base_credit);
+            if (_config.active_reads) {
+                ++(*_config.active_reads);
+            }
 
             return make_ready_future<>();
         });
@@ -401,6 +404,9 @@ public:
     ~restricting_mutation_reader() {
         if (boost::get<mutation_reader>(&_reader_or_mutation_source)) {
             _config.resources_sem->signal(new_reader_base_cost);
+            if (_config.active_reads) {
+                --(*_config.active_reads);
+            }
         }
     }
     future<streamed_mutation_opt> operator()() override {

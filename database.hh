@@ -1027,6 +1027,10 @@ private:
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
 
+        uint64_t active_reads = 0;
+        uint64_t active_reads_streaming = 0;
+        uint64_t active_reads_system_keyspace = 0;
+
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
     };
@@ -1222,6 +1226,10 @@ public:
         return _sstable_load_concurrency_sem;
     }
     void register_connection_drop_notifier(netw::messaging_service& ms);
+
+    db_stats& get_stats() {
+        return *_stats;
+    }
 
     friend class distributed_loader;
 };
