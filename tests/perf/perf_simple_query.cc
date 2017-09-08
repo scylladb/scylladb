@@ -77,7 +77,7 @@ std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
         case test_config::run_mode::read: return os << "read";
         case test_config::run_mode::del: return os << "delete";
     }
-    assert(0);
+    abort();
 }
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -190,7 +190,7 @@ future<> do_test(cql_test_env& env, test_config& cfg) {
             case test_config::run_mode::del:
                 return test_delete(env, cfg);
         };
-        assert(0);
+        abort();
     });
 }
 

@@ -1285,6 +1285,7 @@ public:
                 case 3: return row_marker(timestamp_dist(_gen), std::chrono::seconds(1), expiry_dist(_gen));
                 default: assert(0);
             }
+            abort();
         };
 
         if (_bool_dist(_gen)) {
