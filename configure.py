@@ -167,6 +167,7 @@ modes = {
 
 scylla_tests = [
     'tests/mutation_test',
+    'tests/mvcc_test',
     'tests/streamed_mutation_test',
     'tests/schema_registry_test',
     'tests/canonical_mutation_test',
