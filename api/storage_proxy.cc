@@ -397,7 +397,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_range_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
-        return sum_timer_stats(ctx.sp, &proxy::stats::read);
+        return sum_timer_stats(ctx.sp, &proxy::stats::range);
     });
 
     sp::get_range_latency.set(r, [&ctx](std::unique_ptr<request> req) {
