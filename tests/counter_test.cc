@@ -21,6 +21,8 @@
 
 #include "counters.hh"
 
+#include <random>
+
 #include <seastar/core/thread.hh>
 
 #include <boost/range/algorithm/sort.hpp>
@@ -35,6 +37,22 @@
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
+
+void verify_shard_order(counter_cell_view ccv) {
+    if (ccv.shards().begin() == ccv.shards().end()) {
+        return;
+    }
+
+    auto it = ccv.shards().begin();
+    auto prev = it;
+    ++it;
+
+    while (it != ccv.shards().end()) {
+        BOOST_REQUIRE_GT(it->id(), prev->id());
+        prev = it;
+        ++it;
+    }
+}
 
 std::vector<counter_id> generate_ids(unsigned count) {
     std::vector<counter_id> id;
@@ -54,6 +72,7 @@ SEASTAR_TEST_CASE(test_counter_cell) {
 
         auto cv = counter_cell_view(c1.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 1);
+        verify_shard_order(cv);
 
         counter_cell_builder b2;
         b2.add_shard(counter_shard(*cv.get_shard(id[0])).update(2, 1));
@@ -62,10 +81,12 @@ SEASTAR_TEST_CASE(test_counter_cell) {
 
         cv = counter_cell_view(c2.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 8);
+        verify_shard_order(cv);
 
         counter_cell_view::apply_reversibly(c1, c2);
         cv = counter_cell_view(c1.as_atomic_cell());
         BOOST_REQUIRE_EQUAL(cv.total_value(), 4);
+        verify_shard_order(cv);
     });
 }
 
@@ -157,11 +178,13 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         BOOST_REQUIRE(ac.is_live());
         counter_cell_view ccv { ac };
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -102);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 20);
+        verify_shard_order(ccv);
 
         m.apply(m3);
         ac = get_counter_cell(m);
@@ -183,22 +206,26 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 2);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 11);
+        verify_shard_order(ccv);
 
         m = mutation(s, m1.decorated_key(), m2.partition().difference(s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -105);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 9);
+        verify_shard_order(ccv);
 
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m3.partition()));
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
@@ -340,11 +367,13 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         BOOST_REQUIRE(ac.is_live());
         auto ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 5);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 4);
+        verify_shard_order(ccv);
 
         m = m2;
         transform_counter_updates_to_shards(m, &m0, 0);
@@ -353,11 +382,13 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 14);
+        verify_shard_order(ccv);
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
         ccv = counter_cell_view(ac);
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 12);
+        verify_shard_order(ccv);
 
         m = m3;
         transform_counter_updates_to_shards(m, &m0, 0);
@@ -368,3 +399,164 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
     });
 }
 
+SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
+    return seastar::async([] {
+        std::random_device rd;
+        std::default_random_engine gen(rd());
+
+        std::uniform_int_distribution<unsigned> shard_count_dist(2, 64);
+        std::uniform_int_distribution<int64_t> logical_clock_dist(1, 1024 * 1024);
+        std::uniform_int_distribution<int64_t> value_dist(-1024 * 1024, 1024 * 1024);
+
+        for (auto i = 0; i < 100; i++) {
+            auto shard_count = shard_count_dist(gen);
+            auto ids = generate_ids(shard_count);
+
+            // Create a valid counter cell
+            std::vector<counter_shard> shards;
+            for (auto id : ids) {
+                shards.emplace_back(id, value_dist(gen), logical_clock_dist(gen));
+            }
+
+            counter_cell_builder b1;
+            for (auto&& cs : shards) {
+                b1.add_shard(cs);
+            }
+            auto c1 = atomic_cell_or_collection(b1.build(0));
+
+            // Corrupt it by changing shard order and adding duplicates
+            boost::range::random_shuffle(shards);
+
+            std::uniform_int_distribution<unsigned> duplicate_count_dist(1, shard_count / 2);
+            auto duplicate_count = duplicate_count_dist(gen);
+            for (auto i = 0u; i < duplicate_count; i++) {
+                auto cs = shards[i];
+                shards.emplace_back(cs);
+            }
+
+            boost::range::random_shuffle(shards);
+
+            // Sanitize
+            counter_cell_builder b2;
+            for (auto&& cs : shards) {
+                b2.add_maybe_unsorted_shard(cs);
+            }
+            b2.sort_and_remove_duplicates();
+            auto c2 = atomic_cell_or_collection(b2.build(0));
+
+            // Compare
+            auto cv1 = counter_cell_view(c1.as_atomic_cell());
+            auto cv2 = counter_cell_view(c2.as_atomic_cell());
+
+            BOOST_REQUIRE_EQUAL(cv1, cv2);
+            BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
+            verify_shard_order(cv1);
+            verify_shard_order(cv2);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_counter_id_order_1_7_4) {
+    return seastar::async([] {
+        const char* ids[] = {
+            "e41baa44-b178-48fc-ab75-11e9664409be",
+            "f2ad405d-1658-484f-9418-6314ae2cedcf",
+            "ffeeddcc-aa99-8877-6655-443322110000",
+            "ffeeddcc-aa99-8877-6655-443322110001",
+            "ffeeddcc-aa99-8878-6655-443322110000",
+            "00000000-0000-0000-0000-000000000000",
+            "00000000-0000-0000-0000-000000000001",
+            "0290003c-977e-397c-ac3e-fdfdc01d626b",
+            "0290003c-987e-397c-ac3e-fdfdc01d626b",
+            "0eeeddcc-aa99-8877-6655-443322110000",
+            "0feeddcc-aa99-8877-8655-443322110000",
+            "0feeddcc-aa99-8877-6655-443322110000",
+            "3bf296f0-6e46-4481-87dc-ca53e61a8f08",
+        };
+
+        auto counter_ids = boost::copy_range<std::vector<counter_id>>(
+            ids | boost::adaptors::transformed([] (auto id) {
+                return counter_id(utils::UUID(id));
+            })
+        );
+
+        counter_id::less_compare_1_7_4 cmp;
+        for (auto it = counter_ids.begin(); it != counter_ids.end(); ++it) {
+            for (auto it2 = counter_ids.begin(); it2 != it; ++it2) {
+                BOOST_REQUIRE_MESSAGE(cmp(*it2, *it), *it2 << " expected to be less than " << *it);
+            }
+            for (auto it2 = std::next(it); it2 != counter_ids.end(); ++it2) {
+                BOOST_REQUIRE_MESSAGE(cmp(*it, *it2), *it << " expected to be less than " << *it2);
+            }
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
+    return seastar::async([] {
+        auto ids = generate_ids(16);
+
+        counter_cell_builder ccb;
+        for (auto&& id : ids) {
+            ccb.add_shard(counter_shard(id, 1, 1));
+        }
+        auto ac = atomic_cell_or_collection(ccb.build(0));
+
+        auto cv = counter_cell_view(ac.as_atomic_cell());
+
+        verify_shard_order(cv);
+
+        stdx::optional<counter_id> previous;
+        counter_id::less_compare_1_7_4 cmp;
+        for (auto&& cs : cv.shards_compatible_with_1_7_4()) {
+            if (previous) {
+                BOOST_REQUIRE_MESSAGE(cmp(*previous, cs.id()), *previous << " expected to be less than " << cs.id());
+            }
+            previous = cs.id();
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_counter_id_ordering) {
+    return seastar::async([] {
+        const char* ids[] = {
+                "00000000-0000-0000-0000-000000000000",
+                "00000000-0000-0000-0000-000000000001",
+                "0290003c-977e-397c-ac3e-fdfdc01d626b",
+                "0290003c-987e-397c-ac3e-fdfdc01d626b",
+                "0eeeddcc-aa99-8877-6655-443322110000",
+                "0feeddcc-aa99-8877-6655-443322110000",
+                "0feeddcc-aa99-8877-8655-443322110000",
+                "3bf296f0-6e46-4481-87dc-ca53e61a8f08",
+                "e41baa44-b178-48fc-ab75-11e9664409be",
+                "f2ad405d-1658-484f-9418-6314ae2cedcf",
+                "ffeeddcc-aa99-8877-6655-443322110000",
+                "ffeeddcc-aa99-8877-6655-443322110001",
+                "ffeeddcc-aa99-8878-6655-443322110000",
+        };
+
+        auto counter_ids = boost::copy_range<std::vector<counter_id>>(
+            ids | boost::adaptors::transformed([] (auto id) {
+                return counter_id(utils::UUID(id));
+            })
+        );
+
+        for (auto it = counter_ids.begin(); it != counter_ids.end(); ++it) {
+            BOOST_REQUIRE_EQUAL(*it, *it);
+            BOOST_REQUIRE(!(*it < *it));
+            BOOST_REQUIRE(!(*it > *it));
+            for (auto it2 = counter_ids.begin(); it2 != it; ++it2) {
+                BOOST_REQUIRE(*it2 < *it);
+                BOOST_REQUIRE(*it2 != *it);
+                BOOST_REQUIRE(!(*it2 > *it));
+                BOOST_REQUIRE(!(*it2 == *it));
+            }
+            for (auto it2 = std::next(it); it2 != counter_ids.end(); ++it2) {
+                BOOST_REQUIRE(*it2 > *it);
+                BOOST_REQUIRE(*it2 != *it);
+                BOOST_REQUIRE(!(*it2 < *it));
+                BOOST_REQUIRE(!(*it2 == *it));
+            }
+        }
+    });
+}

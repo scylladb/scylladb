@@ -29,6 +29,15 @@ counter_id counter_id::local()
     return counter_id(service::get_local_storage_service().get_local_id());
 }
 
+bool counter_id::less_compare_1_7_4::operator()(const counter_id& a, const counter_id& b) const
+{
+    if (a._most_significant != b._most_significant) {
+        return a._most_significant < b._most_significant;
+    } else {
+        return a._least_significant < b._least_significant;
+    }
+}
+
 std::ostream& operator<<(std::ostream& os, const counter_id& id) {
     return os << id.to_uuid();
 }
@@ -40,6 +49,33 @@ std::ostream& operator<<(std::ostream& os, counter_shard_view csv) {
 
 std::ostream& operator<<(std::ostream& os, counter_cell_view ccv) {
     return os << "{counter_cell timestamp: " << ccv.timestamp() << " shards: {" << ::join(", ", ccv.shards()) << "}}";
+}
+
+void counter_cell_builder::do_sort_and_remove_duplicates()
+{
+    boost::range::sort(_shards, [] (auto& a, auto& b) { return a.id() < b.id(); });
+
+    std::vector<counter_shard> new_shards;
+    new_shards.reserve(_shards.size());
+    for (auto& cs : _shards) {
+        if (new_shards.empty() || new_shards.back().id() != cs.id()) {
+            new_shards.emplace_back(cs);
+        } else {
+            new_shards.back().apply(cs);
+        }
+    }
+    _shards = std::move(new_shards);
+    _sorted = true;
+}
+
+std::vector<counter_shard> counter_cell_view::shards_compatible_with_1_7_4() const
+{
+    auto sorted_shards = boost::copy_range<std::vector<counter_shard>>(shards());
+    counter_id::less_compare_1_7_4 cmp;
+    boost::range::sort(sorted_shards, [&] (auto& a, auto& b) {
+        return cmp(a.id(), b.id());
+    });
+    return sorted_shards;
 }
 
 bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)

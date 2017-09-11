@@ -73,8 +73,9 @@ atomic_cell read_atomic_cell(atomic_cell_variant cv)
                     // TODO: a lot of copying for something called view
                     counter_cell_builder ccb; // we know the final number of shards
                     for (auto csv : ccv.shards()) {
-                        ccb.add_shard(counter_shard(csv));
+                        ccb.add_maybe_unsorted_shard(counter_shard(csv));
                     }
+                    ccb.sort_and_remove_duplicates();
                     return ccb.build(_created_at);
                 }
                 atomic_cell operator()(ser::counter_cell_update_view& ccv) const {
