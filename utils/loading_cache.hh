@@ -188,7 +188,8 @@ enum class loading_cache_reload_enabled { no, yes };
 
 /// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
 ///
-/// Each cached value is reloaded after the "refresh" time period since it was loaded for the last time.
+/// Each cached value if reloading is enabled (\tparam ReloadEnabled == loading_cache_reload_enabled::yes) is reloaded after
+/// the "refresh" time period since it was loaded for the last time.
 ///
 /// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
 /// been reloaded even once during the same period.
@@ -197,8 +198,10 @@ enum class loading_cache_reload_enabled { no, yes };
 /// every time in order to get the requested value.
 ///
 /// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
-/// the "expiration" to be at least ("refresh" + "load latency"). This way the value is going to stay in the cache and is going to be
-/// read in a non-blocking way as long as it's frequently accessed.
+/// the "expiration" to be at least ("refresh" + "max load latency"). This way the value is going to stay in the cache and is going to be
+/// read in a non-blocking way as long as it's frequently accessed. Note however that since reloading is an asynchronous
+/// procedure it may get delayed by other running task. Therefore choosing the "expiration" too close to the ("refresh" + "max load latency")
+/// value one risks to have his/her cache values evicted when the system is heavily loaded.
 ///
 /// The cache is also limited in size and if adding the next value is going
 /// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
@@ -215,6 +218,7 @@ enum class loading_cache_reload_enabled { no, yes };
 ///
 /// \tparam Key type of the cache key
 /// \tparam Tp type of the cached value
+/// \tparam ReloadEnabled if loading_cache_reload_enabled::yes allow reloading the values otherwise don't reload
 /// \tparam EntrySize predicate to calculate the entry size
 /// \tparam Hash hash function
 /// \tparam EqualPred equality predicate
@@ -222,6 +226,7 @@ enum class loading_cache_reload_enabled { no, yes };
 /// \tparam Alloc elements allocator
 template<typename Key,
          typename Tp,
+         loading_cache_reload_enabled ReloadEnabled = loading_cache_reload_enabled::no,
          typename EntrySize = simple_entry_size<Tp>,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
@@ -243,26 +248,49 @@ public:
 
     class entry_is_too_big : public std::exception {};
 
+private:
+    loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
+        : _max_size(max_size)
+        , _expiry(expiry)
+        , _refresh(refresh)
+        , _logger(logger)
+        , _timer([this] { on_timer(); })
+    {
+        // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
+        if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
+            throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
+        }
+    }
+
+public:
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
-                : _max_size(max_size)
-                , _expiry(expiry)
-                , _refresh(refresh)
-                , _logger(logger)
-                , _load(std::forward<Func>(load)) {
+        : loading_cache(max_size, expiry, refresh, logger)
+    {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
+
+        _load = std::forward<Func>(load);
 
         // If expiration period is zero - caching is disabled
         if (!caching_enabled()) {
             return;
         }
 
-        // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
-        if (_refresh == std::chrono::milliseconds(0) || _max_size == 0) {
-            throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
+        _timer_period = std::min(_expiry, _refresh);
+        _timer.arm(_timer_period);
+    }
+
+    loading_cache(size_t max_size, std::chrono::milliseconds expiry, logging::logger& logger)
+        : loading_cache(max_size, expiry, loading_cache_clock_type::time_point::max().time_since_epoch(), logger)
+    {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::no, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::no");
+
+        // If expiration period is zero - caching is disabled
+        if (!caching_enabled()) {
+            return;
         }
 
-        _timer_period = std::min(_expiry, _refresh);
-        _timer.set_callback([this] { on_timer(); });
+        _timer_period = _expiry;
         _timer.arm(_timer_period);
     }
 
@@ -270,12 +298,13 @@ public:
         _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), [] (ts_value_lru_entry* ptr) { loading_cache::destroy_ts_value(ptr); });
     }
 
-    future<value_ptr> get_ptr(const Key& k) {
+    template <typename LoadFunc>
+    future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
         // We shouldn't be here if caching is disabled
         assert(caching_enabled());
 
-        return _loading_values.get_or_load(k, [this] (const Key& k) {
-            return _load(k).then([this] (value_type val) {
+        return _loading_values.get_or_load(k, [this, load = std::forward<LoadFunc>(load)] (const Key& k) mutable {
+            return load(k).then([this] (value_type val) {
                 return ts_value_type(std::move(val));
             });
         }).then([this, k] (timestamped_val_ptr ts_val_ptr) {
@@ -300,7 +329,14 @@ public:
         });
     }
 
+    future<value_ptr> get_ptr(const Key& k) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+        return get_ptr(k, _load);
+    }
+
     future<Tp> get(const Key& k) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
             return _load(k).then([] (Tp val) {
@@ -380,7 +416,7 @@ private:
             const ts_value_type& v = lru_entry.timestamped_value();
             auto since_last_read = now - v.last_read();
             auto since_loaded = now - v.loaded();
-            if (_expiry < since_last_read || _expiry < since_loaded) {
+            if (_expiry < since_last_read || (ReloadEnabled == loading_cache_reload_enabled::yes && _expiry < since_loaded)) {
                 _logger.trace("drop_expired(): {}: dropping the entry: _expiry {},  ms passed since: loaded {} last_read {}", lru_entry.key(), _expiry.count(), duration_cast<milliseconds>(since_loaded).count(), duration_cast<milliseconds>(since_last_read).count());
                 return true;
             }
@@ -420,6 +456,12 @@ private:
 
         // check if rehashing is needed and do it if it is.
         periodic_rehash();
+
+        if (ReloadEnabled == loading_cache_reload_enabled::no) {
+            _logger.trace("on_timer(): rearming");
+            _timer.arm(loading_cache_clock_type::now() + _timer_period);
+            return;
+        }
 
         // Reload all those which vlaue needs to be reloaded.
         with_gate(_timer_reads_gate, [this] {
