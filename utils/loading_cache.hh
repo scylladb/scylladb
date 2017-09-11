@@ -324,8 +324,11 @@ public:
                 ts_value_lru_entry* new_lru_entry = Alloc().allocate(1);
                 new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list, _current_size);
 
-                // This will "touch" the entry and add it to the LRU list
+                // This will "touch" the entry and add it to the LRU list - we must do this before the shrink() call.
                 value_ptr vp(new_lru_entry->timestamped_value_ptr());
+
+                // Remove the least recently used items if map is too big.
+                shrink();
 
                 return make_ready_future<value_ptr>(std::move(vp));
             }
@@ -487,9 +490,6 @@ private:
 
         // Clean up items that were not touched for the whole _expiry period.
         drop_expired();
-
-        // Remove the least recently used items if map is too big.
-        shrink();
 
         // check if rehashing is needed and do it if it is.
         periodic_rehash();
