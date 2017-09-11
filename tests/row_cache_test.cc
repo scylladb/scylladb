@@ -1311,6 +1311,8 @@ SEASTAR_TEST_CASE(test_mvcc) {
             memtable_snapshot_source underlying(s);
             partition_key::equality eq(*s);
 
+            underlying.apply(m1);
+
             cache_tracker tracker;
             row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
