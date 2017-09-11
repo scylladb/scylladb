@@ -2144,6 +2144,41 @@ void mutation_partition::evict() noexcept {
     _static_row = {};
 }
 
+bool
+mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) {
+    auto less = rows_entry::compare(s);
+    auto i = _rows.lower_bound(r.start(), less);
+    auto end = _rows.lower_bound(r.end(), less);
+    if (!less(r.start(), r.end())) {
+        return bool(cont);
+    }
+    if (i != end) {
+        if (no_clustering_row_between(s, r.start(), i->position())) {
+            ++i;
+        }
+        while (i != end) {
+            if (i->continuous() != cont) {
+                return false;
+            }
+            ++i;
+        }
+        if (end != _rows.begin() && no_clustering_row_between(s, std::prev(end)->position(), r.end())) {
+            return true;
+        }
+    }
+    return (end == _rows.end() ? is_continuous::yes : end->continuous()) == cont;
+}
+
+bool
+mutation_partition::fully_continuous(const schema& s, const position_range& r) {
+    return check_continuity(s, r, is_continuous::yes);
+}
+
+bool
+mutation_partition::fully_discontinuous(const schema& s, const position_range& r) {
+    return check_continuity(s, r, is_continuous::no);
+}
+
 future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& source,
                                          const dht::decorated_key& dk,
                                          const query::partition_slice& slice,

@@ -877,6 +877,8 @@ private:
 
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
+
+    bool check_continuity(const schema&, const position_range&, is_continuous);
 public:
     struct copy_comparators_only {};
     struct incomplete_tag {};
@@ -918,6 +920,10 @@ public:
     void set_static_row_continuous(bool value) { _static_row_continuous = value; }
     bool is_fully_continuous() const;
     void make_fully_continuous();
+    // Returns true iff all keys from given range are marked as continuous, or range is empty.
+    bool fully_continuous(const schema&, const position_range&);
+    // Returns true iff all keys from given range are marked as not continuous and range is not empty.
+    bool fully_discontinuous(const schema&, const position_range&);
     // Removes all data, marking affected ranges as discontinuous.
     void evict() noexcept;
     void apply(tombstone t) { _tombstone.apply(t); }
