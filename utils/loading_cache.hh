@@ -240,6 +240,7 @@ private:
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
     using set_iterator = typename loading_values_type::iterator;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
+    using value_extractor_fn = std::function<Tp& (ts_value_type&)>;
 
 public:
     using value_type = Tp;
@@ -247,6 +248,7 @@ public:
     using value_ptr = typename ts_value_type::value_ptr;
 
     class entry_is_too_big : public std::exception {};
+    using iterator = boost::transform_iterator<value_extractor_fn, set_iterator>;
 
 private:
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
@@ -255,6 +257,7 @@ private:
         , _refresh(refresh)
         , _logger(logger)
         , _timer([this] { on_timer(); })
+        , _value_extractor_fn([] (ts_value_type& v) -> value_type& { return v.value(); })
     {
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
         if (caching_enabled() && (_refresh == std::chrono::milliseconds(0) || _max_size == 0)) {
@@ -351,6 +354,38 @@ public:
 
     future<> stop() {
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
+    }
+
+    iterator find(const Key& k) noexcept {
+        return boost::make_transform_iterator(set_find(k), _value_extractor_fn);
+    }
+
+    iterator end() {
+        return boost::make_transform_iterator(_loading_values.end(), _value_extractor_fn);
+    }
+
+    iterator begin() {
+        return boost::make_transform_iterator(_loading_values.begin(), _value_extractor_fn);
+    }
+
+    template <typename Pred>
+    void remove_if(Pred&& pred) {
+        static_assert(std::is_same<bool, std::result_of_t<Pred(const value_type&)>>::value, "Bad Pred signature");
+
+        _lru_list.remove_and_dispose_if([this, &pred] (const ts_value_lru_entry& v) {
+            return pred(v.timestamped_value().value());
+        }, [this] (ts_value_lru_entry* p) {
+            loading_cache::destroy_ts_value(p);
+        });
+    }
+
+    size_t size() const {
+        return _loading_values.size();
+    }
+
+    /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
+    size_t memory_footprint() const {
+        return _current_size;
     }
 
 private:
@@ -490,6 +525,7 @@ private:
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
     seastar::gate _timer_reads_gate;
+    value_extractor_fn _value_extractor_fn;
 };
 
 }
