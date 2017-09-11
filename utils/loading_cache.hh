@@ -46,6 +46,7 @@ public:
     using value_type = Tp;
     using loading_values_type = typename utils::loading_shared_values<Key, timestamped_val, Hash, EqualPred, LoadingSharedValuesStats, 256>;
     class lru_entry;
+    class value_ptr;
 
 private:
     value_type _value;
@@ -74,10 +75,8 @@ public:
         return *this;
     }
 
-    value_type& value() noexcept {
-        touch();
-        return _value;
-    }
+    value_type& value() noexcept { return _value; }
+    const value_type& value() const noexcept { return _value; }
 
     loading_cache_clock_type::time_point last_read() const noexcept {
         return _last_read;
@@ -112,6 +111,26 @@ struct simple_entry_size {
     size_t operator()(const Tp& val) {
         return 1;
     }
+};
+
+template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
+class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::value_ptr {
+private:
+    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
+    using loading_values_type = typename ts_value_type::loading_values_type;
+
+public:
+    using timestamped_val_ptr = typename loading_values_type::entry_ptr;
+    using value_type = Tp;
+
+private:
+    timestamped_val_ptr _ts_val_ptr;
+
+public:
+    value_ptr(timestamped_val_ptr ts_val_ptr) : _ts_val_ptr(std::move(ts_val_ptr)) { _ts_val_ptr->touch(); }
+    explicit operator bool() const noexcept { return bool(_ts_val_ptr); }
+    value_type& operator*() const noexcept { return _ts_val_ptr->value(); }
+    value_type* operator->() const noexcept { return &_ts_val_ptr->value(); }
 };
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
@@ -220,6 +239,7 @@ private:
 public:
     using value_type = Tp;
     using key_type = Key;
+    using value_ptr = typename ts_value_type::value_ptr;
 
     class entry_is_too_big : public std::exception {};
 
@@ -250,11 +270,9 @@ public:
         _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), [] (ts_value_lru_entry* ptr) { loading_cache::destroy_ts_value(ptr); });
     }
 
-    future<Tp> get(const Key& k) {
-        // If caching is disabled - always load in the foreground
-        if (!caching_enabled()) {
-            return _load(k);
-        }
+    future<value_ptr> get_ptr(const Key& k) {
+        // We shouldn't be here if caching is disabled
+        assert(caching_enabled());
 
         return _loading_values.get_or_load(k, [this] (const Key& k) {
             return _load(k).then([this] (value_type val) {
@@ -266,17 +284,32 @@ public:
                 _logger.trace("{}: storing the value for the first time", k);
 
                 if (ts_val_ptr->size() > _max_size) {
-                    return make_exception_future<Tp>(entry_is_too_big());
+                    return make_exception_future<value_ptr>(entry_is_too_big());
                 }
 
                 ts_value_lru_entry* new_lru_entry = Alloc().allocate(1);
                 new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list, _current_size);
 
-                // This will "touch" the entry and add it to the LRU list.
-                return make_ready_future<Tp>(new_lru_entry->timestamped_value_ptr()->value());
+                // This will "touch" the entry and add it to the LRU list
+                value_ptr vp(new_lru_entry->timestamped_value_ptr());
+
+                return make_ready_future<value_ptr>(std::move(vp));
             }
 
-            return make_ready_future<Tp>(ts_val_ptr->value());
+            return make_ready_future<value_ptr>(std::move(ts_val_ptr));
+        });
+    }
+
+    future<Tp> get(const Key& k) {
+        // If caching is disabled - always load in the foreground
+        if (!caching_enabled()) {
+            return _load(k).then([] (Tp val) {
+                return make_ready_future<Tp>(std::move(val));
+            });
+        }
+
+        return get_ptr(k).then([] (value_ptr v_ptr) {
+            return make_ready_future<Tp>(*v_ptr);
         });
     }
 
