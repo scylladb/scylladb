@@ -3040,7 +3040,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
         ranges = std::move(partition_ranges);
     } else {
         for (auto&& r : partition_ranges) {
-            auto restricted_ranges = get_restricted_ranges(ks, *schema, std::move(r));
+            auto restricted_ranges = get_restricted_ranges(*schema, std::move(r));
             std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(ranges));
         }
     }
@@ -3314,7 +3314,7 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
  * so we need to restrict each scan to the specific range we want, or else we'd get duplicate results.
  */
 dht::partition_range_vector
-storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, dht::partition_range range) {
+storage_proxy::get_restricted_ranges(const schema& s, dht::partition_range range) {
     locator::token_metadata& tm = get_local_storage_service().get_token_metadata();
     return service::get_restricted_ranges(tm, s, std::move(range));
 }
