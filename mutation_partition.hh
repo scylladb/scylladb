@@ -788,6 +788,9 @@ public:
         bool operator()(position_in_partition_view p, const rows_entry& e) const {
             return _c(p, e.position()) < 0;
         }
+        bool operator()(position_in_partition_view p1, position_in_partition_view p2) const {
+            return _c(p1, p2) < 0;
+        }
     };
     template <typename Comparator>
     struct delegating_compare {
