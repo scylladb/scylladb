@@ -114,7 +114,7 @@ struct hash<auth::authenticated_user> {
 
 class auth::auth::permissions_cache {
 public:
-    typedef utils::loading_cache<std::pair<authenticated_user, data_resource>, permission_set, utils::tuple_hash> cache_type;
+    typedef utils::loading_cache<std::pair<authenticated_user, data_resource>, permission_set, utils::simple_entry_size<permission_set>, utils::tuple_hash> cache_type;
     typedef typename cache_type::key_type key_type;
 
     permissions_cache()
