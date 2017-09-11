@@ -187,7 +187,7 @@ protected:
     shared_ptr<storage_proxy> _proxy;
     tracing::trace_state_ptr _trace_state;
     db::consistency_level _cl;
-    keyspace& _ks;
+    size_t _total_block_for = 0;
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
@@ -201,12 +201,6 @@ protected:
     bool _timedout = false;
     bool _throttled = false;
 protected:
-    size_t total_block_for() {
-        // original comment from cassandra:
-        // during bootstrap, include pending endpoints in the count
-        // or we may fail the consistency level guarantees (see #833, #8058)
-        return db::block_for(_ks, _cl) + _pending_endpoints;
-    }
     virtual void signal(gms::inet_address from) {
         signal();
     }
@@ -214,8 +208,12 @@ public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
-            : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _ks(ks), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+            : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
+        // original comment from cassandra:
+        // during bootstrap, include pending endpoints in the count
+        // or we may fail the consistency level guarantees (see #833, #8058)
+        _total_block_for = db::block_for(ks, _cl) + _pending_endpoints;
         ++_proxy->_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
@@ -229,7 +227,7 @@ public:
                 _proxy->unthrottle();
             }
         } else if (_timedout) {
-            _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, total_block_for(), _type));
+            _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
         }
     };
     bool is_counter() const {
@@ -243,7 +241,7 @@ public:
     }
     void signal(size_t nr = 1) {
         _cl_acks += nr;
-        if (!_cl_achieved && _cl_acks >= total_block_for()) {
+        if (!_cl_achieved && _cl_acks >= _total_block_for) {
              _cl_achieved = true;
              if (_proxy->need_throttle_writes()) {
                  _throttled = true;
