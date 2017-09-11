@@ -166,11 +166,11 @@ public:
      * @param n
      */
     void add(int64_t n) {
+        auto pos = bucket_offsets.size();
         auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
-        if (low == bucket_offsets.end()) {
-            low--;
+        if (low != bucket_offsets.end()) {
+            pos = std::distance(bucket_offsets.begin(), low);
         }
-        auto pos = std::distance(bucket_offsets.begin(), low);
         buckets.at(pos)++;
         _count++;
     }
@@ -187,11 +187,11 @@ public:
         if (new_count <= _count) {
             return;
         }
+        auto pos = bucket_offsets.size();
         auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
-        if (low == bucket_offsets.end()) {
-            low--;
+        if (low != bucket_offsets.end()) {
+            pos = std::distance(bucket_offsets.begin(), low);
         }
-        auto pos = std::distance(bucket_offsets.begin(), low);
         buckets.at(pos)+= new_count - _count;
         _count = new_count;
     }
@@ -316,11 +316,14 @@ public:
     int64_t percentile(double perc) const {
         assert(perc >= 0 && perc <= 1.0);
         auto last_bucket = buckets.size() - 1;
-        if (buckets[last_bucket] > 0) {
-            throw std::runtime_error("Unable to compute when histogram overflowed");
+
+        auto c = count();
+
+        if (!c) {
+            return 0; // no data
         }
 
-        auto pcount = int64_t(std::floor(count() * perc));
+        auto pcount = int64_t(std::floor(c * perc));
         int64_t elements = 0;
         for (size_t i = 0; i < last_bucket; i++) {
             if (buckets[i]) {
@@ -330,7 +333,7 @@ public:
                 }
             }
         }
-        return 0;
+        return round(bucket_offsets.back() * 1.2); // overflowed value is in the requested percentile
     }
 
     /**
