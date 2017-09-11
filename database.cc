@@ -762,6 +762,9 @@ column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring di
 }
 
 void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level) {
+    if (schema()->is_counter() && !sst->has_scylla_component()) {
+        throw std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead.");
+    }
     auto shards = sst->get_shards_for_this_sstable();
     if (belongs_to_other_shard(shards)) {
         // If we're here, this sstable is shared by this and other
@@ -1100,7 +1103,10 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                     auto gen = cf.calculate_generation_for_new_table();
 
                     // Read toc content as it will be needed for moving and deleting a sstable.
-                    return sst->read_toc().then([sst] {
+                    return sst->read_toc().then([sst, s = cf.schema()] {
+                        if (s->is_counter() && !sst->has_scylla_component()) {
+                            return make_exception_future<>(std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead."));
+                        }
                         return sst->mutate_sstable_level(0);
                     }).then([&cf, sst, gen] {
                         return sst->create_links(cf._config.datadir, gen);
