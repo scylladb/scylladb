@@ -40,7 +40,7 @@ namespace utils {
 using loading_cache_clock_type = seastar::lowres_clock;
 using auto_unlink_list_hook = bi::list_base_hook<bi::link_mode<bi::auto_unlink>>;
 
-template<typename Tp, typename Key, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
+template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val {
 public:
     using value_type = Tp;
@@ -52,12 +52,14 @@ private:
     loading_cache_clock_type::time_point _loaded;
     loading_cache_clock_type::time_point _last_read;
     lru_entry* _lru_entry_ptr = nullptr; /// MRU item is at the front, LRU - at the back
+    size_t _size = 0;
 
 public:
     timestamped_val(value_type val)
         : _value(std::move(val))
         , _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
+        , _size(EntrySize()(_value))
     {}
     timestamped_val(timestamped_val&&) = default;
 
@@ -66,6 +68,9 @@ public:
 
         _value = std::move(new_val);
         _loaded = loading_cache_clock_type::now();
+        _lru_entry_ptr->cache_size() -= _size;
+        _size = EntrySize()(_value);
+        _lru_entry_ptr->cache_size() += _size;
         return *this;
     }
 
@@ -80,6 +85,10 @@ public:
 
     loading_cache_clock_type::time_point loaded() const noexcept {
         return _loaded;
+    }
+
+    size_t size() const {
+        return _size;
     }
 
     bool ready() const noexcept {
@@ -98,11 +107,18 @@ private:
     }
 };
 
+template <typename Tp>
+struct simple_entry_size {
+    size_t operator()(const Tp& val) {
+        return 1;
+    }
+};
+
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
-template<typename Tp, typename Key, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public auto_unlink_list_hook {
+template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
+class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public auto_unlink_list_hook {
 private:
-    using ts_value_type = timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>;
+    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using loading_values_type = typename ts_value_type::loading_values_type;
 
 public:
@@ -112,17 +128,25 @@ public:
 private:
     timestamped_val_ptr _ts_val_ptr;
     lru_list_type& _lru_list;
+    size_t& _cache_size;
 
 public:
-    lru_entry(timestamped_val_ptr ts_val, lru_list_type& lru_list)
+    lru_entry(timestamped_val_ptr ts_val, lru_list_type& lru_list, size_t& cache_size)
         : _ts_val_ptr(std::move(ts_val))
         , _lru_list(lru_list)
+        , _cache_size(cache_size)
     {
         _ts_val_ptr->set_anchor_back_reference(this);
+        _cache_size += _ts_val_ptr->size();
     }
 
     ~lru_entry() {
+        _cache_size -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
+    }
+
+    size_t& cache_size() noexcept {
+        return _cache_size;
     }
 
     /// Set this item as the most recently used item.
@@ -143,15 +167,50 @@ public:
 
 enum class loading_cache_reload_enabled { no, yes };
 
+/// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
+///
+/// Each cached value is reloaded after the "refresh" time period since it was loaded for the last time.
+///
+/// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
+/// been reloaded even once during the same period.
+///
+/// If "expiration" is set to zero - the caching is going to be disabled and get_XXX(...) is going to call the "loader" callback
+/// every time in order to get the requested value.
+///
+/// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
+/// the "expiration" to be at least ("refresh" + "load latency"). This way the value is going to stay in the cache and is going to be
+/// read in a non-blocking way as long as it's frequently accessed.
+///
+/// The cache is also limited in size and if adding the next value is going
+/// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
+/// becomes such that adding the new value is not going to break the size limit. If the new entry's size is greater than
+/// the cache size then the get_XXX(...) method is going to return a future with the loading_cache::entry_is_too_big exception.
+///
+/// The size of the cache is defined as a sum of sizes of all cached entries.
+/// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
+///
+/// The get(key) or get_ptr(key) methods ensures that the "loader" callback is called only once for each cached entry regardless of how many
+/// callers are calling for the get_XXX(key) for the same "key" at the same time. Only after the value is evicted from the cache
+/// it's going to be "loaded" in the context of get_XXX(key). As long as the value is cached get_XXX(key) is going to return the
+/// cached value immediately and reload it in the background every "refresh" time period as described above.
+///
+/// \tparam Key type of the cache key
+/// \tparam Tp type of the cached value
+/// \tparam EntrySize predicate to calculate the entry size
+/// \tparam Hash hash function
+/// \tparam EqualPred equality predicate
+/// \tparam LoadingSharedValuesStats statistics incrementing class (see utils::loading_shared_values)
+/// \tparam Alloc elements allocator
 template<typename Key,
          typename Tp,
+         typename EntrySize = simple_entry_size<Tp>,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
          typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
-         typename Alloc = std::allocator<typename timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry>>
+         typename Alloc = std::allocator<typename timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry>>
 class loading_cache {
 private:
-    using ts_value_type = timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>;
+    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using loading_values_type = typename ts_value_type::loading_values_type;
     using timestamped_val_ptr = typename loading_values_type::entry_ptr;
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
@@ -162,6 +221,7 @@ public:
     using value_type = Tp;
     using key_type = Key;
 
+    class entry_is_too_big : public std::exception {};
 
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
@@ -205,8 +265,12 @@ public:
             if (!ts_val_ptr->ready()) {
                 _logger.trace("{}: storing the value for the first time", k);
 
+                if (ts_val_ptr->size() > _max_size) {
+                    return make_exception_future<Tp>(entry_is_too_big());
+                }
+
                 ts_value_lru_entry* new_lru_entry = Alloc().allocate(1);
-                new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list);
+                new(new_lru_entry) ts_value_lru_entry(std::move(ts_val_ptr), _lru_list, _current_size);
 
                 // This will "touch" the entry and add it to the LRU list.
                 return make_ready_future<Tp>(new_lru_entry->timestamped_value_ptr()->value());
@@ -295,20 +359,11 @@ private:
 
     // Shrink the cache to the _max_size discarding the least recently used items
     void shrink() {
-        if (_loading_values.size() > _max_size) {
-            auto num_items_to_erase = _loading_values.size() - _max_size;
-            for (size_t i = 0; i < num_items_to_erase; ++i) {
-                using namespace std::chrono;
-                auto it = _lru_list.rbegin();
-                // This may happen if there are pending insertions into the loading_shared_values that hasn't been yet finalized.
-                // In this case the number of elements in the _lru_list will be less than the _loading_values.size().
-                if (_lru_list.rbegin() == _lru_list.rend()) {
-                    return;
-                }
-                ts_value_lru_entry& lru_entry = *it;
-                _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
-                loading_cache::destroy_ts_value(&lru_entry);
-            }
+        while (_current_size > _max_size) {
+            using namespace std::chrono;
+            ts_value_lru_entry& lru_entry = *_lru_list.rbegin();
+            _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", lru_entry.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - lru_entry.timestamped_value().last_read()).count());
+            loading_cache::destroy_ts_value(&lru_entry);
         }
     }
 
@@ -351,6 +406,7 @@ private:
 
     loading_values_type _loading_values;
     lru_list_type _lru_list;
+    size_t _current_size = 0;
     size_t _max_size = 0;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
