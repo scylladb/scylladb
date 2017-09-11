@@ -362,6 +362,13 @@ public:
         }
         return sum;
     }
+
+    estimated_histogram& operator*=(double v) {
+        for (size_t i = 0; i < buckets.size(); i++) {
+            buckets[i] *= v;
+        }
+        return *this;
+    }
 #if 0
     /**
      * @return true if this histogram has overflowed -- that is, a value larger than our largest bucket could bound was added

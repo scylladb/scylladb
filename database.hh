@@ -319,6 +319,7 @@ public:
         utils::estimated_histogram estimated_sstable_per_read{35};
         utils::timed_rate_moving_average_and_histogram tombstone_scanned;
         utils::timed_rate_moving_average_and_histogram live_scanned;
+        utils::estimated_histogram estimated_coordinator_read;
     };
 
     struct snapshot_details {
@@ -440,6 +441,10 @@ private:
     // such needs, we have this generic _async_gate, which all potentially asynchronous operations
     // have to get.  It will be closed by stop().
     seastar::gate _async_gate;
+
+    double _cached_percentile = -1;
+    lowres_clock::time_point _percentile_cache_timestamp;
+    std::chrono::milliseconds _percentile_cache_value;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -758,6 +763,8 @@ public:
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
     future<> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
+    void add_coordinator_read_latency(utils::estimated_histogram::duration latency);
+    std::chrono::milliseconds get_coordinator_read_latency_percentile(double percentile);
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,

@@ -2884,6 +2884,20 @@ column_family::as_mutation_source() const {
     });
 }
 
+void column_family::add_coordinator_read_latency(utils::estimated_histogram::duration latency) {
+    _stats.estimated_coordinator_read.add(std::chrono::duration_cast<std::chrono::microseconds>(latency).count());
+}
+
+std::chrono::milliseconds column_family::get_coordinator_read_latency_percentile(double percentile) {
+    if (_cached_percentile != percentile || lowres_clock::now() - _percentile_cache_timestamp > 1s) {
+        _percentile_cache_timestamp = lowres_clock::now();
+        _cached_percentile = percentile;
+        _percentile_cache_value = std::max(_stats.estimated_coordinator_read.percentile(percentile) / 1000, int64_t(1)) * 1ms;
+        _stats.estimated_coordinator_read *= 0.9; // decay values a little to give new data points more weight
+    }
+    return _percentile_cache_value;
+}
+
 static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
 future<lw_shared_ptr<query::result>, cache_temperature>

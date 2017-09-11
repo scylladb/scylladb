@@ -2678,6 +2678,10 @@ public:
 
         return _result_promise.get_future();
     }
+
+    lw_shared_ptr<column_family>& get_cf() {
+        return _cf;
+    }
 };
 
 class never_speculating_read_executor : public abstract_read_executor {
@@ -2720,8 +2724,7 @@ public:
         });
         auto& sr = _schema->speculative_retry();
         auto t = (sr.get_type() == speculative_retry::type::PERCENTILE) ?
-            // FIXME: the timeout should come from previous latency statistics for a partition
-            std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2) :
+            std::min(_cf->get_coordinator_read_latency_percentile(sr.get_value()), std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2)) :
             std::chrono::milliseconds(unsigned(sr.get_value()));
         _speculate_timer.arm(t);
 
@@ -2898,7 +2901,13 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, dht::parti
     merger.reserve(exec.size());
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
-        return rex->execute(timeout);
+        utils::latency_counter lc;
+        lc.start();
+        return rex->execute(timeout).finally([lc, rex] () mutable {
+            if (lc.is_start()) {
+                rex->get_cf()->add_coordinator_read_latency(lc.stop().latency());
+            }
+        });
     }, std::move(merger));
 
     return f.handle_exception([exec = std::move(exec), p = shared_from_this()] (std::exception_ptr eptr) {
