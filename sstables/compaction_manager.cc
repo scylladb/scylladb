@@ -372,8 +372,7 @@ void compaction_manager::register_metrics() {
 
     _metrics.add_group("compaction_manager", {
         sm::make_gauge("compactions", [this] { return _stats.active_tasks; },
-                       sm::description("Holds the number of currently active compactions. "
-                                       "Too high number of concurrent compactions may overwhelm the disk.")),
+                       sm::description("Holds the number of currently active compactions.")),
     });
 }
 
