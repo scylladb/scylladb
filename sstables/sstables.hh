@@ -618,6 +618,10 @@ public:
 
     future<> read_toc();
 
+    bool has_scylla_component() const {
+        return has_component(component_type::Scylla);
+    }
+
     bool filter_has_key(const key& key) {
         return _components->filter->is_present(bytes_view(key));
     }
