@@ -197,12 +197,12 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_for_wide_partitio
         assert_that(cache.make_reader(s, singular_range))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 3);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 2);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 1);
         assert_that(cache.make_reader(s, singular_range))
             .produces(m)
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(secondary_calls_count, 5);
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 4);
         BOOST_REQUIRE_EQUAL(tracker.uncached_wide_partitions(), 2);
     });
 }
