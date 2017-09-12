@@ -105,7 +105,6 @@ public:
         _apply.advance_and_await().get();
         _memtables.erase(_memtables.begin(), _memtables.end());
     }
-    // Must run in a seastar thread
     void apply(const mutation& mt) {
         pending()->apply(mt);
     }
@@ -116,7 +115,6 @@ public:
         new_mt->apply(mt).get();
         _memtables.push_back(new_mt);
     }
-    // Must run in a seastar thread
     // mt must not change from now on.
     void apply(lw_shared_ptr<memtable> mt) {
         auto op = _apply.start();

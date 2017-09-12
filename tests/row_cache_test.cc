@@ -1140,7 +1140,9 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         sleep(10ms).get();
 
         // This update should miss on all partitions
-        auto update_future = cache.update([&] { memtables.apply(*mt2); }, *mt2);
+        auto mt2_copy = make_lw_shared<memtable>(s);
+        mt2_copy->apply(*mt2).get();
+        auto update_future = cache.update([&] { memtables.apply(mt2_copy); }, *mt2);
 
         auto rd3 = cache.make_reader(s);
 
@@ -1266,8 +1268,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
 
         // This update should miss on all partitions
         auto cache_cleared = cache.invalidate([&] {
-            memtables.clear();
-            memtables.apply(*mt2);
+            memtables.apply(mt2);
         });
 
         auto rd2 = cache.make_reader(s);
@@ -1337,7 +1338,9 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 BOOST_REQUIRE(*mt1_reader_sm_opt);
             }
 
-            cache.update([&] { underlying.apply(*mt1); }, *mt1).get();
+            auto mt1_copy = make_lw_shared<memtable>(s);
+            mt1_copy->apply(*mt1).get();
+            cache.update([&] { underlying.apply(mt1_copy); }, *mt1).get();
 
             auto sm3 = cache.make_reader(s)().get0();
             BOOST_REQUIRE(sm3);
@@ -1580,7 +1583,9 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         mt->apply(m4);
         mt->apply(m5);
 
-        cache.update_invalidating([&] { underlying.apply(*mt); }, *mt).get();
+        auto mt_copy = make_lw_shared<memtable>(s.schema());
+        mt_copy->apply(*mt).get();
+        cache.update_invalidating([&] { underlying.apply(mt_copy); }, *mt).get();
 
         assert_that(cache.make_reader(s.schema()))
             .produces(m5)
