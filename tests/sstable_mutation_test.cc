@@ -35,7 +35,6 @@
 #include "tmpdir.hh"
 
 #include "disk-error-handler.hh"
-#include "tests/sstable_assertions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
