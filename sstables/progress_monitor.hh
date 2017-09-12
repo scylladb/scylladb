@@ -47,4 +47,9 @@ struct noop_write_monitor final : public write_monitor {
 };
 
 write_monitor& default_write_monitor();
+
+struct reader_position_tracker {
+    uint64_t position = 0;
+    uint64_t total_read_size = 0;
+};
 }

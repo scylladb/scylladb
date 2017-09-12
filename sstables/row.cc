@@ -422,6 +422,10 @@ bool data_consume_context::eof() const {
     return _ctx->eof();
 }
 
+const reader_position_tracker& data_consume_context::reader_position() const {
+    return _ctx->reader_position();
+}
+
 data_consume_context sstable::data_consume_rows(
         row_consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
     // Although we were only asked to read until toread.end, we'll not limit

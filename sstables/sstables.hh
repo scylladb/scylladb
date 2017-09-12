@@ -104,7 +104,7 @@ public:
     future<> read();
     future<> fast_forward_to(uint64_t begin, uint64_t end);
     future<> skip_to(indexable_element, uint64_t begin);
-    uint64_t position() const;
+    const reader_position_tracker& reader_position() const;
     bool eof() const;
     ~data_consume_context();
     data_consume_context(data_consume_context&&) noexcept;

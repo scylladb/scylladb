@@ -24,6 +24,7 @@
 #include "core/future.hh"
 #include "core/iostream.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
 
 template<typename T>
@@ -44,7 +45,7 @@ class continuous_data_consumer {
     };
 protected:
     input_stream<char> _input;
-    uint64_t _stream_position;
+    sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
     int64_t _remain;
 
@@ -219,7 +220,7 @@ private:
     }
 public:
     continuous_data_consumer(input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-            : _input(std::move(input)), _stream_position(start), _remain(maxlen) {}
+            : _input(std::move(input)), _stream_position(sstables::reader_position_tracker{start, maxlen}), _remain(maxlen) {}
 
     template<typename Consumer>
     future<> consume_input(Consumer& c) {
@@ -267,7 +268,7 @@ public:
             data.trim_front(_remain - segment.size());
             auto len = _remain - segment.size();
             _remain -= len;
-            _stream_position += len;
+            _stream_position.position += len;
             if (_remain == 0 && ret == proceed::yes) {
                 verify_end_state();
             }
@@ -279,7 +280,7 @@ public:
         } else {
             // We can process the entire buffer (if the consumer wants to).
             auto orig_data_size = data.size();
-            _stream_position += data.size();
+            _stream_position.position += data.size();
             if (process(data) == proceed::yes) {
                 assert(data.size() == 0);
                 if (_remain >= 0) {
@@ -290,29 +291,33 @@ public:
                 if (_remain >= 0) {
                     _remain -= orig_data_size - data.size();
                 }
-                _stream_position -= data.size();
+                _stream_position.position -= data.size();
                 return make_ready_future<unconsumed_remainder>(std::move(data));
             }
         }
     }
 
     future<> fast_forward_to(size_t begin, size_t end) {
-        assert(begin >= _stream_position);
-        auto n = begin - _stream_position;
-        _stream_position = begin;
+        assert(begin >= _stream_position.position);
+        auto n = begin - _stream_position.position;
+        _stream_position.position = begin;
 
-        assert(end >= _stream_position);
-        _remain = end - _stream_position;
+        assert(end >= _stream_position.position);
+        _remain = end - _stream_position.position;
 
         _prestate = prestate::NONE;
         return _input.skip(n);
     }
 
     future<> skip_to(size_t begin) {
-        return fast_forward_to(begin, _stream_position + _remain);
+        return fast_forward_to(begin, _stream_position.position + _remain);
     }
 
     uint64_t position() const {
+        return _stream_position.position;
+    }
+
+    const sstables::reader_position_tracker& reader_position() {
         return _stream_position;
     }
 
