@@ -3028,7 +3028,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             cmd->row_limit = remaining_row_count;
             cmd->partition_limit = remaining_partition_count;
             return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i),
-                    std::move(ranges), concurrency_factor, std::move(trace_state), remaining_row_count, remaining_partition_count);
+                    std::move(ranges), concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count);
         }
     }).handle_exception([p] (std::exception_ptr eptr) {
         p->handle_read_error(eptr, true);
