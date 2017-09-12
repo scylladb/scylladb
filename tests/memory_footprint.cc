@@ -191,7 +191,7 @@ static sizes calculate_sizes(const mutation& m) {
     result.query_result = m.query(partition_slice_builder(*s).build(), query::result_request::only_result).buf().size();
 
     tmpdir sstable_dir;
-    auto sst = make_lw_shared<sstables::sstable>(s,
+    auto sst = sstables::make_sstable(s,
         sstable_dir.path,
         1 /* generation */,
         sstables::sstable::version_types::la,

@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include "version.hh"
+#include "shared_sstable.hh"
 #include "core/file.hh"
 #include "core/fstream.hh"
 #include "core/future.hh"
@@ -29,6 +31,7 @@
 #include "core/enum.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"
+#include <seastar/core/shared_ptr_incomplete.hh>
 #include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
@@ -154,6 +157,13 @@ struct sstable_writer_config {
     seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
 };
 
+static constexpr inline size_t default_sstable_buffer_size() {
+    return 128 * 1024;
+}
+
+shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
+
 class sstable : public enable_lw_shared_from_this<sstable> {
 public:
     enum class component_type {
@@ -171,9 +181,9 @@ public:
         Scylla,
         Unknown,
     };
-    enum class version_types { ka, la };
-    enum class format_types { big };
-    static const size_t default_buffer_size = 128*1024;
+    using version_types = sstable_version_types;
+    using format_types = sstable_format_types;
+    static const size_t default_buffer_size = default_sstable_buffer_size();
 public:
     sstable(schema_ptr schema, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now(),
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_buffer_size)
@@ -739,9 +749,6 @@ public:
     friend class index_reader;
     friend class mutation_reader::impl;
 };
-
-using shared_sstable = lw_shared_ptr<sstable>;
-using sstable_list = std::unordered_set<shared_sstable>;
 
 struct entry_descriptor {
     sstring ks;

@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "sstables.hh"
+#include "shared_sstable.hh"
 #include "query-request.hh" // for partition_range; FIXME: move it out of there
 #include <seastar/core/shared_ptr.hh>
 #include <vector>

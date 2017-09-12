@@ -168,6 +168,13 @@ public:
     }
 };
 
+shared_sstable
+make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now,
+            io_error_handler_gen error_handler_gen, size_t buffer_size) {
+    // safe, since shared_from_this() takes ownership
+    return (new sstable(std::move(schema), std::move(dir), generation, v, f, now, std::move(error_handler_gen), buffer_size))->shared_from_this();
+}
+
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" }
@@ -1373,7 +1380,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
 
 future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
         const io_priority_class& pc) {
-    auto sst = make_lw_shared<sstables::sstable>(s, dir, generation, v, f);
+    auto sst = sstables::make_sstable(s, dir, generation, v, f);
     return sst->load(pc).then([sst] () mutable {
         auto shards = sst->get_shards_for_this_sstable();
         auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),
@@ -3028,5 +3035,14 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+
+}
+
+namespace seastar {
+
+void
+lw_shared_ptr_deleter<sstables::sstable>::dispose(sstables::sstable* s) {
+    delete s;
+}
 
 }

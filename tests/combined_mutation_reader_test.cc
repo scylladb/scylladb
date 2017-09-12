@@ -58,7 +58,7 @@ struct sst_factory {
     {}
 
     sstables::shared_sstable operator()() {
-        auto sst = make_lw_shared<sstables::sstable>(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        auto sst = sstables::make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         sst->set_unshared();
 
         //TODO set sstable level, to make the test more interesting

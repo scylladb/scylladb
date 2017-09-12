@@ -44,6 +44,12 @@
 #include "service/storage_service.hh"
 #include "auth/auth.hh"
 
+namespace sstables {
+
+future<> await_background_jobs_on_all_shards();
+
+}
+
 static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
     return gms::get_failure_detector().start().then([seed_provider, cluster_name] {
         // Init gossiper

@@ -72,6 +72,7 @@
 #include "view_info.hh"
 #include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
+#include "sstables/compaction_manager.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
@@ -502,7 +503,7 @@ public:
         }
         auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
         return parallel_for_each(std::move(candidates),
-            [this](const lw_shared_ptr<sstables::sstable>& sstable) {
+            [this](const sstables::shared_sstable& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
                 return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _fwd).then([this](auto smo) {
                     if (smo) {
@@ -750,7 +751,7 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 future<sstables::shared_sstable>
 column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring dir, int64_t generation,
         sstables::sstable::version_types v, sstables::sstable::format_types f) {
-    auto sst = make_lw_shared<sstables::sstable>(_schema, dir, generation, v, f);
+    auto sst = sstables::make_sstable(_schema, dir, generation, v, f);
     if (!belongs_to_current_shard(info.owners)) {
         dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
         sst->mark_for_deletion();
@@ -797,7 +798,7 @@ void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sst
     }
 }
 
-void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable) {
+void column_family::add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
     new_sstables->insert(sstable);
@@ -865,7 +866,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
         auto f = current_waiters.get_shared_future(); // for this seal
 
         with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
-            auto newtab = make_lw_shared<sstables::sstable>(_schema,
+            auto newtab = sstables::make_sstable(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 sstables::sstable::version_types::ka,
                 sstables::sstable::format_types::big);
@@ -923,7 +924,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
     return with_gate(_streaming_flush_gate, [this, old, &smb, permit = std::move(permit)] () mutable {
         return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
-                auto newtab = make_lw_shared<sstables::sstable>(_schema,
+                auto newtab = sstables::make_sstable(_schema,
                                                                 _config.datadir, calculate_generation_for_new_table(),
                                                                 sstables::sstable::version_types::ka,
                                                                 sstables::sstable::format_types::big);
@@ -998,7 +999,7 @@ future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
     auto gen = calculate_generation_for_new_table();
 
-    auto newtab = make_lw_shared<sstables::sstable>(_schema,
+    auto newtab = sstables::make_sstable(_schema,
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
@@ -1097,7 +1098,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                         [ks_name, cf_name, comps = pair.second] (database& db) {
                     auto& cf = db.find_column_family(ks_name, cf_name);
 
-                    auto sst = make_lw_shared<sstables::sstable>(cf.schema(), cf._config.datadir + "/upload", comps.generation,
+                    auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
                         comps.version, comps.format, gc_clock::now(),
                         [] (disk_error_signal_type&) { return error_handler_for_upload_dir(); });
                     auto gen = cf.calculate_generation_for_new_table();
@@ -1150,7 +1151,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
             if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(_schema,
+            auto sst = sstables::make_sstable(_schema,
                                                          _config.datadir, comps.generation,
                                                          comps.version, comps.format);
             work.sstables.emplace(comps.generation, std::move(sst));
@@ -1347,7 +1348,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
 
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
-                auto sst = make_lw_shared<sstables::sstable>(_schema, _config.datadir, gen,
+                auto sst = sstables::make_sstable(_schema, _config.datadir, gen,
                         sstables::sstable::version_types::ka,
                         sstables::sstable::format_types::big);
                 sst->set_unshared();
@@ -1361,7 +1362,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
     });
 }
 
-static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
+static bool needs_cleanup(const sstables::shared_sstable& sst,
                    const dht::token_range_vector& owned_ranges,
                    schema_ptr s) {
     auto first = sst->get_first_partition_key();
@@ -1591,7 +1592,7 @@ load_sstables_with_open_info(std::vector<sstables::foreign_sstable_open_info> ss
             if (!pred(info)) {
                 return make_ready_future<>();
             }
-            auto sst = make_lw_shared<sstables::sstable>(s, dir, info.generation, info.version, info.format);
+            auto sst = sstables::make_sstable(s, dir, info.generation, info.version, info.format);
             return sst->load(std::move(info)).then([&ssts, sst] {
                 ssts.push_back(std::move(sst));
                 return make_ready_future<>();
@@ -1723,7 +1724,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         return cf->calculate_generation_for_new_table();
                     }).get0();
 
-                    auto sst = make_lw_shared<sstables::sstable>(cf->schema(), cf->dir(), gen,
+                    auto sst = sstables::make_sstable(cf->schema(), cf->dir(), gen,
                         sstables::sstable::version_types::ka, sstables::sstable::format_types::big,
                         gc_clock::now(), default_io_error_handler_gen());
                     return sst;
@@ -2005,9 +2006,10 @@ database::database(const db::config& cfg)
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
     , _version(empty_version)
+    , _compaction_manager(std::make_unique<compaction_manager>())
     , _enable_incremental_backups(cfg.incremental_backups())
 {
-    _compaction_manager.start();
+    _compaction_manager->start();
     setup_metrics();
 
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
@@ -2423,9 +2425,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager, *_cl_stats);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, *_compaction_manager, *_cl_stats);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager, *_cl_stats);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), *_compaction_manager, *_cl_stats);
     }
 
     auto uuid = schema->id();
@@ -3458,7 +3460,7 @@ schema_ptr database::find_indexed_table(const sstring& ks_name, const sstring& i
 
 future<>
 database::stop() {
-    return _compaction_manager.stop().then([this] {
+    return _compaction_manager->stop().then([this] {
         // try to ensure that CL has done disk flushing
         if (_commitlog != nullptr) {
             return _commitlog->shutdown();
@@ -3494,6 +3496,18 @@ future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) 
     return truncate(ks, cf, std::move(tsf));
 }
 
+future<>
+column_family::run_with_compaction_disabled(std::function<future<> ()> func) {
+    ++_compaction_disabled;
+    return _compaction_manager.remove(this).then(std::move(func)).finally([this] {
+        if (--_compaction_disabled == 0) {
+            // we're turning if on again, use function that does not increment
+            // the counter further.
+            do_trigger_compaction();
+        }
+    });
+}
+
 future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf, bool with_snapshot) {
     return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
         const auto durable = ks.metadata()->durable_writes();
@@ -3506,17 +3520,17 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         // call.
         auto low_mark = cf.set_low_replay_position_mark();
 
-        future<> f = make_ready_future<>();
-        if (durable || auto_snapshot) {
-            // TODO:
-            // this is not really a guarantee at all that we've actually
-            // gotten all things to disk. Again, need queue-ish or something.
-            f = cf.flush();
-        } else {
-            f = cf.clear();
-        }
 
-        return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return cf.run_with_compaction_disabled([&cf, durable, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+            future<> f = make_ready_future<>();
+            if (durable || auto_snapshot) {
+                // TODO:
+                // this is not really a guarantee at all that we've actually
+                // gotten all things to disk. Again, need queue-ish or something.
+                f = cf.flush();
+            } else {
+                f = cf.clear();
+            }
             return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
                 dblog.debug("Discarding sstable data for truncated CF + indexes");
                 // TODO: notify truncation
@@ -3950,6 +3964,20 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
     });
 }
 
+future<int64_t>
+column_family::disable_sstable_write() {
+    _sstable_writes_disabled_at = std::chrono::steady_clock::now();
+    return _sstables_lock.write_lock().then([this] {
+        if (_sstables->all()->empty()) {
+            return make_ready_future<int64_t>(0);
+        }
+        int64_t max = 0;
+        for (auto&& s : *_sstables->all()) {
+            max = std::max(max, s->generation());
+        }
+        return make_ready_future<int64_t>(max);
+    });
+}
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;

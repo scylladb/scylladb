@@ -64,12 +64,11 @@
 #include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
-#include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
-#include "sstables/compaction.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/version.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -99,7 +98,12 @@ namespace sstables {
 
 class sstable;
 class entry_descriptor;
+class compaction_descriptor;
+class foreign_sstable_open_info;
+
 }
+
+class compaction_manager;
 
 namespace ser {
 template<typename T>
@@ -444,11 +448,11 @@ private:
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
-    void add_sstable(lw_shared_ptr<sstables::sstable> sstable, std::vector<unsigned>&& shards_for_the_sstable);
+    void add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
-    future<lw_shared_ptr<sstables::sstable>> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
-        int64_t generation, sstables::sstable::version_types v, sstables::sstable::format_types f);
-    void load_sstable(lw_shared_ptr<sstables::sstable>& sstable, bool reset_level = false);
+    future<sstables::shared_sstable> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
+        int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
+    void load_sstable(sstables::shared_sstable& sstable, bool reset_level = false);
     lw_shared_ptr<memtable> new_memtable();
     lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
@@ -638,19 +642,7 @@ public:
     // The other shards will keep writing tables at will. Therefore, you very likely need
     // to call this separately in all shards first, to guarantee that none of them are writing
     // new data before you can safely assume that the whole node is disabled.
-    future<int64_t> disable_sstable_write() {
-        _sstable_writes_disabled_at = std::chrono::steady_clock::now();
-        return _sstables_lock.write_lock().then([this] {
-            if (_sstables->all()->empty()) {
-                return make_ready_future<int64_t>(0);
-            }
-            int64_t max = 0;
-            for (auto&& s : *_sstables->all()) {
-                max = std::max(max, s->generation());
-            }
-            return make_ready_future<int64_t>(max);
-        });
-    }
+    future<int64_t> disable_sstable_write();
 
     // SSTable writes are now allowed again, and generation is updated to new_generation if != -1
     // returns the amount of microseconds elapsed since we disabled writes.
@@ -760,17 +752,7 @@ public:
     cache_hit_rate get_hit_rate(gms::inet_address addr);
     void drop_hit_rate(gms::inet_address addr);
 
-    template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
-    Result run_with_compaction_disabled(Func && func) {
-        ++_compaction_disabled;
-        return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
-            if (--_compaction_disabled == 0) {
-                // we're turning if on again, use function that does not increment
-                // the counter further.
-                do_trigger_compaction();
-            }
-        });
-    }
+    future<> run_with_compaction_disabled(std::function<future<> ()> func);
 
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
@@ -1067,7 +1049,7 @@ private:
     std::unique_ptr<db::commitlog> _commitlog;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
-    compaction_manager _compaction_manager;
+    std::unique_ptr<compaction_manager> _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
@@ -1118,10 +1100,10 @@ public:
     }
 
     compaction_manager& get_compaction_manager() {
-        return _compaction_manager;
+        return *_compaction_manager;
     }
     const compaction_manager& get_compaction_manager() const {
-        return _compaction_manager;
+        return *_compaction_manager;
     }
 
     void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg);

@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
+ *
  */
 
 /*
@@ -21,31 +22,32 @@
 
 #pragma once
 
-// database.hh
-class database;
-class column_family;
-class memtable_list;
+#include <utility>
+#include <functional>
+#include <unordered_set>
+#include <seastar/core/shared_ptr.hh>
 
-// mutation.hh
-class mutation;
-class mutation_partition;
+namespace sstables {
 
-// schema.hh
-class schema;
-class column_definition;
-class column_mapping;
+class sstable;
 
-// schema_mutations.hh
-class schema_mutations;
+};
 
-// keys.hh
-class exploded_clustering_prefix;
-class partition_key;
-class partition_key_view;
-class clustering_key_prefix;
-class clustering_key_prefix_view;
-using clustering_key = clustering_key_prefix;
-using clustering_key_view = clustering_key_prefix_view;
+// Customize deleter so that lw_shared_ptr can work with an incomplete sstable class
+namespace seastar {
 
-// memtable.hh
-class memtable;
+template <>
+struct lw_shared_ptr_deleter<sstables::sstable> {
+    static void dispose(sstables::sstable* sst);
+};
+
+}
+
+namespace sstables {
+
+using shared_sstable = seastar::lw_shared_ptr<sstable>;
+using sstable_list = std::unordered_set<shared_sstable>;
+
+}
+
+

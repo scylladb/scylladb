@@ -20,6 +20,7 @@
  */
 
 #include "compaction_manager.hh"
+#include "sstables/sstables.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"

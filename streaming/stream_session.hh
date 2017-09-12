@@ -51,7 +51,6 @@
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/session_info.hh"
-#include "sstables/sstables.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include <map>

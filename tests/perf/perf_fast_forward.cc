@@ -29,7 +29,9 @@
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include <seastar/core/reactor.hh>
+#include "sstables/compaction_manager.hh"
 #include "transport/messages/result_message.hh"
+#include "sstables/shared_index_lists.hh"
 
 #include "disk-error-handler.hh"
 

@@ -26,10 +26,10 @@
 #include "mutation_reader.hh"
 
 class sstable_range_wrapping_reader final : public mutation_reader::impl {
-    lw_shared_ptr<sstables::sstable> _sst;
+    sstables::shared_sstable _sst;
     sstables::mutation_reader _smr;
 public:
-    sstable_range_wrapping_reader(lw_shared_ptr<sstables::sstable> sst,
+    sstable_range_wrapping_reader(sstables::shared_sstable sst,
             schema_ptr s,
             const dht::partition_range& pr,
             const query::partition_slice& slice,
