@@ -57,6 +57,7 @@
 #include "range_tombstone_list.hh"
 #include "counters.hh"
 #include "binary_search.hh"
+#include "utils/bloom_filter.hh"
 
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
@@ -1349,6 +1350,35 @@ future<> sstable::create_data() {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
     });
+}
+
+future<> sstable::read_filter(const io_priority_class& pc) {
+    if (!has_component(sstable::component_type::Filter)) {
+        _components->filter = std::make_unique<utils::filter::always_present_filter>();
+        return make_ready_future<>();
+    }
+
+    return do_with(sstables::filter(), [this, &pc] (auto& filter) {
+        return this->read_simple<sstable::component_type::Filter>(filter, pc).then([this, &filter] {
+            large_bitset bs(filter.buckets.elements.size() * 64);
+            bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
+            _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
+        });
+    });
+}
+
+void sstable::write_filter(const io_priority_class& pc) {
+    if (!has_component(sstable::component_type::Filter)) {
+        return;
+    }
+
+    auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_components->filter.get());
+
+    auto&& bs = f->bits();
+    utils::chunked_vector<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
+    bs.save(v.begin());
+    auto filter = sstables::filter(f->num_hashes(), std::move(v));
+    write_simple<sstable::component_type::Filter>(filter, pc);
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.
