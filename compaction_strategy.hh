@@ -22,6 +22,7 @@
 #pragma once
 
 #include "sstables/shared_sstable.hh"
+#include "exceptions/exceptions.hh"
 
 class column_family;
 class schema;
