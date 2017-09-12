@@ -282,7 +282,8 @@ public:
         const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        read_monitor& monitor = default_read_monitor());
 
     flat_mutation_reader read_row_flat(schema_ptr schema, dht::ring_position_view key) {
         auto& full_slice = schema->full_slice();
@@ -297,7 +298,8 @@ public:
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        read_monitor& monitor = default_read_monitor());
 
     flat_mutation_reader read_range_rows_flat(schema_ptr schema, const dht::partition_range& range) {
         auto& full_slice = schema->full_slice();

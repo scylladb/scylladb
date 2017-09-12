@@ -52,4 +52,19 @@ struct reader_position_tracker {
     uint64_t position = 0;
     uint64_t total_read_size = 0;
 };
+
+class read_monitor {
+public:
+    virtual ~read_monitor() { }
+    // parameters are the current position in the data file
+    virtual void on_read_started(const reader_position_tracker&) = 0;
+    virtual void on_read_completed() = 0;
+};
+
+struct noop_read_monitor final : public read_monitor {
+    virtual void on_read_started(const reader_position_tracker&) override {}
+    virtual void on_read_completed() override {}
+};
+
+read_monitor& default_read_monitor();
 }

@@ -80,6 +80,11 @@ write_monitor& default_write_monitor() {
     return default_noop_write_monitor;
 }
 
+static noop_read_monitor default_noop_read_monitor;
+read_monitor& default_read_monitor() {
+    return default_noop_read_monitor;
+}
+
 static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
         file_open_options options) {
     if (get_config().enable_sstable_data_integrity_check()) {
