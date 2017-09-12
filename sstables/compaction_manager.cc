@@ -315,7 +315,7 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::submit_resharding_job(column_family* cf, std::function<future<>()> job) {
+future<> compaction_manager::run_resharding_job(column_family* cf, std::function<future<>()> job) {
     if (_stopped) {
         return make_ready_future<>();
     }

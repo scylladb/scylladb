@@ -155,13 +155,15 @@ public:
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
 
-    // Submit a resharding job for resharding compaction on behalf of a single
-    // column family.
+    // Run a resharding job for a given column family.
+    // it completes when future returned by job is ready or returns immediately
+    // if manager was asked to stop.
+    //
     // parameter job is a function that will carry the reshard operation on a set
     // of sstables that belong to different shards for this column family using
     // sstables::reshard_sstables(), and in the end, it will forward unshared
     // sstables created by the process to their owner shards.
-    future<> submit_resharding_job(column_family* cf, std::function<future<>()> job);
+    future<> run_resharding_job(column_family* cf, std::function<future<>()> job);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
