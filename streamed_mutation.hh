@@ -410,7 +410,7 @@ public:
         circular_buffer<mutation_fragment> _buffer;
         size_t _buffer_size = 0;
     protected:
-        static constexpr size_t max_buffer_size_in_bytes = 8 * 1024;
+        size_t max_buffer_size_in_bytes = 8 * 1024;
 
         schema_ptr _schema;
         dht::decorated_key _key;
@@ -498,6 +498,10 @@ public:
 
     future<mutation_fragment_opt> operator()() {
         return _impl->operator()();
+    }
+
+    void set_max_buffer_size(size_t size) {
+        _impl->max_buffer_size_in_bytes = size;
     }
 };
 
