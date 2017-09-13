@@ -1,4 +1,5 @@
 import gdb, gdb.printing, uuid, argparse
+import re
 from operator import attrgetter
 from collections import defaultdict
 import re
@@ -1009,6 +1010,53 @@ class scylla_tasks(gdb.Command):
             vptr = int(ptr.reinterpret_cast(vptr_type).dereference())
             gdb.write('(task*) 0x%x  %s\n' % (ptr, resolve(vptr)))
 
+def find_in_live(mem_start, mem_size, value, size_selector='g'):
+    for line in gdb.execute("find/%s 0x%x, +0x%x, 0x%x" % (size_selector, mem_start, mem_size, value), to_string=True).split('\n'):
+        if line.startswith('0x'):
+            ptr_info = gdb.execute("scylla ptr %s" % line, to_string=True)
+            if 'live' in ptr_info:
+                m = re.search('live \((0x[0-9a-f]+)', ptr_info)
+                if m:
+                    obj_start = int(m.group(1), 0)
+                    addr = int(line, 0)
+                    offset = addr - obj_start
+                    yield obj_start, offset
+
+# Finds live objects on seastar heap of current shard which contain given value.
+# Prints results in 'scylla ptr' format.
+#
+# Example:
+#
+#   (gdb) scylla find 0x600005321900
+#   thread 1, small (size <= 512), live (0x6000000f3800 +48)
+#   thread 1, small (size <= 56), live (0x6000008a1230 +32)
+#
+class scylla_find(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla find', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        args = arg.split(' ')
+        def print_usage():
+            gdb.write("Usage: scylla find [ -w | -g ] <value>\n")
+
+        if len(args) < 1 or not args[0]:
+            print_usage()
+            return
+
+        selector = 'g'
+        if args[0] in ['-w', '-g']:
+            selector = args[0][1:]
+            args = args[1:]
+
+        if len(args) != 1:
+            print_usage()
+            return
+        value = int(args[0], 0)
+
+        mem_start, mem_size = get_seastar_memory_start_and_size()
+        for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
+            gdb.execute("scylla ptr 0x%x" % (obj + off))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -1030,3 +1078,4 @@ scylla_unthread()
 scylla_threads()
 scylla_task_stats()
 scylla_tasks()
+scylla_find()
