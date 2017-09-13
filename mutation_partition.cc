@@ -859,7 +859,7 @@ operator<<(std::ostream& os, const deletable_row& dr) {
 
 std::ostream&
 operator<<(std::ostream& os, const rows_entry& re) {
-    return fprint(os, "{rows_entry: cont=%d dummy=%d %s %s}", re.continuous(), re.dummy(), re._key, re._row);
+    return fprint(os, "{rows_entry: cont=%d dummy=%d %s %s}", re.continuous(), re.dummy(), re.position(), re._row);
 }
 
 std::ostream&
