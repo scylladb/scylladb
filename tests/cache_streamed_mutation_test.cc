@@ -189,7 +189,7 @@ public:
         return rc._read_section(rc._tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
                 cache_entry& e = rc.find_or_create(dk, {}, rc.phase_of(dk));
-                return e.partition().read(e.schema());
+                return e.partition().read(rc._tracker.region(), e.schema());
             });
         });
     }

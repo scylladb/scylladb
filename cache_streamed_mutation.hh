@@ -141,7 +141,7 @@ public:
         , _lower_bound(position_in_partition::before_all_clustered_rows())
         , _upper_bound(position_in_partition_view::before_all_clustered_rows())
         , _read_context(std::move(ctx))
-        , _next_row(*_schema, cache._tracker.region(), *_snp)
+        , _next_row(*_schema, *_snp)
     { }
     cache_streamed_mutation(const cache_streamed_mutation&) = delete;
     cache_streamed_mutation(cache_streamed_mutation&&) = delete;
@@ -205,10 +205,15 @@ future<> cache_streamed_mutation::do_fill_buffer() {
         return read_from_underlying();
     }
     return _lsa_manager.run_in_read_section([this] {
-        auto same_pos = _next_row.maybe_refresh();
-        // FIXME: If continuity changed anywhere between _lower_bound and _next_row.position()
-        // we need to redo the lookup with _lower_bound. There is no eviction yet, so not yet a problem.
-        assert(same_pos);
+        // We assume that if there was eviction, and thus the range may
+        // no longer be continuous, the cursor was invalidated.
+        if (!_next_row.up_to_date()) {
+            auto adjacent = _next_row.advance_to(_lower_bound);
+            _next_row_in_range = !after_current_range(_next_row.position());
+            if (!adjacent && !_next_row.continuous()) {
+                return start_reading_from_underlying();
+            }
+        }
         while (!is_buffer_full() && !_end_of_stream && !_reading_underlying) {
             future<> f = copy_from_cache_to_buffer();
             if (!f.available() || need_preempt()) {
@@ -232,7 +237,14 @@ future<> cache_streamed_mutation::read_from_underlying() {
             _reading_underlying = false;
             return _lsa_manager.run_in_update_section([this] {
                 auto same_pos = _next_row.maybe_refresh();
-                assert(same_pos); // FIXME: handle eviction
+                if (!same_pos) {
+                    _read_context->cache().on_mispopulate(); // FIXME: Insert dummy entry at _upper_bound.
+                    _next_row_in_range = !after_current_range(_next_row.position());
+                    if (!_next_row.continuous()) {
+                        return start_reading_from_underlying();
+                    }
+                    return make_ready_future<>();
+                }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
                     add_to_buffer(_next_row);

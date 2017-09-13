@@ -171,6 +171,11 @@ public:
         return *this;
     }
 
+    streamed_mutation_assertions& produces(const mutation& m) {
+        assert_that(mutation_from_streamed_mutation(_sm).get0()).is_equal_to(m);
+        return *this;
+    }
+
     streamed_mutation_assertions& produces_only(const std::deque<mutation_fragment>& fragments) {
         for (auto&& f : fragments) {
             produces(f);

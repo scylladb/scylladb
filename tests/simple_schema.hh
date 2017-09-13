@@ -43,6 +43,9 @@ public:
     api::timestamp_type new_timestamp() {
         return _timestamp++;
     }
+    tombstone new_tombstone() {
+        return {new_timestamp(), gc_clock::now()};
+    }
 public:
     simple_schema()
         : _s(schema_builder("ks", "cf")

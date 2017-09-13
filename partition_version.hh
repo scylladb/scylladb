@@ -191,19 +191,42 @@ public:
     using phase_type = uint64_t;
     static constexpr phase_type default_phase = 0;
     static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
+public:
+    // Used for determining reference stability.
+    // References and iterators into versions owned by the snapshot
+    // obtained between two equal change_mark objects were produced
+    // by that snapshot are guaranteed to be still valid.
+    class change_mark {
+        uint64_t _reclaim_count = 0;
+        size_t _versions_count = 0; // merge_partition_versions() removes versions on merge
+    private:
+        friend class partition_snapshot;
+        change_mark(uint64_t reclaim_count, size_t versions_count)
+            : _reclaim_count(reclaim_count), _versions_count(versions_count) {}
+    public:
+        change_mark() = default;
+        bool operator==(const change_mark& m) const {
+            return _reclaim_count == m._reclaim_count && _versions_count == m._versions_count;
+        }
+        bool operator!=(const change_mark& m) const {
+            return !(*this == m);
+        }
+    };
 private:
     schema_ptr _schema;
     // Either _version or _entry is non-null.
     partition_version_ref _version;
     partition_entry* _entry;
     phase_type _phase;
+    logalloc::region& _region;
 
     friend class partition_entry;
 public:
     explicit partition_snapshot(schema_ptr s,
+                                logalloc::region& region,
                                 partition_entry* entry,
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -217,6 +240,10 @@ public:
     ~partition_snapshot();
 
     partition_version_ref& version();
+
+    change_mark get_change_mark() {
+        return {_region.reclaim_counter(), version_count()};
+    }
 
     const partition_version_ref& version() const;
 
@@ -280,6 +307,10 @@ public:
         return *this;
     }
 
+    // Removes all data marking affected ranges as discontinuous.
+    // Includes versions referenced by snapshots.
+    void evict() noexcept;
+
     partition_version_ref& version() {
         return _version;
     }
@@ -338,7 +369,7 @@ public:
     void upgrade(schema_ptr from, schema_ptr to);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(schema_ptr entry_schema,
+    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     friend std::ostream& operator<<(std::ostream& out, partition_entry& e);

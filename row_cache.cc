@@ -76,7 +76,6 @@ cache_tracker::cache_tracker() {
             evict_last(_lru);
             --_stats.partitions;
             ++_stats.partition_evictions;
-            ++_stats.modification_count;
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
             // Bad luck, linearization during partition removal caused us to
@@ -139,7 +138,7 @@ void cache_tracker::clear() {
     });
     _stats.partition_removals += _stats.partitions;
     _stats.partitions = 0;
-    ++_stats.modification_count;
+    allocator().invalidate_references();
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -153,14 +152,13 @@ void cache_tracker::touch(cache_entry& e) {
 void cache_tracker::insert(cache_entry& entry) {
     ++_stats.partition_insertions;
     ++_stats.partitions;
-    ++_stats.modification_count;
     _lru.push_front(entry);
 }
 
 void cache_tracker::on_erase() {
     --_stats.partitions;
     ++_stats.partition_removals;
-    ++_stats.modification_count;
+    allocator().invalidate_references();
 }
 
 void cache_tracker::on_merge() {
@@ -219,7 +217,6 @@ class partition_range_cursor final {
     dht::ring_position_view _end_pos;
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;
-    size_t _last_modification_count;
 private:
     void set_position(cache_entry& e) {
         // FIXME: make ring_position_view convertible to ring_position, so we can use e.position()
@@ -240,7 +237,6 @@ public:
         , _start_pos(dht::ring_position_view::for_range_start(range))
         , _end_pos(dht::ring_position_view::for_range_end(range))
         , _last_reclaim_count(std::numeric_limits<uint64_t>::max())
-        , _last_modification_count(std::numeric_limits<size_t>::max())
     { }
 
     // Ensures that cache entry reference is valid.
@@ -248,10 +244,8 @@ public:
     // Returns true if and only if the position of the cursor changed.
     // Strong exception guarantees.
     bool refresh() {
-        auto reclaim_count = _cache.get().get_cache_tracker().region().reclaim_counter();
-        auto modification_count = _cache.get().get_cache_tracker().modification_count();
-
-        if (reclaim_count == _last_reclaim_count && modification_count == _last_modification_count) {
+        auto reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
+        if (reclaim_count == _last_reclaim_count) {
             return true;
         }
 
@@ -264,7 +258,6 @@ public:
         auto same = !cmp(_start_pos, _it->position());
         set_position(*_it);
         _last_reclaim_count = reclaim_count;
-        _last_modification_count = modification_count;
         return same;
     }
 
@@ -861,7 +854,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,
             // which has to always be continuous.
             cache_entry& e = *cache_i;
-            e.partition() = partition_entry(mutation_partition::make_incomplete(*e.schema(), mem_e.partition().partition_tombstone()));
+            e.partition().evict(); // FIXME: evict gradually
         } else {
             _tracker.clear_continuity(*cache_i);
         }
@@ -973,6 +966,10 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     }
 }
 
+cache_entry::~cache_entry() {
+    _pe.evict();
+}
+
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
@@ -991,7 +988,7 @@ streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
 
 // Assumes reader is in the corresponding partition
 streamed_mutation cache_entry::do_read(row_cache& rc, read_context& reader) {
-    auto snp = _pe.read(_schema, reader.phase());
+    auto snp = _pe.read(rc._tracker.region(), _schema, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto sm = make_cache_streamed_mutation(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
     if (reader.schema()->version() != _schema->version()) {
