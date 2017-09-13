@@ -27,6 +27,8 @@
 
 namespace sstables {
 
+logging::logger atomic_deletion_manager::_deletion_logger("sstable-deletion");
+
 atomic_deletion_manager::atomic_deletion_manager(unsigned shard_count,
         std::function<future<> (std::vector<sstring> sstables)> delete_sstables)
         : _shard_count(shard_count)

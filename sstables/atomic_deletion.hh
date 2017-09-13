@@ -71,7 +71,7 @@ public:
 };
 
 class atomic_deletion_manager {
-    logging::logger _deletion_logger{"sstable-deletion"};
+    static logging::logger _deletion_logger;
     using shards_agreeing_to_delete_sstable_type = std::unordered_set<shard_id>;
     using sstables_to_delete_atomically_type = std::set<sstring>;
     struct pending_deletion {
