@@ -120,6 +120,11 @@ atomic_deletion_manager::delete_atomically(std::vector<sstable_to_delete> atomic
 void
 atomic_deletion_manager::cancel_atomic_deletions() {
     _atomic_deletions_cancelled = true;
+    cancel_prior_atomic_deletions();
+}
+
+void
+atomic_deletion_manager::cancel_prior_atomic_deletions() {
     for (auto&& pd : _atomic_deletion_sets) {
         if (!pd.second) {
             // Could happen if a delete_atomically() failed

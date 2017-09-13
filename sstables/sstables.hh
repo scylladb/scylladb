@@ -796,6 +796,9 @@ future<> delete_atomically(std::vector<sstable_to_delete> ssts);
 
 // Cancel any deletions scheduled by delete_atomically() and make their
 // futures complete (with an atomic_deletion_cancelled exception).
+void cancel_prior_atomic_deletions();
+
+// Like cancel_prior_atomic_deletions(), but will also cause any later deletion attempts to fail.
 void cancel_atomic_deletions();
 
 class components_writer {

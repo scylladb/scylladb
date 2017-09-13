@@ -2976,6 +2976,10 @@ delete_atomically(std::vector<shared_sstable> ssts) {
     return delete_atomically(std::move(sstables_to_delete_atomically));
 }
 
+void cancel_prior_atomic_deletions() {
+    g_atomic_deletion_manager.cancel_prior_atomic_deletions();
+}
+
 void cancel_atomic_deletions() {
     g_atomic_deletion_manager.cancel_atomic_deletions();
 }

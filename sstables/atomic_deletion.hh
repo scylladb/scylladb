@@ -89,6 +89,7 @@ public:
             std::function<future<> (std::vector<sstring> sstables)> delete_sstables);
     future<> delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigned deleting_shard);
     void cancel_atomic_deletions();
+    void cancel_prior_atomic_deletions();
 };
 
 }
