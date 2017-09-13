@@ -409,8 +409,7 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
     return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, g = this->shared_from_this(), map = std::move(map)] {
     return seastar::async([this, g, map = std::move(map)] () mutable {
-        std::vector<inet_address> endpoints;
-        boost::copy(map | boost::adaptors::map_keys, std::inserter(endpoints, endpoints.begin()));
+        auto endpoints = boost::copy_range<std::vector<inet_address>>(map | boost::adaptors::map_keys);
         std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
         auto node_is_seed = [this] (gms::inet_address ip) { return is_seed(ip); };
         boost::partition(endpoints, node_is_seed);
