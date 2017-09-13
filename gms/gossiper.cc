@@ -1143,7 +1143,7 @@ int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     auto ep1 = get_endpoint_state_for_endpoint(addr1);
     auto ep2 = get_endpoint_state_for_endpoint(addr2);
     if (!ep1 || !ep2) {
-        auto err = sprint("Can nod get endpoint_state for %s or %s", addr1, addr2);
+        auto err = sprint("Can not get endpoint_state for %s or %s", addr1, addr2);
         logger.warn("{}", err);
         throw std::runtime_error(err);
     }
