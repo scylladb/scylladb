@@ -21,6 +21,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
+#include <sstables/sstables.hh>
 #include "core/do_with.hh"
 #include "cql_test_env.hh"
 #include "cql3/query_processor.hh"
@@ -296,7 +297,10 @@ public:
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             db->start(std::move(*cfg)).get();
-            auto stop_db = defer([db] { db->stop().get(); });
+            auto stop_db = defer([db] {
+                db->stop().get();
+                sstables::cancel_atomic_deletions();
+            });
 
             // FIXME: split
             tst_init_ms_fd_gossiper(db::config::seed_provider_type()).get();
