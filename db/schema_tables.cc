@@ -801,6 +801,15 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
+       // Incoming mutations have the version field deleted. Delete here as well so that
+       // schemas which are otherwise equal don't appear as differing.
+       for (auto&& e : old_column_families) {
+           schema_mutations& sm = e.second;
+           if (sm.scylla_tables()) {
+               delete_schema_version(*sm.scylla_tables());
+           }
+       }
+
        proxy.local().mutate_locally(std::move(mutations)).get0();
 
        if (do_flush) {

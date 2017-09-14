@@ -69,6 +69,10 @@ public:
         return _scylla_tables;
     }
 
+    mutation_opt& scylla_tables() {
+        return _scylla_tables;
+    }
+
     const mutation_opt& indices_mutation() const {
         return _indices;
     }
