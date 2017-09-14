@@ -855,6 +855,8 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             // which has to always be continuous.
             cache_entry& e = *cache_i;
             e.partition().evict(); // FIXME: evict gradually
+            upgrade_entry(e);
+            e.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
         } else {
             _tracker.clear_continuity(*cache_i);
         }

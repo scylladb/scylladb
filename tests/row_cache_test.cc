@@ -1579,6 +1579,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         auto mt = make_lw_shared<memtable>(s.schema());
 
         auto m3 = mutation_for_key(m1.decorated_key());
+        m3.partition().apply(s.new_tombstone());
         auto m4 = mutation_for_key(keys[2]);
         auto m5 = mutation_for_key(keys[0]);
         mt->apply(m3);
