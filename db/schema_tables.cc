@@ -1943,7 +1943,7 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
 
     std::vector<index_metadata> index_defs;
     if (sm.indices_mutation()) {
-        index_defs = create_indices_from_index_rows(query::result_set(sm.indices_mutation().value()), ks_name, cf_name);
+        index_defs = create_indices_from_index_rows(query::result_set(*sm.indices_mutation()), ks_name, cf_name);
     }
     for (auto&& index : index_defs) {
         builder.with_index(index);
