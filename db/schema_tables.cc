@@ -1522,7 +1522,7 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
     m.set_clustered_cell(ckey, "type", expand_user_type(column.type)->as_cql3_type()->to_string(), timestamp);
 }
 
-static mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
+mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
     schema_ptr s = tables();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
