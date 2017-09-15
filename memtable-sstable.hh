@@ -26,7 +26,8 @@
 #pragma once
 
 #include "memtable.hh"
-#include "sstables/sstables.hh"
+#include "sstables/shared_sstable.hh"
+#include "sstables/progress_monitor.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/thread.hh>
