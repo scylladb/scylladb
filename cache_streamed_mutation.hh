@@ -78,6 +78,12 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
         //  - _next_row_in_range = _next.position() < _upper_bound
         reading_from_cache,
 
+        // Starts reading from underlying reader.
+        // The range to read is position_range(_lower_bound, min(_next_row.position(), _upper_bound)).
+        // Invariants:
+        //  - _next_row_in_range = _next.position() < _upper_bound
+        move_to_underlying,
+
         // Invariants:
         // - Upper bound of the read is min(_next_row.position(), _upper_bound)
         // - _next_row_in_range = _next.position() < _upper_bound
@@ -218,6 +224,14 @@ future<> cache_streamed_mutation::fill_buffer() {
 
 inline
 future<> cache_streamed_mutation::do_fill_buffer() {
+    if (_state == state::move_to_underlying) {
+        _state = state::reading_from_underlying;
+        auto end = _next_row_in_range ? position_in_partition(_next_row.position())
+                                      : position_in_partition(_upper_bound);
+        return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)}).then([this] {
+            return read_from_underlying();
+        });
+    }
     if (_state == state::reading_from_underlying) {
         return read_from_underlying();
     }
@@ -364,10 +378,8 @@ bool cache_streamed_mutation::after_current_range(position_in_partition_view p) 
 
 inline
 future<> cache_streamed_mutation::start_reading_from_underlying() {
-    _state = state::reading_from_underlying;
-    auto end = _next_row_in_range ? position_in_partition(_next_row.position())
-                                  : position_in_partition(_upper_bound);
-    return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)});
+    _state = state::move_to_underlying;
+    return make_ready_future<>();
 }
 
 inline
