@@ -69,6 +69,23 @@ public:
 };
 
 class cache_streamed_mutation final : public streamed_mutation::impl {
+    enum class state {
+        before_static_row,
+
+        // Invariants:
+        //  - position_range(_lower_bound, _upper_bound) covers all not yet emitted positions from current range
+        //  - _next_row points to the nearest row in cache >= _lower_bound
+        //  - _next_row_in_range = _next.position() < _upper_bound
+        reading_from_cache,
+
+        // Invariants:
+        // - Upper bound of the read is min(_next_row.position(), _upper_bound)
+        // - _next_row_in_range = _next.position() < _upper_bound
+        // - _last_row_key contains the key of last emitted clustering_row
+        reading_from_underlying,
+
+        end_of_stream
+    };
     lw_shared_ptr<partition_snapshot> _snp;
     position_in_partition::tri_compare _position_cmp;
 
@@ -92,8 +109,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     position_in_partition _lower_bound;
     position_in_partition_view _upper_bound;
 
-    bool _static_row_done = false;
-    bool _reading_underlying = false;
+    state _state = state::before_static_row;
     lw_shared_ptr<read_context> _read_context;
     partition_snapshot_row_cursor _next_row;
     bool _next_row_in_range = false;
@@ -175,13 +191,14 @@ future<> cache_streamed_mutation::process_static_row() {
 
 inline
 future<> cache_streamed_mutation::fill_buffer() {
-    if (!_static_row_done) {
-        _static_row_done = true;
+    if (_state == state::before_static_row) {
         auto after_static_row = [this] {
             if (_ck_ranges_curr == _ck_ranges_end) {
                 _end_of_stream = true;
+                _state = state::end_of_stream;
                 return make_ready_future<>();
             }
+            _state = state::reading_from_cache;
             return _lsa_manager.run_in_read_section([this] {
                 return move_to_current_range();
             }).then([this] {
@@ -201,9 +218,10 @@ future<> cache_streamed_mutation::fill_buffer() {
 
 inline
 future<> cache_streamed_mutation::do_fill_buffer() {
-    if (_reading_underlying) {
+    if (_state == state::reading_from_underlying) {
         return read_from_underlying();
     }
+    // assert(_state == state::reading_from_cache)
     return _lsa_manager.run_in_read_section([this] {
         // We assume that if there was eviction, and thus the range may
         // no longer be continuous, the cursor was invalidated.
@@ -214,7 +232,7 @@ future<> cache_streamed_mutation::do_fill_buffer() {
                 return start_reading_from_underlying();
             }
         }
-        while (!is_buffer_full() && !_end_of_stream && !_reading_underlying) {
+        while (!is_buffer_full() && _state == state::reading_from_cache) {
             future<> f = copy_from_cache_to_buffer();
             if (!f.available() || need_preempt()) {
                 return f;
@@ -227,14 +245,14 @@ future<> cache_streamed_mutation::do_fill_buffer() {
 inline
 future<> cache_streamed_mutation::read_from_underlying() {
     return consume_mutation_fragments_until(_read_context->get_streamed_mutation(),
-        [this] { return !_reading_underlying || is_buffer_full(); },
+        [this] { return _state != state::reading_from_underlying || is_buffer_full(); },
         [this] (mutation_fragment mf) {
             _read_context->cache().on_row_miss();
             maybe_add_to_cache(mf);
             add_to_buffer(std::move(mf));
         },
         [this] {
-            _reading_underlying = false;
+            _state = state::reading_from_cache;
             return _lsa_manager.run_in_update_section([this] {
                 auto same_pos = _next_row.maybe_refresh();
                 if (!same_pos) {
@@ -346,7 +364,7 @@ bool cache_streamed_mutation::after_current_range(position_in_partition_view p) 
 
 inline
 future<> cache_streamed_mutation::start_reading_from_underlying() {
-    _reading_underlying = true;
+    _state = state::reading_from_underlying;
     auto end = _next_row_in_range ? position_in_partition(_next_row.position())
                                   : position_in_partition(_upper_bound);
     return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)});
@@ -373,6 +391,7 @@ inline
 void cache_streamed_mutation::move_to_end() {
     drain_tombstones();
     _end_of_stream = true;
+    _state = state::end_of_stream;
 }
 
 inline
