@@ -801,6 +801,15 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
+       // Incoming mutations have the version field deleted. Delete here as well so that
+       // schemas which are otherwise equal don't appear as differing.
+       for (auto&& e : old_column_families) {
+           schema_mutations& sm = e.second;
+           if (sm.scylla_tables()) {
+               delete_schema_version(*sm.scylla_tables());
+           }
+       }
+
        proxy.local().mutate_locally(std::move(mutations)).get0();
 
        if (do_flush) {
@@ -1513,7 +1522,7 @@ static void add_dropped_column_to_schema_mutation(schema_ptr table, const sstrin
     m.set_clustered_cell(ckey, "type", expand_user_type(column.type)->as_cql3_type()->to_string(), timestamp);
 }
 
-static mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
+mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type timestamp) {
     schema_ptr s = tables();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
@@ -1943,7 +1952,7 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
 
     std::vector<index_metadata> index_defs;
     if (sm.indices_mutation()) {
-        index_defs = create_indices_from_index_rows(query::result_set(sm.indices_mutation().value()), ks_name, cf_name);
+        index_defs = create_indices_from_index_rows(query::result_set(*sm.indices_mutation()), ks_name, cf_name);
     }
     for (auto&& index : index_defs) {
         builder.with_index(index);

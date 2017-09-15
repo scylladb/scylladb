@@ -32,22 +32,22 @@ schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    stdx::optional<canonical_mutation> scylla_tables)
     : _columnfamilies(columnfamilies.to_mutation(is_view ? db::schema_tables::views() : db::schema_tables::tables()))
     , _columns(columns.to_mutation(db::schema_tables::columns()))
-    , _indices(indices ? stdx::optional<mutation>{indices.value().to_mutation(db::schema_tables::indexes())} : stdx::nullopt)
-    , _dropped_columns(dropped_columns ? stdx::optional<mutation>{dropped_columns.value().to_mutation(db::schema_tables::dropped_columns())} : stdx::nullopt)
-    , _scylla_tables(scylla_tables ? stdx::optional<mutation>{scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : stdx::nullopt)
+    , _indices(indices ? mutation_opt{indices.value().to_mutation(db::schema_tables::indexes())} : stdx::nullopt)
+    , _dropped_columns(dropped_columns ? mutation_opt{dropped_columns.value().to_mutation(db::schema_tables::dropped_columns())} : stdx::nullopt)
+    , _scylla_tables(scylla_tables ? mutation_opt{scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : stdx::nullopt)
 {}
 
 void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     dst.push_back(_columnfamilies);
     dst.push_back(_columns);
     if (_indices) {
-        dst.push_back(_indices.value());
+        dst.push_back(*_indices);
     }
     if (_dropped_columns) {
-        dst.push_back(_dropped_columns.value());
+        dst.push_back(*_dropped_columns);
     }
     if (_scylla_tables) {
-        dst.push_back(_scylla_tables.value());
+        dst.push_back(*_scylla_tables);
     }
 }
 
@@ -68,26 +68,26 @@ table_schema_version schema_mutations::digest() const {
     md5_hasher h;
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns);
-    if (_indices && !_indices.value().partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, _indices.value());
+    if (_indices && !_indices->partition().empty()) {
+        db::schema_tables::feed_hash_for_schema_digest(h, *_indices);
     }
-    if (_dropped_columns && !_dropped_columns.value().partition().empty()) {
-        db::schema_tables::feed_hash_for_schema_digest(h, _dropped_columns.value());
+    if (_dropped_columns && !_dropped_columns->partition().empty()) {
+        db::schema_tables::feed_hash_for_schema_digest(h, *_dropped_columns);
     }
     if (_scylla_tables) {
-        db::schema_tables::feed_hash_for_schema_digest(h, _scylla_tables.value());
+        db::schema_tables::feed_hash_for_schema_digest(h, *_scylla_tables);
     }
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 
-static stdx::optional<mutation> compact(const stdx::optional<mutation>& m) {
+static mutation_opt compact(const mutation_opt& m) {
     if (!m) {
         return m;
     }
     return db::schema_tables::compact_for_schema_digest(*m);
 }
 
-static stdx::optional<mutation> compact(const mutation& m) {
+static mutation_opt compact(const mutation& m) {
     return db::schema_tables::compact_for_schema_digest(m);
 }
 
