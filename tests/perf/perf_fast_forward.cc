@@ -244,10 +244,11 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     uint64_t fragments = 0;
     while (pk < n) {
         if (n_skip) {
-            rd.fast_forward_to(dht::partition_range(
+            pr = dht::partition_range(
                 dht::partition_range::bound(keys[pk], true),
                 dht::partition_range::bound(keys[std::min(n, pk + n_read) - 1], true)
-            )).get();
+            );
+            rd.fast_forward_to(pr).get();
         }
         fragments += consume_all(rd);
         pk += n_read + n_skip;
