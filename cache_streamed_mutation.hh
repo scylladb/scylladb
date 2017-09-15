@@ -121,12 +121,12 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     bool _next_row_in_range = false;
 
     future<> do_fill_buffer();
-    future<> copy_from_cache_to_buffer();
+    void copy_from_cache_to_buffer();
     future<> process_static_row();
     void move_to_end();
-    future<> move_to_next_range();
-    future<> move_to_current_range();
-    future<> move_to_next_entry();
+    void move_to_next_range();
+    void move_to_current_range();
+    void move_to_next_entry();
     // Emits all delayed range tombstones with positions smaller than upper_bound.
     void drain_tombstones(position_in_partition_view upper_bound);
     // Emits all delayed range tombstones.
@@ -205,11 +205,10 @@ future<> cache_streamed_mutation::fill_buffer() {
                 return make_ready_future<>();
             }
             _state = state::reading_from_cache;
-            return _lsa_manager.run_in_read_section([this] {
-                return move_to_current_range();
-            }).then([this] {
-                return fill_buffer();
+            _lsa_manager.run_in_read_section([this] {
+                move_to_current_range();
             });
+            return fill_buffer();
         };
         if (_schema->has_static_columns()) {
             return process_static_row().then(std::move(after_static_row));
@@ -243,13 +242,14 @@ future<> cache_streamed_mutation::do_fill_buffer() {
             auto adjacent = _next_row.advance_to(_lower_bound);
             _next_row_in_range = !after_current_range(_next_row.position());
             if (!adjacent && !_next_row.continuous()) {
-                return start_reading_from_underlying();
+                start_reading_from_underlying();
+                return make_ready_future<>();
             }
         }
         while (!is_buffer_full() && _state == state::reading_from_cache) {
-            future<> f = copy_from_cache_to_buffer();
-            if (!f.available() || need_preempt()) {
-                return f;
+            copy_from_cache_to_buffer();
+            if (need_preempt()) {
+                break;
             }
         }
         return make_ready_future<>();
@@ -267,20 +267,20 @@ future<> cache_streamed_mutation::read_from_underlying() {
         },
         [this] {
             _state = state::reading_from_cache;
-            return _lsa_manager.run_in_update_section([this] {
+            _lsa_manager.run_in_update_section([this] {
                 auto same_pos = _next_row.maybe_refresh();
                 if (!same_pos) {
                     _read_context->cache().on_mispopulate(); // FIXME: Insert dummy entry at _upper_bound.
                     _next_row_in_range = !after_current_range(_next_row.position());
                     if (!_next_row.continuous()) {
-                        return start_reading_from_underlying();
+                        start_reading_from_underlying();
                     }
-                    return make_ready_future<>();
+                    return;
                 }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
                     add_to_buffer(_next_row);
-                    return move_to_next_entry();
+                    move_to_next_entry();
                 } else {
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
@@ -288,9 +288,10 @@ future<> cache_streamed_mutation::read_from_underlying() {
                         // FIXME: Insert dummy entry at _upper_bound.
                         _read_context->cache().on_mispopulate();
                     }
-                    return move_to_next_range();
+                    move_to_next_range();
                 }
             });
+            return make_ready_future<>();
         });
 }
 
@@ -383,19 +384,19 @@ future<> cache_streamed_mutation::start_reading_from_underlying() {
 }
 
 inline
-future<> cache_streamed_mutation::copy_from_cache_to_buffer() {
+void cache_streamed_mutation::copy_from_cache_to_buffer() {
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
     for (auto&& rts : _snp->range_tombstones(*_schema, _lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
         add_to_buffer(std::move(rts));
         if (is_buffer_full()) {
-            return make_ready_future<>();
+            return;
         }
     }
     if (_next_row_in_range) {
         add_to_buffer(_next_row);
-        return move_to_next_entry();
+        move_to_next_entry();
     } else {
-        return move_to_next_range();
+        move_to_next_range();
     }
 }
 
@@ -407,44 +408,41 @@ void cache_streamed_mutation::move_to_end() {
 }
 
 inline
-future<> cache_streamed_mutation::move_to_next_range() {
+void cache_streamed_mutation::move_to_next_range() {
     ++_ck_ranges_curr;
     if (_ck_ranges_curr == _ck_ranges_end) {
         move_to_end();
-        return make_ready_future<>();
     } else {
-        return move_to_current_range();
+        move_to_current_range();
     }
 }
 
 inline
-future<> cache_streamed_mutation::move_to_current_range() {
+void cache_streamed_mutation::move_to_current_range() {
     _last_row_key = std::experimental::nullopt;
     _lower_bound = position_in_partition::for_range_start(*_ck_ranges_curr);
     _upper_bound = position_in_partition_view::for_range_end(*_ck_ranges_curr);
     auto complete_until_next = _next_row.advance_to(_lower_bound) || _next_row.continuous();
     _next_row_in_range = !after_current_range(_next_row.position());
     if (!complete_until_next) {
-        return start_reading_from_underlying();
+        start_reading_from_underlying();
     }
-    return make_ready_future<>();
 }
 
 // _next_row must be inside the range.
 inline
-future<> cache_streamed_mutation::move_to_next_entry() {
+void cache_streamed_mutation::move_to_next_entry() {
     if (no_clustering_row_between(*_schema, _next_row.position(), _upper_bound)) {
-        return move_to_next_range();
+        move_to_next_range();
     } else {
         if (!_next_row.next()) {
             move_to_end();
-            return make_ready_future<>();
+            return;
         }
         _next_row_in_range = !after_current_range(_next_row.position());
         if (!_next_row.continuous()) {
-            return start_reading_from_underlying();
+            start_reading_from_underlying();
         }
-        return make_ready_future<>();
     }
 }
 
