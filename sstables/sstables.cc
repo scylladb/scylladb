@@ -36,6 +36,7 @@
 
 #include "types.hh"
 #include "sstables.hh"
+#include "progress_monitor.hh"
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"

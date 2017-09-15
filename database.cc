@@ -73,6 +73,7 @@
 #include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/progress_monitor.hh"
 
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"

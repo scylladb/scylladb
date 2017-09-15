@@ -54,6 +54,7 @@
 #include "disk-error-handler.hh"
 #include "atomic_deletion.hh"
 #include "sstables/shared_index_lists.hh"
+#include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 
 namespace seastar {
@@ -132,20 +133,6 @@ struct foreign_sstable_open_info;
 struct sstable_open_info;
 
 class index_reader;
-
-class write_monitor {
-public:
-    virtual ~write_monitor() { }
-    virtual void on_write_completed() = 0;
-    virtual void on_flush_completed() = 0;
-};
-
-struct noop_write_monitor final : public write_monitor {
-    virtual void on_write_completed() override { }
-    virtual void on_flush_completed() override { }
-};
-
-seastar::shared_ptr<write_monitor> default_write_monitor();
 
 struct sstable_writer_config {
     std::experimental::optional<size_t> promoted_index_block_size;
