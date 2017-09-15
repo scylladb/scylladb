@@ -169,6 +169,7 @@ scylla_tests = [
     'tests/mutation_test',
     'tests/mvcc_test',
     'tests/streamed_mutation_test',
+    'tests/flat_mutation_reader_test',
     'tests/schema_registry_test',
     'tests/canonical_mutation_test',
     'tests/range_test',
