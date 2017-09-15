@@ -31,6 +31,7 @@
 #include "tests/result_set_assertions.hh"
 #include "service/migration_manager.hh"
 #include "schema_builder.hh"
+#include "schema_registry.hh"
 
 #include "disk-error-handler.hh"
 
@@ -242,6 +243,49 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             BOOST_REQUIRE(new_schema->get_column_definition(to_bytes("v1")) == nullptr);
 
             assert_that_failed(e.execute_cql("alter table ks.table1 add v1 list<text>;"));
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            service::migration_manager& mm = service::get_local_migration_manager();
+
+            auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
+
+            auto legacy_version = utils::UUID_gen::get_time_UUID();
+            auto s0 = schema_builder("ks", "table1")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("v1", bytes_type)
+                .with_version(legacy_version)
+                .build();
+
+            auto find_table = [&] () -> column_family& {
+                return e.db().local().find_column_family("ks", "table1");
+            };
+
+            auto muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, api::new_timestamp()).get0();
+            service::get_storage_proxy().local().mutate_locally(muts1).get();
+            e.db().invoke_on_all([gs = global_schema_ptr(s0)] (database& db) {
+                return db.add_column_family_and_make_directory(gs);
+            }).get();
+
+            auto s1 = find_table().schema();
+
+            BOOST_REQUIRE_EQUAL(legacy_version, s1->version());
+
+            mm.announce(muts1).get();
+
+            BOOST_REQUIRE(s1 == find_table().schema());
+            BOOST_REQUIRE_EQUAL(legacy_version, find_table().schema()->version());
+
+            auto muts2 = muts1;
+            muts2.push_back(db::schema_tables::make_scylla_tables_mutation(s0, api::new_timestamp()));
+            mm.announce(muts2).get();
+
+            BOOST_REQUIRE(s1 == find_table().schema());
+            BOOST_REQUIRE_EQUAL(legacy_version, find_table().schema()->version());
         });
     });
 }

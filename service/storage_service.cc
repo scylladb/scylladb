@@ -86,6 +86,7 @@ static const sstring MATERIALIZED_VIEWS_FEATURE = "MATERIALIZED_VIEWS";
 static const sstring COUNTERS_FEATURE = "COUNTERS";
 static const sstring INDEXES_FEATURE = "INDEXES";
 static const sstring CORRECT_COUNTER_ORDER_FEATURE = "CORRECT_COUNTER_ORDER";
+static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
 
 distributed<storage_service> _the_storage_service;
 
@@ -127,6 +128,7 @@ sstring storage_service::get_config_supported_features() {
         LARGE_PARTITIONS_FEATURE,
         COUNTERS_FEATURE,
         CORRECT_COUNTER_ORDER_FEATURE,
+        SCHEMA_TABLES_V3
     };
     if (service::get_local_storage_service()._db.local().get_config().experimental()) {
         features.push_back(MATERIALIZED_VIEWS_FEATURE);
@@ -1352,6 +1354,7 @@ future<> storage_service::init_server(int delay) {
             ss._large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
             ss._counters_feature = gms::feature(COUNTERS_FEATURE);
             ss._correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
+            ss._schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
 
             if (ss._db.local().get_config().experimental()) {
                 ss._materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);

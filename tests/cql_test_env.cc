@@ -299,6 +299,10 @@ public:
                 gms::get_failure_detector().stop().get();
             });
 
+            ss.invoke_on_all([] (auto&& ss) {
+                ss.enable_all_features();
+            }).get();
+
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();

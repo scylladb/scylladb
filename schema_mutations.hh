@@ -31,12 +31,12 @@
 class schema_mutations {
     mutation _columnfamilies;
     mutation _columns;
-    stdx::optional<mutation> _indices;
-    stdx::optional<mutation> _dropped_columns;
-    stdx::optional<mutation> _scylla_tables;
+    mutation_opt _indices;
+    mutation_opt _dropped_columns;
+    mutation_opt _scylla_tables;
 public:
-    schema_mutations(mutation columnfamilies, mutation columns, stdx::optional<mutation> indices, stdx::optional<mutation> dropped_columns,
-        stdx::optional<mutation> scylla_tables)
+    schema_mutations(mutation columnfamilies, mutation columns, mutation_opt indices, mutation_opt dropped_columns,
+        mutation_opt scylla_tables)
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
             , _indices(std::move(indices))
@@ -65,14 +65,18 @@ public:
         return _columns;
     }
 
-    const stdx::optional<mutation>& scylla_tables() const {
+    const mutation_opt& scylla_tables() const {
         return _scylla_tables;
     }
 
-    const stdx::optional<mutation>& indices_mutation() const {
+    mutation_opt& scylla_tables() {
+        return _scylla_tables;
+    }
+
+    const mutation_opt& indices_mutation() const {
         return _indices;
     }
-    const stdx::optional<mutation>& dropped_columns_mutation() const {
+    const mutation_opt& dropped_columns_mutation() const {
         return _dropped_columns;
     }
 
@@ -86,19 +90,19 @@ public:
 
     stdx::optional<canonical_mutation> indices_canonical_mutation() const {
         if (_indices) {
-            return canonical_mutation(_indices.value());
+            return canonical_mutation(*_indices);
         }
         return {};
     }
     stdx::optional<canonical_mutation> dropped_columns_canonical_mutation() const {
         if (_dropped_columns) {
-            return canonical_mutation(_dropped_columns.value());
+            return canonical_mutation(*_dropped_columns);
         }
         return {};
     }
     stdx::optional<canonical_mutation> scylla_tables_canonical_mutation() const {
         if (_scylla_tables) {
-            return canonical_mutation(_scylla_tables.value());
+            return canonical_mutation(*_scylla_tables);
         }
         return {};
     }

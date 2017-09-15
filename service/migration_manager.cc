@@ -240,7 +240,10 @@ bool migration_manager::has_compatible_schema_tables_version(const gms::inet_add
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
     return has_compatible_schema_tables_version(endpoint)
-            && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
+            && !gms::get_local_gossiper().is_gossip_only_member(endpoint)
+            // Disable pulls during rolling upgrade from 1.7 to 2.0 to avoid
+            // schema version inconsistency. See https://github.com/scylladb/scylla/issues/2802.
+            && get_storage_service().local().cluster_supports_schema_tables_v3();
 }
 
 future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
