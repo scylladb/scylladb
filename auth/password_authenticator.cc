@@ -50,6 +50,7 @@
 #include "password_authenticator.hh"
 #include "authenticated_user.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 #include "log.hh"
 
 const sstring auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME("org.apache.cassandra.auth.PasswordAuthenticator");

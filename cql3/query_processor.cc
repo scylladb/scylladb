@@ -45,6 +45,7 @@
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/util.hh"
+#include "untyped_result_set.hh"
 
 #include "transport/messages/result_message.hh"
 

@@ -68,6 +68,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
+#include "cql3/untyped_result_set.hh"
 
 static logging::logger blogger("batchlog_manager");
 

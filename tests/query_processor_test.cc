@@ -33,6 +33,7 @@
 #include "core/future-util.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 
 #include "disk-error-handler.hh"
 

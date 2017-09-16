@@ -56,13 +56,15 @@
 #include "core/distributed.hh"
 #include "statements/prepared_statement.hh"
 #include "transport/messages/result_message.hh"
-#include "untyped_result_set.hh"
 
 namespace cql3 {
 
 namespace statements {
 class batch_statement;
 }
+
+class untyped_result_set;
+class untyped_result_set_row;
 
 /*!
  * \brief to allow paging, holds

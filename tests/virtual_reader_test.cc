@@ -35,6 +35,7 @@
 #include "db/size_estimates_virtual_reader.hh"
 #include "core/future-util.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 #include "transport/messages/result_message.hh"
 
 #include "disk-error-handler.hh"

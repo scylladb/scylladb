@@ -51,6 +51,7 @@
 #include "authenticated_user.hh"
 #include "permission.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 

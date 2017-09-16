@@ -51,6 +51,7 @@
 #include "service/query_state.hh"
 #include "cql3/query_options.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/hash.hh"
 #include "dht/i_partitioner.hh"

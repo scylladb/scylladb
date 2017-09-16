@@ -47,6 +47,7 @@
 #include "authorizer.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 #include "cql3/statements/raw/cf_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "db/config.hh"
