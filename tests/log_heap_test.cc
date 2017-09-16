@@ -25,19 +25,19 @@
 #include <boost/test/unit_test.hpp>
 #include <iostream>
 
-#include "utils/log_histogram.hh"
+#include "utils/log_heap.hh"
 
-template<const log_histogram_options& opts>
-struct node : public log_histogram_hook<opts> {
+template<const log_heap_options& opts>
+struct node : public log_heap_hook<opts> {
     size_t v;
     node(size_t v) : v(v) {}
 };
 
-template<const log_histogram_options& opts>
+template<const log_heap_options& opts>
 void test_with_options() {
     std::vector<std::unique_ptr<node<opts>>> nodes;
 
-    log_histogram<node<opts>, opts> hist;
+    log_heap<node<opts>, opts> hist;
 
     BOOST_REQUIRE(hist.empty());
 
@@ -78,10 +78,10 @@ void test_with_options() {
     BOOST_REQUIRE(count == (opts.max_size + 1));
 }
 
-extern constexpr log_histogram_options opts1{(1 << 4) + 3, 3, (1 << 6) + 2};
-extern constexpr log_histogram_options opts2{(1 << 4) + 2, 1, (1 << 17) + 2};
-extern constexpr log_histogram_options opts3{(1 << 4) + 1, 0, (1 << 17) + 2};
-extern constexpr log_histogram_options opts4{(1 << 4) + 0, 3, (1 << 17)};
+extern constexpr log_heap_options opts1{(1 << 4) + 3, 3, (1 << 6) + 2};
+extern constexpr log_heap_options opts2{(1 << 4) + 2, 1, (1 << 17) + 2};
+extern constexpr log_heap_options opts3{(1 << 4) + 1, 0, (1 << 17) + 2};
+extern constexpr log_heap_options opts4{(1 << 4) + 0, 3, (1 << 17)};
 
 template<>
 size_t hist_key<node<opts1>>(const node<opts1>& n) { return n.v; }
@@ -95,7 +95,7 @@ size_t hist_key<node<opts3>>(const node<opts3>& n) { return n.v; }
 template<>
 size_t hist_key<node<opts4>>(const node<opts4>& n) { return n.v; }
 
-BOOST_AUTO_TEST_CASE(test_log_histogram) {
+BOOST_AUTO_TEST_CASE(test_log_heap) {
     test_with_options<opts1>();
     test_with_options<opts2>();
     test_with_options<opts3>();

@@ -44,15 +44,15 @@ inline constexpr size_t pow2_rank_constexpr(size_t v) {
     return v <= 1 ? 1 : 1 + pow2_rank_constexpr(v >> 1);
 }
 
-// Configures log_histogram.
+// Configures log_heap.
 // Only values <= max_size can be inserted into the histogram.
-// log_histogram::contains_above_min() returns true if and only if the histogram contains any value >= min_size.
-struct log_histogram_options {
+// log_heap::contains_above_min() returns true if and only if the histogram contains any value >= min_size.
+struct log_heap_options {
     const size_t min_size;
     const size_t sub_bucket_shift;
     const size_t max_size;
 
-    constexpr log_histogram_options(const size_t min_size, size_t sub_bucket_shift, size_t max_size)
+    constexpr log_heap_options(const size_t min_size, size_t sub_bucket_shift, size_t max_size)
             : min_size(min_size)
             , sub_bucket_shift(sub_bucket_shift)
             , max_size(max_size) {
@@ -82,24 +82,24 @@ struct log_histogram_options {
     }
 };
 
-template<const log_histogram_options& opts>
-struct log_histogram_bucket_index {
+template<const log_heap_options& opts>
+struct log_heap_bucket_index {
     using type = std::conditional_t<(opts.number_of_buckets() > ((1 << 16) - 1)), uint32_t,
           std::conditional_t<(opts.number_of_buckets() > ((1 << 8) - 1)), uint16_t, uint8_t>>;
 };
 
-template<const log_histogram_options& opts>
-struct log_histogram_hook : public bi::list_base_hook<> {
-    typename log_histogram_bucket_index<opts>::type cached_bucket;
+template<const log_heap_options& opts>
+struct log_heap_hook : public bi::list_base_hook<> {
+    typename log_heap_bucket_index<opts>::type cached_bucket;
 };
 
 template<typename T>
 size_t hist_key(const T&);
 
-template<typename T, const log_histogram_options& opts, bool = std::is_base_of<log_histogram_hook<opts>, T>::value>
-struct log_histogram_element_traits {
+template<typename T, const log_heap_options& opts, bool = std::is_base_of<log_heap_hook<opts>, T>::value>
+struct log_heap_element_traits {
     using bucket_type = bi::list<T, bi::constant_time_size<false>>;
-    static void cache_bucket(T& v, typename log_histogram_bucket_index<opts>::type b) {
+    static void cache_bucket(T& v, typename log_heap_bucket_index<opts>::type b) {
         v.cached_bucket = b;
     }
     static size_t cached_bucket(const T& v) {
@@ -110,10 +110,10 @@ struct log_histogram_element_traits {
     }
 };
 
-template<typename T, const log_histogram_options& opts>
-struct log_histogram_element_traits<T, opts, false> {
+template<typename T, const log_heap_options& opts>
+struct log_heap_element_traits<T, opts, false> {
     using bucket_type = typename T::bucket_type;
-    static void cache_bucket(T&, typename log_histogram_bucket_index<opts>::type);
+    static void cache_bucket(T&, typename log_heap_bucket_index<opts>::type);
     static size_t cached_bucket(const T&);
     static size_t hist_key(const T&);
 };
@@ -126,17 +126,17 @@ struct log_histogram_element_traits<T, opts, false> {
  * not admitted. The histogram gives bigger precision to smaller values, with
  * precision decreasing as values get larger.
  */
-template<typename T, const log_histogram_options& opts>
+template<typename T, const log_heap_options& opts>
 GCC6_CONCEPT(
     requires requires() {
-        typename log_histogram_element_traits<T, opts>;
+        typename log_heap_element_traits<T, opts>;
     }
 )
-class log_histogram final {
+class log_heap final {
     // Ensure that (value << sub_bucket_index) in bucket_of() doesn't overflow
     static_assert(pow2_rank_constexpr(opts.max_size - opts.min_size + 1) + opts.sub_bucket_shift < std::numeric_limits<size_t>::digits, "overflow");
 private:
-    using traits = log_histogram_element_traits<T, opts>;
+    using traits = log_heap_element_traits<T, opts>;
     using bucket = typename traits::bucket_type;
 
     struct hist_size_less_compare {
@@ -150,7 +150,7 @@ private:
 public:
     template <bool IsConst>
     class hist_iterator : public std::iterator<std::input_iterator_tag, std::conditional_t<IsConst, const T, T>> {
-        using hist_type = std::conditional_t<IsConst, const log_histogram, log_histogram>;
+        using hist_type = std::conditional_t<IsConst, const log_heap, log_heap>;
         using iterator_type = std::conditional_t<IsConst, typename bucket::const_iterator, typename bucket::iterator>;
 
         hist_type& _h;
@@ -250,7 +250,7 @@ public:
         maybe_adjust_watermark();
     }
     // Merges the specified histogram, moving all elements from it into this.
-    void merge(log_histogram& other) {
+    void merge(log_heap& other) {
         for (size_t i = 0; i < opts.number_of_buckets(); ++i) {
             _buckets[i].splice(_buckets[i].begin(), other._buckets[i]);
         }

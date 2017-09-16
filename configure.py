@@ -224,7 +224,7 @@ scylla_tests = [
     'tests/murmur_hash_test',
     'tests/allocation_strategy_test',
     'tests/logalloc_test',
-    'tests/log_histogram_test',
+    'tests/log_heap_test',
     'tests/managed_vector_test',
     'tests/crc_test',
     'tests/flush_queue_test',
@@ -672,7 +672,7 @@ deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']
 deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc', 'utils/uuid.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
 deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
-deps['tests/log_histogram_test'] = ['tests/log_histogram_test.cc']
+deps['tests/log_heap_test'] = ['tests/log_heap_test.cc']
 deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
 
 warnings = [

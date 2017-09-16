@@ -62,7 +62,7 @@ boost_tests = [
     'query_processor_test',
     'batchlog_manager_test',
     'logalloc_test',
-    'log_histogram_test',
+    'log_heap_test',
     'crc_test',
     'flush_queue_test',
     'config_test',

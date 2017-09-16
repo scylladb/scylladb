@@ -37,7 +37,7 @@
 #include "utils/logalloc.hh"
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
-#include "utils/log_histogram.hh"
+#include "utils/log_heap.hh"
 
 namespace bi = boost::intrusive;
 
@@ -207,9 +207,9 @@ static_assert(min_free_space_for_compaction >= max_managed_object_size,
 // Since we only compact if there's >= min_free_space_for_compaction of free space,
 // we use min_free_space_for_compaction as the histogram's minimum size and put
 // everything below that value in the same bucket.
-extern constexpr log_histogram_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
+extern constexpr log_heap_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
 
-struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_options> {
+struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
     bool _lsa_managed;
     segment::size_type _free_space;
     region::impl* _region;
@@ -236,7 +236,7 @@ struct segment_descriptor : public log_histogram_hook<segment_descriptor_hist_op
     }
 };
 
-using segment_descriptor_hist = log_histogram<segment_descriptor, segment_descriptor_hist_options>;
+using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
 #ifndef DEFAULT_ALLOCATOR
 
