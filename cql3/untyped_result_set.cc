@@ -47,11 +47,11 @@
 #include "result_set.hh"
 #include "transport/messages/result_message.hh"
 
-cql3::untyped_result_set::row::row(const std::unordered_map<sstring, bytes_opt>& data)
+cql3::untyped_result_set_row::untyped_result_set_row(const std::unordered_map<sstring, bytes_opt>& data)
     : _data(data)
 {}
 
-cql3::untyped_result_set::row::row(const std::vector<::shared_ptr<column_specification>>& columns, std::vector<bytes_opt> data)
+cql3::untyped_result_set_row::untyped_result_set_row(const std::vector<::shared_ptr<column_specification>>& columns, std::vector<bytes_opt> data)
 : _columns(columns)
 , _data([&columns, data = std::move(data)] () mutable {
     std::unordered_map<sstring, bytes_opt> tmp;
@@ -62,7 +62,7 @@ cql3::untyped_result_set::row::row(const std::vector<::shared_ptr<column_specifi
 }())
 {}
 
-bool cql3::untyped_result_set::row::has(const sstring& name) const {
+bool cql3::untyped_result_set_row::has(const sstring& name) const {
     auto i = _data.find(name);
     return i != _data.end() && i->second;
 }
@@ -90,7 +90,7 @@ cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
 }())
 {}
 
-const cql3::untyped_result_set::row& cql3::untyped_result_set::one() const {
+const cql3::untyped_result_set_row& cql3::untyped_result_set::one() const {
     if (_rows.size() != 1) {
         throw std::runtime_error("One row required, " + std::to_string(_rows.size()) + " found");
     }

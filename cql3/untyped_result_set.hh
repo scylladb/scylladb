@@ -49,96 +49,97 @@
 
 namespace cql3 {
 
+class untyped_result_set_row {
+private:
+    const std::vector<::shared_ptr<column_specification>> _columns;
+    const std::unordered_map<sstring, bytes_opt> _data;
+public:
+    untyped_result_set_row(const std::unordered_map<sstring, bytes_opt>&);
+    untyped_result_set_row(const std::vector<::shared_ptr<column_specification>>&, std::vector<bytes_opt>);
+    untyped_result_set_row(untyped_result_set_row&&) = default;
+    untyped_result_set_row(const untyped_result_set_row&) = delete;
+
+    bool has(const sstring&) const;
+    bytes get_blob(const sstring& name) const {
+        return *_data.at(name);
+    }
+    template<typename T>
+    T get_as(const sstring& name) const {
+        return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
+    }
+    template<typename T>
+    std::experimental::optional<T> get_opt(const sstring& name) const {
+        return has(name) ? get_as<T>(name) : std::experimental::optional<T>{};
+    }
+    template<typename T>
+    T get_or(const sstring& name, T t) const {
+        return has(name) ? get_as<T>(name) : t;
+    }
+    // this could maybe be done as an overload of get_as (or something), but that just
+    // muddles things for no real gain. Let user (us) attempt to know what he is doing instead.
+    template<typename K, typename V, typename Iter>
+    void get_map_data(const sstring& name, Iter out, data_type keytype =
+            data_type_for<K>(), data_type valtype =
+            data_type_for<V>()) const {
+        auto vec =
+                value_cast<map_type_impl::native_type>(
+                        map_type_impl::get_instance(keytype, valtype, false)->deserialize(
+                                get_blob(name)));
+        std::transform(vec.begin(), vec.end(), out,
+                [](auto& p) {
+                    return std::pair<K, V>(value_cast<K>(p.first), value_cast<V>(p.second));
+                });
+    }
+    template<typename K, typename V, typename ... Rest>
+    std::unordered_map<K, V, Rest...> get_map(const sstring& name,
+            data_type keytype = data_type_for<K>(), data_type valtype =
+                    data_type_for<V>()) const {
+        std::unordered_map<K, V, Rest...> res;
+        get_map_data<K, V>(name, std::inserter(res, res.end()), keytype, valtype);
+        return res;
+    }
+    template<typename V, typename Iter>
+    void get_list_data(const sstring& name, Iter out, data_type valtype = data_type_for<V>()) const {
+        auto vec =
+                value_cast<list_type_impl::native_type>(
+                        list_type_impl::get_instance(valtype, false)->deserialize(
+                                get_blob(name)));
+        std::transform(vec.begin(), vec.end(), out, [](auto& v) { return value_cast<V>(v); });
+    }
+    template<typename V, typename ... Rest>
+    std::vector<V, Rest...> get_list(const sstring& name, data_type valtype = data_type_for<V>()) const {
+        std::vector<V, Rest...> res;
+        get_list_data<V>(name, std::back_inserter(res), valtype);
+        return res;
+    }
+    template<typename V, typename Iter>
+    void get_set_data(const sstring& name, Iter out, data_type valtype =
+                    data_type_for<V>()) const {
+        auto vec =
+                        value_cast<set_type_impl::native_type>(
+                                        set_type_impl::get_instance(valtype,
+                                                        false)->deserialize(
+                                                        get_blob(name)));
+        std::transform(vec.begin(), vec.end(), out, [](auto& p) {
+            return value_cast<V>(p);
+        });
+    }
+    template<typename V, typename ... Rest>
+    std::unordered_set<V, Rest...> get_set(const sstring& name,
+            data_type valtype =
+                    data_type_for<V>()) const {
+        std::unordered_set<V, Rest...> res;
+        get_set_data<V>(name, std::inserter(res, res.end()), valtype);
+        return res;
+    }
+    const std::vector<::shared_ptr<column_specification>>& get_columns() const {
+        return _columns;
+    }
+};
+
 class untyped_result_set {
 public:
-    class row {
-    private:
-        const std::vector<::shared_ptr<column_specification>> _columns;
-        const std::unordered_map<sstring, bytes_opt> _data;
-    public:
-        row(const std::unordered_map<sstring, bytes_opt>&);
-        row(const std::vector<::shared_ptr<column_specification>>&, std::vector<bytes_opt>);
-        row(row&&) = default;
-        row(const row&) = delete;
-
-        bool has(const sstring&) const;
-        bytes get_blob(const sstring& name) const {
-            return *_data.at(name);
-        }
-        template<typename T>
-        T get_as(const sstring& name) const {
-            return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
-        }
-        template<typename T>
-        std::experimental::optional<T> get_opt(const sstring& name) const {
-            return has(name) ? get_as<T>(name) : std::experimental::optional<T>{};
-        }
-        template<typename T>
-        T get_or(const sstring& name, T t) const {
-            return has(name) ? get_as<T>(name) : t;
-        }
-        // this could maybe be done as an overload of get_as (or something), but that just
-        // muddles things for no real gain. Let user (us) attempt to know what he is doing instead.
-        template<typename K, typename V, typename Iter>
-        void get_map_data(const sstring& name, Iter out, data_type keytype =
-                data_type_for<K>(), data_type valtype =
-                data_type_for<V>()) const {
-            auto vec =
-                    value_cast<map_type_impl::native_type>(
-                            map_type_impl::get_instance(keytype, valtype, false)->deserialize(
-                                    get_blob(name)));
-            std::transform(vec.begin(), vec.end(), out,
-                    [](auto& p) {
-                        return std::pair<K, V>(value_cast<K>(p.first), value_cast<V>(p.second));
-                    });
-        }
-        template<typename K, typename V, typename ... Rest>
-        std::unordered_map<K, V, Rest...> get_map(const sstring& name,
-                data_type keytype = data_type_for<K>(), data_type valtype =
-                        data_type_for<V>()) const {
-            std::unordered_map<K, V, Rest...> res;
-            get_map_data<K, V>(name, std::inserter(res, res.end()), keytype, valtype);
-            return res;
-        }
-        template<typename V, typename Iter>
-        void get_list_data(const sstring& name, Iter out, data_type valtype = data_type_for<V>()) const {
-            auto vec =
-                    value_cast<list_type_impl::native_type>(
-                            list_type_impl::get_instance(valtype, false)->deserialize(
-                                    get_blob(name)));
-            std::transform(vec.begin(), vec.end(), out, [](auto& v) { return value_cast<V>(v); });
-        }
-        template<typename V, typename ... Rest>
-        std::vector<V, Rest...> get_list(const sstring& name, data_type valtype = data_type_for<V>()) const {
-            std::vector<V, Rest...> res;
-            get_list_data<V>(name, std::back_inserter(res), valtype);
-            return res;
-        }
-        template<typename V, typename Iter>
-        void get_set_data(const sstring& name, Iter out, data_type valtype =
-                        data_type_for<V>()) const {
-            auto vec =
-                            value_cast<set_type_impl::native_type>(
-                                            set_type_impl::get_instance(valtype,
-                                                            false)->deserialize(
-                                                            get_blob(name)));
-            std::transform(vec.begin(), vec.end(), out, [](auto& p) {
-                return value_cast<V>(p);
-            });
-        }
-        template<typename V, typename ... Rest>
-        std::unordered_set<V, Rest...> get_set(const sstring& name,
-                data_type valtype =
-                        data_type_for<V>()) const {
-            std::unordered_set<V, Rest...> res;
-            get_set_data<V>(name, std::inserter(res, res.end()), valtype);
-            return res;
-        }
-        const std::vector<::shared_ptr<column_specification>>& get_columns() const {
-            return _columns;
-        }
-    };
-
+    using row = untyped_result_set_row;
     typedef std::vector<row> rows_type;
     using const_iterator = rows_type::const_iterator;
 

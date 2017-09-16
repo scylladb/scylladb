@@ -365,7 +365,7 @@ private:
      * \brief iterate over all results using paging
      */
     future<> for_each_cql_result(::shared_ptr<cql3::internal_query_state> state,
-                std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f);
+                std::function<stop_iteration(const cql3::untyped_result_set_row&)>&& f);
     /*!
      * \brief check, based on the state if there are additional results
      * Users of the paging, should not use the internal_query_state directly
@@ -407,7 +407,7 @@ public:
      */
 
     template<typename... Args>
-    future<> query(const sstring& query_string, std::function<stop_iteration(const cql3::untyped_result_set::row&)>&& f, Args&&... args) {
+    future<> query(const sstring& query_string, std::function<stop_iteration(const cql3::untyped_result_set_row&)>&& f, Args&&... args) {
         return for_each_cql_result(create_paged_state(query_string, { data_value(std::forward<Args>(args))... }), std::move(f));
     }
 
