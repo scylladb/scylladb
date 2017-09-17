@@ -323,10 +323,21 @@ fi
 
 CUR_VERSION=`scylla --version` || true
 if [ "$CUR_VERSION" != "" ]; then
-    NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid version --version $CUR_VERSION --mode i` || true
+    if is_debian_variant; then
+        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' version --version $CUR_VERSION --mode i` || true
+    else
+        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/yum.repos.d/scylla*.repo' version --version $CUR_VERSION --mode i` || true
+    fi
     if [ "$NEW_VERSION" != "" ]; then
        echo $NEW_VERSION
     fi
+else
+    if is_debian_variant; then
+        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' version --version unknown --mode u` || true
+    else
+        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/yum.repos.d/scylla*.repo' version --version unknown --mode u` || true
+    fi
+    echo "Scylla executable is not found, check your installation" $NEW_VERSION
 fi
 
 # scylla_selinux_setup only supports Red Hat variants
