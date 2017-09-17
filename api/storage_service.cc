@@ -362,7 +362,7 @@ void set_storage_service(http_context& ctx, routes& r) {
             try {
                 res = fut.get0();
             } catch(std::runtime_error& e) {
-                return make_ready_future<json::json_return_type>(json_exception(httpd::bad_param_exception(e.what())));
+                throw httpd::bad_param_exception(e.what());
             }
             return make_ready_future<json::json_return_type>(json::json_return_type(res));
         });
