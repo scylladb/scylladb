@@ -1174,26 +1174,27 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
-    try {
-        ms().send_gossip_echo(id).get();
+    ms().send_gossip_echo(id).then([this, addr] {
         logger.trace("Got EchoMessage Reply");
         set_last_processed_message_at();
-        // After sending echo message, the Node might not be in the
-        // endpoint_state_map anymore, use the reference of local_state
-        // might cause user-after-free
-        auto it = endpoint_state_map.find(addr);
-        if (it == endpoint_state_map.end()) {
-            logger.info("Node {} is not in endpoint_state_map anymore", addr);
-        } else {
-            endpoint_state& state = it->second;
-            logger.debug("Mark Node {} alive after EchoMessage", addr);
-            real_mark_alive(addr, state);
-        }
-    } catch(...) {
-        logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
-    }
-
-    _pending_mark_alive_endpoints.erase(addr);
+        return seastar::async([this, addr] {
+            // After sending echo message, the Node might not be in the
+            // endpoint_state_map anymore, use the reference of local_state
+            // might cause user-after-free
+            auto it = endpoint_state_map.find(addr);
+            if (it == endpoint_state_map.end()) {
+                logger.info("Node {} is not in endpoint_state_map anymore", addr);
+            } else {
+                endpoint_state& state = it->second;
+                logger.debug("Mark Node {} alive after EchoMessage", addr);
+                real_mark_alive(addr, state);
+            }
+        });
+    }).finally([this, addr] {
+        _pending_mark_alive_endpoints.erase(addr);
+    }).handle_exception([addr] (auto ep) {
+        logger.warn("Fail to send EchoMessage to {}: {}", addr, ep);
+    });
 }
 
 // Runs inside seastar::async context
