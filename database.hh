@@ -523,6 +523,10 @@ public:
         return _config.datadir;
     }
 
+    logalloc::region_group& dirty_memory_region_group() const {
+        return _config.dirty_memory_manager->region_group();
+    }
+
     // Used for asynchronous operations that may defer and need to guarantee that the column
     // family will be alive until their termination
     template<typename Func, typename Futurator = futurize<std::result_of_t<Func()>>, typename... Args>

@@ -3247,7 +3247,8 @@ void dirty_memory_manager::start_reclaiming() noexcept {
 }
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
+    auto& cf = find_column_family(m.column_family_id());
+    return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
             auto& cf = find_column_family(m.column_family_id());
             cf.apply(m, m_schema, std::move(h));
@@ -3258,7 +3259,7 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
 }
 
 future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, timeout_clock::time_point timeout) {
-    return _dirty_memory_manager.region_group().run_when_memory_available([this, &m, &cf, h = std::move(h)]() mutable {
+    return cf.dirty_memory_region_group().run_when_memory_available([this, &m, &cf, h = std::move(h)]() mutable {
         cf.apply(m, std::move(h));
     }, timeout);
 }
