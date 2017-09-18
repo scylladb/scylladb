@@ -4175,3 +4175,65 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             BOOST_REQUIRE(!reader().get0());
         });
 }
+
+SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
+    return seastar::async([] {
+        cell_locker_stats cl_stats;
+
+        auto builder = schema_builder("tests", "tombstone_purge")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        builder.set_gc_grace_seconds(0);
+        builder.set_compaction_strategy(sstables::compaction_strategy_type::leveled);
+        auto s = builder.build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            auto sst = make_sstable(s, tmp->path, (*gen)++, la, big);
+            sst->set_unshared();
+            sst->set_sstable_level(1); // NEEDED for partitioned_sstable_set to actually have an effect
+            return sst;
+        };
+
+        auto compact = [&, s] (std::vector<shared_sstable> all) -> std::vector<shared_sstable> {
+            auto cm = make_lw_shared<compaction_manager>();
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
+            cf->mark_ready_for_writes();
+            return sstables::compact_sstables(std::move(all), *cf, sst_gen, 0 /*std::numeric_limits<uint64_t>::max()*/, 0).get0();
+        };
+
+        auto make_insert = [&] (auto p) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
+            BOOST_REQUIRE(m.decorated_key().token() == p.second);
+            return m;
+        };
+
+        auto tokens = token_generation_for_current_shard(4);
+        auto mut1 = make_insert(tokens[0]);
+        auto mut2 = make_insert(tokens[1]);
+        auto mut3 = make_insert(tokens[2]);
+        auto mut4 = make_insert(tokens[3]);
+        std::vector<shared_sstable> sstables = {
+                make_sstable_containing(sst_gen, {mut1, mut2}),
+                make_sstable_containing(sst_gen, {mut3, mut4})
+        };
+
+        auto result = compact(std::move(sstables));
+        BOOST_REQUIRE_EQUAL(4, result.size());
+
+        assert_that(sstable_reader(result[0], s))
+                .produces(mut1)
+                .produces_end_of_stream();
+        assert_that(sstable_reader(result[1], s))
+                .produces(mut2)
+                .produces_end_of_stream();
+        assert_that(sstable_reader(result[2], s))
+                .produces(mut3)
+                .produces_end_of_stream();
+        assert_that(sstable_reader(result[3], s))
+                .produces(mut4)
+                .produces_end_of_stream();
+    });
+}

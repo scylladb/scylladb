@@ -303,6 +303,10 @@ public:
             return next == _end ? dht::maximum_token() : next->first.lower().token();
         };
 
+        const auto current_token =  [&] {
+            return _it == _end ? dht::maximum_token() : _it->first.lower().token();
+        };
+
         while (_it != _end) {
             if (boost::icl::contains(_it->first, interval)) {
                 ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
@@ -312,7 +316,7 @@ public:
             if (boost::icl::lower_less(interval, _it->first)) {
                 return std::make_tuple(dht::token_range::make({token, true}, {_it->first.lower().token(), false}),
                     std::move(ssts),
-                    next_token());
+                    current_token());
             }
             _it++;
         }
