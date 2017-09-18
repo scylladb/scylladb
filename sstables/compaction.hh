@@ -89,6 +89,7 @@ namespace sstables {
         uint64_t end_size = 0;
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
+        int64_t ended_at;
         std::vector<shared_sstable> new_sstables;
         sstring stop_requested;
 
@@ -102,7 +103,7 @@ namespace sstables {
     };
 
     // Compact a list of N sstables into M sstables.
-    // Returns a vector with newly created sstables(s).
+    // Returns info about the finished compaction, which includes vector to new sstables.
     //
     // creator is used to get a sstable object for a new sstable that will be written.
     // max_sstable_size is a relaxed limit size for a sstable to be generated.
@@ -112,7 +113,7 @@ namespace sstables {
     // If cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<std::vector<shared_sstable>> compact_sstables(std::vector<shared_sstable> sstables,
+    future<compaction_info> compact_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false,
             seastar::thread_scheduling_group* tsg = nullptr);

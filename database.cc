@@ -72,6 +72,7 @@
 #include "view_info.hh"
 #include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
+#include "db/query_context.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/progress_monitor.hh"
 
@@ -1366,10 +1367,25 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
                 return sst;
         };
         return sstables::compact_sstables(*sstables_to_compact, *this, create_sstable, descriptor.max_sstable_bytes, descriptor.level,
-                cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact] (auto new_sstables) {
-            _compaction_strategy.notify_completion(*sstables_to_compact, new_sstables);
-            return this->rebuild_sstable_list(new_sstables, *sstables_to_compact);
+                cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact] (auto info) {
+            _compaction_strategy.notify_completion(*sstables_to_compact, info.new_sstables);
+            this->rebuild_sstable_list(info.new_sstables, *sstables_to_compact);
+            return info;
         });
+    }).then([this] (auto info) {
+        if (info.type != sstables::compaction_type::Compaction) {
+            return make_ready_future<>();
+        }
+        // skip update if running without a query context, for example, when running a test case.
+        if (!db::qctx) {
+            return make_ready_future<>();
+        }
+        // FIXME: add support to merged_rows. merged_rows is a histogram that
+        // shows how many sstables each row is merged from. This information
+        // cannot be accessed until we make combined_reader more generic,
+        // for example, by adding a reducer method.
+        return db::system_keyspace::update_compaction_history(info.ks, info.cf, info.ended_at,
+            info.start_size, info.end_size, std::unordered_map<int32_t, int64_t>{});
     });
 }
 

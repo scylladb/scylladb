@@ -2311,7 +2311,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             for (auto&& sst : all) {
                 column_family_test(cf).add_sstable(sst);
             }
-            return sstables::compact_sstables(to_compact, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+            return sstables::compact_sstables(to_compact, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0().new_sstables;
         };
 
         auto next_timestamp = [] {
@@ -2938,9 +2938,9 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
             BOOST_REQUIRE(now.time_since_epoch().count() == sst2->get_stats_metadata().max_local_deletion_time);
 
             auto creator = [s] { return sstables::make_sstable(s, "tests/sstables/tests-temporary", 56, la, big); };
-            auto new_sstables = sstables::compact_sstables({ sst1, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
-            BOOST_REQUIRE(new_sstables.size() == 1);
-            BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) == new_sstables.front()->get_stats_metadata().max_local_deletion_time);
+            auto info = sstables::compact_sstables({ sst1, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+            BOOST_REQUIRE(info.new_sstables.size() == 1);
+            BOOST_REQUIRE(((now + gc_clock::duration(100)).time_since_epoch().count()) == info.new_sstables.front()->get_stats_metadata().max_local_deletion_time);
         });
     });
 }
@@ -3389,9 +3389,9 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
         check_min_max_column_names(sst2, { "9ck101" }, { "9ck298" });
 
         auto creator = [s, tmp] { return sstables::make_sstable(s, tmp->path, 3, la, big); };
-        auto new_sstables = sstables::compact_sstables({ sst, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
-        BOOST_REQUIRE(new_sstables.size() == 1);
-        check_min_max_column_names(new_sstables.front(), { "0ck100" }, { "9ck298" });
+        auto info = sstables::compact_sstables({ sst, sst2 }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(info.new_sstables.size() == 1);
+        check_min_max_column_names(info.new_sstables.front(), { "0ck100" }, { "9ck298" });
     });
 }
 
@@ -4005,10 +4005,10 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             sst->set_unshared();
             return sst;
         };
-        auto new_sstables = sstables::compact_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
-        BOOST_REQUIRE(new_sstables.size() == 1);
-        BOOST_REQUIRE(new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
-        BOOST_REQUIRE_CLOSE(new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
+        auto info = sstables::compact_sstables({ sst }, *cf, creator, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(info.new_sstables.size() == 1);
+        BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(gc_before) == 0.0f);
+        BOOST_REQUIRE_CLOSE(info.new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
 
         std::map<sstring, sstring> options;
         options.emplace("tombstone_threshold", "0.3f");
@@ -4199,7 +4199,7 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
             auto cm = make_lw_shared<compaction_manager>();
             auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
             cf->mark_ready_for_writes();
-            return sstables::compact_sstables(std::move(all), *cf, sst_gen, 0 /*std::numeric_limits<uint64_t>::max()*/, 0).get0();
+            return sstables::compact_sstables(std::move(all), *cf, sst_gen, 0 /*std::numeric_limits<uint64_t>::max()*/, 0).get0().new_sstables;
         };
 
         auto make_insert = [&] (auto p) {
