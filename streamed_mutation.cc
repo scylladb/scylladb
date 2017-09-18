@@ -508,6 +508,9 @@ public:
 streamed_mutation merge_mutations(std::vector<streamed_mutation> ms)
 {
     assert(!ms.empty());
+    if (ms.size() == 1) {
+        return std::move(ms[0]);
+    }
     return make_streamed_mutation<mutation_merger>(ms.back().schema(), ms.back().decorated_key(), std::move(ms));
 }
 
