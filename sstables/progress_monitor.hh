@@ -20,28 +20,24 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-// Glue logic for writing memtables to sstables
-
 #pragma once
 
-#include "memtable.hh"
-#include "sstables/shared_sstable.hh"
-#include "sstables/progress_monitor.hh"
-#include <seastar/core/future.hh>
-#include <seastar/core/file.hh>
-#include <seastar/core/thread.hh>
+
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/shared_ptr_incomplete.hh>
 
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst,
-        seastar::shared_ptr<sstables::write_monitor> mon,
-        bool backup = false,
-        const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false,
-        seastar::thread_scheduling_group* tsg = nullptr);
+namespace sstables {
+class write_monitor {
+public:
+    virtual ~write_monitor() { }
+    virtual void on_write_completed() = 0;
+    virtual void on_flush_completed() = 0;
+};
 
-future<>
-write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst);
+struct noop_write_monitor final : public write_monitor {
+    virtual void on_write_completed() override { }
+    virtual void on_flush_completed() override { }
+};
+
+seastar::shared_ptr<write_monitor> default_write_monitor();
+}
