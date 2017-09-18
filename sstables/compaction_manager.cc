@@ -20,6 +20,7 @@
  */
 
 #include "compaction_manager.hh"
+#include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include <seastar/core/metrics.hh>
@@ -567,6 +568,14 @@ future<> compaction_manager::remove(column_family* cf) {
     });
 }
 
+void compaction_manager::stop_tracking_ongoing_compactions(column_family* cf) {
+    for (auto& info : _compactions) {
+        if (cf->schema()->ks_name() == info->ks && cf->schema()->cf_name() == info->cf) {
+            info->stop_tracking();
+        }
+    }
+}
+
 void compaction_manager::stop_compaction(sstring type) {
     // TODO: this method only works for compaction of type compaction and cleanup.
     // Other types are: validation, scrub, index_build.
@@ -588,4 +597,69 @@ void compaction_manager::stop_compaction(sstring type) {
 void compaction_manager::on_compaction_complete(compaction_weight_registration& weight_registration) {
     weight_registration.deregister();
     reevalute_postponed_compactions();
+}
+
+double compaction_backlog_tracker::backlog() {
+    return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+}
+
+void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
+    _ongoing_writes.erase(sst);
+    _impl->add_sstable(std::move(sst));
+}
+
+void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
+    _ongoing_compactions.erase(sst);
+    _impl->remove_sstable(std::move(sst));
+}
+
+void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
+    _ongoing_writes.emplace(sst, &wp);
+}
+
+void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
+    _ongoing_compactions.emplace(sst, &rp);
+}
+
+void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) {
+    for (auto&& w : _ongoing_writes) {
+        new_bt.register_partially_written_sstable(w.first, *w.second);
+    }
+
+    if (move_read_charges) {
+        for (auto&& w : _ongoing_compactions) {
+            new_bt.register_compacting_sstable(w.first, *w.second);
+        }
+    }
+    _ongoing_writes = {};
+    _ongoing_compactions = {};
+}
+
+void compaction_backlog_tracker::revert_charges(sstables::shared_sstable sst) {
+    _ongoing_writes.erase(sst);
+    _ongoing_compactions.erase(sst);
+}
+
+compaction_backlog_tracker::~compaction_backlog_tracker() {
+    if (_manager) {
+        _manager->remove_backlog_tracker(this);
+    }
+}
+
+void compaction_backlog_manager::remove_backlog_tracker(compaction_backlog_tracker* tracker) {
+    _backlog_trackers.erase(tracker);
+}
+
+double compaction_backlog_manager::backlog() const {
+    double backlog = 0;
+
+    for (auto& tracker: _backlog_trackers) {
+        backlog += tracker->backlog();
+    }
+    return backlog;
+}
+
+void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker) {
+    tracker._manager = this;
+    _backlog_trackers.insert(&tracker);
 }

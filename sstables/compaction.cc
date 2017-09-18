@@ -53,6 +53,7 @@
 #include "core/pipe.hh"
 
 #include "sstables.hh"
+#include "sstables/progress_monitor.hh"
 #include "compaction.hh"
 #include "compaction_manager.hh"
 #include "database.hh"
@@ -147,6 +148,144 @@ public:
     void consume_end_of_stream();
 };
 
+struct compaction_read_monitor_generator final : public read_monitor_generator {
+    class compaction_read_monitor final : public  sstables::read_monitor, public backlog_read_progress_manager {
+        sstables::shared_sstable _sst;
+        compaction_manager& _compaction_manager;
+        column_family& _cf;
+        const sstables::reader_position_tracker* _tracker = nullptr;
+        uint64_t _last_position_seen = 0;
+    public:
+        virtual void on_read_started(const sstables::reader_position_tracker& tracker) override {
+            _tracker = &tracker;
+            _cf.get_compaction_strategy().get_backlog_tracker().register_compacting_sstable(_sst, *this);
+        }
+
+        virtual void on_read_completed() override {
+            if (_tracker) {
+                _last_position_seen = _tracker->position;
+                _tracker = nullptr;
+            }
+        }
+
+        virtual uint64_t compacted() const override {
+            if (_tracker) {
+                return _tracker->position;
+            }
+            return _last_position_seen;
+        }
+
+        void remove_sstable(bool is_tracking) {
+            if (is_tracking) {
+                _cf.get_compaction_strategy().get_backlog_tracker().remove_sstable(_sst);
+            }
+            _sst = {};
+        }
+
+        compaction_read_monitor(sstables::shared_sstable sst, compaction_manager& cm, column_family &cf)
+            : _sst(std::move(sst)), _compaction_manager(cm), _cf(cf) { }
+
+        ~compaction_read_monitor() {
+            // We failed to finish handling this SSTable, so we have to update the backlog_tracker
+            // about it.
+            if (_sst) {
+                _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+            }
+        }
+    };
+
+    virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
+        _generated_monitors.emplace_back(std::move(sst), _compaction_manager, _cf);
+        return _generated_monitors.back();
+    }
+    compaction_read_monitor_generator(compaction_manager& cm, column_family& cf)
+        : _compaction_manager(cm)
+        , _cf(cf) {}
+
+    void remove_sstables(bool is_tracking) {
+        for (auto& rm : _generated_monitors) {
+            rm.remove_sstable(is_tracking);
+        }
+
+    }
+private:
+     compaction_manager& _compaction_manager;
+     column_family& _cf;
+     std::deque<compaction_read_monitor> _generated_monitors;
+};
+
+class compaction_write_monitor final : public sstables::write_monitor, public backlog_write_progress_manager {
+    sstables::shared_sstable _sst;
+    column_family& _cf;
+    const sstables::writer_offset_tracker* _tracker = nullptr;
+    uint64_t _progress_seen = 0;
+public:
+    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf)
+        : _sst(sst)
+        , _cf(cf) {}
+
+    ~compaction_write_monitor() {
+        if (_sst) {
+            _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
+        }
+    }
+
+    virtual void on_write_started(const sstables::writer_offset_tracker& tracker) override {
+        _tracker = &tracker;
+        _cf.get_compaction_strategy().get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+    }
+
+    virtual void on_data_write_completed() override {
+        if (_tracker) {
+            _progress_seen = _tracker->offset;
+            _tracker = nullptr;
+        }
+    }
+
+    virtual uint64_t written() const {
+        if (_tracker) {
+            return _tracker->offset;
+        }
+        return _progress_seen;
+    }
+
+    void add_sstable() {
+        _cf.get_compaction_strategy().get_backlog_tracker().add_sstable(_sst);
+        _sst = {};
+    }
+
+    virtual void on_write_completed() override { }
+    virtual void on_flush_completed() override { }
+};
+
+// Resharding doesn't really belong into any strategy, because it is not worried about laying out
+// SSTables according to any strategy-specific criteria.  So we will just make it proportional to
+// the amount of data we still have to reshard.
+//
+// Although at first it may seem like we could improve this by tracking the ongoing reshard as well
+// and reducing the backlog as we compact, that is not really true. Resharding is not really
+// expected to get rid of data and it is usually just splitting data among shards. Whichever backlog
+// we get rid of by tracking the compaction will come back as a big spike as we add this SSTable
+// back to their rightful shard owners.
+//
+// So because the data is supposed to be constant, we will just add the total amount of data as the
+// backlog.
+class resharding_backlog_tracker final : public compaction_backlog_tracker::impl {
+    uint64_t _total_bytes = 0;
+public:
+    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) {
+        return _total_bytes;
+    }
+
+    virtual void add_sstable(sstables::shared_sstable sst)  override {
+        _total_bytes += sst->data_size();
+    }
+
+    virtual void remove_sstable(sstables::shared_sstable sst)  override {
+        _total_bytes -= sst->data_size();
+    }
+};
+
 class compaction {
 protected:
     column_family& _cf;
@@ -206,17 +345,7 @@ public:
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
-    virtual flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const {
-        return ::make_local_shard_sstable_reader(_cf.schema(),
-                std::move(ssts),
-                query::full_partition_range,
-                _cf.schema()->full_slice(),
-                service::get_local_compaction_priority(),
-                no_resource_tracking(),
-                nullptr,
-                ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no);
-    }
+    virtual flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const = 0;
 
     flat_mutation_reader setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
@@ -267,6 +396,7 @@ private:
         auto duration = std::chrono::duration<float>(ended_at - started_at);
         auto throughput = (double(_info->end_size) / (1024*1024)) / duration.count();
         sstring new_sstables_msg;
+
         for (auto& newtab : _info->new_sstables) {
             new_sstables_msg += sprint("%s:level=%d, ", newtab->get_filename(), newtab->get_sstable_level());
         }
@@ -283,6 +413,8 @@ private:
             _info->total_partitions, _info->total_keys_written);
         report_finish(formatted_msg, ended_at);
 
+        backlog_tracker_adjust_charges();
+
         auto info = std::move(_info);
         _cf.get_compaction_manager().deregister_compaction(info);
         return std::move(*info);
@@ -290,6 +422,7 @@ private:
 
     virtual void report_start(const sstring& formatted_msg) const = 0;
     virtual void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const = 0;
+    virtual void backlog_tracker_adjust_charges() = 0;
 
     virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() {
         return [] (const dht::decorated_key& dk) {
@@ -357,6 +490,8 @@ class regular_compaction : public compaction {
     shared_sstable _sst;
     stdx::optional<sstable_writer> _writer;
     stdx::optional<compaction_weight_registration> _weight_registration;
+    mutable compaction_read_monitor_generator _monitor_generator;
+    std::deque<compaction_write_monitor> _active_write_monitors = {};
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator,
             seastar::thread_scheduling_group* tsg)
@@ -365,7 +500,21 @@ public:
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
         , _weight_registration(std::move(descriptor.weight_registration))
+        , _monitor_generator(_cf.get_compaction_manager(), _cf)
     {
+    }
+
+    flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
+        return ::make_local_shard_sstable_reader(_cf.schema(),
+                std::move(ssts),
+                query::full_partition_range,
+                _cf.schema()->full_slice(),
+                service::get_local_compaction_priority(),
+                no_resource_tracking(),
+                nullptr,
+                ::streamed_mutation::forwarding::no,
+                ::mutation_reader::forwarding::no,
+                _monitor_generator);
     }
 
     void report_start(const sstring& formatted_msg) const override {
@@ -374,6 +523,13 @@ public:
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
         clogger.info("Compacted {}", formatted_msg);
+    }
+
+    void backlog_tracker_adjust_charges() override {
+        _monitor_generator.remove_sstables(_info->tracking);
+        for (auto& wm : _active_write_monitors) {
+            wm.add_sstable();
+        }
     }
 
     virtual std::function<api::timestamp_type(const dht::decorated_key&)> max_purgeable_func() override {
@@ -394,9 +550,11 @@ public:
             _sst = _creator();
             setup_new_sstable(_sst);
 
+            _active_write_monitors.emplace_back(_sst, _cf);
             auto&& priority = service::get_local_compaction_priority();
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
+            cfg.monitor = &_active_write_monitors.back();
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority));
         }
         return &*_writer;
@@ -458,14 +616,26 @@ class resharding_compaction final : public compaction {
     std::vector<std::pair<shared_sstable, stdx::optional<sstable_writer>>> _output_sstables;
     shard_id _shard; // shard of current sstable writer
     std::function<shared_sstable(shard_id)> _sstable_creator;
+    compaction_backlog_tracker _resharding_backlog_tracker;
 public:
     resharding_compaction(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
             uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
         : compaction(cf, std::move(sstables), max_sstable_size, sstable_level, tsg)
         , _output_sstables(smp::count)
         , _sstable_creator(std::move(creator))
+        , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
     {
+        cf.get_compaction_manager().register_backlog_tracker(_resharding_backlog_tracker);
+        for (auto& s : _sstables) {
+            _resharding_backlog_tracker.add_sstable(s);
+        }
         _info->type = compaction_type::Reshard;
+    }
+
+    ~resharding_compaction() {
+        for (auto& s : _sstables) {
+            _resharding_backlog_tracker.remove_sstable(s);
+        }
     }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
@@ -488,6 +658,8 @@ public:
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
         clogger.info("Resharded {}", formatted_msg);
     }
+
+    void backlog_tracker_adjust_charges() override { }
 
     sstable_writer* select_sstable_writer(const dht::decorated_key& dk) override {
         _shard = dht::shard_of(dk.token());

@@ -39,6 +39,9 @@
 
 #include <vector>
 #include <chrono>
+#include <cmath>
+#include <ctgmath>
+#include <seastar/core/shared_ptr.hh>
 
 #include "sstables.hh"
 #include "compaction.hh"
@@ -56,6 +59,7 @@
 #include "date_tiered_compaction_strategy.hh"
 #include "leveled_compaction_strategy.hh"
 #include "time_window_compaction_strategy.hh"
+#include "sstables/compaction_backlog_manager.hh"
 
 logging::logger date_tiered_manifest::logger = logging::logger("DateTieredCompactionStrategy");
 logging::logger leveled_manifest::logger("LeveledManifest");
@@ -349,6 +353,30 @@ compaction_strategy_impl::get_resharding_jobs(column_family& cf, std::vector<sst
     return jobs;
 }
 
+struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
+    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) override {
+        return std::numeric_limits<double>::infinity();
+    }
+    virtual void add_sstable(sstables::shared_sstable sst) override { }
+    virtual void remove_sstable(sstables::shared_sstable sst) override { }
+};
+
+struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
+    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) override {
+        return 0;
+    }
+    virtual void add_sstable(sstables::shared_sstable sst) override { }
+    virtual void remove_sstable(sstables::shared_sstable sst)  override { }
+};
+
+// Just so that if we have more than one CF with NullStrategy, we don't create a lot
+// of objects to iterate over for no reason
+// Still thread local because of make_unique. But this will disappear soon
+static thread_local compaction_backlog_tracker null_backlog_tracker(std::make_unique<null_backlog_tracker>());
+compaction_backlog_tracker& get_null_backlog_tracker() {
+    return null_backlog_tracker;
+}
+
 //
 // Null compaction strategy is the default compaction strategy.
 // As the name implies, it does nothing.
@@ -365,6 +393,10 @@ public:
 
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::null;
+    }
+
+    virtual compaction_backlog_tracker& get_backlog_tracker() override {
+        return get_null_backlog_tracker();
     }
 };
 
@@ -389,7 +421,76 @@ public:
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::major;
     }
+
+    virtual compaction_backlog_tracker& get_backlog_tracker() override {
+        return get_null_backlog_tracker();
+    }
 };
+
+leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring, sstring>& options)
+        : compaction_strategy_impl(options)
+        , _stcs_options(options)
+        , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
+{
+    using namespace cql3::statements;
+
+    auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
+    _max_sstable_size_in_mb = property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
+    if (_max_sstable_size_in_mb >= 1000) {
+        leveled_manifest::logger.warn("Max sstable size of {}MB is configured; having a unit of compaction this large is probably a bad idea",
+            _max_sstable_size_in_mb);
+    } else if (_max_sstable_size_in_mb < 50) {
+        leveled_manifest::logger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance" \
+            "improves up to 160MB", _max_sstable_size_in_mb);
+    }
+    _compaction_counter.resize(leveled_manifest::MAX_LEVELS);
+}
+
+time_window_compaction_strategy::time_window_compaction_strategy(const std::map<sstring, sstring>& options)
+    : compaction_strategy_impl(options)
+    , _options(options)
+    , _stcs_options(options)
+    , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
+{
+    if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+        _disable_tombstone_compaction = true;
+        clogger.debug("Disabling tombstone compactions for TWCS");
+    } else {
+        clogger.debug("Enabling tombstone compactions for TWCS");
+    }
+    _use_clustering_key_filter = true;
+}
+
+date_tiered_compaction_strategy::date_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
+    : compaction_strategy_impl(options)
+    , _manifest(options)
+    , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
+{
+    // tombstone compaction is disabled by default because:
+    // - deletion shouldn't be used with DTCS; rather data is deleted through TTL.
+    // - with time series workloads, it's usually better to wait for whole sstable to be expired rather than
+    // compacting a single sstable when it's more than 20% (default value) expired.
+    // For more details, see CASSANDRA-9234
+    if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
+        _disable_tombstone_compaction = true;
+        date_tiered_manifest::logger.debug("Disabling tombstone compactions for DTCS");
+    } else {
+        date_tiered_manifest::logger.debug("Enabling tombstone compactions for DTCS");
+    }
+
+    _use_clustering_key_filter = true;
+}
+
+size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
+    : compaction_strategy_impl(options)
+    , _options(options)
+    , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
+{}
+
+size_tiered_compaction_strategy::size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options)
+    : _options(options)
+    , _backlog_tracker(std::make_unique<unimplemented_backlog_tracker>())
+{}
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
@@ -432,6 +533,10 @@ compaction_strategy::make_sstable_set(schema_ptr schema) const {
     return sstable_set(
             _compaction_strategy_impl->make_sstable_set(std::move(schema)),
             make_lw_shared<sstable_list>());
+}
+
+compaction_backlog_tracker& compaction_strategy::get_backlog_tracker() {
+    return _compaction_strategy_impl->get_backlog_tracker();
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

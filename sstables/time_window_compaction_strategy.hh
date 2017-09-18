@@ -121,19 +121,9 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     db_clock::time_point _last_expired_check;
     timestamp_type _highest_window_seen;
     size_tiered_compaction_strategy_options _stcs_options;
+    compaction_backlog_tracker _backlog_tracker;
 public:
-    time_window_compaction_strategy(const std::map<sstring, sstring>& options)
-        : compaction_strategy_impl(options), _options(options), _stcs_options(options)
-    {
-        if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
-            _disable_tombstone_compaction = true;
-            clogger.debug("Disabling tombstone compactions for TWCS");
-        } else {
-            clogger.debug("Enabling tombstone compactions for TWCS");
-        }
-        _use_clustering_key_filter = true;
-    }
-
+    time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cf, std::vector<shared_sstable> candidates) override {
         auto gc_before = gc_clock::now() - cf.schema()->gc_grace_seconds();
 
@@ -297,6 +287,10 @@ public:
 
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::time_window;
+    }
+
+    virtual compaction_backlog_tracker& get_backlog_tracker() override {
+        return _backlog_tracker;
     }
 };
 

@@ -23,6 +23,7 @@
 
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
+#include "sstables/compaction_backlog_manager.hh"
 
 class column_family;
 class schema;
@@ -120,6 +121,8 @@ public:
     }
 
     sstable_set make_sstable_set(schema_ptr schema) const;
+
+    compaction_backlog_tracker& get_backlog_tracker();
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
