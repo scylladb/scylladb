@@ -849,7 +849,7 @@ with open(buildfile, 'w') as f:
         builddir = {outdir}
         cxx = {cxx}
         cxxflags = {user_cflags} {warnings} {defines}
-        ldflags = {user_ldflags}
+        ldflags = -fuse-ld=gold {user_ldflags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
