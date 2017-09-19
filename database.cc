@@ -470,10 +470,12 @@ public:
 
     virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
-        _selector_position = _pr->start()->value().token();
-        _read_sstables.clear();
 
-        return create_new_readers(nullptr);
+        if (_pr->start()->value().token() >= _selector_position) {
+            return create_new_readers(&_pr->start()->value().token());
+        }
+
+        return {};
     }
 };
 
