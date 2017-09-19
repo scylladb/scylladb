@@ -450,18 +450,9 @@ public:
             return {};
         }
 
-        dblog.trace("incremental_reader_selector {}: {} new sstables to consider", this, selection.sstables.size());
+        _selector_position = std::move(selection.next_token);
 
-        if (selection.next_token == _selector_position) {
-            _selector_position = dht::maximum_token();
-            dblog.trace(
-                    "incremental_reader_selector {}: selector ({}) is the same as next_token, setting it to max",
-                    this,
-                    selection.next_token);
-        } else {
-            _selector_position = std::move(selection.next_token);
-            dblog.trace("incremental_reader_selector {}: advancing selector to {}", this, _selector_position);
-        }
+        dblog.trace("incremental_reader_selector {}: {} new sstables to consider, advancing selector to {}", this, selection.sstables.size(), _selector_position);
 
         return boost::copy_range<std::vector<mutation_reader>>(selection.sstables
                 | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
