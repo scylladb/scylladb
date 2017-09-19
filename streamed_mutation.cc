@@ -126,7 +126,7 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 
 position_in_partition_view mutation_fragment::position() const
 {
-    return visit([] (auto& mf) { return mf.position(); });
+    return visit([] (auto& mf) -> position_in_partition_view { return mf.position(); });
 }
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
@@ -147,7 +147,7 @@ std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
 
 std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
     os << "{mutation_fragment: " << mf._kind << " " << mf.position() << " ";
-    mf.visit([&os] (const auto& what) {
+    mf.visit([&os] (const auto& what) -> void {
        os << what;
     });
     os << "}";
