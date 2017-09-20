@@ -40,7 +40,7 @@
 
 namespace sstables {
 
-static logging::logger sstlog("sstable");
+extern logging::logger sstlog;
 
 enum class mask_type : uint8_t {
     set,
