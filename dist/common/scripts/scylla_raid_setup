@@ -96,7 +96,9 @@ elif is_gentoo_variant; then
     emerge -uq sys-fs/mdadm sys-fs/xfsprogs
 fi
 if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
+    udevadm settle
     mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
+    udevadm settle
     mkfs.xfs $RAID -f
 else
     for dsk in $DISKS; do
@@ -107,7 +109,9 @@ else
         fi
     done
     wait
+    udevadm settle
     mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
+    udevadm settle
     mkfs.xfs $RAID -f -K
 fi
 if is_debian_variant; then
