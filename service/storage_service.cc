@@ -1016,8 +1016,8 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     slogger.debug("endpoint={} on_dead", endpoint);
-    netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        netw::get_local_messaging_service().remove_rpc_client(netw::msg_addr{endpoint, 0});
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             try {
                 subscriber->on_down(endpoint);
