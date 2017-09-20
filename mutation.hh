@@ -129,6 +129,7 @@ public:
 
     void apply(mutation&&);
     void apply(const mutation&);
+    void apply(const mutation_fragment&);
 
     mutation operator+(const mutation& other) const;
     mutation& operator+=(const mutation& other);

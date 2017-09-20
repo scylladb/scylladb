@@ -45,6 +45,8 @@
 #include "intrusive_set_external_comparator.hh"
 #include "utils/with_relational_operators.hh"
 
+class mutation_fragment;
+
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
@@ -898,6 +900,9 @@ public:
     bool fully_discontinuous(const schema&, const position_range&);
     // Removes all data, marking affected ranges as discontinuous.
     void evict() noexcept;
+    // Applies mutation_fragment.
+    // The fragment must be goverened by the same schema as this object.
+    void apply(const schema& s, const mutation_fragment&);
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(const schema& schema, const clustering_key_prefix& prefix, tombstone t);
     void apply_delete(const schema& schema, range_tombstone rt);

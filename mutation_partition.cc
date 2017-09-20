@@ -334,6 +334,43 @@ mutation_partition::apply(const schema& s, const mutation_partition& p, const sc
     apply(s, std::move(tmp));
 }
 
+struct mutation_fragment_applier {
+    const schema& _s;
+    mutation_partition& _mp;
+
+    void operator()(tombstone t) {
+        _mp.apply(t);
+    }
+
+    void operator()(range_tombstone rt) {
+        _mp.apply_row_tombstone(_s, std::move(rt));
+    }
+
+    void operator()(static_row sr) {
+        _mp.static_row().apply(_s, column_kind::static_column, std::move(sr.cells()));
+    }
+
+    void operator()(partition_start ps) {
+        _mp.apply(ps.partition_tombstone());
+    }
+
+    void operator()(partition_end ps) {
+    }
+
+    void operator()(clustering_row cr) {
+        auto& dr = _mp.clustered_row(_s, std::move(cr.key()));
+        dr.apply(cr.tomb());
+        dr.apply(cr.marker());
+        dr.cells().apply(_s, column_kind::regular_column, std::move(cr.cells()));
+    }
+};
+
+void
+mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
+    mutation_fragment_applier applier{s, *this};
+    mf.visit(applier);
+}
+
 void
 mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
     if (s.version() != p_schema.version()) {

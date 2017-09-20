@@ -186,6 +186,10 @@ void mutation::apply(const mutation& m) {
     partition().apply(*schema(), m.partition(), *m.schema());
 }
 
+void mutation::apply(const mutation_fragment& mf) {
+    partition().apply(*schema(), mf);
+}
+
 mutation& mutation::operator=(const mutation& m) {
     return *this = mutation(m);
 }
