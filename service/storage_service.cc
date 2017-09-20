@@ -323,6 +323,9 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto& proxy = service::get_storage_proxy();
     // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
     update_schema_version_and_announce(proxy).get();// Ensure we know our own actual Schema UUID in preparation for updates
+    get_storage_service().invoke_on_all([] (auto& ss) {
+        ss.register_features();
+    }).get();
 #if 0
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
@@ -1366,10 +1369,6 @@ future<> storage_service::init_server(int delay) {
             }
             slogger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
-
-        get_storage_service().invoke_on_all([] (auto& ss) {
-            ss.register_features();
-        }).get();
     });
 }
 
