@@ -1392,10 +1392,12 @@ future<> storage_service::replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0) 
     }).then([this, g0] {
         _shadow_token_metadata = _token_metadata;
         g0->shadow_endpoint_state_map = g0->endpoint_state_map;
+        g0->maybe_enable_features();
 
         return get_storage_service().invoke_on_all([g0, this](storage_service& local_ss) {
             if (engine().cpu_id() != 0) {
                 gms::get_local_gossiper().endpoint_state_map = g0->shadow_endpoint_state_map;
+                gms::get_local_gossiper().maybe_enable_features();
                 local_ss._token_metadata = _shadow_token_metadata;
             }
         });
