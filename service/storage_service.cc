@@ -329,6 +329,19 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
 #endif
 }
 
+void storage_service::register_features() {
+    _range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
+    _large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
+    _counters_feature = gms::feature(COUNTERS_FEATURE);
+    _correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
+    _schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
+
+    if (_db.local().get_config().experimental()) {
+        _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
+        _indexes_feature = gms::feature(INDEXES_FEATURE);
+    }
+}
+
 // Runs inside seastar::async context
 void storage_service::join_token_ring(int delay) {
     // This function only gets called on shard 0, but we want to set _joined
@@ -1350,16 +1363,7 @@ future<> storage_service::init_server(int delay) {
         }
 
         get_storage_service().invoke_on_all([] (auto& ss) {
-            ss._range_tombstones_feature = gms::feature(RANGE_TOMBSTONES_FEATURE);
-            ss._large_partitions_feature = gms::feature(LARGE_PARTITIONS_FEATURE);
-            ss._counters_feature = gms::feature(COUNTERS_FEATURE);
-            ss._correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
-            ss._schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
-
-            if (ss._db.local().get_config().experimental()) {
-                ss._materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
-                ss._indexes_feature = gms::feature(INDEXES_FEATURE);
-            }
+            ss.register_features();
         }).get();
     });
 }
