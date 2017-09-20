@@ -651,7 +651,6 @@ void gossiper::run() {
             if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
                 if (endpoint_map_changed) {
                     shadow_endpoint_state_map = endpoint_state_map;
-                    _features_condvar.broadcast();
                     maybe_enable_features();
                 }
 
@@ -669,7 +668,6 @@ void gossiper::run() {
                     if (engine().cpu_id() != 0) {
                         if (endpoint_map_changed) {
                             local_gossiper.endpoint_state_map = shadow_endpoint_state_map;
-                            local_gossiper._features_condvar.broadcast();
                             local_gossiper.maybe_enable_features();
                         }
 
@@ -1952,6 +1950,7 @@ void gossiper::unregister_feature(feature* f) {
 
 void gossiper::maybe_enable_features() {
     if (_registered_features.empty()) {
+        _features_condvar.broadcast();
         return;
     }
 
@@ -1966,6 +1965,7 @@ void gossiper::maybe_enable_features() {
             ++it;
         }
     }
+    _features_condvar.broadcast();
 }
 
 feature::feature(sstring name, bool enabled)
