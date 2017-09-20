@@ -894,6 +894,8 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
     _streaming_memtables->add_memtable();
     _streaming_memtables->erase(old);
 
+    dblog.debug("Sealing streaming memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
+
     auto guard = _streaming_flush_phaser.start();
     return with_gate(_streaming_flush_gate, [this, old, permit = std::move(permit)] () mutable {
         _delayed_streaming_flush.cancel();
@@ -907,6 +909,8 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                 sstables::sstable::format_types::big);
 
             newtab->set_unshared();
+
+            dblog.debug("Flushing to {}", newtab->get_filename());
 
             auto&& priority = service::get_local_streaming_write_priority();
             // This is somewhat similar to the main memtable flush, but with important differences.
@@ -924,6 +928,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
                 auto adder = [this, newtab] {
                     add_sstable(newtab, {engine().cpu_id()});
                     try_trigger_compaction();
+                    dblog.debug("Flushing to {} done", newtab->get_filename());
                 };
                 if (_config.enable_cache) {
                     return _cache.update_invalidating(adder, *old);
@@ -3175,6 +3180,9 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
 }
 
 void column_family::apply_streaming_mutation(schema_ptr m_schema, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
+    if (dblog.is_enabled(logging::log_level::trace)) {
+        dblog.trace("streaming apply {}", m.pretty_printer(m_schema));
+    }
     if (fragmented) {
         apply_streaming_big_mutation(std::move(m_schema), plan_id, m);
         return;
@@ -3951,6 +3959,7 @@ future<> column_family::flush_streaming_mutations(utils::UUID plan_id, dht::part
     // be to change seal_active_streaming_memtable_delayed to take a range parameter. However, we
     // need this code to go away as soon as we can (see FIXME above). So the double gate is a better
     // temporary counter measure.
+    dblog.debug("Flushing streaming memtable, plan={}", plan_id);
     return with_gate(_streaming_flush_gate, [this, plan_id, ranges = std::move(ranges)] () mutable {
         return flush_streaming_big_mutations(plan_id).then([this, ranges = std::move(ranges)] (auto sstables) mutable {
             return _streaming_memtables->seal_active_memtable_delayed().then([this] {
