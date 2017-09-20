@@ -537,10 +537,10 @@ private:
 public:
     void check_knows_remote_features(sstring local_features_string) const;
     void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
+    void maybe_enable_features();
 private:
     void register_feature(feature* f);
     void unregister_feature(feature* f);
-    void maybe_enable_features();
 private:
     seastar::metrics::metric_groups _metrics;
 };
