@@ -258,6 +258,7 @@ public:
     }
 
     const schema_ptr& schema() const { return _schema; }
+    logalloc::region& region() const { return _region; }
 
     tombstone partition_tombstone() const;
     row static_row() const;
