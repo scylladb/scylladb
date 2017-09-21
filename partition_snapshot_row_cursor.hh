@@ -273,7 +273,6 @@ public:
     }
 
     bool is_in_latest_version() const;
-    void set_continuous(bool val);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
         out << "{cursor: position=" << cur._position << ", ";
@@ -320,11 +319,6 @@ public:
 inline
 bool partition_snapshot_row_cursor::is_in_latest_version() const {
     return _current_row[0].version_no == 0;
-}
-
-inline
-void partition_snapshot_row_cursor::set_continuous(bool val) {
-    _current_row[0].it->set_continuous(val);
 }
 
 inline

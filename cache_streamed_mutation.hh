@@ -319,9 +319,24 @@ future<> cache_streamed_mutation::read_from_underlying() {
 
 inline
 void cache_streamed_mutation::maybe_update_continuity() {
-    if (can_populate() && _next_row.is_in_latest_version()) {
+    if (can_populate()) {
         if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
-            _next_row.set_continuous(true);
+            if (_next_row.is_in_latest_version()) {
+                _next_row.get_iterator_in_latest_version()->set_continuous(true);
+            } else {
+                // Cover entry from older version
+                with_allocator(_snp->region().allocator(), [&] {
+                    auto& rows = _snp->version()->partition().clustered_rows();
+                    rows_entry::compare less(*_schema);
+                    auto e = alloc_strategy_unique_ptr<rows_entry>(
+                        current_allocator().construct<rows_entry>(*_schema, _next_row.position(), is_dummy(_next_row.dummy()), is_continuous::yes));
+                    auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                    auto inserted = insert_result.second;
+                    if (inserted) {
+                        e.release();
+                    }
+                });
+            }
         }
     } else {
         _read_context->cache().on_mispopulate();
