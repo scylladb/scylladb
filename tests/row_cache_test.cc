@@ -1778,9 +1778,12 @@ static void consume_all(mutation_reader& rd) {
     }
 }
 
-static void populate_range(row_cache& cache, query::clustering_range r = query::full_clustering_range) {
+static void populate_range(row_cache& cache,
+    const dht::partition_range& pr = query::full_partition_range,
+    const query::clustering_range& r = query::full_clustering_range)
+{
     auto slice = partition_slice_builder(*cache.schema()).with_range(r).build();
-    auto rd = cache.make_reader(cache.schema(), query::full_partition_range, slice);
+    auto rd = cache.make_reader(cache.schema(), pr, slice);
     consume_all(rd);
 }
 
@@ -1922,7 +1925,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
                 underlying.apply(m2);
             }).get();
 
-            populate_range(cache, query::clustering_range::make_starting_with(s.make_ckey(5)));
+            populate_range(cache, pr, query::clustering_range::make_starting_with(s.make_ckey(5)));
 
             sma.produces_range_tombstone(rt2);
             sma.produces_range_tombstone(rt3);
