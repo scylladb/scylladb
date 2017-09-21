@@ -246,6 +246,7 @@ future<> cache_streamed_mutation::do_fill_buffer() {
                 return make_ready_future<>();
             }
         }
+        _next_row.maybe_refresh();
         while (!is_buffer_full() && _state == state::reading_from_cache) {
             copy_from_cache_to_buffer();
             if (need_preempt()) {
