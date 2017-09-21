@@ -212,6 +212,10 @@ public:
         return {clustering_row_tag_t(), std::move(ck)};
     }
 
+    static position_in_partition for_static_row() {
+        return position_in_partition{static_row_tag_t()};
+    }
+
     static position_in_partition for_range_start(const query::clustering_range&);
     static position_in_partition for_range_end(const query::clustering_range&);
 
