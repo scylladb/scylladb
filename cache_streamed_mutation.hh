@@ -290,8 +290,24 @@ future<> cache_streamed_mutation::read_from_underlying() {
                 } else {
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
+                    } else if (can_populate()) {
+                        rows_entry::compare less(*_schema);
+                        auto& rows = _snp->version()->partition().clustered_rows();
+                        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+                            with_allocator(_snp->region().allocator(), [&] {
+                                auto e = alloc_strategy_unique_ptr<rows_entry>(
+                                    current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
+                                // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
+                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto inserted = insert_result.second;
+                                if (inserted) {
+                                    e.release();
+                                } else {
+                                    insert_result.first->set_continuous(true);
+                                }
+                            });
+                        }
                     } else {
-                        // FIXME: Insert dummy entry at _upper_bound.
                         _read_context->cache().on_mispopulate();
                     }
                     move_to_next_range();
@@ -350,7 +366,6 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
             e.set_continuous(true);
         } else {
-            // FIXME: Insert dummy entry at _ck_ranges_curr->start()
             _read_context->cache().on_mispopulate();
         }
         with_allocator(standard_allocator(), [&] {
@@ -410,9 +425,23 @@ void cache_streamed_mutation::move_to_current_range() {
     _last_row = nullptr;
     _lower_bound = position_in_partition::for_range_start(*_ck_ranges_curr);
     _upper_bound = position_in_partition_view::for_range_end(*_ck_ranges_curr);
-    auto complete_until_next = _next_row.advance_to(_lower_bound) || _next_row.continuous();
+    auto adjacent = _next_row.advance_to(_lower_bound);
     _next_row_in_range = !after_current_range(_next_row.position());
-    if (!complete_until_next) {
+    if (!adjacent && !_next_row.continuous()) {
+        if (_ck_ranges_curr->start()) {
+            // Insert dummy for lower bound
+            if (can_populate()) {
+                // FIXME: _lower_bound could be adjacent to the previous row, in which case we could skip this
+                auto it = with_allocator(_lsa_manager.region().allocator(), [&] {
+                    auto& rows = _snp->version()->partition().clustered_rows();
+                    auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
+                    return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
+                });
+                _last_row = partition_snapshot_row_weakref(*_snp, it);
+            } else {
+                _read_context->cache().on_mispopulate();
+            }
+        }
         start_reading_from_underlying();
     }
 }
