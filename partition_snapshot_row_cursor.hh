@@ -54,6 +54,7 @@ class partition_snapshot_row_cursor final {
     const schema& _schema;
     partition_snapshot& _snp;
     std::vector<position_in_version> _heap;
+    std::vector<mutation_partition::rows_type::iterator> _iterators;
     std::vector<position_in_version> _current_row;
     position_in_partition _position;
     partition_snapshot::change_mark _change_mark;
@@ -79,7 +80,7 @@ public:
         return up_to_date() && _current_row[0].version_no == 0;
     }
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
-        return _current_row[0].it;
+        return _iterators[0];
     }
     bool up_to_date() const {
         return _snp.get_change_mark() == _change_mark;
@@ -116,11 +117,13 @@ public:
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
         _current_row.clear();
+        _iterators.clear();
         int version_no = 0;
         for (auto&& v : _snp.versions()) {
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, less);
             auto end = rows.end();
+            _iterators.push_back(pos);
             if (pos != end) {
                 _heap.push_back({pos, end, version_no});
             }
@@ -141,6 +144,7 @@ public:
         assert(up_to_date());
         for (auto&& curr : _current_row) {
             ++curr.it;
+            _iterators[curr.version_no] = curr.it;
             if (curr.it != curr.end) {
                 _heap.push_back(curr);
                 boost::range::push_heap(_heap, heap_less);
