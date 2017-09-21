@@ -77,12 +77,19 @@ class position_in_partition_view {
     partition_region _type;
     int _bound_weight = 0;
     const clustering_key_prefix* _ck; // nullptr when _type != clustered
-private:
+public:
     position_in_partition_view(partition_region type, int bound_weight, const clustering_key_prefix* ck)
         : _type(type)
         , _bound_weight(bound_weight)
         , _ck(ck)
     { }
+    bool is_before_key() const {
+        return _bound_weight < 0;
+    }
+    bool is_after_key() const {
+        return _bound_weight > 0;
+    }
+private:
     // Returns placement of this position_in_partition relative to *_ck,
     // or lexicographical_relation::at_prefix if !_ck.
     lexicographical_relation relation() const {

@@ -651,11 +651,13 @@ class rows_entry {
     clustering_key _key;
     deletable_row _row;
     struct flags {
+        // _before_ck and _after_ck encode position_in_partition::weight
+        bool _before_ck : 1;
+        bool _after_ck : 1;
         bool _continuous : 1; // See doc of is_continuous.
         bool _dummy : 1;
-        bool _last : 1;
         bool _erased : 1; // Used only temporarily during apply_reversibly(). Refs #2012.
-        flags() : _continuous(true), _dummy(false), _last(false), _erased(false) { }
+        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _erased(false) { }
     } _flags{};
     friend class mutation_partition;
 public:
@@ -664,7 +666,8 @@ public:
         : _key(e._key)
     {
         _flags._erased = true;
-        _flags._last = e._flags._last;
+        _flags._before_ck = e._flags._before_ck;
+        _flags._after_ck = e._flags._after_ck;
     }
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
@@ -675,13 +678,10 @@ public:
     rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous)
         : _key(pos.key())
     {
-        if (!pos.is_clustering_row()) {
-            assert(bool(dummy));
-            assert(pos.is_after_all_clustered_rows(s)); // FIXME: Support insertion at any position
-            _flags._last = true;
-        }
         _flags._dummy = bool(dummy);
         _flags._continuous = bool(continuous);
+        _flags._before_ck = pos.is_before_key();
+        _flags._after_ck = pos.is_after_key();
     }
     rows_entry(const clustering_key& key, deletable_row&& row)
         : _key(key), _row(std::move(row))
@@ -713,12 +713,7 @@ public:
         return _row;
     }
     position_in_partition_view position() const {
-        if (_flags._last) {
-            return position_in_partition_view::after_all_clustered_rows();
-        } else {
-            return position_in_partition_view(
-                    position_in_partition_view::clustering_row_tag_t(), _key);
-        }
+        return position_in_partition_view(partition_region::clustered, _flags._after_ck - _flags._before_ck, &_key);
     }
 
     is_continuous continuous() const { return is_continuous(_flags._continuous); }

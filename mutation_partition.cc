@@ -2138,7 +2138,8 @@ void mutation_partition::evict() noexcept {
         // No rows would mean it is continuous.
         auto i = _rows.erase_and_dispose(_rows.begin(), std::prev(_rows.end()), current_deleter<rows_entry>());
         rows_entry& e = *i;
-        e._flags._last = true;
+        e._flags._before_ck = false;
+        e._flags._after_ck = true;
         e._flags._dummy = true;
         e._flags._continuous = false;
         e._row = {};
