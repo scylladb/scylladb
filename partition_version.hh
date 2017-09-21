@@ -196,6 +196,8 @@ public:
     // References and iterators into versions owned by the snapshot
     // obtained between two equal change_mark objects were produced
     // by that snapshot are guaranteed to be still valid.
+    //
+    // Has a null state which is != than anything returned by get_change_mark().
     class change_mark {
         uint64_t _reclaim_count = 0;
         size_t _versions_count = 0; // merge_partition_versions() removes versions on merge
@@ -210,6 +212,9 @@ public:
         }
         bool operator!=(const change_mark& m) const {
             return !(*this == m);
+        }
+        explicit operator bool() const {
+            return _reclaim_count > 0;
         }
     };
 private:
