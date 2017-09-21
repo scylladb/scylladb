@@ -133,9 +133,7 @@ public:
         , _snp(snp)
         , _position(position_in_partition::static_row_tag_t{})
     { }
-    bool has_valid_row_from_latest_version() const {
-        return iterators_valid() && _current_row[0].version_no == 0;
-    }
+
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
         return _iterators[0];
     }

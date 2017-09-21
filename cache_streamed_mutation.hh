@@ -334,17 +334,11 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         mutation_partition& mp = _snp->version()->partition();
         rows_entry::compare less(*_schema);
 
-        // FIXME: If _next_row is up to date, but latest version doesn't have iterator in
-        // current row (could be far away, so we'd do this often), then this will do
-        // the lookup in mp. This is not necessary, because _next_row has iterators for
-        // next rows in each version, even if they're not part of the current row.
-        // They're currently buried in the heap, but you could keep a vector of
-        // iterators per each version in addition to the heap.
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(cr.key(), cr.tomb(), cr.marker(), cr.cells()));
         new_entry->set_continuous(false);
-        auto it = _next_row.has_valid_row_from_latest_version()
-                  ? _next_row.get_iterator_in_latest_version() : mp.clustered_rows().lower_bound(cr.key(), less);
+        auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
+                                              : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {
             _read_context->cache().on_row_insert();
