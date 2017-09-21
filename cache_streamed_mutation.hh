@@ -87,7 +87,8 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
         // Invariants:
         // - Upper bound of the read is min(_next_row.position(), _upper_bound)
         // - _next_row_in_range = _next.position() < _upper_bound
-        // - _last_row_key contains the key of last emitted clustering_row
+        // - _last_row points at a direct predecessor of the next row which is going to be read.
+        //   Used for populating continuity.
         reading_from_underlying,
 
         end_of_stream
@@ -101,7 +102,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
 
     lsa_manager _lsa_manager;
 
-    stdx::optional<clustering_key> _last_row_key;
+    partition_snapshot_row_weakref _last_row;
 
     // We need to be prepared that we may get overlapping and out of order
     // range tombstones. We must emit fragments with strictly monotonic positions,
@@ -244,6 +245,7 @@ future<> cache_streamed_mutation::do_fill_buffer() {
             auto adjacent = _next_row.advance_to(_lower_bound);
             _next_row_in_range = !after_current_range(_next_row.position());
             if (!adjacent && !_next_row.continuous()) {
+                _last_row = nullptr; // We could insert a dummy here, but this path is unlikely.
                 start_reading_from_underlying();
                 return make_ready_future<>();
             }
@@ -282,6 +284,7 @@ future<> cache_streamed_mutation::read_from_underlying() {
                 }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
+                    _last_row = _next_row;
                     add_to_buffer(_next_row);
                     move_to_next_entry();
                 } else {
@@ -301,11 +304,7 @@ future<> cache_streamed_mutation::read_from_underlying() {
 inline
 void cache_streamed_mutation::maybe_update_continuity() {
     if (can_populate() && _next_row.is_in_latest_version()) {
-        if (_last_row_key) {
-            if (_next_row.previous_row_in_latest_version_has_key(*_last_row_key)) {
-                _next_row.set_continuous(true);
-            }
-        } else if (!_ck_ranges_curr->start()) {
+        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
             _next_row.set_continuous(true);
         }
     } else {
@@ -327,6 +326,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const mutation_fragment& mf) {
 inline
 void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
+        _last_row = nullptr;
         _read_context->cache().on_mispopulate();
         return;
     }
@@ -347,25 +347,15 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
 
         rows_entry& e = *it;
-        if (_last_row_key) {
-            if (it == mp.clustered_rows().begin()) {
-                // FIXME: check whether entry for _last_row_key is in older versions and if so set
-                // continuity to true.
-                _read_context->cache().on_mispopulate();
-            } else {
-                auto prev_it = it;
-                --prev_it;
-                clustering_key_prefix::equality eq(*_schema);
-                if (eq(*_last_row_key, prev_it->key())) {
-                    e.set_continuous(true);
-                }
-            }
-        } else if (!_ck_ranges_curr->start()) {
+        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
             e.set_continuous(true);
         } else {
             // FIXME: Insert dummy entry at _ck_ranges_curr->start()
             _read_context->cache().on_mispopulate();
         }
+        with_allocator(standard_allocator(), [&] {
+            _last_row = partition_snapshot_row_weakref(*_snp, it);
+        });
     });
 }
 
@@ -390,6 +380,7 @@ void cache_streamed_mutation::copy_from_cache_to_buffer() {
         }
     }
     if (_next_row_in_range) {
+        _last_row = _next_row;
         add_to_buffer(_next_row);
         move_to_next_entry();
     } else {
@@ -416,7 +407,7 @@ void cache_streamed_mutation::move_to_next_range() {
 
 inline
 void cache_streamed_mutation::move_to_current_range() {
-    _last_row_key = std::experimental::nullopt;
+    _last_row = nullptr;
     _lower_bound = position_in_partition::for_range_start(*_ck_ranges_curr);
     _upper_bound = position_in_partition_view::for_range_end(*_ck_ranges_curr);
     auto complete_until_next = _next_row.advance_to(_lower_bound) || _next_row.continuous();
@@ -479,7 +470,6 @@ inline
 void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
     auto& row = mf.as_clustering_row();
     drain_tombstones(row.position());
-    _last_row_key = row.key();
     _lower_bound = position_in_partition::after_key(row.key());
     push_mutation_fragment(std::move(mf));
 }

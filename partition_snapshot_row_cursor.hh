@@ -273,7 +273,6 @@ public:
     }
 
     bool is_in_latest_version() const;
-    bool previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const;
     void set_continuous(bool val);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
@@ -321,17 +320,6 @@ public:
 inline
 bool partition_snapshot_row_cursor::is_in_latest_version() const {
     return _current_row[0].version_no == 0;
-}
-
-inline
-bool partition_snapshot_row_cursor::previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const {
-    if (_current_row[0].it == _snp.version()->partition().clustered_rows().begin()) {
-        return false;
-    }
-    auto prev_it = _current_row[0].it;
-    --prev_it;
-    clustering_key_prefix::equality eq(_schema);
-    return eq(prev_it->key(), key);
 }
 
 inline
