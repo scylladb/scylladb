@@ -76,13 +76,16 @@ public:
         , _snp(snp)
         , _position(position_in_partition::static_row_tag_t{})
     { }
-    bool has_up_to_date_row_from_latest_version() const {
-        return up_to_date() && _current_row[0].version_no == 0;
+    bool has_valid_row_from_latest_version() const {
+        return iterators_valid() && _current_row[0].version_no == 0;
     }
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
         return _iterators[0];
     }
-    bool up_to_date() const {
+
+    // Returns true iff the iterators obtained since the cursor was last made valid
+    // are still valid. Note that this doesn't mean that the cursor itself is valid.
+    bool iterators_valid() const {
         return _snp.get_change_mark() == _change_mark;
     }
 
@@ -95,7 +98,7 @@ public:
     //
     // but avoids work if not necessary.
     bool maybe_refresh() {
-        if (!up_to_date()) {
+        if (!iterators_valid()) {
             return advance_to(_position);
         }
         return true;
@@ -141,7 +144,7 @@ public:
     // Can be only called on a valid cursor pointing at a row.
     bool next() {
         position_in_version::less_compare heap_less(_schema);
-        assert(up_to_date());
+        assert(iterators_valid());
         for (auto&& curr : _current_row) {
             ++curr.it;
             _iterators[curr.version_no] = curr.it;
