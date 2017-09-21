@@ -532,14 +532,18 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
-    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.lower_bound(_rows, std::move(cmp));
+    if (!r.start()) {
+        return std::cbegin(_rows);
+    }
+    return _rows.lower_bound(position_in_partition_view::for_range_start(r), rows_entry::compare(schema));
 }
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
-    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.upper_bound(_rows, std::move(cmp));
+    if (!r.end()) {
+        return std::cend(_rows);
+    }
+    return _rows.lower_bound(position_in_partition_view::for_range_end(r), rows_entry::compare(schema));
 }
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>

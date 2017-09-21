@@ -792,29 +792,6 @@ public:
             return _c(p1, p2) < 0;
         }
     };
-    template <typename Comparator>
-    struct delegating_compare {
-        Comparator _c;
-        delegating_compare(Comparator&& c) : _c(std::move(c)) {}
-        template <typename Comparable>
-        bool operator()(const Comparable& v, const rows_entry& e) const {
-            if (e._flags._last) {
-                return true;
-            }
-            return _c(v, e._key);
-        }
-        template <typename Comparable>
-        bool operator()(const rows_entry& e, const Comparable& v) const {
-            if (e._flags._last) {
-                return false;
-            }
-            return _c(e._key, v);
-        }
-    };
-    template <typename Comparator>
-    static auto key_comparator(Comparator&& c) {
-        return delegating_compare<Comparator>(std::move(c));
-    }
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
