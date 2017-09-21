@@ -187,3 +187,5 @@ flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
 class mutation_reader;
 
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
+
+flat_mutation_reader make_empty_flat_reader();

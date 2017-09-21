@@ -125,3 +125,16 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
     };
     return make_flat_mutation_reader<converting_reader>(std::move(s), std::move(legacy_reader), fwd);
 }
+
+class empty_flat_reader final : public flat_mutation_reader::impl {
+public:
+    empty_flat_reader() { _end_of_stream = true; }
+    virtual future<> fill_buffer() override { return make_ready_future<>(); }
+    virtual void next_partition() override {}
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override { return make_ready_future<>(); };
+    virtual future<> fast_forward_to(position_range cr) override { return make_ready_future<>(); };
+};
+
+flat_mutation_reader make_empty_flat_reader() {
+    return make_flat_mutation_reader<empty_flat_reader>();
+}

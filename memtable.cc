@@ -454,7 +454,7 @@ memtable::make_flat_reader(schema_ptr s,
             upgrade_entry(*i);
             return flat_mutation_reader_from_mutation_reader(s, make_reader_returning(i->read(shared_from_this(), s, slice, fwd)), fwd);
         } else {
-            return flat_mutation_reader_from_mutation_reader(s, make_empty_reader(), fwd);
+            return make_empty_flat_reader();
         }
         });
     } else {
