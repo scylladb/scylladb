@@ -950,6 +950,10 @@ int main(int argc, char** argv) {
                     table_config cfg{name, n_rows, value_size};
                     populate(env, cfg);
                 } else {
+                    if (smp::count != 1) {
+                        throw std::runtime_error("The test must be run with one shard");
+                    }
+
                     database& db = env.local_db();
                     column_family& cf = db.find_column_family("ks", "test");
 
