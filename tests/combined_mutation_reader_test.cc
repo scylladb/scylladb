@@ -133,8 +133,6 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
 
         auto tmp = make_lw_shared<tmpdir>();
 
-        std::cout << tmp->path << std::endl;
-
         unsigned gen{0};
 
         std::vector<sstables::shared_sstable> tables = {
