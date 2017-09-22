@@ -182,6 +182,32 @@ public:
     bool is_in_latest_version() const;
     bool previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const;
     void set_continuous(bool val);
+
+    friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
+        out << "{cursor: position=" << cur._position << ", ";
+        if (!cur.iterators_valid()) {
+            return out << " iterators invalid}";
+        }
+        out << "current=[";
+        bool first = true;
+        for (auto&& v : cur._current_row) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            out << v.version_no;
+        }
+        out << "], heap=[";
+        first = true;
+        for (auto&& v : cur._heap) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            out << "{v=" << v.version_no << ", pos=" << v.it->position() << "}";
+        }
+        return out << "]}";
+    };
 };
 
 inline
