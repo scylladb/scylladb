@@ -26,17 +26,12 @@
 #include "core/thread.hh"
 
 #include "database.hh"
-#include "mutation_reader.hh"
 #include "schema_builder.hh"
-#include "partition_slice_builder.hh"
 #include "tmpdir.hh"
 #include "sstable_mutation_readers.hh"
-#include "cell_locking.hh"
 
 #include "tests/test-utils.hh"
-#include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
-#include "tests/result_set_assertions.hh"
 #include "tests/simple_schema.hh"
 #include "tests/sstable_utils.hh"
 #include "tests/sstable_test.hh"
