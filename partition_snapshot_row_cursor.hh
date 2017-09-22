@@ -301,6 +301,21 @@ public:
             first = false;
             out << "{v=" << v.version_no << ", pos=" << v.it->position() << "}";
         }
+        out << "], iterators=[";
+        first = true;
+        auto v = cur._snp.versions().begin();
+        for (auto&& i : cur._iterators) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            if (i == v->partition().clustered_rows().end()) {
+                out << "end";
+            } else {
+                out << i->position();
+            }
+            ++v;
+        }
         return out << "]}";
     };
 };
