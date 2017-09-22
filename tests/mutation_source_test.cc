@@ -259,8 +259,9 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
 
     mutation_source ms = populate(s, partitions);
 
+    auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
     mutation_reader rd = ms(s,
-        dht::partition_range::make({keys[0]}, {keys[1]}),
+        pr,
         query::full_slice,
         default_priority_class(),
         nullptr,
@@ -280,14 +281,16 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
             // ...don't finish consumption to leave the reader in the middle of partition
     }
 
-    rd.fast_forward_to(dht::partition_range::make({missing_key}, {missing_key})).get();
+    pr = dht::partition_range::make({missing_key}, {missing_key});
+    rd.fast_forward_to(pr).get();
 
     {
         streamed_mutation_opt smo = rd().get0();
         BOOST_REQUIRE(!smo);
     }
 
-    rd.fast_forward_to(dht::partition_range::make({keys[3]}, {keys[3]})).get();
+    pr = dht::partition_range::make({keys[3]}, {keys[3]});
+    rd.fast_forward_to(pr).get();
 
     {
         streamed_mutation_opt smo = rd().get0();
@@ -303,7 +306,8 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
         BOOST_REQUIRE(!smo);
     }
 
-    rd.fast_forward_to(dht::partition_range::make_starting_with({keys[keys.size() - 1]})).get();
+    pr = dht::partition_range::make_starting_with({keys[keys.size() - 1]});
+    rd.fast_forward_to(pr).get();
 
     {
         streamed_mutation_opt smo = rd().get0();
@@ -314,7 +318,8 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
         // ...don't finish consumption to leave the reader in the middle of partition
     }
 
-    rd.fast_forward_to(dht::partition_range::make({key_after_all}, {key_after_all})).get();
+    pr = dht::partition_range::make({key_after_all}, {key_after_all});
+    rd.fast_forward_to(pr).get();
 
     {
         streamed_mutation_opt smo = rd().get0();
