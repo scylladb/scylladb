@@ -192,4 +192,4 @@ flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m);
 
 flat_mutation_reader make_empty_flat_reader();
 
-streamed_mutation streamed_mutation_from_mutation_copy(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+flat_mutation_reader flat_mutation_reader_from_mutation(mutation&&, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);

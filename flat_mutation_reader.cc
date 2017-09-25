@@ -213,9 +213,8 @@ flat_mutation_reader make_empty_flat_reader() {
     return make_flat_mutation_reader<empty_flat_reader>();
 }
 
-streamed_mutation streamed_mutation_from_mutation_copy(mutation m, streamed_mutation::forwarding fwd)
-{
-    class reader final : public streamed_mutation::impl {
+flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_mutation::forwarding fwd) {
+    class reader final : public flat_mutation_reader::impl {
         mutation _mutation;
         position_in_partition::less_compare _cmp;
         bool _static_row_done = false;
@@ -270,16 +269,18 @@ streamed_mutation streamed_mutation_from_mutation_copy(mutation m, streamed_muta
                     push_mutation_fragment(std::move(*mfopt));
                 } else {
                     _end_of_stream = true;
+                    push_mutation_fragment(partition_end());
                 }
             }
         }
     public:
-        explicit reader(mutation m)
-            : streamed_mutation::impl(m.schema(), m.decorated_key(), m.partition().partition_tombstone())
-            , _mutation(std::move(m))
+        explicit reader(mutation&& m)
+            : _mutation(std::move(m))
             , _cmp(*_mutation.schema())
         {
             auto mutation_destroyer = defer([this] { destroy_mutation(); });
+            push_mutation_fragment(partition_start(_mutation.decorated_key(),
+                                                   _mutation.partition().partition_tombstone()));
 
             prepare_next_clustering_row();
             prepare_next_range_tombstone();
@@ -288,7 +289,6 @@ streamed_mutation streamed_mutation_from_mutation_copy(mutation m, streamed_muta
 
             mutation_destroyer.cancel();
         }
-
         void destroy_mutation() noexcept {
             // After unlink_leftmost_without_rebalance() was called on a bi::set
             // we need to complete destroying the tree using that function.
@@ -309,20 +309,31 @@ streamed_mutation streamed_mutation_from_mutation_copy(mutation m, streamed_muta
                 rt = rts.unlink_leftmost_without_rebalance();
             }
         }
-
         ~reader() {
             destroy_mutation();
         }
-
         virtual future<> fill_buffer() override {
             do_fill_buffer();
             return make_ready_future<>();
         }
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _end_of_stream = true;
+                destroy_mutation();
+            }
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            throw std::runtime_error("This reader can't be fast forwarded to another partition.");
+        };
+        virtual future<> fast_forward_to(position_range cr) override {
+            throw std::runtime_error("This reader can't be fast forwarded to another position.");
+        };
     };
-
-    auto sm = make_streamed_mutation<reader>(std::move(m));
+    schema_ptr s = m.schema();
+    auto res = make_flat_mutation_reader<reader>(std::move(m));
     if (fwd) {
-        return make_forwardable(std::move(sm)); // FIXME: optimize
+        return make_forwardable(std::move(s), std::move(res));
     }
-    return std::move(sm);
+    return res;
 }
