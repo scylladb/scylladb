@@ -560,6 +560,7 @@ scylla_core = (['database.cc',
                  'disk-error-handler.cc',
                  'duration.cc',
                  'vint-serialization.cc',
+                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -972,6 +973,7 @@ with open(buildfile, 'w') as f:
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
+            objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
             has_thrift = False
             for dep in deps[binary]:
                 if isinstance(dep, Thrift):
