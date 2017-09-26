@@ -1987,6 +1987,8 @@ feature::feature(sstring name, bool enabled)
         , _enabled(enabled) {
     if (!_enabled) {
         get_local_gossiper().register_feature(this);
+    } else {
+        _pr.set_value();
     }
 }
 
@@ -1999,12 +2001,13 @@ feature::~feature() {
     }
 }
 
-feature& feature::operator=(feature other) {
+feature& feature::operator=(feature&& other) {
     if (!_enabled) {
         get_local_gossiper().unregister_feature(this);
     }
     _name = other._name;
     _enabled = other._enabled;
+    _pr = std::move(other._pr);
     if (!_enabled) {
         get_local_gossiper().register_feature(this);
     }
@@ -2015,7 +2018,10 @@ void feature::enable() {
     if (engine().cpu_id() == 0) {
         logger.info("Feature {} is enabled", name());
     }
-    _enabled = true;
+    if (!_enabled) {
+        _enabled = true;
+        _pr.set_value();
+    }
 }
 
 } // namespace gms
