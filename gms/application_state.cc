@@ -62,6 +62,7 @@ static const std::map<application_state, sstring> application_state_names = {
     {application_state::TOKENS,                 "TOKENS"},
     {application_state::SUPPORTED_FEATURES,     "SUPPORTED_FEATURES"},
     {application_state::CACHE_HITRATES,         "CACHE_HITRATES"},
+    {application_state::SCHEMA_TABLES_VERSION,  "SCHEMA_TABLES_VERSION"},
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m) {
