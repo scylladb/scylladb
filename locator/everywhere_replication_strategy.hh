@@ -49,6 +49,7 @@ public:
     virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, token_metadata& tm) const override {
         return tm.get_all_endpoints();
     }
+    std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
 
     virtual void validate_options() const override { /* noop */ }
 
