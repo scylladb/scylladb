@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <seastar/core/shared_future.hh>
+
 namespace gms {
 
 /**
@@ -31,19 +33,16 @@ namespace gms {
  */
 class feature final {
     sstring _name;
-    bool _enabled;
+    bool _enabled = false;
+    mutable shared_promise<> _pr;
     friend class gossiper;
 public:
     explicit feature(sstring name, bool enabled = false);
+    feature() = default;
     ~feature();
-    feature()
-            : _enabled(false)
-    { }
-    feature(const feature& other)
-            : feature(other._name, other._enabled)
-    { }
+    feature(const feature& other) = delete;
     void enable();
-    feature& operator=(feature other);
+    feature& operator=(feature&& other);
     const sstring& name() const {
         return _name;
     }
@@ -53,6 +52,7 @@ public:
     friend inline std::ostream& operator<<(std::ostream& os, const feature& f) {
         return os << "{ gossip feature = " << f._name << " }";
     }
+    future<> when_enabled() const { return _pr.get_shared_future(); }
 };
 
 } // namespace gms
