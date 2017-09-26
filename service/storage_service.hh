@@ -2245,8 +2245,8 @@ public:
         return bool(_correct_counter_order_feature);
     }
 
-    bool cluster_supports_schema_tables_v3() const {
-        return bool(_schema_tables_v3);
+    const gms::feature& cluster_supports_schema_tables_v3() const {
+        return _schema_tables_v3;
     }
 };
 

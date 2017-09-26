@@ -163,9 +163,19 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 {
     auto& proxy = get_local_storage_proxy();
     auto& db = proxy.get_db().local();
+    auto& ss = get_storage_service().local();
     if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
         mlogger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
+    }
+
+    // Disable pulls during rolling upgrade from 1.7 to 2.0 to avoid
+    // schema version inconsistency. See https://github.com/scylladb/scylla/issues/2802.
+    if (!ss.cluster_supports_schema_tables_v3()) {
+        mlogger.debug("Delaying pull with {} until cluster upgrade is complete", endpoint);
+        return ss.cluster_supports_schema_tables_v3().when_enabled().then([this, their_version, endpoint] {
+            return maybe_schedule_schema_pull(their_version, endpoint);
+        });
     }
 
     if (db.get_version() == database::empty_version || runtime::get_uptime() < migration_delay) {
@@ -240,10 +250,7 @@ bool migration_manager::has_compatible_schema_tables_version(const gms::inet_add
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
     return has_compatible_schema_tables_version(endpoint)
-            && !gms::get_local_gossiper().is_gossip_only_member(endpoint)
-            // Disable pulls during rolling upgrade from 1.7 to 2.0 to avoid
-            // schema version inconsistency. See https://github.com/scylladb/scylla/issues/2802.
-            && get_storage_service().local().cluster_supports_schema_tables_v3();
+            && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
 
 future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
