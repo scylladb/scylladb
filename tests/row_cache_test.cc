@@ -1743,6 +1743,29 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
     });
 }
 
+static void consume_all(mutation_reader& rd) {
+    while (streamed_mutation_opt smo = rd().get0()) {
+        auto&& sm = *smo;
+        while (sm().get0()) ;
+    }
+}
+
+static void populate_range(row_cache& cache,
+    const dht::partition_range& pr = query::full_partition_range,
+    const query::clustering_range& r = query::full_clustering_range)
+{
+    auto slice = partition_slice_builder(*cache.schema()).with_range(r).build();
+    auto rd = cache.make_reader(cache.schema(), pr, slice);
+    consume_all(rd);
+}
+
+static void apply(row_cache& cache, memtable_snapshot_source& underlying, const mutation& m) {
+    auto mt = make_lw_shared<memtable>(m.schema());
+    mt->apply(m);
+    underlying.apply(m);
+    cache.update(*mt, make_default_partition_presence_checker()).get();
+}
+
 SEASTAR_TEST_CASE(test_query_only_static_row) {
     return seastar::async([] {
         simple_schema s;
@@ -1776,6 +1799,90 @@ SEASTAR_TEST_CASE(test_query_only_static_row) {
             assert_that(cache.make_reader(s.schema(), prange, slice))
                     .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
                     .produces_end_of_stream();
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        mutation m1(pk, s.schema());
+        s.add_row(m1, s.make_ckey(0), "v");
+        s.add_row(m1, s.make_ckey(1), "v");
+        underlying.apply(m1);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto make_sm = [&] (const query::partition_slice& slice = query::full_slice) {
+            auto rd = cache.make_reader(s.schema(), pr, slice);
+            auto smo = rd().get0();
+            BOOST_REQUIRE(smo);
+            streamed_mutation& sm = *smo;
+            sm.set_max_buffer_size(1);
+            return assert_that_stream(std::move(sm));
+        };
+
+        {
+            populate_range(cache, pr, s.make_ckey_range(0, 1));
+            auto rd = make_sm(); // to keep current version alive
+
+            mutation m2(pk, s.schema());
+            s.add_row(m2, s.make_ckey(2), "v");
+            s.add_row(m2, s.make_ckey(3), "v");
+            s.add_row(m2, s.make_ckey(4), "v");
+            apply(cache, underlying, m2);
+
+            auto slice1 = partition_slice_builder(*s.schema())
+                .with_range(s.make_ckey_range(0, 5))
+                .build();
+
+            auto sma1 = make_sm(slice1);
+            sma1.produces_row_with_key(s.make_ckey(0));
+
+            populate_range(cache, pr, s.make_ckey_range(3, 3));
+
+            auto sma2 = make_sm(slice1);
+
+            sma2.produces_row_with_key(s.make_ckey(0));
+
+            populate_range(cache, pr, s.make_ckey_range(2, 3));
+
+            sma2.produces_row_with_key(s.make_ckey(1));
+            sma2.produces_row_with_key(s.make_ckey(2));
+            sma2.produces_row_with_key(s.make_ckey(3));
+            sma2.produces_row_with_key(s.make_ckey(4));
+            sma2.produces_end_of_stream();
+
+            sma1.produces_row_with_key(s.make_ckey(1));
+            sma1.produces_row_with_key(s.make_ckey(2));
+            sma1.produces_row_with_key(s.make_ckey(3));
+            sma1.produces_row_with_key(s.make_ckey(4));
+            sma1.produces_end_of_stream();
+        }
+
+        {
+            cache.evict();
+            populate_range(cache, pr, s.make_ckey_range(4, 4));
+
+            auto slice1 = partition_slice_builder(*s.schema())
+                .with_range(s.make_ckey_range(0, 1))
+                .with_range(s.make_ckey_range(3, 3))
+                .build();
+            auto sma1 = make_sm(slice1);
+
+            sma1.produces_row_with_key(s.make_ckey(0));
+
+            populate_range(cache, pr, s.make_ckey_range(2, 4));
+
+            sma1.produces_row_with_key(s.make_ckey(1));
+            sma1.produces_row_with_key(s.make_ckey(3));
+            sma1.produces_end_of_stream();
         }
     });
 }

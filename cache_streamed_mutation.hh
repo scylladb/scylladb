@@ -327,7 +327,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(cr.key(), cr.tomb(), cr.marker(), cr.cells()));
         new_entry->set_continuous(false);
-        auto it = _next_row.has_up_to_date_row_from_latest_version()
+        auto it = _next_row.has_valid_row_from_latest_version()
                   ? _next_row.get_iterator_in_latest_version() : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {

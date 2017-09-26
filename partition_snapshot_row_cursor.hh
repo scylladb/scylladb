@@ -34,6 +34,8 @@
 // When the cursor is invalidated, it still maintains its previous position. It can be brought
 // back to validity by calling maybe_refresh(), or advance_to().
 //
+// Insertion of row entries after cursor's position invalidates the cursor.
+//
 class partition_snapshot_row_cursor final {
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
@@ -55,6 +57,7 @@ class partition_snapshot_row_cursor final {
     logalloc::region& _region;
     partition_snapshot& _snp;
     std::vector<position_in_version> _heap;
+    std::vector<mutation_partition::rows_type::iterator> _iterators;
     std::vector<position_in_version> _current_row;
     position_in_partition _position;
     uint64_t _last_reclaim_count = 0;
@@ -78,13 +81,16 @@ public:
         , _snp(snp)
         , _position(position_in_partition::static_row_tag_t{})
     { }
-    bool has_up_to_date_row_from_latest_version() const {
-        return up_to_date() && _current_row[0].version_no == 0;
+    bool has_valid_row_from_latest_version() const {
+        return iterators_valid() && _current_row[0].version_no == 0;
     }
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
-        return _current_row[0].it;
+        return _iterators[0];
     }
-    bool up_to_date() const {
+
+    // Returns true iff the iterators obtained since the cursor was last made valid
+    // are still valid. Note that this doesn't mean that the cursor itself is valid.
+    bool iterators_valid() const {
         return _region.reclaim_counter() == _last_reclaim_count && _last_versions_count == _snp.version_count();
     }
 
@@ -97,8 +103,39 @@ public:
     //
     // but avoids work if not necessary.
     bool maybe_refresh() {
-        if (!up_to_date()) {
+        if (!iterators_valid()) {
             return advance_to(_position);
+        }
+        // Refresh latest version's iterator in case there was an insertion
+        // before it and after cursor's position. There cannot be any
+        // insertions for non-latest versions, so we don't have to update them.
+        if (_current_row[0].version_no != 0) {
+            rows_entry::compare less(_schema);
+            position_in_partition::equal_compare eq(_schema);
+            position_in_version::less_compare heap_less(_schema);
+            auto& rows = _snp.version()->partition().clustered_rows();
+            auto it = _iterators[0] = rows.lower_bound(_position, less);
+            auto heap_i = boost::find_if(_heap, [](auto&& v) { return v.version_no == 0; });
+            if (it == rows.end()) {
+                if (heap_i != _heap.end()) {
+                    _heap.erase(heap_i);
+                    boost::range::make_heap(_heap, heap_less);
+                }
+            } else if (eq(_position, it->position())) {
+                _current_row.insert(_current_row.begin(), position_in_version{it, rows.end(), 0});
+                if (heap_i != _heap.end()) {
+                    _heap.erase(heap_i);
+                    boost::range::make_heap(_heap, heap_less);
+                }
+            } else {
+                if (heap_i != _heap.end()) {
+                    heap_i->it = it;
+                    boost::range::make_heap(_heap, heap_less);
+                } else {
+                    _heap.push_back({it, rows.end(), 0});
+                    boost::range::push_heap(_heap, heap_less);
+                }
+            }
         }
         return true;
     }
@@ -119,11 +156,13 @@ public:
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
         _current_row.clear();
+        _iterators.clear();
         int version_no = 0;
         for (auto&& v : _snp.versions()) {
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, less);
             auto end = rows.end();
+            _iterators.push_back(pos);
             if (pos != end) {
                 _heap.push_back({pos, end, version_no});
             }
@@ -142,9 +181,10 @@ public:
     // Can be only called on a valid cursor pointing at a row.
     bool next() {
         position_in_version::less_compare heap_less(_schema);
-        assert(up_to_date());
+        assert(iterators_valid());
         for (auto&& curr : _current_row) {
             ++curr.it;
+            _iterators[curr.version_no] = curr.it;
             if (curr.it != curr.end) {
                 _heap.push_back(curr);
                 boost::range::push_heap(_heap, heap_less);
@@ -186,6 +226,32 @@ public:
     bool is_in_latest_version() const;
     bool previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const;
     void set_continuous(bool val);
+
+    friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
+        out << "{cursor: position=" << cur._position << ", ";
+        if (!cur.iterators_valid()) {
+            return out << " iterators invalid}";
+        }
+        out << "current=[";
+        bool first = true;
+        for (auto&& v : cur._current_row) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            out << v.version_no;
+        }
+        out << "], heap=[";
+        first = true;
+        for (auto&& v : cur._heap) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            out << "{v=" << v.version_no << ", pos=" << v.it->position() << "}";
+        }
+        return out << "]}";
+    };
 };
 
 inline
