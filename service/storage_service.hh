@@ -1747,7 +1747,6 @@ private:
     future<> start_leaving();
     void leave_ring();
     void unbootstrap();
-    future<> stream_hints();
 
 public:
     future<> move(sstring new_token) {
