@@ -34,4 +34,11 @@ static const struct no_context_t {
     const no_context_t& context_for(Args&&...) const noexcept { return *this; }
 } no_context;
 
+struct no_op_continuation {
+    template<typename T>
+    static T run(T value) noexcept {
+        return value;
+    }
+};
+
 }
