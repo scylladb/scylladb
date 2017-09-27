@@ -29,6 +29,7 @@
 #include <boost/range/algorithm/generate.hpp>
 
 #include "imr/fundamental.hh"
+#include "imr/compound.hh"
 
 #include "random-utils.hh"
 
@@ -184,6 +185,47 @@ BOOST_AUTO_TEST_CASE(test_buffer) {
             BOOST_CHECK_EQUAL(buffer_type::size_when_serialized(size, serializer), size);
             BOOST_CHECK_EQUAL(buffer_type::serialize(out, size, serializer), size);
         });
+    }
+}
+
+BOOST_AUTO_TEST_SUITE_END();
+
+BOOST_AUTO_TEST_SUITE(compound);
+
+struct test_optional_context {
+    template<typename Tag>
+    bool is_present() const noexcept;
+
+    template<typename Tag, typename... Args>
+    decltype(auto) context_for(Args&&...) const noexcept { return *this; }
+};
+template<>
+bool test_optional_context::is_present<A>() const noexcept {
+    return true;
+}
+template<>
+bool test_optional_context::is_present<B>() const noexcept {
+    return false;
+}
+
+BOOST_AUTO_TEST_CASE(test_optional) {
+    using optional_type1 = imr::optional<A, imr::pod<uint32_t>>;
+    using optional_type2 = imr::optional<B, imr::pod<uint32_t>>;
+
+    for (auto i = 0; i < random_test_iteration_count; i++) {
+        auto value = tests::random::get_int<uint32_t>();
+        auto expected_size = imr::pod<uint32_t>::size_when_serialized(value);
+
+        auto buffer = std::make_unique<uint8_t[]>(expected_size);
+
+        BOOST_CHECK_EQUAL(optional_type1::size_when_serialized(value), expected_size);
+        BOOST_CHECK_EQUAL(optional_type1::serialize(buffer.get(), value), expected_size);
+
+        BOOST_CHECK_EQUAL(optional_type1::serialized_object_size(buffer.get(), test_optional_context()), expected_size);
+        BOOST_CHECK_EQUAL(optional_type2::serialized_object_size(buffer.get(), test_optional_context()), 0);
+
+        auto view = optional_type1::make_view(buffer.get());
+        BOOST_CHECK_EQUAL(view.get().load(), value);
     }
 }
 
