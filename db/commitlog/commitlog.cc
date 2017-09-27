@@ -114,6 +114,7 @@ public:
 
 db::commitlog::config::config(const db::config& cfg)
     : commit_log_location(cfg.commitlog_directory())
+    , metrics_category_name("commitlog")
     , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (memory::stats().total_memory() * smp::count) >> 20)
     , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
     , commitlog_sync_period_in_ms(cfg.commitlog_sync_period_in_ms())
@@ -271,7 +272,7 @@ public:
     future<> sync_all_segments(bool shutdown = false);
     future<> shutdown();
 
-    void create_counters();
+    void create_counters(const sstring& metrics_category_name);
 
     future<> orphan_all();
 
@@ -959,7 +960,9 @@ db::commitlog::segment_manager::segment_manager(config c)
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
 
-    create_counters();
+    if (!cfg.metrics_category_name.empty()) {
+        create_counters(cfg.metrics_category_name);
+    }
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1068,10 +1071,10 @@ future<> db::commitlog::segment_manager::init() {
     });
 }
 
-void db::commitlog::segment_manager::create_counters() {
+void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("commitlog", {
+    _metrics.add_group(metrics_category_name, {
         sm::make_gauge("segments", [this] { return _segments.size(); },
                        sm::description("Holds the current number of segments.")),
 
