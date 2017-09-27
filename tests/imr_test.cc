@@ -333,4 +333,207 @@ BOOST_AUTO_TEST_CASE(test_variant) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_structure_with_fixed) {
+    using S = imr::structure<imr::member<A, imr::pod<uint8_t>>,
+                             imr::member<B, imr::pod<int64_t>>,
+                             imr::member<C, imr::pod<uint32_t>>>;
+    static constexpr auto expected_size = sizeof(uint8_t) + sizeof(uint64_t)
+                                          + sizeof(uint32_t);
+
+    for (auto i = 0; i < random_test_iteration_count; i++) {
+        auto a = tests::random::get_int<uint8_t>();
+        auto b = tests::random::get_int<uint64_t>();
+        auto c = tests::random::get_int<uint32_t>();
+
+        auto writer = [&] (auto&& serializer) noexcept {
+            return serializer
+                .serialize(a)
+                .serialize(b)
+                .serialize(c)
+                .done();
+        };
+
+        uint8_t buffer[expected_size];
+
+        BOOST_CHECK_EQUAL(S::size_when_serialized(writer), expected_size);
+        BOOST_CHECK_EQUAL(S::serialize(buffer, writer), expected_size);
+        BOOST_CHECK_EQUAL(S::serialized_object_size(buffer), expected_size);
+
+        auto mview = S::make_view(buffer);
+        BOOST_CHECK_EQUAL(mview.get<A>().load(), a);
+        BOOST_CHECK_EQUAL(mview.get<B>().load(), b);
+        BOOST_CHECK_EQUAL(mview.get<C>().load(), c);
+
+        auto view = S::make_view(const_cast<const uint8_t*>(buffer));
+        BOOST_CHECK_EQUAL(view.get<A>().load(), a);
+        BOOST_CHECK_EQUAL(view.get<B>().load(), b);
+        BOOST_CHECK_EQUAL(view.get<C>().load(), c);
+
+        a = tests::random::get_int<uint8_t>();
+        b = tests::random::get_int<uint64_t>();
+        c = tests::random::get_int<uint32_t>();
+        mview.get<A>().store(a);
+        mview.get<B>().store(b);
+        mview.get<C>().store(c);
+
+        BOOST_CHECK_EQUAL(view.get<A>().load(), a);
+        BOOST_CHECK_EQUAL(view.get<B>().load(), b);
+        BOOST_CHECK_EQUAL(view.get<C>().load(), c);
+    }
+}
+
+class test_structure_context {
+    bool _b_is_present;
+    size_t _c_size_of;
+public:
+    test_structure_context(bool b_is_present, size_t c_size_of) noexcept
+        : _b_is_present(b_is_present), _c_size_of(c_size_of) { }
+
+    template<typename Tag>
+    bool is_present() const noexcept;
+
+    template<typename Tag>
+    size_t size_of() const noexcept;
+
+    template<typename Tag, typename... Args>
+    decltype(auto) context_for(Args&&...) const noexcept { return *this; }
+};
+
+template<>
+bool test_structure_context::is_present<B>() const noexcept {
+    return _b_is_present;
+}
+
+template<>
+size_t test_structure_context::size_of<C>() const noexcept {
+    return _c_size_of;
+}
+
+BOOST_AUTO_TEST_CASE(test_structure_with_context) {
+    using S = imr::structure<imr::member<A, imr::flags<B, C>>,
+                             imr::optional_member<B, imr::pod<uint16_t>>,
+                             imr::member<C, imr::buffer<C>>>;
+
+    for (auto i = 0; i < random_test_iteration_count; i++) {
+        auto b_value = tests::random::get_int<uint16_t>();
+        auto c_data = tests::random::get_bytes();
+
+        const auto expected_size = 1 + imr::pod<uint16_t>::size_when_serialized(b_value)
+                                   + c_data.size();
+
+        auto writer = [&] (auto&& serializer) noexcept {
+            return serializer
+                .serialize(imr::set_flag<B>())
+                .serialize(b_value)
+                .serialize(c_data)
+                .done();
+        };
+
+        BOOST_CHECK_EQUAL(S::size_when_serialized(writer), expected_size);
+
+        auto buffer = std::make_unique<uint8_t[]>(expected_size);
+        BOOST_CHECK_EQUAL(S::serialize(buffer.get(), writer), expected_size);
+
+        auto ctx = test_structure_context(true, c_data.size());
+        BOOST_CHECK_EQUAL(S::serialized_object_size(buffer.get(), ctx), expected_size);
+
+        auto mview = S::make_view(buffer.get(), ctx);
+        BOOST_CHECK(mview.get<A>().get<B>());
+        BOOST_CHECK(!mview.get<A>().get<C>());
+        BOOST_CHECK_EQUAL(mview.get<B>().get().load(), b_value);
+        BOOST_CHECK(boost::range::equal(mview.get<C>(ctx), c_data));
+
+        auto view = S::view(mview);
+        BOOST_CHECK(view.get<A>().get<B>());
+        BOOST_CHECK(!view.get<A>().get<C>());
+        BOOST_CHECK_EQUAL(view.get<B>().get().load(), b_value);
+        BOOST_CHECK(boost::range::equal(view.get<C>(ctx), c_data));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_structure_get_element_without_view) {
+    using S = imr::structure<imr::member<A, imr::flags<B, C>>,
+                             imr::member<B, imr::pod<uint64_t>>,
+                             imr::optional_member<C, imr::pod<uint16_t>>>;
+
+    auto uinteger = tests::random::get_int<uint64_t>();
+
+    static constexpr auto expected_size = 1 + sizeof(uint64_t);
+
+    auto writer = [&] (auto&& serializer) noexcept {
+        return serializer
+            .serialize(imr::set_flag<B>())
+            .serialize(uinteger)
+            .skip()
+            .done();
+    };
+
+    BOOST_CHECK_EQUAL(S::size_when_serialized(writer), expected_size);
+
+    uint8_t buffer[expected_size];
+    BOOST_CHECK_EQUAL(S::serialize(buffer, writer), expected_size);
+
+    auto fview = S::get_member<A>(buffer);
+    BOOST_CHECK(fview.get<B>());
+    BOOST_CHECK(!fview.get<C>());
+
+    auto uview = S::get_member<B>(buffer);
+    BOOST_CHECK_EQUAL(uview.load(), uinteger);
+    // FIXME test offset
+}
+
+BOOST_AUTO_TEST_CASE(test_nested_structure) {
+    using S1 = imr::structure<imr::optional_member<B, imr::pod<uint16_t>>,
+                              imr::member<C, imr::buffer<C>>,
+                              imr::member<A, imr::pod<uint8_t>>>;
+
+    using S = imr::structure<imr::member<A, imr::pod<uint16_t>>,
+                             imr::member<B, S1>,
+                             imr::member<C, imr::pod<uint32_t>>>;
+
+    for (auto i = 0; i < random_test_iteration_count; i++) {
+        auto b1_value = tests::random::get_int<uint16_t>();
+        auto c1_data = tests::random::get_bytes();
+        auto a1_value = tests::random::get_int<uint8_t>();
+
+        const auto expected_size1 = imr::pod<uint16_t>::size_when_serialized(b1_value)
+                                    + c1_data.size() + sizeof(uint8_t);
+
+        auto a_value = tests::random::get_int<uint16_t>();
+        auto c_value = tests::random::get_int<uint32_t>();
+
+        const auto expected_size = sizeof(uint16_t) + expected_size1 + sizeof(uint32_t);
+
+        auto writer1 = [&] (auto&& serializer) noexcept {
+            return serializer
+                    .serialize(b1_value)
+                    .serialize(c1_data)
+                    .serialize(a1_value)
+                    .done();
+        };
+
+        auto writer = [&] (auto&& serializer) noexcept {
+            return serializer
+                    .serialize(a_value)
+                    .serialize(writer1)
+                    .serialize(c_value)
+                    .done();
+        };
+
+        BOOST_CHECK_EQUAL(S::size_when_serialized(writer), expected_size);
+
+        auto buffer = std::make_unique<uint8_t[]>(expected_size);
+        BOOST_CHECK_EQUAL(S::serialize(buffer.get(), writer), expected_size);
+
+        auto ctx = test_structure_context(true, c1_data.size());
+        BOOST_CHECK_EQUAL(S::serialized_object_size(buffer.get(), ctx), expected_size);
+
+        auto view = S::make_view(buffer.get(), ctx);
+        BOOST_CHECK_EQUAL(view.get<A>().load(), a_value);
+        BOOST_CHECK_EQUAL(view.get<B>(ctx).get<B>().get().load(), b1_value);
+        BOOST_CHECK(boost::range::equal(view.get<B>(ctx).get<C>(ctx), c1_data));
+        BOOST_CHECK_EQUAL(view.get<C>(ctx).load(), c_value);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END();
