@@ -419,17 +419,20 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
     return make_ready_future<stop_iteration>(c.consume_end_of_partition());
 }
 
-/*
+GCC6_CONCEPT(
 template<typename T>
 concept bool FlattenedConsumer() {
-    return StreamedMutationConsumer() && requires(T obj, const dht::decorated_key& dk) {
+    return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
         obj.consume_new_partition(dk);
         obj.consume_end_of_partition();
     };
 }
-*/
-template<typename FlattenedConsumer>
-auto consume_flattened(mutation_reader mr, FlattenedConsumer&& c, bool reverse_mutations = false)
+)
+template<typename Consumer>
+GCC6_CONCEPT(
+    requires FlattenedConsumer<Consumer>()
+)
+auto consume_flattened(mutation_reader mr, Consumer&& c, bool reverse_mutations = false)
 {
     return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
         return repeat([&, reverse_mutations] {

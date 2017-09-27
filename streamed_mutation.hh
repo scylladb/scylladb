@@ -447,7 +447,7 @@ public:
 
     template<typename Visitor>
     GCC6_CONCEPT(
-        requires MutationFragmentVisitor<Visitor, decltype(auto)>()
+        requires MutationFragmentVisitor<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>()
     )
     decltype(auto) visit(Visitor&& visitor) const {
         switch (_kind) {
