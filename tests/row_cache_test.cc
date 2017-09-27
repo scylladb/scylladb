@@ -190,6 +190,30 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
     });
 }
 
+dht::partition_range make_single_partition_range(schema_ptr& s, int pkey) {
+    auto pk = partition_key::from_exploded(*s, { int32_type->decompose(pkey) });
+    auto dk = dht::global_partitioner().decorate_key(*s, pk);
+    return dht::partition_range::make_singular(dk);
+}
+
+SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_partition_query) {
+    return seastar::async([] {
+        auto s = make_schema();
+        int secondary_calls_count = 0;
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mutation_source([&secondary_calls_count] (schema_ptr s, const dht::partition_range& range, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
+            return make_counting_reader(make_empty_reader(), secondary_calls_count);
+        })), tracker);
+        auto range = make_single_partition_range(s, 100);
+        assert_that(cache.make_reader(s, range))
+            .produces_end_of_stream();
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
+        assert_that(cache.make_reader(s, range))
+            .produces_eos_or_empty_mutation();
+        BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
+    });
+}
+
 SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
     return seastar::async([] {
         auto s = make_schema();
@@ -203,9 +227,7 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
                 .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
 
-        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(100) });
-        auto dk = dht::global_partitioner().decorate_key(*s, pk);
-        auto range = dht::partition_range::make_singular(dk);
+        auto range = make_single_partition_range(s, 100);
 
         assert_that(cache.make_reader(s, range))
                 .produces_end_of_stream();
@@ -693,7 +715,11 @@ bool has_key(row_cache& cache, const dht::decorated_key& key) {
     auto range = dht::partition_range::make_singular(key);
     auto reader = cache.make_reader(cache.schema(), range);
     auto mo = reader().get0();
-    return bool(mo);
+    if (!bool(mo)) {
+        return false;
+    }
+    auto m = mutation_from_streamed_mutation(*mo).get0();
+    return !m.partition().empty();
 }
 
 void verify_has(row_cache& cache, const dht::decorated_key& key) {

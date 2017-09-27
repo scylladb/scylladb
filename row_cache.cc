@@ -340,6 +340,25 @@ public:
         return _delegate().then([this, phase] (auto sm) mutable -> streamed_mutation_opt {
             auto ctx = std::move(_read_context);
             if (!sm) {
+                if (phase == _cache.phase_of(ctx->range().start()->value())) {
+                    _cache._read_section(_cache._tracker.region(), [this, ctx = std::move(ctx)] {
+                        with_allocator(_cache._tracker.allocator(), [this, &ctx] {
+                            dht::decorated_key dk = ctx->range().start()->value().as_decorated_key();
+                            _cache.do_find_or_create_entry(dk, nullptr, [&] (auto i) {
+                                mutation_partition mp(_cache._schema);
+                                cache_entry* entry = current_allocator().construct<cache_entry>(
+                                    _cache._schema, std::move(dk), std::move(mp));
+                                _cache._tracker.insert(*entry);
+                                entry->set_continuous(i->continuous());
+                                return _cache._partitions.insert(i, *entry);
+                            }, [&] (auto i) {
+                                _cache._tracker.on_miss_already_populated();
+                            });
+                        });
+                    });
+                } else {
+                    _cache._tracker.on_mispopulate();
+                }
                 return std::move(sm);
             }
             if (phase == _cache.phase_of(ctx->range().start()->value())) {
