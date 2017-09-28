@@ -32,6 +32,7 @@
 
 #include "imr/fundamental.hh"
 #include "imr/compound.hh"
+#include "imr/methods.hh"
 
 #include "random-utils.hh"
 
@@ -534,6 +535,185 @@ BOOST_AUTO_TEST_CASE(test_nested_structure) {
         BOOST_CHECK(boost::range::equal(view.get<B>(ctx).get<C>(ctx), c1_data));
         BOOST_CHECK_EQUAL(view.get<C>(ctx).load(), c_value);
     }
+}
+
+BOOST_AUTO_TEST_SUITE_END();
+
+struct object_with_destructor {
+    static size_t destruction_count;
+    static uint64_t last_destroyed_one;
+
+    static void reset() {
+        destruction_count = 0;
+        last_destroyed_one = 0;
+    }
+
+    uint64_t value;
+};
+
+size_t object_with_destructor::destruction_count = 0;
+uint64_t object_with_destructor::last_destroyed_one = 0;
+
+struct object_without_destructor {
+    uint64_t value;
+};
+
+namespace imr {
+namespace methods {
+
+template<>
+struct destructor<pod<object_with_destructor>> {
+    template<typename... Args>
+    static void run(uint8_t* ptr, Args&&...) noexcept {
+        object_with_destructor::destruction_count++;
+
+        auto view = imr::pod<object_with_destructor>::make_view(ptr);
+        object_with_destructor::last_destroyed_one = view.load().value;
+    }
+};
+
+}
+}
+
+BOOST_AUTO_TEST_SUITE(methods);
+
+BOOST_AUTO_TEST_CASE(test_simple_destructor) {
+    object_with_destructor::reset();
+
+    using O1 = imr::pod<object_with_destructor>;
+    using O2 = imr::pod<object_without_destructor>;
+
+    BOOST_CHECK(!imr::methods::is_trivially_destructible<O1>::value);
+    BOOST_CHECK(imr::methods::is_trivially_destructible<O2>::value);
+
+    static constexpr auto expected_size = sizeof(object_with_destructor);
+    uint8_t buffer[expected_size];
+
+    auto value = tests::random::get_int<uint64_t>();
+    BOOST_CHECK_EQUAL(O1::serialize(buffer, object_with_destructor { value }), expected_size);
+    imr::methods::destroy<O1>(buffer);
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 1);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, value);
+
+    imr::methods::destroy<O2>(buffer);
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 1);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, value);
+}
+
+BOOST_AUTO_TEST_CASE(test_structure_destructor) {
+    object_with_destructor::reset();
+
+    using S = imr::structure<imr::member<A, imr::pod<object_with_destructor>>,
+            imr::member<B, imr::pod<object_without_destructor>>,
+            imr::member<C, imr::pod<object_with_destructor>>>;
+
+    using S1 = imr::structure<imr::member<A, imr::pod<object_without_destructor>>,
+            imr::member<B, imr::pod<object_without_destructor>>,
+            imr::member<C, imr::pod<object_without_destructor>>>;
+
+    BOOST_CHECK(!imr::methods::is_trivially_destructible<S>::value);
+    BOOST_CHECK(imr::methods::is_trivially_destructible<S1>::value);
+
+    static constexpr auto expected_size = sizeof(object_with_destructor) * 3;
+    uint8_t buffer[expected_size];
+
+    auto a = tests::random::get_int<uint64_t>();
+    auto b = tests::random::get_int<uint64_t>();
+    auto c = tests::random::get_int<uint64_t>();
+
+    BOOST_CHECK_EQUAL(S::serialize(buffer, [&] (auto serializer) noexcept {
+        return serializer
+                .serialize(object_with_destructor { a })
+                .serialize(object_without_destructor { b })
+                .serialize(object_with_destructor { c })
+                .done();
+    }), expected_size);
+
+    imr::methods::destroy<S>(buffer);
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 2);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, c);
+
+    imr::methods::destroy<S1>(buffer);
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 2);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, c);
+}
+
+BOOST_AUTO_TEST_CASE(test_optional_destructor) {
+    object_with_destructor::reset();
+
+    using O1 = imr::optional<A, imr::pod<object_with_destructor>>;
+    using O2 = imr::optional<B, imr::pod<object_with_destructor>>;
+    using O3 = imr::optional<A, imr::pod<object_without_destructor>>;
+
+    BOOST_CHECK(!imr::methods::is_trivially_destructible<O1>::value);
+    BOOST_CHECK(!imr::methods::is_trivially_destructible<O2>::value);
+    BOOST_CHECK(imr::methods::is_trivially_destructible<O3>::value);
+
+    static constexpr auto expected_size = sizeof(object_with_destructor);
+    uint8_t buffer[expected_size];
+
+    auto value = tests::random::get_int<uint64_t>();
+
+    BOOST_CHECK_EQUAL(O1::serialize(buffer, object_with_destructor { value }), expected_size);
+
+    imr::methods::destroy<O2>(buffer, compound::test_optional_context());
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 0);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, 0);
+
+    imr::methods::destroy<O1>(buffer, compound::test_optional_context());
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 1);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, value);
+
+    imr::methods::destroy<O3>(buffer, compound::test_optional_context());
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 1);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, value);
+}
+
+using V = imr::variant<A,
+        imr::member<B, imr::pod<object_with_destructor>>,
+        imr::member<C, imr::pod<object_without_destructor>>>;
+
+struct test_variant_context {
+    bool _alternative_b;
+public:
+    template<typename Tag>
+    auto active_alternative_of() const noexcept;
+
+    template<typename Tag>
+    decltype(auto) context_for(...) const noexcept { return *this; }
+};
+
+template<>
+auto test_variant_context::active_alternative_of<A>() const noexcept {
+    if (_alternative_b) {
+        return V::index_for<B>();
+    } else {
+        return V::index_for<C>();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_variant_destructor) {
+    object_with_destructor::reset();
+
+    using V1 = imr::variant<A, imr::member<B, imr::pod<object_without_destructor>>>;
+
+    BOOST_CHECK(!imr::methods::is_trivially_destructible<V>::value);
+    BOOST_CHECK(imr::methods::is_trivially_destructible<V1>::value);
+
+    static constexpr auto expected_size = sizeof(object_with_destructor);
+    uint8_t buffer[expected_size];
+
+    auto value = tests::random::get_int<uint64_t>();
+
+    BOOST_CHECK_EQUAL(V::serialize<B>(buffer, object_with_destructor { value }), expected_size);
+
+    imr::methods::destroy<V>(buffer, test_variant_context { false });
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 0);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, 0);
+
+    imr::methods::destroy<V>(buffer, test_variant_context { true });
+    BOOST_CHECK_EQUAL(object_with_destructor::destruction_count, 1);
+    BOOST_CHECK_EQUAL(object_with_destructor::last_destroyed_one, value);
 }
 
 BOOST_AUTO_TEST_SUITE_END();
