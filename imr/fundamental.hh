@@ -142,6 +142,15 @@ public:
         (do_set_or_clear<Tags1>(out, sfs.value()), ...);
         return object_size;
     }
+
+    static size_t size_when_serialized(placeholder<flags<Tags...>>&) noexcept {
+        return object_size;
+    }
+
+    static size_t serialize(uint8_t* out, placeholder<flags<Tags...>>& phldr) noexcept {
+        phldr.set_pointer(out);
+        return object_size;
+    }
 };
 
 /// POD object
@@ -201,6 +210,15 @@ public:
 
     static size_t serialize(uint8_t* out, const Type& value) noexcept {
         internal::write_pod(value, out);
+        return sizeof(Type);
+    }
+
+    static size_t size_when_serialized(placeholder<pod<Type>>&) noexcept {
+        return sizeof(Type);
+    }
+
+    static size_t serialize(uint8_t* out, placeholder<pod<Type>>& phldr) noexcept {
+        phldr.set_pointer(out);
         return sizeof(Type);
     }
 };
