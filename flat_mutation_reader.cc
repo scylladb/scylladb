@@ -126,18 +126,21 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
     return make_flat_mutation_reader<converting_reader>(std::move(s), std::move(legacy_reader), fwd);
 }
 
-streamed_mutation make_forwardable_copy(streamed_mutation m) {
-    class reader : public streamed_mutation::impl {
-        streamed_mutation _sm;
-        position_range _current = position_range::for_static_row();
+flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m) {
+    class reader : public flat_mutation_reader::impl {
+        schema_ptr _schema;
+        flat_mutation_reader _underlying;
+        position_range _current = {
+            position_in_partition(position_in_partition::partition_start_tag_t()),
+            position_in_partition(position_in_partition::after_static_row_tag_t())
+        };
         mutation_fragment_opt _next;
-    private:
         // When resolves, _next is engaged or _end_of_stream is set.
         future<> ensure_next() {
             if (_next) {
                 return make_ready_future<>();
             }
-            return _sm().then([this] (auto&& mfo) {
+            return _underlying().then([this] (auto&& mfo) {
                 _next = std::move(mfo);
                 if (!_next) {
                     _end_of_stream = true;
@@ -145,11 +148,7 @@ streamed_mutation make_forwardable_copy(streamed_mutation m) {
             });
         }
     public:
-        explicit reader(streamed_mutation sm)
-            : impl(sm.schema(), std::move(sm.decorated_key()), sm.partition_tombstone())
-            , _sm(std::move(sm))
-        { }
-
+        reader(schema_ptr s, flat_mutation_reader r) : _schema(std::move(s)), _underlying(std::move(r)) { }
         virtual future<> fill_buffer() override {
             return repeat([this] {
                 if (is_buffer_full()) {
@@ -159,7 +158,7 @@ streamed_mutation make_forwardable_copy(streamed_mutation m) {
                     if (is_end_of_stream()) {
                         return stop_iteration::yes;
                     }
-                    position_in_partition::less_compare cmp(*_sm.schema());
+                    position_in_partition::less_compare cmp(*_schema);
                     if (!cmp(_next->position(), _current.end())) {
                         _end_of_stream = true;
                         // keep _next, it may be relevant for next range
@@ -173,16 +172,31 @@ streamed_mutation make_forwardable_copy(streamed_mutation m) {
                 });
             });
         }
-
         virtual future<> fast_forward_to(position_range pr) override {
             _current = std::move(pr);
             _end_of_stream = false;
-            forward_buffer_to(_current.start());
+            forward_buffer_to(_schema, _current.start());
             return make_ready_future<>();
         }
+        virtual void next_partition() override {
+            _end_of_stream = false;
+            if (!_next || !_next->is_partition_start()) {
+                _underlying.next_partition();
+                _next = {};
+            }
+            clear_buffer_to_next_partition();
+            _current = {
+                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition(position_in_partition::after_static_row_tag_t())
+            };
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            clear_buffer();
+            _next = {};
+            return _underlying.fast_forward_to(pr);
+        }
     };
-
-    return make_streamed_mutation<reader>(std::move(m));
+    return make_flat_mutation_reader<reader>(std::move(s), std::move(m));
 }
 
 class empty_flat_reader final : public flat_mutation_reader::impl {
