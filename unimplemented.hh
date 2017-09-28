@@ -60,7 +60,7 @@ enum class cause {
     ROLES,
 };
 
-void fail(cause what) __attribute__((noreturn));
+[[noreturn]] void fail(cause what);
 void warn(cause what);
 
 }
