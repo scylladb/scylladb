@@ -248,16 +248,13 @@ mutation_partition::mutation_partition(const mutation_partition& x, const schema
             for (const rows_entry& e : x.range(schema, r)) {
                 _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(e), rows_entry::compare(schema));
             }
+            for (auto&& rt : x._row_tombstones.slice(schema, r)) {
+                _row_tombstones.apply(schema, rt);
+            }
         }
     } catch (...) {
         _rows.clear_and_dispose(current_deleter<rows_entry>());
         throw;
-    }
-
-    for(auto&& r : ck_ranges) {
-        for (auto&& rt : x._row_tombstones.slice(schema, r)) {
-            _row_tombstones.apply(schema, rt);
-        }
     }
 }
 
