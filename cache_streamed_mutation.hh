@@ -74,8 +74,10 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
 
         // Invariants:
         //  - position_range(_lower_bound, _upper_bound) covers all not yet emitted positions from current range
-        //  - _next_row points to the nearest row in cache >= _lower_bound
-        //  - _next_row_in_range = _next.position() < _upper_bound
+        //  - if _next_row has valid iterators:
+        //    - _next_row points to the nearest row in cache >= _lower_bound
+        //    - _next_row_in_range = _next.position() < _upper_bound
+        //  - if _next_row doesn't have valid iterators, it has no meaning.
         reading_from_cache,
 
         // Starts reading from underlying reader.

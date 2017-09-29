@@ -89,6 +89,7 @@ public:
 // back to validity by calling maybe_refresh(), or advance_to().
 //
 // Insertion of row entries after cursor's position invalidates the cursor.
+// Exceptions thrown from mutators invalidate the cursor.
 //
 class partition_snapshot_row_cursor final {
     friend class partition_snapshot_row_weakref;
@@ -202,6 +203,7 @@ public:
     // May be called when cursor is not valid.
     // The cursor is valid after the call.
     // Must be called under reclaim lock.
+    // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
         memory::on_alloc_point();
         rows_entry::compare less(_schema);
@@ -230,6 +232,7 @@ public:
     // Advances the cursor to the next row.
     // If there is no next row, returns false and the cursor is no longer pointing at a row.
     // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
     bool next() {
         memory::on_alloc_point();
         position_in_version::less_compare heap_less(_schema);
