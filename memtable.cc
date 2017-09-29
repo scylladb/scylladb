@@ -309,6 +309,10 @@ public:
             });
         });
     }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        return _delegate_range ? _delegate.fast_forward_to(pr)
+                               : iterator_reader::fast_forward_to(pr);
+    }
 };
 
 void memtable::add_flushed_memory(uint64_t delta) {
