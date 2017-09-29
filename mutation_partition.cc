@@ -660,17 +660,17 @@ struct appending_hash<row> {
             }
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
-                max_ts.update(cell_and_hash->cell.as_atomic_cell().timestamp());
+                max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
                 if constexpr (query::using_hash_of_hash_v<Hasher>) {
                     if (cell_and_hash->hash) {
                         feed_hash(h, *cell_and_hash->hash);
                     } else {
                         query::default_hasher cellh;
-                        feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(), def);
+                        feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
                         feed_hash(h, cellh.finalize_uint64());
                     }
                 } else {
-                    feed_hash(h, cell_and_hash->cell.as_atomic_cell(), def);
+                    feed_hash(h, cell_and_hash->cell.as_atomic_cell(def), def);
                 }
             } else {
                 auto&& cm = cell_and_hash->cell.as_collection_mutation();
@@ -735,13 +735,13 @@ static void get_compacted_row_slice(const schema& s,
         } else {
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
-                auto c = cell->as_atomic_cell();
+                auto c = cell->as_atomic_cell(def);
                 if (!c.is_live()) {
                     writer.add().skip();
                 } else if (def.is_counter()) {
-                    write_counter_cell(writer, slice, cell->as_atomic_cell());
+                    write_counter_cell(writer, slice, cell->as_atomic_cell(def));
                 } else {
-                    write_cell(writer, slice, cell->as_atomic_cell());
+                    write_cell(writer, slice, cell->as_atomic_cell(def));
                 }
             } else {
                 auto&& mut = cell->as_collection_mutation();
@@ -762,7 +762,7 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
-            auto&& c = cell_or_collection.as_atomic_cell();
+            auto&& c = cell_or_collection.as_atomic_cell(def);
             if (c.is_live(tomb, now, def.is_counter())) {
                 any_live = true;
                 return stop_iteration::yes;
@@ -1046,9 +1046,9 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
     // provided via an upper layer
     if (def.is_atomic()) {
         if (def.is_counter()) {
-            counter_cell_view::apply(dst.cell, src); // FIXME: Optimize
+            counter_cell_view::apply(def, dst.cell, src); // FIXME: Optimize
             dst.hash = { };
-        } else if (compare_atomic_cell_for_merge(dst.cell.as_atomic_cell(), src.as_atomic_cell()) < 0) {
+        } else if (compare_atomic_cell_for_merge(dst.cell.as_atomic_cell(def), src.as_atomic_cell(def)) < 0) {
             using std::swap;
             swap(dst.cell, src);
             dst.hash = std::move(src_hash);
@@ -1597,7 +1597,7 @@ bool row::compact_and_expire(
         bool erase = false;
         const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
-            atomic_cell_view cell = c.as_atomic_cell();
+            atomic_cell_view cell = c.as_atomic_cell(def);
             auto can_erase_cell = [&] {
                 return cell.deletion_time() < gc_before && can_gc(tombstone(cell.timestamp(), cell.deletion_time()));
             };
@@ -1670,12 +1670,12 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             if (it == other_range.end() || it->first != c.first) {
                 r.append_cell(c.first, c.second);
             } else if (cdef.is_counter()) {
-                auto cell = counter_cell_view::difference(c.second.as_atomic_cell(), it->second.as_atomic_cell());
+                auto cell = counter_cell_view::difference(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef));
                 if (cell) {
                     r.append_cell(c.first, std::move(*cell));
                 }
             } else if (s.column_at(kind, c.first).is_atomic()) {
-                if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(), it->second.as_atomic_cell()) > 0) {
+                if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef)) > 0) {
                     r.append_cell(c.first, c.second);
                 }
             } else {
@@ -1726,7 +1726,7 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
     _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
         const column_definition& def = s.static_column_at(id);
         if (def.is_atomic()) {
-            v.accept_static_cell(id, cell.as_atomic_cell());
+            v.accept_static_cell(id, cell.as_atomic_cell(def));
         } else {
             v.accept_static_cell(id, cell.as_collection_mutation());
         }
@@ -1740,7 +1740,7 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
         dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
             const column_definition& def = s.regular_column_at(id);
             if (def.is_atomic()) {
-                v.accept_row_cell(id, cell.as_atomic_cell());
+                v.accept_row_cell(id, cell.as_atomic_cell(def));
             } else {
                 v.accept_row_cell(id, cell.as_collection_mutation());
             }

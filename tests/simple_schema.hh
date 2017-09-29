@@ -110,7 +110,7 @@ public:
         if (!cell) {
             throw std::runtime_error("cell not found");
         }
-        atomic_cell_view ac = cell->as_atomic_cell();
+        atomic_cell_view ac = cell->as_atomic_cell(_v_def);
         if (!ac.is_live()) {
             throw std::runtime_error("cell is dead");
         }

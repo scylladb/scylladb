@@ -183,7 +183,7 @@ private:
             r.for_each_cell([this, &s, kind](column_id id, const atomic_cell_or_collection& item) {
                 auto& col = s.column_at(kind, id);
                 if (col.is_atomic()) {
-                    update(item.as_atomic_cell());
+                    update(item.as_atomic_cell(col));
                 } else {
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                     auto mview = ctype->deserialize_mutation_form(item.as_collection_mutation());

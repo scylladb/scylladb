@@ -120,11 +120,11 @@ public:
 
     // Appends the cell to dst upgrading it to the new schema.
     // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, const atomic_cell_or_collection& cell) {
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell) {
         if (new_def.is_atomic()) {
-            accept_cell(dst, kind, new_def, old_type, cell.as_atomic_cell());
+            accept_cell(dst, kind, new_def, old_def.type, cell.as_atomic_cell(old_def));
         } else {
-            accept_cell(dst, kind, new_def, old_type, cell.as_collection_mutation());
+            accept_cell(dst, kind, new_def, old_def.type, cell.as_collection_mutation());
         }
     }
 };

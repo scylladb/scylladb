@@ -183,7 +183,7 @@ static bool is_partition_key_empty(
     default:
         // No multi-cell columns in the view's partition key
         auto& c = update.cells().cell_at(base_col->id);
-        return c.as_atomic_cell().value().empty();
+        return c.as_atomic_cell(*base_col).value().empty();
     }
 }
 
@@ -264,8 +264,9 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     auto marker = base_row.marker();
     auto col_id = _view_info.base_non_pk_column_in_view_pk();
     if (col_id) {
+        auto& def = _base->regular_column_at(*col_id);
         // Note: multi-cell columns can't be part of the primary key.
-        auto cell = base_row.cells().cell_at(*col_id).as_atomic_cell();
+        auto cell = base_row.cells().cell_at(*col_id).as_atomic_cell(def);
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
@@ -300,7 +301,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
             return;
         }
         if (def.is_atomic()) {
-            maybe_update_expiry_and_ttl(c.as_atomic_cell());
+            maybe_update_expiry_and_ttl(c.as_atomic_cell(def));
         } else {
             auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             ctype->for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
@@ -328,7 +329,7 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
         default:
             auto& c = update.cells().cell_at(base_col->id);
             if (base_col->is_atomic()) {
-                return c.as_atomic_cell().value();
+                return c.as_atomic_cell(cdef).value();
             }
             return c.as_collection_mutation().data;
         }
@@ -388,7 +389,8 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
         // We delete the old row using a shadowable row tombstone, making sure that
         // the tombstone deletes everything in the row (or it might still show up).
         // Note: multi-cell columns can't be part of the primary key.
-        auto cell = existing.cells().cell_at(*col_id).as_atomic_cell();
+        auto& def = _base->regular_column_at(*col_id);
+        auto cell = existing.cells().cell_at(*col_id).as_atomic_cell(def);
         if (cell.is_live()) {
             r.apply(shadowable_tombstone(cell.timestamp(), now));
         }
@@ -406,7 +408,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
                 // Unselected columns are used regardless of being live or dead, since we don't know if
                 // they were used to compute the view entry's row marker.
                 if (def.is_atomic()) {
-                    set_max_ts(cell.as_atomic_cell());
+                    set_max_ts(cell.as_atomic_cell(def));
                 } else {
                     auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
                     ctype->for_each_cell(cell.as_collection_mutation(), set_max_ts);
@@ -483,11 +485,12 @@ void view_updates::generate_update(
 
     auto* after = update.cells().find_cell(*col_id);
     // Note: multi-cell columns can't be part of the primary key.
+    auto& cdef = _base->regular_column_at(*col_id);
     if (existing) {
         auto* before = existing->cells().find_cell(*col_id);
-        if (before && before->as_atomic_cell().is_live()) {
-            if (after && after->as_atomic_cell().is_live()) {
-                auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(), after->as_atomic_cell());
+        if (before && before->as_atomic_cell(cdef).is_live()) {
+            if (after && after->as_atomic_cell(cdef).is_live()) {
+                auto cmp = compare_atomic_cell_for_merge(before->as_atomic_cell(cdef), after->as_atomic_cell(cdef));
                 if (cmp == 0) {
                     update_entry(base_key, update, *existing, now);
                 } else {
@@ -501,7 +504,7 @@ void view_updates::generate_update(
     }
 
     // No existing row or the cell wasn't live
-    if (after && after->as_atomic_cell().is_live()) {
+    if (after && after->as_atomic_cell(cdef).is_live()) {
         create_entry(base_key, update, now);
     }
 }

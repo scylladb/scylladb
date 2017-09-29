@@ -796,7 +796,7 @@ static void delete_schema_version(mutation& m) {
         auto&& cell = cells.find_cell(version_col.id);
         api::timestamp_type t = api::new_timestamp();
         if (cell) {
-            t = std::max(t, cell->as_atomic_cell().timestamp());
+            t = std::max(t, cell->as_atomic_cell(version_col).timestamp());
         }
         cells.apply(version_col, atomic_cell::make_dead(t, gc_clock::now()));
     }

@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
         row& r = p.clustered_row(*s, c_key).cells();
         auto i = r.find_cell(r1_col.id);
         BOOST_REQUIRE(i);
-        auto cell = i->as_atomic_cell();
+        auto cell = i->as_atomic_cell(r1_col);
         BOOST_REQUIRE(cell.is_live());
         BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
     });
@@ -318,7 +318,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
                     BOOST_REQUIRE(i);
-                    auto cell = i->as_atomic_cell();
+                    auto cell = i->as_atomic_cell(r1_col);
                     BOOST_REQUIRE(cell.is_live());
                     BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
                 }
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
                     auto cell = re.row().cells().find_cell(r1_col.id);
                     if (cell) {
-                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
+                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell(r1_col).value()));
                     }
                 }
                 return true;
@@ -931,7 +931,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         row& r = p.static_row();
         auto i = r.find_cell(s1_col.id);
         BOOST_REQUIRE(i);
-        auto cell = i->as_atomic_cell();
+        auto cell = i->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell.is_live());
         BOOST_REQUIRE(bytes_type->equal(cell.value(), bytes_type->decompose(data_value(blob1))));
 
@@ -944,7 +944,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         row& r2 = p2.static_row();
         auto i2 = r2.find_cell(s1_col.id);
         BOOST_REQUIRE(i2);
-        auto cell2 = i2->as_atomic_cell();
+        auto cell2 = i2->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell2.is_live());
         BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
     });

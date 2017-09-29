@@ -1919,7 +1919,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
             return;
         }
         assert(column_definition.is_regular());
-        atomic_cell_view cell = c.as_atomic_cell();
+        atomic_cell_view cell = c.as_atomic_cell(column_definition);
         std::vector<bytes_view> column_name = { column_definition.name() };
         index_and_write_column_name(out, clustering_key, column_name);
         write_cell(out, cell, column_definition);
@@ -1939,7 +1939,7 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         const auto& column_name = column_definition.name();
         auto sp = composite::static_prefix(schema);
         index_and_write_column_name(out, sp, { bytes_view(column_name) });
-        atomic_cell_view cell = c.as_atomic_cell();
+        atomic_cell_view cell = c.as_atomic_cell(column_definition);
         write_cell(out, cell, column_definition);
     });
 }
@@ -2987,7 +2987,7 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
             write_collection(writer, column_definition, c.as_collection_mutation(), properties, has_complex_deletion);
             return;
         }
-        atomic_cell_view cell = c.as_atomic_cell();
+        atomic_cell_view cell = c.as_atomic_cell(column_definition);
         ++_c_stats.cells_count;
         ++_c_stats.column_count;
         write_cell(writer, cell, column_definition, properties);

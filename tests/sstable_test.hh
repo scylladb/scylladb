@@ -553,7 +553,7 @@ inline void match(const row& row, const schema& s, bytes col, const data_value& 
     auto cdef = s.get_column_definition(col);
 
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
-    auto c = row.cell_at(cdef->id).as_atomic_cell();
+    auto c = row.cell_at(cdef->id).as_atomic_cell(*cdef);
     if (check_status_and_done(c, Status)) {
         return;
     }

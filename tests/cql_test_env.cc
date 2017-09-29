@@ -226,7 +226,7 @@ public:
             }
             bytes actual;
             if (!col_def->type->is_multi_cell()) {
-                auto c = cell->as_atomic_cell();
+                auto c = cell->as_atomic_cell(*col_def);
                 assert(c.is_live());
                 actual = { c.value().begin(), c.value().end() };
             } else {

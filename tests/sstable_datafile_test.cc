@@ -1148,8 +1148,10 @@ SEASTAR_TEST_CASE(compact) {
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(int8_t)170}));
+                        auto& cdef1 = *s->get_column_definition("age");
+                        auto& cdef2 = *s->get_column_definition("height");
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,40}));
+                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == bytes({0,0,0,(int8_t)170}));
                         return read_mutation_from_flat_mutation_reader(*reader);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1160,8 +1162,10 @@ SEASTAR_TEST_CASE(compact) {
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(int8_t)180}));
+                        auto& cdef1 = *s->get_column_definition("age");
+                        auto& cdef2 = *s->get_column_definition("height");
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.cell_at(cdef2.id).as_atomic_cell(cdef2).value() == bytes({0,0,0,(int8_t)180}));
                         return read_mutation_from_flat_mutation_reader(*reader);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1172,8 +1176,10 @@ SEASTAR_TEST_CASE(compact) {
                         auto &row = rows.begin()->row();
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.find_cell(s->get_column_definition("height")->id) == nullptr);
+                        auto& cdef1 = *s->get_column_definition("age");
+                        auto& cdef2 = *s->get_column_definition("height");
+                        BOOST_REQUIRE(cells.cell_at(cdef1.id).as_atomic_cell(cdef1).value() == bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.find_cell(cdef2.id) == nullptr);
                         return read_mutation_from_flat_mutation_reader(*reader);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -2382,7 +2388,8 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
                 auto& row = rows.begin()->row();
                 auto& cells = row.cells();
                 BOOST_REQUIRE_EQUAL(cells.size(), 1);
-                BOOST_REQUIRE(!cells.cell_at(s->get_column_definition("value")->id).as_atomic_cell().is_live());
+                auto& cdef = *s->get_column_definition("value");
+                BOOST_REQUIRE(!cells.cell_at(cdef.id).as_atomic_cell(cdef).is_live());
                 return (*reader)();
             }).then([reader, s] (mutation_fragment_opt m) {
                 BOOST_REQUIRE(!m);
@@ -2557,7 +2564,8 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             BOOST_REQUIRE(!row.deleted_at());
             auto& cells = row.cells();
             BOOST_REQUIRE_EQUAL(cells.size(), 1);
-            BOOST_REQUIRE_EQUAL(cells.cell_at(s->get_column_definition("e")->id).as_atomic_cell().value(), int32_type->decompose(5));
+            auto& cdef = *s->get_column_definition("e");
+            BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
             return (*reader)();
         }).then([reader, s] (mutation_fragment_opt m) {
             BOOST_REQUIRE(!m);
@@ -2866,7 +2874,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
             cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-                counter_cell_view ccv { c.as_atomic_cell() };
+                counter_cell_view ccv { c.as_atomic_cell(s->regular_column_at(id)) };
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), 13);
@@ -2896,7 +2904,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
-                    BOOST_REQUIRE(!c.as_atomic_cell().is_live());
+                    BOOST_REQUIRE(!c.as_atomic_cell(col).is_live());
                 } else {
                     BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
                 }
@@ -4356,14 +4364,14 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             sst->load().get0();
             auto reader = sstable_reader(sst, s);
 
-            auto verify_row = [] (mutation_fragment_opt mfopt, int64_t expected_value) {
+            auto verify_row = [&s] (mutation_fragment_opt mfopt, int64_t expected_value) {
                 BOOST_REQUIRE(bool(mfopt));
                 auto& mf = *mfopt;
                 BOOST_REQUIRE(mf.is_clustering_row());
                 auto& row = mf.as_clustering_row();
                 size_t n = 0;
-                row.cells().for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
-                    auto acv = ac_o_c.as_atomic_cell();
+                row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+                    auto acv = ac_o_c.as_atomic_cell(s->regular_column_at(id));
                     auto ccv = counter_cell_view(acv);
                     counter_shard_view::less_compare_by_id cmp;
                     BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp), ccv << " is expected to be sorted");

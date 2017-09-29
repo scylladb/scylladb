@@ -447,7 +447,7 @@ static bytes_view_opt do_get_value(const schema& schema,
                 return stdx::nullopt;
             }
             assert(cdef.is_atomic());
-            auto c = cell->as_atomic_cell();
+            auto c = cell->as_atomic_cell(cdef);
             return c.is_dead(now) ? stdx::nullopt : bytes_view_opt(c.value());
     }
 }

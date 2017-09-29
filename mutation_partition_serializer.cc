@@ -125,7 +125,7 @@ auto write_row_cells(Writer&& writer, const row& r, const schema& s, column_kind
         auto& def = s.column_at(kind, id);
         auto cell_or_collection_writer = column_writer.add().write_id(id);
         if (def.is_atomic()) {
-            auto&& c = cell.as_atomic_cell();
+            auto&& c = cell.as_atomic_cell(def);
             auto cell_writer = std::move(cell_or_collection_writer).start_c_variant();
             if (!c.is_live()) {
                 write_dead_cell(std::move(cell_writer).start_variant_dead_cell(), c).end_variant().end_column();

@@ -59,6 +59,8 @@ std::vector<counter_id> generate_ids(unsigned count) {
 
 SEASTAR_TEST_CASE(test_counter_cell) {
     return seastar::async([] {
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
         auto id = generate_ids(3);
 
         counter_cell_builder b1;
@@ -66,7 +68,7 @@ SEASTAR_TEST_CASE(test_counter_cell) {
         b1.add_shard(counter_shard(id[1], -4, 1));
         auto c1 = atomic_cell_or_collection(b1.build(0));
 
-        auto cv = counter_cell_view(c1.as_atomic_cell());
+        auto cv = counter_cell_view(c1.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 1);
         verify_shard_order(cv);
 
@@ -75,12 +77,12 @@ SEASTAR_TEST_CASE(test_counter_cell) {
         b2.add_shard(counter_shard(id[2], 1, 1));
         auto c2 = atomic_cell_or_collection(b2.build(0));
 
-        cv = counter_cell_view(c2.as_atomic_cell());
+        cv = counter_cell_view(c2.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 8);
         verify_shard_order(cv);
 
-        counter_cell_view::apply(c1, c2);
-        cv = counter_cell_view(c1.as_atomic_cell());
+        counter_cell_view::apply(cdef, c1, c2);
+        cv = counter_cell_view(c1.as_atomic_cell(cdef));
         BOOST_REQUIRE_EQUAL(cv.total_value(), 4);
         verify_shard_order(cv);
     });
@@ -88,12 +90,14 @@ SEASTAR_TEST_CASE(test_counter_cell) {
 
 SEASTAR_TEST_CASE(test_apply) {
     return seastar::async([] {
-        auto verify_apply = [] (atomic_cell_or_collection dst, atomic_cell_or_collection src, int64_t value) {
-            counter_cell_view::apply(dst, src);
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
 
-            auto cv = counter_cell_view(dst.as_atomic_cell());
+        auto verify_apply = [&] (atomic_cell_or_collection dst, atomic_cell_or_collection src, int64_t value) {
+            counter_cell_view::apply(cdef, dst, src);
+
+            auto cv = counter_cell_view(dst.as_atomic_cell(cdef));
             BOOST_REQUIRE_EQUAL(cv.total_value(), value);
-            BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell().timestamp(), src.as_atomic_cell().timestamp()));
+            BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell(cdef).timestamp(), src.as_atomic_cell(cdef).timestamp()));
         };
         auto id = generate_ids(5);
 
@@ -152,8 +156,8 @@ atomic_cell_view get_counter_cell(mutation& m) {
     const auto& cells = mp.clustered_rows().begin()->row().cells();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     stdx::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
-        acv = ac_o_c.as_atomic_cell();
+    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        acv = ac_o_c.as_atomic_cell(m.schema()->regular_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));
     return *acv;
@@ -164,8 +168,8 @@ atomic_cell_view get_static_counter_cell(mutation& m) {
     const auto& cells = mp.static_row();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     stdx::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
-        acv = ac_o_c.as_atomic_cell();
+    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        acv = ac_o_c.as_atomic_cell(m.schema()->static_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));
     return *acv;
@@ -452,6 +456,8 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
         std::uniform_int_distribution<int64_t> value_dist(-1024 * 1024, 1024 * 1024);
 
         for (auto i = 0; i < 100; i++) {
+            auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
             auto shard_count = shard_count_dist(gen);
             auto ids = generate_ids(shard_count);
 
@@ -488,8 +494,8 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
             auto c2 = atomic_cell_or_collection(b2.build(0));
 
             // Compare
-            auto cv1 = counter_cell_view(c1.as_atomic_cell());
-            auto cv2 = counter_cell_view(c2.as_atomic_cell());
+            auto cv1 = counter_cell_view(c1.as_atomic_cell(cdef));
+            auto cv2 = counter_cell_view(c2.as_atomic_cell(cdef));
 
             BOOST_REQUIRE_EQUAL(cv1, cv2);
             BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
@@ -537,6 +543,8 @@ SEASTAR_TEST_CASE(test_counter_id_order_1_7_4) {
 
 SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
     return seastar::async([] {
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
         auto ids = generate_ids(16);
 
         counter_cell_builder ccb;
@@ -545,7 +553,7 @@ SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
         }
         auto ac = atomic_cell_or_collection(ccb.build(0));
 
-        auto cv = counter_cell_view(ac.as_atomic_cell());
+        auto cv = counter_cell_view(ac.as_atomic_cell(cdef));
 
         verify_shard_order(cv);
 

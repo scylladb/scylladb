@@ -115,12 +115,13 @@ public:
             if (!cell) {
                 BOOST_FAIL(sprint("Expected static row with column %s, but it is not present", columns[i].name));
             }
-            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell().value());
+            auto& cdef = _reader.schema()->static_column_at(columns[i].id);
+            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell(cdef).value());
             if (cmp != 0) {
                 BOOST_FAIL(sprint("Expected static row with column %s having value %s, but it has value %s",
                                   columns[i].name,
                                   columns[i].value,
-                                  cell->as_atomic_cell().value()));
+                                  cell->as_atomic_cell(cdef).value()));
             }
         }
         return *this;
@@ -148,12 +149,13 @@ public:
             if (!cell) {
                 BOOST_FAIL(sprint("Expected row with column %s, but it is not present", columns[i].name));
             }
-            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell().value());
+            auto& cdef = _reader.schema()->regular_column_at(columns[i].id);
+            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell(cdef).value());
             if (cmp != 0) {
                 BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
                                   columns[i].name,
                                   columns[i].value,
-                                  cell->as_atomic_cell().value()));
+                                  cell->as_atomic_cell(cdef).value()));
             }
         }
         return *this;
