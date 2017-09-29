@@ -318,3 +318,43 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
         BOOST_REQUIRE(std::is_sorted(virtual_dirty_values.begin(), virtual_dirty_values.end()));
     });
 }
+
+// Reproducer for #2854
+SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
+    return seastar::async([] {
+        schema_ptr s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("col", bytes_type, column_kind::regular_column)
+            .build();
+
+        auto mt = make_lw_shared<memtable>(s);
+        auto mt2 = make_lw_shared<memtable>(s);
+
+        std::vector<mutation> ring = make_ring(s, 5);
+
+        for (auto& m : ring) {
+            mt->apply(m);
+            mt2->apply(m);
+        }
+
+        auto rd = mt->make_reader(s);
+
+        auto sm_opt = rd().get0();
+        BOOST_REQUIRE(sm_opt);
+        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[0].key()));
+        mt->mark_flushed(mt2->as_data_source());
+        sm_opt = rd().get0();
+        BOOST_REQUIRE(sm_opt);
+        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[1].key()));
+
+        auto range = dht::partition_range::make_starting_with(dht::ring_position(ring[3].decorated_key()));
+        rd.fast_forward_to(range);
+        sm_opt = rd().get0();
+        BOOST_REQUIRE(sm_opt);
+        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[3].key()));
+        sm_opt = rd().get0();
+        BOOST_REQUIRE(sm_opt);
+        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[4].key()));
+        BOOST_REQUIRE(!rd().get0());
+    });
+}
