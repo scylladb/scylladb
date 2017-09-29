@@ -153,7 +153,7 @@ memtable::slice(const dht::partition_range& range) const {
     }
 }
 
-class iterator_reader: public mutation_reader::impl {
+class iterator_reader {
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
     const dht::partition_range* _range;
@@ -254,15 +254,14 @@ protected:
         _last = {};
         return ret;
     }
-public:
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    future<> fast_forward_to(const dht::partition_range& pr) {
         _range = &pr;
         _last = { };
         return make_ready_future<>();
     }
 };
 
-class scanning_reader final: public iterator_reader {
+class scanning_reader final : public mutation_reader::impl, private iterator_reader {
     stdx::optional<dht::partition_range> _delegate_range;
     mutation_reader _delegate;
     const io_priority_class& _pc;
@@ -391,7 +390,7 @@ public:
     }
 };
 
-class flush_reader final : public iterator_reader {
+class flush_reader final : public mutation_reader::impl, private iterator_reader {
     flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
@@ -422,6 +421,9 @@ public:
                 }
             });
         });
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        return iterator_reader::fast_forward_to(pr);
     }
 };
 
