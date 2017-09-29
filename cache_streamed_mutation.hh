@@ -143,7 +143,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     void add_to_buffer(range_tombstone&&);
     void add_to_buffer(mutation_fragment&&);
     future<> read_from_underlying();
-    future<> start_reading_from_underlying();
+    void start_reading_from_underlying();
     bool after_current_range(position_in_partition_view position);
     bool can_populate() const;
     void maybe_update_continuity();
@@ -413,9 +413,8 @@ bool cache_streamed_mutation::after_current_range(position_in_partition_view p) 
 }
 
 inline
-future<> cache_streamed_mutation::start_reading_from_underlying() {
+void cache_streamed_mutation::start_reading_from_underlying() {
     _state = state::move_to_underlying;
-    return make_ready_future<>();
 }
 
 inline
