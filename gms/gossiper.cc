@@ -1764,21 +1764,23 @@ future<> gossiper::wait_for_gossip_to_settle() {
         static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
         int32_t total_polls = 0;
         int32_t num_okay = 0;
+        int32_t ep_size = endpoint_state_map.size();
         logger.info("Waiting for gossip to settle before accepting client requests...");
         sleep(GOSSIP_SETTLE_MIN_WAIT_MS).get();
         while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
             sleep(GOSSIP_SETTLE_POLL_INTERVAL_MS).get();
+            int32_t current_size = endpoint_state_map.size();
             total_polls++;
-            // Make sure 5 gossip rounds are completed sucessfully
-            if (_nr_run > 5) {
-                logger.debug("Gossip looks settled. gossip round completed: {}", _nr_run);
+            if (current_size == ep_size) {
+                logger.debug("Gossip looks settled");
                 num_okay++;
             } else {
                 logger.info("Gossip not settled after {} polls.", total_polls);
                 num_okay = 0;
             }
+            ep_size = current_size;
             if (force_after > 0 && total_polls > force_after) {
-                logger.warn("Gossip not settled but startup forced by cassandra.skip_wait_for_gossip_to_settle.", total_polls);
+                logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
                 break;
             }
         }
