@@ -22,6 +22,7 @@
 #pragma once
 
 #include "partition_version.hh"
+#include "flat_mutation_reader.hh"
 
 struct partition_snapshot_reader_dummy_accounter {
    void operator()(const clustering_row& cr) {}
@@ -305,7 +306,7 @@ make_partition_snapshot_reader(schema_ptr s,
 }
 
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
-class partition_snapshot_flat_reader : public streamed_mutation::impl, public MemoryAccounter {
+class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public MemoryAccounter {
     struct rows_position {
         mutation_partition::rows_type::const_iterator _position;
         mutation_partition::rows_type::const_iterator _end;
@@ -320,6 +321,7 @@ class partition_snapshot_flat_reader : public streamed_mutation::impl, public Me
         }
     };
 private:
+    schema_ptr _schema;
     // Keeps shared pointer to the container we read mutation from to make sure
     // that its lifetime is appropriately extended.
     boost::any _container_guard;
@@ -468,6 +470,9 @@ private:
                 refresh_iterators();
             }
         }
+        if (is_end_of_stream()) {
+            push_mutation_fragment(partition_end());
+        }
     }
 
     static tombstone tomb(partition_snapshot& snp) {
@@ -483,19 +488,20 @@ public:
                               query::clustering_key_filter_ranges crr,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
-        : streamed_mutation::impl(s, std::move(dk), tomb(*snp))
-        , MemoryAccounter(std::forward<Args>(args)...)
+        : MemoryAccounter(std::forward<Args>(args)...)
+        , _schema(std::move(s))
         , _container_guard(std::move(pointer_to_container))
         , _ck_ranges(std::move(crr))
         , _current_ck_range(_ck_ranges.begin())
         , _ck_range_end(_ck_ranges.end())
-        , _cmp(*s)
-        , _eq(*s)
-        , _heap_cmp(*s)
+        , _cmp(*_schema)
+        , _eq(*_schema)
+        , _heap_cmp(*_schema)
         , _snapshot(snp)
-        , _range_tombstones(*s)
+        , _range_tombstones(*_schema)
         , _lsa_region(region)
         , _read_section(read_section) {
+        push_mutation_fragment(partition_start(std::move(dk), tomb(*snp)));
         do_fill_buffer();
     }
 
@@ -511,4 +517,51 @@ public:
             });
         });
     }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = true;
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        throw std::runtime_error("This reader can't be fast forwarded to another partition.");
+    };
+    virtual future<> fast_forward_to(position_range cr) override {
+        throw std::runtime_error("This reader can't be fast forwarded to another position.");
+    };
 };
+
+template <typename MemoryAccounter, typename... Args>
+inline flat_mutation_reader
+make_partition_snapshot_flat_reader(schema_ptr s,
+                                    dht::decorated_key dk,
+                                    query::clustering_key_filter_ranges crr,
+                                    lw_shared_ptr<partition_snapshot> snp,
+                                    logalloc::region& region,
+                                    logalloc::allocating_section& read_section,
+                                    boost::any pointer_to_container,
+                                    streamed_mutation::forwarding fwd,
+                                    Args&&... args)
+{
+    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(s, std::move(dk),
+            snp, std::move(crr), region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
+    if (fwd) {
+        return make_forwardable(s, std::move(res)); // FIXME: optimize
+    } else {
+        return std::move(res);
+    }
+}
+
+inline flat_mutation_reader
+make_partition_snapshot_flat_reader(schema_ptr s,
+                                    dht::decorated_key dk,
+                                    query::clustering_key_filter_ranges crr,
+                                    lw_shared_ptr<partition_snapshot> snp,
+                                    logalloc::region& region,
+                                    logalloc::allocating_section& read_section,
+                                    boost::any pointer_to_container,
+                                    streamed_mutation::forwarding fwd)
+{
+    return make_partition_snapshot_flat_reader<partition_snapshot_reader_dummy_accounter>(std::move(s),
+            std::move(dk), std::move(crr), std::move(snp), region, read_section, std::move(pointer_to_container), fwd);
+}
