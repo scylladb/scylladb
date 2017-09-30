@@ -704,6 +704,9 @@ public:
         double single_key_parallel_scan_threshold;
         bool& single_key_optimization_enabled;
         int64_t& optimization_probing_read_counter;
+        int64_t& read_count;
+        int64_t& optimization_hit_count;
+        metrics::histogram& optimization_extra_read_proportion;
     };
 
 private:
@@ -748,6 +751,8 @@ private:
     }
 
     void evaluate_single_key_optimization_stats(single_key_optimization_stats stats) {
+        double proportion{0};
+
         if (stats.read == 0) {
             // If read wasn't updated then the early exit wasn't
             // triggered and we read all data sources, thus we have
@@ -755,11 +760,23 @@ private:
             if (_config.single_key_parallel_scan_threshold != 1) {
                 _config.single_key_optimization_enabled = false;
             }
+            proportion = 1;
         } else if (stats.read == 1) {
             _config.single_key_optimization_enabled = true;
+            proportion = 0;
         } else {
-            const double proportion = static_cast<double>(stats.read - 1) / static_cast<double>(stats.total - 1);
+            proportion = static_cast<double>(stats.read - 1) / static_cast<double>(stats.total - 1);
             _config.single_key_optimization_enabled = proportion <= _config.single_key_parallel_scan_threshold;
+        }
+
+        auto it = _config.optimization_extra_read_proportion.buckets.begin();
+        const auto end = _config.optimization_extra_read_proportion.buckets.end();
+        double lower_bound{0};
+
+        while (it != end && proportion > lower_bound) {
+            lower_bound = it->upper_bound;
+            ++it->count;
+            ++it;
         }
     }
 
@@ -842,6 +859,7 @@ private:
     }
 
 public:
+
     single_key_sstable_reader(column_family* cf,
                               config config,
                               schema_ptr schema,
@@ -871,11 +889,14 @@ public:
         }
         auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
 
+        ++_config.read_count;
+
         if (candidates.empty()) {
             return make_ready_future<streamed_mutation_opt>();
         }
 
         if (is_eligible_for_single_key_optimization()) {
+            ++_config.optimization_hit_count;
             return read_as_needed(std::move(candidates));
         }
 
@@ -909,7 +930,10 @@ column_family::make_sstable_reader(schema_ptr s,
         single_key_sstable_reader::config reader_config{_stats.estimated_sstable_per_read,
                 _config.single_key_parallel_scan_threshold,
                 _single_key_optimization_enabled,
-                _single_key_optimization_probing_read_counter};
+                _single_key_optimization_probing_read_counter,
+                _stats.single_key_reader_read_count,
+                _stats.single_key_reader_optimization_hit_count,
+                _stats.single_key_reader_optimization_extra_read_proportion};
 
         if (config.resources_sem) {
             auto ms = mutation_source([&config, reader_config = std::move(reader_config), sstables = std::move(sstables), this] (
@@ -1605,7 +1629,15 @@ void column_family::set_metrics() {
                 ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
                 ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks),
+                ms::make_gauge("single_key_reader_optimization_hit_rate",
+                        ms::description("Percentage of the total reads that hit the optimization."),
+                        [this] { return _stats.single_key_reader_read_count ? (_stats.single_key_reader_optimization_hit_count * 100) / _stats.single_key_reader_read_count : 0; })(cf)(ks)(_config.single_key_parallel_scan_threshold > 0),
+                ms::make_histogram("single_key_reader_optimization_extra_read_proportion",
+                        ms::description("The proportion of the extra data-sources read to serve the read."
+                            " It's a number between 0 and 1, where 0 is the best case and 1 is the worst case."
+                            " The best case is when out of N data sources only one had to be read, and the worst case is when all of them."),
+                        [this] { return _stats.single_key_reader_optimization_extra_read_proportion; })(cf)(ks)(_config.single_key_parallel_scan_threshold > 0)
         });
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
