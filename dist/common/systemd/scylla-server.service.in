@@ -25,6 +25,7 @@ OOMScoreAdjust=-950
 StandardOutput=syslog
 StandardError=syslog
 SyslogLevelPrefix=false
+AmbientCapabilities=CAP_SYS_NICE
 
 [Install]
 WantedBy=multi-user.target
