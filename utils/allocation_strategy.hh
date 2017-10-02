@@ -132,6 +132,7 @@ public:
     // Releases storage for the object. Doesn't invoke object's destructor.
     // Doesn't invalidate references to objects allocated with this strategy.
     virtual void free(void* object, size_t size) = 0;
+    virtual void free(void* object) = 0;
 
     // Returns the total immutable memory size used by the allocator to host
     // this object.  This will be at least the size of the object itself, plus
@@ -199,6 +200,10 @@ public:
     }
 
     virtual void free(void* obj, size_t size) override {
+        ::free(obj);
+    }
+
+    virtual void free(void* obj) override {
         ::free(obj);
     }
 

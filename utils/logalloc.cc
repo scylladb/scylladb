@@ -1310,18 +1310,37 @@ public:
         }
     }
 
+private:
+    void on_non_lsa_free(void* obj) noexcept {
+        auto allocated_size = malloc_usable_size(obj);
+        _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
+        if (_group) {
+            _evictable_space -= allocated_size;
+            _group->decrease_usage(_heap_handle, allocated_size);
+        }
+        shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
+    }
+public:
+    virtual void free(void* obj) noexcept override {
+        compaction_lock _(*this);
+        segment* seg = shard_segment_pool.containing_segment(obj);
+        if (!seg) {
+            on_non_lsa_free(obj);
+            standard_allocator().free(obj);
+            return;
+        }
+
+        auto pos = reinterpret_cast<const char*>(obj);
+        auto desc = object_descriptor::decode_backwards(pos);
+        free(obj, desc.live_size(obj));
+    }
+
     virtual void free(void* obj, size_t size) noexcept override {
         compaction_lock _(*this);
         segment* seg = shard_segment_pool.containing_segment(obj);
 
         if (!seg) {
-            auto allocated_size = malloc_usable_size(obj);
-            _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
-            if (_group) {
-                 _evictable_space -= allocated_size;
-                _group->decrease_usage(_heap_handle, allocated_size);
-            }
-            shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
+            on_non_lsa_free(obj);
             standard_allocator().free(obj, size);
             return;
         }
