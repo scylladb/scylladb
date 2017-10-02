@@ -301,9 +301,9 @@ public:
                 if (!e) {
                     return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
                 } else {
-                    auto ret =  make_ready_future<streamed_mutation_opt>(e->read(mtbl(), schema(), _slice, _fwd));
+                    _delegate = mutation_reader_from_flat_mutation_reader(schema(), e->read(mtbl(), schema(), _slice, _fwd));
                     advance();
-                    return ret;
+                    return _delegate();
                 }
             });
         });
@@ -454,7 +454,7 @@ memtable::make_flat_reader(schema_ptr s,
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
-            return flat_mutation_reader_from_mutation_reader(s, make_reader_returning(i->read(shared_from_this(), s, slice, fwd)), fwd);
+            return i->read(shared_from_this(), s, slice, fwd);
         } else {
             return make_empty_flat_reader();
         }
@@ -560,7 +560,7 @@ bool memtable::is_flushed() const {
     return bool(_underlying);
 }
 
-streamed_mutation
+flat_mutation_reader
 memtable_entry::read(lw_shared_ptr<memtable> mtbl,
         const schema_ptr& target_schema,
         const query::partition_slice& slice,
@@ -569,10 +569,10 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl,
     if (_schema->version() != target_schema->version()) {
         auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, std::move(cr));
         mutation m = mutation(target_schema, _key, std::move(mp));
-        return streamed_mutation_from_mutation(std::move(m), fwd);
+        return flat_mutation_reader_from_mutation(std::move(m), fwd);
     }
     auto snp = _pe.read(mtbl->region(), _schema);
-    return make_partition_snapshot_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
+    return make_partition_snapshot_flat_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
 }
 
 void memtable::upgrade_entry(memtable_entry& e) {

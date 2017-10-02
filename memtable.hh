@@ -60,7 +60,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    streamed_mutation read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
+    flat_mutation_reader read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();
