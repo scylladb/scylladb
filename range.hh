@@ -23,6 +23,7 @@
 
 #include "stdx.hh"
 #include <list>
+#include <vector>
 #include <experimental/optional>
 #include <iosfwd>
 #include <boost/range/algorithm/copy.hpp>
