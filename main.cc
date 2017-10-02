@@ -67,6 +67,15 @@ using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
+template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
+V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
+    const auto iter = ss.find(key);
+    if (iter != ss.end()) {
+        return iter->second;
+    }
+    return def;
+}
+
 static boost::filesystem::path relative_conf_dir(boost::filesystem::path path) {
     static auto conf_dir = db::config::get_conf_dir(); // this is not gonna change in our life time
     return conf_dir / path;
@@ -76,8 +85,6 @@ static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     using namespace boost::filesystem;
     sstring file;
-
-    cfg.apply_seastar_options(opts);
 
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
@@ -255,7 +262,8 @@ int main(int ac, char** av) {
 
     auto cfg = make_lw_shared<db::config>();
     bool help_version = false;
-    cfg->add_options(app.get_options_description())
+    auto init = app.get_options_description().add_options();
+    cfg->add_options(init)
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
         ("version", bpo::bool_switch(&help_version), "print version number and exit")
@@ -297,17 +305,7 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
             read_config(opts, *cfg).get();
-
-            {
-                std::unordered_map<sstring, logging::log_level> logger_levels;
-                log_cli::parse_logger_levels(cfg->logger_log_level(), std::inserter(logger_levels, logger_levels.end()));
-
-                logging::apply_settings(logging::settings{
-                                                    std::move(logger_levels),
-                                                    log_cli::parse_log_level(cfg->default_log_level()),
-                                                    cfg->log_to_stdout(),
-                                                    cfg->log_to_syslog()});
-            }
+            logging::apply_settings(cfg->logging_settings(opts));
 
             verify_rlimit(cfg->developer_mode());
             verify_adequate_memory_per_shard(cfg->developer_mode());

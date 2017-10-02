@@ -25,12 +25,16 @@
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
 #include <unordered_map>
-#include "core/sstring.hh"
-#include "core/future.hh"
-#include "util/program-options.hh"
-#include "seastarx.hh"
 
-namespace seastar { class file; }
+#include <seastar/core/sstring.hh>
+#include <seastar/core/future.hh>
+#include <seastar/util/program-options.hh>
+#include <seastar/util/log.hh>
+
+#include "seastarx.hh"
+#include "utils/config_file.hh"
+
+namespace seastar { class file; struct logging_settings; }
 
 namespace db {
 
@@ -47,78 +51,15 @@ struct seed_provider_type {
             : class_name(std::move(n)), parameters(std::move(opts)) {
     }
     sstring class_name;
-    program_options::string_map parameters;
+    std::unordered_map<sstring, sstring> parameters;
 };
 
-class config {
+class config : public utils::config_file {
 public:
-    enum class value_status {
-        UsedFromSeastar,
-        Used,
-        Unused,
-        Invalid,
-    };
-
-    enum class config_source : uint8_t {
-        None,
-        SettingsFile,
-        CommandLine
-    };
-
-    template<typename T, value_status S>
-    struct value {
-        typedef T type;
-        typedef value<T, S> MyType;
-
-        value(const T& t = T()) : _value(t)
-        {}
-        value_status status() const {
-            return S;
-        }
-        config_source source() const {
-            return _source;
-        }
-        bool is_set() const {
-            return _source > config_source::None;
-        }
-        MyType & operator()(const T& t) {
-            _value = t;
-            return *this;
-        }
-        MyType & operator()(T&& t, config_source src = config_source::None) {
-            _value = std::move(t);
-            if (src > config_source::None) {
-                _source = src;
-            }
-            return *this;
-        }
-        const T& operator()() const {
-            return _value;
-        }
-        T& operator()() {
-            return _value;
-        }
-    private:
-        friend class config;
-        T _value = T();
-        config_source _source = config_source::None;
-    };
-
     config();
 
     // Throws exception if experimental feature is disabled.
     void check_experimental(const sstring& what) const;
-
-    boost::program_options::options_description_easy_init
-    add_options(boost::program_options::options_description&);
-
-    /* Apply the value of Seastar options to the configuration. These are marked `UsedFromSeastar`. */
-    void apply_seastar_options(boost::program_options::variables_map& vars);
-
-    void read_from_yaml(const sstring&);
-    void read_from_yaml(const char *);
-    future<> read_from_file(const sstring&);
-    future<> read_from_file(file);
 
     /**
      * Scans the environment variables for configuration files directory
@@ -129,8 +70,10 @@ public:
      *         according the environment variables definitions.
      */
     static boost::filesystem::path get_conf_dir();
-    using string_map = program_options::string_map;
-    typedef std::vector<sstring> string_list;
+
+    using string_map = std::unordered_map<sstring, sstring>;
+                    //program_options::string_map;
+    using string_list = std::vector<sstring>;
     using seed_provider_type = db::seed_provider_type;
 
     /*
@@ -735,10 +678,6 @@ public:
     val(ssl_storage_port, uint32_t, 7001, Used,     \
             "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
     )                                                   \
-    val(default_log_level, sstring, /* none */, UsedFromSeastar, "") \
-    val(logger_log_level, string_map, /* none */, UsedFromSeastar, "") \
-    val(log_to_stdout, bool, /* none */, UsedFromSeastar, "") \
-    val(log_to_syslog, bool, /* none */, UsedFromSeastar, "") \
     val(enable_in_memory_data_store, bool, false, Used, "Enable in memory mode (system tables are always persisted)") \
     val(enable_cache, bool, true, Used, "Enable cache") \
     val(enable_commitlog, bool, true, Used, "Enable commitlog") \
@@ -781,17 +720,30 @@ public:
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
-    value<type, value_status::status> name;
+    named_value<type, value_status::status> name;
 
     _make_config_values(_make_value_member)
 
-private:
-    struct bound_value;
-    struct bound_values;
-    struct cmdline_args;
-    struct yaml_config;
+    seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
-    int _dummy;
+private:
+    template<typename T>
+    struct log_legacy_value : public named_value<T, value_status::Used> {
+        using MyBase = named_value<T, value_status::Used>;
+
+        using MyBase::MyBase;
+
+        T value_or(T&& t) const {
+            return this->is_set() ? (*this)() : t;
+        }
+        // do not add to boost::options. We only care about yaml config
+        void add_command_line_option(boost::program_options::options_description_easy_init&,
+                        const stdx::string_view&, const stdx::string_view&) override {}
+    };
+
+    log_legacy_value<seastar::log_level> default_log_level;
+    log_legacy_value<std::unordered_map<sstring, seastar::log_level>> logger_log_level;
+    log_legacy_value<bool> log_to_stdout, log_to_syslog;
 };
 
 }
