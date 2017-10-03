@@ -376,6 +376,10 @@ class restricting_mutation_reader : public mutation_reader::impl {
             mutation_reader reader = boost::get<mutation_source_and_params>(_reader_or_mutation_source)();
             _reader_or_mutation_source = std::move(reader);
 
+            if (_config.active_reads) {
+                ++(*_config.active_reads);
+            }
+
             return make_ready_future<>();
         });
     }
@@ -399,6 +403,9 @@ public:
     ~restricting_mutation_reader() {
         if (boost::get<mutation_reader>(&_reader_or_mutation_source)) {
             _config.resources_sem->signal(new_reader_base_cost);
+            if (_config.active_reads) {
+                --(*_config.active_reads);
+            }
         }
     }
     future<streamed_mutation_opt> operator()() override {

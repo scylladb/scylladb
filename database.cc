@@ -2107,6 +2107,10 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
     });
 }
 
+static const metrics::label user_label("user");
+static const metrics::label streaming_label("streaming");
+static const metrics::label system_label("system");
+
 void
 database::setup_metrics() {
     _dirty_memory_manager.setup_collectd("regular");
@@ -2114,6 +2118,10 @@ database::setup_metrics() {
     _streaming_dirty_memory_manager.setup_collectd("streaming");
 
     namespace sm = seastar::metrics;
+
+    auto user_label_instance = user_label("reads");
+    auto streaming_label_instance = streaming_label("reads");
+    auto system_label_instance = system_label("reads");
 
     _metrics.add_group("memory", {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory() + _streaming_dirty_memory_manager.real_dirty_memory(); },
@@ -2180,29 +2188,48 @@ database::setup_metrics() {
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),
 
-        sm::make_gauge("active_reads", [this] { return max_memory_concurrent_reads() - _read_concurrency_sem.current(); },
-                       sm::description(seastar::format("Holds the number of currently active read operations. "
+        sm::make_gauge("active_reads", [this] { return _stats->active_reads; },
+                       sm::description("Holds the number of currently active read operations. "),
+                       {user_label_instance}),
+
+        sm::make_gauge("active_reads_memory_consumption", [this] { return max_memory_concurrent_reads() - _read_concurrency_sem.available_units(); },
+                       sm::description(seastar::format("Holds the amount of memory consumed by currently active read operations. "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_concurrent_reads())),
+                       {user_label_instance}),
 
         sm::make_gauge("queued_reads", [this] { return _read_concurrency_sem.waiters(); },
-                       sm::description("Holds the number of currently queued read operations.")),
+                       sm::description("Holds the number of currently queued read operations."),
+                       {user_label_instance}),
 
-        sm::make_gauge("active_reads_streaming", [this] { return max_memory_streaming_concurrent_reads() - _streaming_concurrency_sem.current(); },
-                       sm::description(seastar::format("Holds the number of currently active read operations issued on behalf of streaming "
+        sm::make_gauge("active_reads", [this] { return _stats->active_reads_streaming; },
+                       sm::description("Holds the number of currently active read operations issued on behalf of streaming "),
+                       {streaming_label_instance}),
+
+
+        sm::make_gauge("active_reads_memory_consumption", [this] { return max_memory_streaming_concurrent_reads() - _streaming_concurrency_sem.available_units(); },
+                       sm::description(seastar::format("Holds the amount of memory consumed by currently active read operations issued on behalf of streaming "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_streaming_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_streaming_concurrent_reads())),
+                       {streaming_label_instance}),
 
-        sm::make_gauge("queued_reads_streaming", [this] { return _streaming_concurrency_sem.waiters(); },
-                       sm::description("Holds the number of currently queued read operations on behalf of streaming.")),
+        sm::make_gauge("queued_reads", [this] { return _streaming_concurrency_sem.waiters(); },
+                       sm::description("Holds the number of currently queued read operations on behalf of streaming."),
+                       {streaming_label_instance}),
 
-        sm::make_gauge("active_reads_system_keyspace", [this] { return max_memory_system_concurrent_reads() - _system_read_concurrency_sem.current(); },
-                       sm::description(seastar::format("Holds the number of currently active read operations from \"system\" keyspace tables. "
+        sm::make_gauge("active_reads", [this] { return _stats->active_reads_system_keyspace; },
+                       sm::description("Holds the number of currently active read operations from \"system\" keyspace tables. "),
+                       {system_label_instance}),
+
+        sm::make_gauge("active_reads_memory_consumption", [this] { return max_memory_system_concurrent_reads() - _system_read_concurrency_sem.available_units(); },
+                       sm::description(seastar::format("Holds the amount of memory consumed by currently active read operations from \"system\" keyspace tables. "
                                                        "If this value gets close to {} we are likely to start dropping new read requests. "
-                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_system_concurrent_reads()))),
+                                                       "In that case sstable_read_queue_overloads is going to get a non-zero value.", max_memory_system_concurrent_reads())),
+                       {system_label_instance}),
 
-        sm::make_gauge("queued_reads_system_keyspace", [this] { return _system_read_concurrency_sem.waiters(); },
-                       sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables.")),
+        sm::make_gauge("queued_reads", [this] { return _system_read_concurrency_sem.waiters(); },
+                       sm::description("Holds the number of currently queued read operations from \"system\" keyspace tables."),
+                       {system_label_instance}),
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
@@ -3420,6 +3447,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_config.resources_sem = &_read_concurrency_sem;
+    cfg.read_concurrency_config.active_reads = &_stats->active_reads;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
     cfg.read_concurrency_config.max_queue_length = 100;
     cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
@@ -3429,6 +3457,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
     cfg.streaming_read_concurrency_config.resources_sem = &_streaming_concurrency_sem;
+    cfg.streaming_read_concurrency_config.active_reads = &_stats->active_reads_streaming;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 

@@ -401,6 +401,7 @@ inline reader_resource_tracker no_resource_tracking() {
 
 struct restricted_mutation_reader_config {
     semaphore* resources_sem = nullptr;
+    uint64_t* active_reads = nullptr;
     std::chrono::nanoseconds timeout = {};
     size_t max_queue_length = std::numeric_limits<size_t>::max();
     std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
