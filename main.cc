@@ -67,6 +67,15 @@ using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
 
+static std::vector<std::reference_wrapper<configurable>>& configurables() {
+    static std::vector<std::reference_wrapper<configurable>> configurables;
+    return configurables;
+}
+
+void configurable::register_configurable(configurable & c) {
+    configurables().emplace_back(std::ref(c));
+}
+
 template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
 V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
     const auto iter = ss.find(key);
@@ -263,8 +272,13 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>();
     bool help_version = false;
     auto init = app.get_options_description().add_options();
-    cfg->add_options(init)
-        // TODO : default, always read?
+
+    cfg->add_options(init);
+    for (configurable& c : configurables()) {
+        c.append_options(init);
+    }
+
+    init // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
         ("version", bpo::bool_switch(&help_version), "print version number and exit")
         ;
@@ -305,6 +319,10 @@ int main(int ac, char** av) {
 
         return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
             read_config(opts, *cfg).get();
+            for (configurable& c : configurables()) {
+                c.initialize(opts).get();
+            }
+
             logging::apply_settings(cfg->logging_settings(opts));
 
             verify_rlimit(cfg->developer_mode());
