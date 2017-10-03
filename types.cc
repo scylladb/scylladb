@@ -714,7 +714,7 @@ public:
                 return v;
             }
 
-            std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ t](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
+            std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ tT](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
             std::smatch dsm;
             if (!std::regex_search(str, dsm, date_re)) {
                 throw marshal_exception();
