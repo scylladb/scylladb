@@ -113,7 +113,7 @@ public:
             auto key = partition_key::from_deeply_exploded(*s, { this->random_key() });
             auto mut = mutation(this->s, key);
             for (auto& cdef: this->s->regular_columns()) {
-                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(0, utf8_type->decompose(this->random_column())));
+                mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(*utf8_type, 0, utf8_type->decompose(this->random_column())));
             }
             this->_mt->apply(std::move(mut));
             return make_ready_future<>();

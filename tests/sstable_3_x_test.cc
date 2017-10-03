@@ -976,8 +976,8 @@ SEASTAR_TEST_CASE(test_write_ttled_column) {
             throw std::runtime_error("no column definition found");
         }
         bytes value = column_def->type->decompose(data_value{1});
-        auto cell = atomic_cell::make_live(write_timestamp, value, write_time_point + ttl, ttl);
-        mut.set_clustered_cell(clustering_key::make_empty(), *column_def, cell);
+        auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+        mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
         mt->apply(std::move(mut));
 
         write_and_compare_sstables(s, mt, table_name);
@@ -1051,13 +1051,10 @@ SEASTAR_TEST_CASE(test_write_collection_wide_update) {
         mutation mut{s, key};
 
         mut.partition().apply_insert(*s, clustering_key::make_empty(), write_timestamp);
-        set_type_impl::mutation set_values {
-            {write_timestamp - 1, write_time_point}, // tombstone
-            {
-                {int32_type->decompose(2), atomic_cell::make_live(write_timestamp, bytes_view{})},
-                {int32_type->decompose(3), atomic_cell::make_live(write_timestamp, bytes_view{})},
-            }
-        };
+        set_type_impl::mutation set_values;
+        set_values.tomb = tombstone {write_timestamp - 1, write_time_point};
+        set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
+        set_values.cells.emplace_back(int32_type->decompose(3), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
         mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
         mt->apply(std::move(mut));
@@ -1083,12 +1080,8 @@ SEASTAR_TEST_CASE(test_write_collection_incremental_update) {
         auto key = partition_key::from_deeply_exploded(*s, { 1 });
         mutation mut{s, key};
 
-        set_type_impl::mutation set_values {
-            {}, // tombstone
-            {
-                {int32_type->decompose(2), atomic_cell::make_live(write_timestamp, bytes_view{})},
-            }
-        };
+        set_type_impl::mutation set_values;
+        set_values.cells.emplace_back(int32_type->decompose(2), atomic_cell::make_live(*bytes_type, write_timestamp, bytes_view{}));
 
         mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
         mt->apply(std::move(mut));

@@ -31,6 +31,8 @@
 #include <iosfwd>
 #include <seastar/util/gcc6-concepts.hh>
 
+class abstract_type;
+
 template<typename T, typename Input>
 static inline
 void set_field(Input& v, unsigned offset, T val) {
@@ -283,9 +285,6 @@ public:
     atomic_cell(atomic_cell&&) = default;
     atomic_cell& operator=(const atomic_cell&) = default;
     atomic_cell& operator=(atomic_cell&&) = default;
-    static atomic_cell from_bytes(managed_bytes b) {
-        return atomic_cell(std::move(b));
-    }
     atomic_cell(atomic_cell_view other) : atomic_cell_base(managed_bytes{other._data}) {}
     operator atomic_cell_view() const {
         return atomic_cell_view(_data);
@@ -293,26 +292,26 @@ public:
     static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
         return atomic_cell_type::make_dead(timestamp, deletion_time);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value) {
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value) {
         return atomic_cell_type::make_live(timestamp, value);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value) {
-        return make_live(timestamp, bytes_view(value));
+    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value) {
+        return make_live(type, timestamp, bytes_view(value));
     }
     static atomic_cell make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         return atomic_cell_type::make_live_counter_update(timestamp, value);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value,
         gc_clock::time_point expiry, gc_clock::duration ttl)
     {
         return atomic_cell_type::make_live(timestamp, value, expiry, ttl);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, const bytes& value,
+    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value,
                                  gc_clock::time_point expiry, gc_clock::duration ttl)
     {
-        return make_live(timestamp, bytes_view(value), expiry, ttl);
+        return make_live(type, timestamp, bytes_view(value), expiry, ttl);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value, ttl_opt ttl) {
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value, ttl_opt ttl) {
         if (!ttl) {
             return atomic_cell_type::make_live(timestamp, value);
         } else {
@@ -320,7 +319,7 @@ public:
         }
     }
     template<typename Serializer>
-    static atomic_cell make_live_from_serializer(api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
+    static atomic_cell make_live_from_serializer(const abstract_type&, api::timestamp_type timestamp, size_t size, Serializer&& serializer) {
         return atomic_cell_type::make_live_from_serializer(timestamp, size, std::forward<Serializer>(serializer));
     }
     friend class atomic_cell_or_collection;
@@ -363,6 +362,6 @@ collection_mutation::operator collection_mutation_view() const {
 class column_definition;
 
 int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
-void merge_column(const column_definition& def,
+void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);

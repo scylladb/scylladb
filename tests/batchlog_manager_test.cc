@@ -39,8 +39,8 @@
 
 #include "message/messaging_service.hh"
 
-static atomic_cell make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, std::move(value));
+static atomic_cell make_atomic_cell(data_type dt, bytes value) {
+    return atomic_cell::make_live(*dt, 0, std::move(value));
 };
 
 SEASTAR_TEST_CASE(test_execute_batch) {
@@ -57,7 +57,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
 
             mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(100)));
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(100)));
 
             using namespace std::chrono_literals;
 

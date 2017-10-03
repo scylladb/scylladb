@@ -252,13 +252,13 @@ public:
     }
 
     atomic_cell build(api::timestamp_type timestamp) const {
-        return atomic_cell::make_live_from_serializer(timestamp, serialized_size(), [this] (bytes::iterator out) {
+        return atomic_cell::make_live_from_serializer(*counter_type, timestamp, serialized_size(), [this] (bytes::iterator out) {
             serialize(out);
         });
     }
 
     static atomic_cell from_single_shard(api::timestamp_type timestamp, const counter_shard& cs) {
-        return atomic_cell::make_live_from_serializer(timestamp, counter_shard::serialized_size(), [&cs] (bytes::iterator out) {
+        return atomic_cell::make_live_from_serializer(*counter_type, timestamp, counter_shard::serialized_size(), [&cs] (bytes::iterator out) {
             cs.serialize(out);
         });
     }

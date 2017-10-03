@@ -51,14 +51,17 @@ using atomic_cell_variant = boost::variant<ser::live_cell_view,
                                            ser::counter_cell_view,
                                            ser::unknown_variant_type>;
 
-atomic_cell read_atomic_cell(atomic_cell_variant cv)
+atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv)
 {
-    struct atomic_cell_visitor : boost::static_visitor<atomic_cell> {
+    class atomic_cell_visitor : public boost::static_visitor<atomic_cell> {
+        const abstract_type& _type;
+    public:
+        explicit atomic_cell_visitor(const abstract_type& t) : _type(t) { }
         atomic_cell operator()(ser::live_cell_view& lcv) const {
-            return atomic_cell::make_live(lcv.created_at(), lcv.value());
+            return atomic_cell::make_live(_type, lcv.created_at(), lcv.value());
         }
         atomic_cell operator()(ser::expiring_cell_view& ecv) const {
-            return atomic_cell::make_live(ecv.c().created_at(), ecv.c().value(), ecv.expiry(), ecv.ttl());
+            return atomic_cell::make_live(_type, ecv.c().created_at(), ecv.c().value(), ecv.expiry(), ecv.ttl());
         }
         atomic_cell operator()(ser::dead_cell_view& dcv) const {
             return atomic_cell::make_dead(dcv.tomb().timestamp(), dcv.tomb().deletion_time());
@@ -93,17 +96,17 @@ atomic_cell read_atomic_cell(atomic_cell_variant cv)
             throw std::runtime_error("Trying to deserialize cell in unknown state");
         }
     };
-    return boost::apply_visitor(atomic_cell_visitor(), cv);
+    return boost::apply_visitor(atomic_cell_visitor(type), cv);
 }
 
-collection_mutation read_collection_cell(ser::collection_cell_view cv)
+collection_mutation read_collection_cell(const collection_type_impl& ctype, ser::collection_cell_view cv)
 {
     collection_type_impl::mutation mut;
     mut.tomb = cv.tomb();
     auto&& elements = cv.elements();
     mut.cells.reserve(elements.size());
     for (auto&& e : elements) {
-        mut.cells.emplace_back(e.key(), read_atomic_cell(e.value()));
+        mut.cells.emplace_back(e.key(), read_atomic_cell(*ctype.value_comparator(), e.value()));
     }
     return collection_type_impl::serialize_mutation_form(mut);
 }
@@ -130,7 +133,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 // FIXME: Pass view to cell to avoid copy
                 auto&& outer = current_allocator();
                 with_allocator(standard_allocator(), [&] {
-                    auto cell = read_atomic_cell(acv);
+                    auto cell = read_atomic_cell(*_col.type(), acv);
                     with_allocator(outer, [&] {
                         _visitor.accept_atomic_cell(_id, cell);
                     });
@@ -143,7 +146,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 // FIXME: Pass view to cell to avoid copy
                 auto&& outer = current_allocator();
                 with_allocator(standard_allocator(), [&] {
-                    auto cell = read_collection_cell(ccv);
+                    auto cell = read_collection_cell(*static_pointer_cast<const collection_type_impl>(_col.type()), ccv);
                     with_allocator(outer, [&] {
                         _visitor.accept_collection(_id, cell);
                     });

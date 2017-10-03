@@ -1454,7 +1454,7 @@ public:
                         return random_counter_cell();
                     }
                     if (col.is_atomic()) {
-                        return atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]);
+                        return atomic_cell::make_live(*col.type, timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]);
                     }
                     static thread_local std::uniform_int_distribution<int> element_dist{1, 13};
                     static thread_local std::uniform_int_distribution<int64_t> uuid_ts_dist{-12219292800000L, -12219292800000L + 1000};
@@ -1463,18 +1463,19 @@ public:
                     m.cells.reserve(num_cells);
                     std::unordered_set<bytes> unique_cells;
                     unique_cells.reserve(num_cells);
+                    auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                     for (auto i = 0; i < num_cells; ++i) {
                         auto uuid = utils::UUID_gen::min_time_UUID(uuid_ts_dist(_gen)).serialize();
                         if (unique_cells.emplace(uuid).second) {
                             m.cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
-                                atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]));
+                                atomic_cell::make_live(*ctype->value_comparator(), timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]));
                         }
                     }
                     std::sort(m.cells.begin(), m.cells.end(), [] (auto&& c1, auto&& c2) {
                             return timeuuid_type->as_less_comparator()(c1.first, c2.first);
                     });
-                    return static_pointer_cast<const collection_type_impl>(col.type)->serialize_mutation_form(m);
+                    return ctype->serialize_mutation_form(m);
                 };
                 auto get_dead_cell = [&] () -> atomic_cell_or_collection{
                     if (col.is_atomic() || col.is_counter()) {

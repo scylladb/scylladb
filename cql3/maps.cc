@@ -300,10 +300,10 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     if (!key) {
         throw invalid_request_exception("Invalid null map key");
     }
-    auto avalue = value ? params.make_cell(*value) : params.make_dead_cell();
+    auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+    auto avalue = value ? params.make_cell(*ctype->get_values_type(), *value) : params.make_dead_cell();
     map_type_impl::mutation update = { {}, { { std::move(to_bytes(*key)), std::move(avalue) } } };
     // should have been verified as map earlier?
-    auto ctype = static_pointer_cast<const map_type_impl>(column.type);
     auto col_mut = ctype->serialize_mutation_form(std::move(update));
     m.set_cell(prefix, column, std::move(col_mut));
 }
@@ -328,10 +328,10 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
             return;
         }
 
-        for (auto&& e : map_value->map) {
-            mut.cells.emplace_back(e.first, params.make_cell(e.second));
-        }
         auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+        for (auto&& e : map_value->map) {
+            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), e.second));
+        }
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
         m.set_cell(prefix, column, std::move(col_mut));
     } else {
@@ -341,7 +341,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         } else {
             auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
                     cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(std::move(v)));
+            m.set_cell(prefix, column, params.make_cell(*column.type, std::move(v)));
         }
     }
 }

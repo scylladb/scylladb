@@ -49,14 +49,15 @@ struct new_mutation {
     tombstone tomb;
 };
 
-inline atomic_cell make_atomic_cell(api::timestamp_type timestamp,
+inline atomic_cell make_atomic_cell(const abstract_type& type,
+                                    api::timestamp_type timestamp,
                                     bytes_view value,
                                     gc_clock::duration ttl,
                                     gc_clock::time_point expiration) {
     if (ttl != gc_clock::duration::zero()) {
-        return atomic_cell::make_live(timestamp, value, expiration, ttl);
+        return atomic_cell::make_live(type, timestamp, value, expiration, ttl);
     } else {
-        return atomic_cell::make_live(timestamp, value);
+        return atomic_cell::make_live(type, timestamp, value);
     }
 }
 
@@ -525,20 +526,26 @@ public:
 
     virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
-            auto ac = make_atomic_cell(api::timestamp_type(timestamp),
-                                       value,
-                                       gc_clock::duration(ttl),
-                                       gc_clock::time_point(gc_clock::duration(expiration)));
-
             bool is_multi_cell = col.collection_extra_data.size();
             if (is_multi_cell != col.cdef->is_multi_cell()) {
                 return;
             }
             if (is_multi_cell) {
+                auto ctype = static_pointer_cast<const collection_type_impl>(col.cdef->type);
+                auto ac = make_atomic_cell(*ctype->value_comparator(),
+                                           api::timestamp_type(timestamp),
+                                           value,
+                                           gc_clock::duration(ttl),
+                                           gc_clock::time_point(gc_clock::duration(expiration)));
                 update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
                 return;
             }
 
+            auto ac = make_atomic_cell(*col.cdef->type,
+                                       api::timestamp_type(timestamp),
+                                       value,
+                                       gc_clock::duration(ttl),
+                                       gc_clock::time_point(gc_clock::duration(expiration)));
             if (col.is_static) {
                 _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
                 return;
@@ -961,7 +968,7 @@ public:
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
-        auto ac = make_atomic_cell(timestamp, value, ttl, local_deletion_time);
+        auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time);
         _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
         return proceed::yes;
     }

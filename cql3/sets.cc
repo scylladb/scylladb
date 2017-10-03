@@ -269,7 +269,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         }
 
         for (auto&& e : set_value->_elements) {
-            mut.cells.emplace_back(e, params.make_cell({}));
+            mut.cells.emplace_back(e, params.make_cell(*set_type->value_comparator(), {}));
         }
         auto smut = set_type->serialize_mutation_form(mut);
 
@@ -279,7 +279,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         auto v = set_type->serialize_partially_deserialized_form(
                 {set_value->_elements.begin(), set_value->_elements.end()},
                 cql_serialization_format::internal());
-        m.set_cell(row_key, column, params.make_cell(std::move(v)));
+        m.set_cell(row_key, column, params.make_cell(*column.type, std::move(v)));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());
     }

@@ -199,7 +199,7 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
     if (!result.empty()) {
         diff = result.build(std::max(a.timestamp(), b.timestamp()));
     } else if (a.timestamp() > b.timestamp()) {
-        diff = atomic_cell::make_live(a.timestamp(), bytes_view());
+        diff = atomic_cell::make_live(*counter_type, a.timestamp(), bytes_view());
     }
     return diff;
 }

@@ -60,7 +60,7 @@ void mutation::set_static_cell(const bytes& name, const data_value& value, api::
     if (!column_def->is_static()) {
         throw std::runtime_error(sprint("column '%s' is not static", name));
     }
-    partition().static_row().apply(*column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
+    partition().static_row().apply(*column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const data_value& value,
@@ -69,7 +69,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, 
     if (!column_def) {
         throw std::runtime_error(sprint("no column definition found for '%s'", name));
     }
-    return set_clustered_cell(key, *column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
+    return set_clustered_cell(key, *column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection&& value) {
@@ -83,7 +83,7 @@ void mutation::set_cell(const clustering_key_prefix& prefix, const bytes& name, 
     if (!column_def) {
         throw std::runtime_error(sprint("no column definition found for '%s'", name));
     }
-    return set_cell(prefix, *column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
+    return set_cell(prefix, *column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }
 
 void mutation::set_cell(const clustering_key_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value) {
