@@ -2553,27 +2553,22 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     }
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, reader_resource_tracker resource_tracker, lw_shared_ptr<file_input_stream_history> history) {
+input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc, lw_shared_ptr<file_input_stream_history> history) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-
-    auto f = resource_tracker.track(_data_file);
-
-    input_stream<char> stream;
     if (_components->compression) {
-        return make_compressed_file_input_stream(f, &_components->compression,
+        return make_compressed_file_input_stream(_data_file, &_components->compression,
                 pos, len, std::move(options));
-
+    } else {
+        return make_file_input_stream(_data_file, pos, len, std::move(options));
     }
-
-    return make_file_input_stream(f, pos, len, std::move(options));
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    return do_with(data_stream(pos, len, pc, no_resource_tracking(), {}), [len] (auto& stream) {
+    return do_with(data_stream(pos, len, pc, { }), [len] (auto& stream) {
         return stream.read_exactly(len).finally([&stream] {
             return stream.close();
         });
@@ -3047,7 +3042,7 @@ public:
             return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
         }
         auto sst = std::move(_sst);
-        return sst->read_row(_s, _key, _slice, _pc, no_resource_tracking(), _fwd);
+        return sst->read_row(_s, _key, _slice, _pc, _fwd);
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         throw std::bad_function_call();
@@ -3070,7 +3065,7 @@ mutation_source sstable::as_mutation_source() {
             const dht::ring_position& pos = range.start()->value();
             return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
         } else {
-            return make_mutation_reader<range_reader_adaptor>(sst, sst->read_range_rows(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr));
+            return make_mutation_reader<range_reader_adaptor>(sst, sst->read_range_rows(s, range, slice, pc, fwd, fwd_mr));
         }
     });
 }
