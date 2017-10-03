@@ -29,6 +29,7 @@
 #include <seastar/util/gcc6-concepts.hh>
 
 #include "stdx.hh"
+#include "seastar/core/future-util.hh"
 
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:
@@ -174,14 +175,30 @@ concept bool MutationFragmentConsumer() {
 )
 
 GCC6_CONCEPT(
+template<typename T, typename ReturnType>
+concept bool FragmentConsumerReturning() {
+    return requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
+        { t.consume(std::move(sr)) } -> ReturnType;
+        { t.consume(std::move(cr)) } -> ReturnType;
+        { t.consume(std::move(rt)) } -> ReturnType;
+    };
+}
+)
+
+GCC6_CONCEPT(
+template<typename T>
+concept bool FragmentConsumer() {
+    return FragmentConsumerReturning<T, stop_iteration >() || FragmentConsumerReturning<T, future<stop_iteration>>();
+}
+)
+
+GCC6_CONCEPT(
 template<typename T>
 concept bool StreamedMutationConsumer() {
-return MutationFragmentConsumer<T, stop_iteration>()
-    && requires(T t, tombstone tomb)
-{
-    { t.consume(tomb) } -> stop_iteration;
-    t.consume_end_of_stream();
-};
+    return FragmentConsumer<T>() && requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
+        t.consume(tomb);
+        t.consume_end_of_stream();
+    };
 }
 )
 
