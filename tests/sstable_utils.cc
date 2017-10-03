@@ -32,8 +32,17 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     auto sst = sst_factory();
     schema_ptr s = muts[0].schema();
     auto mt = make_lw_shared<memtable>(s);
+
+    std::size_t i{0};
     for (auto&& m : muts) {
         mt->apply(m);
+        ++i;
+
+        // Give the reactor some time to breathe
+        if(i == 10) {
+            seastar::thread::yield();
+            i = 0;
+        }
     }
     write_memtable_to_sstable(*mt, sst).get();
     sst->open_data().get();
