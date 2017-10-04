@@ -408,7 +408,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
             logging::logger_registry().set_logger_level("query_processor", logging::log_level::debug);
             e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
-            bytes id = e.prepare("select * from tests.table1;").get0();
+            auto id = e.prepare("select * from tests.table1;").get0();
 
             e.execute_cql("alter table tests.table1 add s1 int;").get();
 

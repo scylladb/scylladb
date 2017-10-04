@@ -246,6 +246,7 @@ scylla_tests = [
     'tests/vint_serialization_test',
     'tests/compress_test',
     'tests/chunked_vector_test',
+    'tests/loading_cache_test',
 ]
 
 apps = [

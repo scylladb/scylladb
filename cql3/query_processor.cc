@@ -58,10 +58,13 @@ using namespace statements;
 using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
+logging::logger prep_cache_log("prepared_statements_cache");
 
 distributed<query_processor> _the_query_processor;
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
+
+const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 class query_processor::internal_state {
     service::query_state _qs;
@@ -96,6 +99,7 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
     , _proxy(proxy)
     , _db(db)
     , _internal_state(new internal_state())
+    , _prepared_cache(prep_cache_log)
 {
     namespace sm = seastar::metrics;
 
@@ -131,6 +135,15 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
 
         sm::make_derive("batches_unlogged_from_logged", _cql_stats.batches_unlogged_from_logged,
                         sm::description("Counts a total number of LOGGED batches that were executed as UNLOGGED batches.")),
+
+        sm::make_derive("prepared_cache_evictions", [] { return prepared_statements_cache::shard_stats().prepared_cache_evictions; },
+                        sm::description("Counts a number of prepared statements cache entries evictions.")),
+
+        sm::make_gauge("prepared_cache_size", [this] { return _prepared_cache.size(); },
+                        sm::description("A number of entries in the prepared statements cache.")),
+
+        sm::make_gauge("prepared_cache_memory_footprint", [this] { return _prepared_cache.memory_footprint(); },
+                        sm::description("Size (in bytes) of the prepared statements cache.")),
     });
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
@@ -198,31 +211,21 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement,
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(const std::experimental::string_view& query_string, service::query_state& query_state)
+query_processor::prepare(sstring query_string, service::query_state& query_state)
 {
     auto& client_state = query_state.get_client_state();
-    return prepare(query_string, client_state, client_state.is_thrift());
+    return prepare(std::move(query_string), client_state, client_state.is_thrift());
 }
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::prepare(const std::experimental::string_view& query_string,
-                         const service::client_state& client_state,
-                         bool for_thrift)
+query_processor::prepare(sstring query_string, const service::client_state& client_state, bool for_thrift)
 {
-    auto existing = get_stored_prepared_statement(query_string, client_state.get_raw_keyspace(), for_thrift);
-    if (existing) {
-        return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(existing);
+    using namespace cql_transport::messages;
+    if (for_thrift) {
+        return prepare_one<result_message::prepared::thrift>(std::move(query_string), client_state, compute_thrift_id, prepared_cache_key_type::thrift_id);
+    } else {
+        return prepare_one<result_message::prepared::cql>(std::move(query_string), client_state, compute_id, prepared_cache_key_type::cql_id);
     }
-
-    return futurize<::shared_ptr<cql_transport::messages::result_message::prepared>>::apply([this, &query_string, &client_state, for_thrift] {
-        auto prepared = get_statement(query_string, client_state);
-        auto bound_terms = prepared->statement->get_bound_terms();
-        if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-            throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
-        }
-        assert(bound_terms == prepared->bound_names.size());
-        return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
-    });
 }
 
 ::shared_ptr<cql_transport::messages::result_message::prepared>
@@ -230,50 +233,11 @@ query_processor::get_stored_prepared_statement(const std::experimental::string_v
                                                const sstring& keyspace,
                                                bool for_thrift)
 {
+    using namespace cql_transport::messages;
     if (for_thrift) {
-        auto statement_id = compute_thrift_id(query_string, keyspace);
-        auto it = _thrift_prepared_statements.find(statement_id);
-        if (it == _thrift_prepared_statements.end()) {
-            return ::shared_ptr<result_message::prepared>();
-        }
-        return ::make_shared<result_message::prepared::thrift>(statement_id, it->second->checked_weak_from_this());
+        return get_stored_prepared_statement_one<result_message::prepared::thrift>(query_string, keyspace, compute_thrift_id, prepared_cache_key_type::thrift_id);
     } else {
-        auto statement_id = compute_id(query_string, keyspace);
-        auto it = _prepared_statements.find(statement_id);
-        if (it == _prepared_statements.end()) {
-            return ::shared_ptr<result_message::prepared>();
-        }
-        return ::make_shared<result_message::prepared::cql>(statement_id, it->second->checked_weak_from_this());
-    }
-}
-
-future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-query_processor::store_prepared_statement(const std::experimental::string_view& query_string,
-                                          const sstring& keyspace,
-                                          std::unique_ptr<statements::prepared_statement> prepared,
-                                          bool for_thrift)
-{
-#if 0
-    // Concatenate the current keyspace so we don't mix prepared statements between keyspace (#5352).
-    // (if the keyspace is null, queryString has to have a fully-qualified keyspace so it's fine.
-    long statementSize = measure(prepared.statement);
-    // don't execute the statement if it's bigger than the allowed threshold
-    if (statementSize > MAX_CACHE_PREPARED_MEMORY)
-        throw new InvalidRequestException(String.format("Prepared statement of size %d bytes is larger than allowed maximum of %d bytes.",
-                                                        statementSize,
-                                                        MAX_CACHE_PREPARED_MEMORY));
-#endif
-    prepared->raw_cql_statement = query_string.data();
-    if (for_thrift) {
-        auto statement_id = compute_thrift_id(query_string, keyspace);
-        auto msg = ::make_shared<result_message::prepared::thrift>(statement_id, prepared->checked_weak_from_this());
-        _thrift_prepared_statements.emplace(statement_id, std::move(prepared));
-        return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
-    } else {
-        auto statement_id = compute_id(query_string, keyspace);
-        auto msg = ::make_shared<result_message::prepared::cql>(statement_id, prepared->checked_weak_from_this());
-        _prepared_statements.emplace(statement_id, std::move(prepared));
-        return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
+        return get_stored_prepared_statement_one<result_message::prepared::cql>(query_string, keyspace, compute_id, prepared_cache_key_type::cql_id);
     }
 }
 
@@ -290,19 +254,19 @@ static sstring hash_target(const std::experimental::string_view& query_string, c
     return keyspace + query_string.to_string();
 }
 
-bytes query_processor::compute_id(const std::experimental::string_view& query_string, const sstring& keyspace)
+prepared_cache_key_type query_processor::compute_id(const std::experimental::string_view& query_string, const sstring& keyspace)
 {
-    return md5_calculate(hash_target(query_string, keyspace));
+    return prepared_cache_key_type(md5_calculate(hash_target(query_string, keyspace)));
 }
 
-int32_t query_processor::compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace)
+prepared_cache_key_type query_processor::compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace)
 {
     auto target = hash_target(query_string, keyspace);
     uint32_t h = 0;
     for (auto&& c : hash_target(query_string, keyspace)) {
         h = 31*h + c;
     }
-    return static_cast<int32_t>(h);
+    return prepared_cache_key_type(static_cast<int32_t>(h));
 }
 
 std::unique_ptr<prepared_statement>
@@ -623,7 +587,7 @@ void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name,
 
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name)
 {
-    _qp->invalidate_prepared_statements([&] (::shared_ptr<cql_statement> stmt) {
+    _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
         return this->should_invalidate(ks_name, cf_name, stmt);
     });
 }

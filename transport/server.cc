@@ -830,15 +830,15 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
     const auto& cs = *client_state;
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query, &cs] () mutable {
-                return _server._query_processor.local().prepare(query, cs, false).discard_result();
+            return smp::submit_to(c, [this, query = std::move(query), &cs] () mutable {
+                return _server._query_processor.local().prepare(std::move(query), cs, false).discard_result();
             });
         } else {
             return make_ready_future<>();
         }
-    }).then([this, query, stream, &cs] {
+    }).then([this, query, stream, &cs] () mutable {
         tracing::trace(cs.get_trace_state(), "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(query, cs, false).then([this, stream, &cs] (auto msg) {
+        return _server._query_processor.local().prepare(std::move(query), cs, false).then([this, stream, &cs] (auto msg) {
             tracing::trace(cs.get_trace_state(), "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));
@@ -852,8 +852,9 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
 
 future<response_type> cql_server::connection::process_execute(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
-    auto id = read_short_bytes(buf);
-    auto prepared = _server._query_processor.local().get_prepared(id);
+    cql3::prepared_cache_key_type cache_key(read_short_bytes(buf));
+    auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
+    auto prepared = _server._query_processor.local().get_prepared(cache_key);
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
@@ -929,8 +930,9 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
             break;
         }
         case 1: {
-            auto id = read_short_bytes(buf);
-            ps = _server._query_processor.local().get_prepared(id);
+            cql3::prepared_cache_key_type cache_key(read_short_bytes(buf));
+            auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
+            ps = _server._query_processor.local().get_prepared(cache_key);
             if (!ps) {
                 throw exceptions::prepared_query_not_found_exception(id);
             }

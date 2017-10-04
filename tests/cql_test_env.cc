@@ -127,7 +127,7 @@ public:
         });
     }
 
-    virtual future<bytes> prepare(sstring query) override {
+    virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
         return qp().invoke_on_all([query, this] (auto& local_qp) {
             auto qs = this->make_query_state();
             return local_qp.prepare(query, *qs).finally([qs] {}).discard_result();
@@ -137,7 +137,7 @@ public:
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
-        bytes id,
+        cql3::prepared_cache_key_type id,
         std::vector<cql3::raw_value> values) override
     {
         auto prepared = local_qp().get_prepared(id);
