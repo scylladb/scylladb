@@ -56,7 +56,7 @@
 #include "log.hh"
 
 const sstring auth::default_authorizer::DEFAULT_AUTHORIZER_NAME(
-                "org.apache.cassandra.auth.CassandraAuthorizer");
+                auth::AUTH_PACKAGE_NAME + "CassandraAuthorizer");
 
 static const sstring USER_NAME = "username";
 static const sstring RESOURCE_NAME = "resource";
@@ -64,6 +64,8 @@ static const sstring PERMISSIONS_NAME = "permissions";
 static const sstring PERMISSIONS_CF = "permissions";
 
 static logging::logger alogger("default_authorizer");
+static const class_registrator<auth::authorizer, auth::default_authorizer> password_auth_reg(
+                auth::default_authorizer::DEFAULT_AUTHORIZER_NAME);
 
 auth::default_authorizer::default_authorizer() {
 }

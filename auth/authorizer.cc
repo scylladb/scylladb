@@ -44,18 +44,20 @@
 #include "default_authorizer.hh"
 #include "auth.hh"
 #include "db/config.hh"
+#include "utils/class_registrator.hh"
 
-const sstring auth::authorizer::ALLOW_ALL_AUTHORIZER_NAME("org.apache.cassandra.auth.AllowAllAuthorizer");
+const sstring auth::authorizer::ALLOW_ALL_AUTHORIZER_NAME(auth::AUTH_PACKAGE_NAME + "AllowAllAuthorizer");
 
 /**
  * Authenticator is assumed to be a fully state-less immutable object (note all the const).
  * We thus store a single instance globally, since it should be safe/ok.
  */
 static std::unique_ptr<auth::authorizer> global_authorizer;
+using authorizer_registry = class_registry<auth::authorizer>;
 
 future<>
 auth::authorizer::setup(const sstring& type) {
-    if (auth::auth::is_class_type(type, ALLOW_ALL_AUTHORIZER_NAME)) {
+    if (type == ALLOW_ALL_AUTHORIZER_NAME) {
         class allow_all_authorizer : public authorizer {
         public:
             future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {
@@ -86,16 +88,14 @@ auth::authorizer::setup(const sstring& type) {
         };
 
         global_authorizer = std::make_unique<allow_all_authorizer>();
-    } else if (auth::auth::is_class_type(type, default_authorizer::DEFAULT_AUTHORIZER_NAME)) {
-        auto da = std::make_unique<default_authorizer>();
-        auto f = da->init();
-        return f.then([da = std::move(da)]() mutable {
-            global_authorizer = std::move(da);
-        });
+        return make_ready_future();
     } else {
-        throw exceptions::configuration_exception("Invalid authorizer type: " + type);
+        auto a = authorizer_registry::create(type);
+        auto f = a->init();
+        return f.then([a = std::move(a)]() mutable {
+            global_authorizer = std::move(a);
+        });
     }
-    return make_ready_future();
 }
 
 auth::authorizer& auth::authorizer::get() {

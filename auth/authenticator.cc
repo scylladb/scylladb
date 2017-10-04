@@ -44,10 +44,11 @@
 #include "password_authenticator.hh"
 #include "auth.hh"
 #include "db/config.hh"
+#include "utils/class_registrator.hh"
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
-const sstring auth::authenticator::ALLOW_ALL_AUTHENTICATOR_NAME("org.apache.cassandra.auth.AllowAllAuthenticator");
+const sstring auth::authenticator::ALLOW_ALL_AUTHENTICATOR_NAME(auth::AUTH_PACKAGE_NAME + "AllowAllAuthenticator");
 
 auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
     if (strcasecmp(name.c_str(), "password") == 0) {
@@ -71,9 +72,11 @@ sstring auth::authenticator::option_to_string(option opt) {
  */
 static std::unique_ptr<auth::authenticator> global_authenticator;
 
+using authenticator_registry = class_registry<auth::authenticator>;
+
 future<>
 auth::authenticator::setup(const sstring& type) {
-    if (auth::auth::is_class_type(type, ALLOW_ALL_AUTHENTICATOR_NAME)) {
+    if (type == ALLOW_ALL_AUTHENTICATOR_NAME) {
         class allow_all_authenticator : public authenticator {
         public:
             const sstring& class_name() const override {
@@ -109,16 +112,14 @@ auth::authenticator::setup(const sstring& type) {
             }
         };
         global_authenticator = std::make_unique<allow_all_authenticator>();
-    } else if (auth::auth::is_class_type(type, password_authenticator::PASSWORD_AUTHENTICATOR_NAME)) {
-        auto pwa = std::make_unique<password_authenticator>();
-        auto f = pwa->init();
-        return f.then([pwa = std::move(pwa)]() mutable {
-            global_authenticator = std::move(pwa);
-        });
+        return make_ready_future();
     } else {
-        throw exceptions::configuration_exception("Invalid authenticator type: " + type);
+        auto a = authenticator_registry::create(type);
+        auto f = a->init();
+        return f.then([a = std::move(a)]() mutable {
+            global_authenticator = std::move(a);
+        });
     }
-    return make_ready_future();
 }
 
 auth::authenticator& auth::authenticator::get() {

@@ -52,7 +52,7 @@ public:
     default_authorizer();
     ~default_authorizer();
 
-    future<> init();
+    future<> init() override;
 
     future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override;
 

@@ -58,6 +58,7 @@
 const sstring auth::auth::DEFAULT_SUPERUSER_NAME("cassandra");
 const sstring auth::auth::AUTH_KS("system_auth");
 const sstring auth::auth::USERS_CF("users");
+const sstring auth::auth::AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 static const sstring USER_NAME("name");
 static const sstring SUPER("super");
@@ -214,30 +215,21 @@ void auth::auth::schedule_when_up(scheduled_func f) {
     });
 }
 
-bool auth::auth::is_class_type(const sstring& type, const sstring& classname) {
-    if (type == classname) {
-        return true;
-    }
-    auto i = classname.find_last_of('.');
-    return classname.compare(i + 1, sstring::npos, type) == 0;
-}
-
 future<> auth::auth::setup() {
     auto& db = cql3::get_local_query_processor().db().local();
     auto& cfg = db.get_config();
 
     future<> f = perm_cache.start();
 
-    if (is_class_type(cfg.authenticator(),
-                    authenticator::ALLOW_ALL_AUTHENTICATOR_NAME)
-                    && is_class_type(cfg.authorizer(),
-                                    authorizer::ALLOW_ALL_AUTHORIZER_NAME)
-                                    ) {
+    qualified_name authenticator_name(AUTH_PACKAGE_NAME, cfg.authenticator()),
+                    authorizer_name(AUTH_PACKAGE_NAME, cfg.authorizer());
+
+    if (authenticator::ALLOW_ALL_AUTHENTICATOR_NAME == authenticator_name && authorizer::ALLOW_ALL_AUTHORIZER_NAME == authorizer_name) {
         // just create the objects
-        return f.then([&cfg] {
-            return authenticator::setup(cfg.authenticator());
-        }).then([&cfg] {
-            return authorizer::setup(cfg.authorizer());
+        return f.then([authenticator_name = std::move(authenticator_name)] {
+            return authenticator::setup(authenticator_name);
+        }).then([authorizer_name = std::move(authorizer_name)] {
+            return authorizer::setup(authorizer_name);
         });
     }
 
@@ -253,10 +245,10 @@ future<> auth::auth::setup() {
         return setup_table(USERS_CF, sprint("CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY(%s)) WITH gc_grace_seconds=%d",
                                         AUTH_KS, USERS_CF, USER_NAME, SUPER, USER_NAME,
                                         90 * 24 * 60 * 60)); // 3 months.
-    }).then([&cfg] {
-        return authenticator::setup(cfg.authenticator());
-    }).then([&cfg] {
-        return authorizer::setup(cfg.authorizer());
+    }).then([authenticator_name = std::move(authenticator_name)] {
+        return authenticator::setup(authenticator_name);
+    }).then([authorizer_name = std::move(authorizer_name)] {
+        return authorizer::setup(authorizer_name);
     }).then([] {
         service::get_local_migration_manager().register_listener(&auth_migration); // again, only one shard...
         // instead of once-timer, just schedule this later
