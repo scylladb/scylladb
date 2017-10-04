@@ -30,6 +30,10 @@ public:
     using runtime_error::runtime_error;
 };
 
+inline bool is_class_name_qualified(const sstring& class_name) {
+    return class_name.find_last_of('.') != sstring::npos;
+}
+
 // BaseType is a base type of a type hierarchy that this registry will hold
 // Args... are parameters for object's constructor
 template<typename BaseType, typename... Args>
@@ -88,10 +92,6 @@ public:
         return _classes;
     }
 
-    static bool is_class_name_qualified(const sstring& class_name) {
-        return class_name.compare(0, 4, "org.") == 0;
-    }
-
     static sstring to_qualified_class_name(sstring class_name);
 };
 
@@ -108,14 +108,15 @@ void class_registry<BaseType, Args...>::register_class(sstring name) {
 
 template<typename BaseType, typename... Args>
 sstring class_registry<BaseType, Args...>::to_qualified_class_name(sstring class_name) {
-    if (class_registry<BaseType, Args...>::is_class_name_qualified(class_name)) {
+    if (is_class_name_qualified(class_name)) {
         return class_name;
     } else {
         const auto& classes{class_registry<BaseType, Args...>::classes()};
 
         const auto it = boost::find_if(classes, [&class_name](const auto& registered_class) {
             // the fully qualified name contains the short name
-            return class_registry<BaseType, Args...>::is_class_name_qualified(registered_class.first) && registered_class.first.find(class_name) != sstring::npos;
+            auto i = registered_class.first.find_last_of('.');
+            return i != sstring::npos && registered_class.first.compare(i + 1, sstring::npos, class_name) == 0;
         });
         return it == classes.end() ? class_name : it->first;
     }
@@ -146,3 +147,26 @@ typename class_registry<BaseType, Args...>::result_type  create_object(const sst
     return class_registry<BaseType, Args...>::create(name, std::forward<Args>(args)...);
 }
 
+class qualified_name {
+    sstring _qname;
+public:
+    // can be optimized with string_views etc.
+    qualified_name(const sstring& pkg_pfx, const sstring& name)
+        : _qname(is_class_name_qualified(name) ? name : pkg_pfx + name)
+    {}
+    operator const sstring&() const {
+        return _qname;
+    }
+};
+
+class unqualified_name {
+    sstring _qname;
+public:
+    // can be optimized with string_views etc.
+    unqualified_name(const sstring& pkg_pfx, const sstring& name)
+        : _qname(name.compare(0, pkg_pfx.size(), pkg_pfx) == 0 ? name.substr(pkg_pfx.size() + 1) : name)
+    {}
+    operator const sstring&() const {
+        return _qname;
+    }
+};
