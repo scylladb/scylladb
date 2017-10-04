@@ -139,14 +139,14 @@ struct reversal_traits<true> {
     }
 };
 
-mutation_partition::mutation_partition(const mutation_partition& x)
+mutation_partition::mutation_partition(const schema& s, const mutation_partition& x)
         : _tombstone(x._tombstone)
-        , _static_row(x._static_row)
+        , _static_row(s, column_kind::static_column, x._static_row)
         , _static_row_continuous(x._static_row_continuous)
         , _rows()
         , _row_tombstones(x._row_tombstones) {
-    auto cloner = [] (const auto& x) {
-        return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
+    auto cloner = [&s] (const auto& x) {
+        return current_allocator().construct<rows_entry>(s, x);
     };
     _rows.clone_from(x._rows, cloner, current_deleter<rows_entry>());
 }
@@ -154,14 +154,14 @@ mutation_partition::mutation_partition(const mutation_partition& x)
 mutation_partition::mutation_partition(const mutation_partition& x, const schema& schema,
         query::clustering_key_filter_ranges ck_ranges)
         : _tombstone(x._tombstone)
-        , _static_row(x._static_row)
+        , _static_row(schema, column_kind::static_column, x._static_row)
         , _static_row_continuous(x._static_row_continuous)
         , _rows()
         , _row_tombstones(x._row_tombstones, range_tombstone_list::copy_comparator_only()) {
     try {
         for(auto&& r : ck_ranges) {
             for (const rows_entry& e : x.range(schema, r)) {
-                _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(e), rows_entry::compare(schema));
+                _rows.insert(_rows.end(), *current_allocator().construct<rows_entry>(schema, e), rows_entry::compare(schema));
             }
             for (auto&& rt : x._row_tombstones.slice(schema, r)) {
                 _row_tombstones.apply(schema, rt);
@@ -211,13 +211,6 @@ mutation_partition::~mutation_partition() {
 }
 
 mutation_partition&
-mutation_partition::operator=(const mutation_partition& x) {
-    mutation_partition n(x);
-    std::swap(*this, n);
-    return *this;
-}
-
-mutation_partition&
 mutation_partition::operator=(mutation_partition&& x) noexcept {
     if (this != &x) {
         this->~mutation_partition();
@@ -257,8 +250,8 @@ struct mutation_fragment_applier {
         _mp.apply_row_tombstone(_s, std::move(rt));
     }
 
-    void operator()(static_row sr) {
-        _mp.static_row().apply(_s, column_kind::static_column, std::move(sr.cells()));
+    void operator()(const static_row& sr) {
+        _mp.static_row().apply(_s, column_kind::static_column, sr.cells());
     }
 
     void operator()(partition_start ps) {
@@ -268,9 +261,10 @@ struct mutation_fragment_applier {
     void operator()(partition_end ps) {
     }
 
-    void operator()(clustering_row cr) {
-        auto& dr = _mp.clustered_row(_s, std::move(cr.key()));
-        dr.apply(_s, std::move(cr));
+    void operator()(const clustering_row& cr) {
+        auto temp = clustering_row(_s, cr);
+        auto& dr = _mp.clustered_row(_s, std::move(temp.key()));
+        dr.apply(_s, std::move(temp));
     }
 };
 
@@ -336,7 +330,7 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
     if (s.version() == p_schema.version()) {
         apply_monotonically(s, std::move(p), no_cache_tracker);
     } else {
-        mutation_partition p2(p);
+        mutation_partition p2(s, p);
         p2.upgrade(p_schema, s);
         apply_monotonically(s, std::move(p2), no_cache_tracker);
     }
@@ -353,7 +347,7 @@ mutation_partition::apply_weak(const schema& s, mutation_partition_view p, const
 
 void mutation_partition::apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema) {
     // FIXME: Optimize
-    apply_monotonically(s, mutation_partition(p), p_schema);
+    apply_monotonically(s, mutation_partition(s, p), p_schema);
 }
 
 void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
@@ -457,7 +451,7 @@ void mutation_partition::insert_row(const schema& s, const clustering_key& key, 
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
-    auto e = current_allocator().construct<rows_entry>(key, row);
+    auto e = current_allocator().construct<rows_entry>(s, key, row);
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
 }
 
@@ -1062,7 +1056,7 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
 
 void
 row::apply(const column_definition& column, const atomic_cell_or_collection& value, cell_hash_opt hash) {
-    auto tmp = value;
+    auto tmp = value.copy(*column.type);
     apply_monotonically(column, std::move(tmp), std::move(hash));
 }
 
@@ -1396,15 +1390,24 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
     }
 }
 
-row::row(const row& o)
+row::row(const schema& s, column_kind kind, const row& o)
     : _type(o._type)
     , _size(o._size)
 {
     if (_type == storage_type::vector) {
-        new (&_storage.vector) vector_storage(o._storage.vector);
+        auto& other_vec = o._storage.vector;
+        auto& vec = *new (&_storage.vector) vector_storage;
+        vec.present = other_vec.present;
+        vec.v.reserve(other_vec.v.size());
+        column_id id = 0;
+        for (auto& cell : other_vec.v) {
+            auto& cdef = s.column_at(kind, id++);
+            vec.v.emplace_back(cell_and_hash { cell.cell.copy(*cdef.type), cell.hash });
+        }
     } else {
-        auto cloner = [] (const auto& x) {
-            return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
+        auto cloner = [&] (const auto& x) {
+            auto& cdef = s.column_at(kind, x.id());
+            return current_allocator().construct<cell_entry>(*cdef.type, x);
         };
         new (&_storage.set) map_type;
         try {
@@ -1425,9 +1428,9 @@ row::~row() {
     }
 }
 
-row::cell_entry::cell_entry(const cell_entry& o)
+row::cell_entry::cell_entry(const abstract_type& type, const cell_entry& o)
     : _id(o._id)
-    , _cell_and_hash(o._cell_and_hash)
+    , _cell_and_hash{ o._cell_and_hash.cell.copy(type), o._cell_and_hash.hash }
 { }
 
 row::cell_entry::cell_entry(cell_entry&& o) noexcept
@@ -1668,7 +1671,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
             }
             auto& cdef = s.column_at(kind, c.first);
             if (it == other_range.end() || it->first != c.first) {
-                r.append_cell(c.first, c.second);
+                r.append_cell(c.first, c.second.copy(*cdef.type));
             } else if (cdef.is_counter()) {
                 auto cell = counter_cell_view::difference(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef));
                 if (cell) {
@@ -1676,7 +1679,7 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
                 }
             } else if (s.column_at(kind, c.first).is_atomic()) {
                 if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(cdef), it->second.as_atomic_cell(cdef)) > 0) {
-                    r.append_cell(c.first, c.second);
+                    r.append_cell(c.first, c.second.copy(*cdef.type));
                 }
             } else {
                 auto ct = static_pointer_cast<const collection_type_impl>(s.column_at(kind, c.first).type);

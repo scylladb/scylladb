@@ -35,12 +35,17 @@ private:
     atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
 public:
     atomic_cell_or_collection() = default;
+    atomic_cell_or_collection(atomic_cell_or_collection&&) = default;
+    atomic_cell_or_collection(const atomic_cell_or_collection&) = delete;
+    atomic_cell_or_collection& operator=(atomic_cell_or_collection&&) = default;
+    atomic_cell_or_collection& operator=(const atomic_cell_or_collection&) = delete;
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell(const column_definition&) const { return atomic_cell_view::from_bytes(_data); }
     atomic_cell_ref as_atomic_cell_ref(const column_definition&) { return { _data }; }
     atomic_cell_mutable_view as_mutable_atomic_cell(const column_definition&) { return atomic_cell_mutable_view::from_bytes(_data); }
     atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm.data)) {}
+    atomic_cell_or_collection copy(const abstract_type&) const { return managed_bytes(_data); }
     explicit operator bool() const {
         return !_data.empty();
     }

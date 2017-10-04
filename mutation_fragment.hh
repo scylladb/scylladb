@@ -54,8 +54,10 @@ public:
             : _ck(std::move(ck)), _t(t), _marker(std::move(marker)), _cells(std::move(cells)) {
         _t.maybe_shadow(marker);
     }
-    clustering_row(const rows_entry& re)
-            : clustering_row(re.key(), re.row().deleted_at(), re.row().marker(), re.row().cells()) { }
+    clustering_row(const schema& s, const clustering_row& other)
+        : clustering_row(other._ck, other._t, other._marker, row(s, column_kind::regular_column, other._cells)) { }
+    clustering_row(const schema& s, const rows_entry& re)
+            : clustering_row(re.key(), re.row().deleted_at(), re.row().marker(), row(s, column_kind::regular_column, re.row().cells())) { }
     clustering_row(rows_entry&& re)
             : clustering_row(std::move(re.key()), re.row().deleted_at(), re.row().marker(), std::move(re.row().cells())) { }
 
@@ -133,7 +135,8 @@ class static_row {
     row _cells;
 public:
     static_row() = default;
-    explicit static_row(const row& r) : _cells(r) { }
+    static_row(const schema& s, const static_row& other) : static_row(s, other._cells) { }
+    explicit static_row(const schema& s, const row& r) : _cells(s, column_kind::static_column, r) { }
     explicit static_row(row&& r) : _cells(std::move(r)) { }
 
     row& cells() { return _cells; }
@@ -328,14 +331,14 @@ public:
     mutation_fragment(partition_start&& r);
     mutation_fragment(partition_end&& r);
 
-    mutation_fragment(const mutation_fragment& o)
+    mutation_fragment(const schema& s, const mutation_fragment& o)
         : _kind(o._kind), _data(std::make_unique<data>()) {
         switch(_kind) {
             case kind::static_row:
-                new (&_data->_static_row) static_row(o._data->_static_row);
+                new (&_data->_static_row) static_row(s, o._data->_static_row);
                 break;
             case kind::clustering_row:
-                new (&_data->_clustering_row) clustering_row(o._data->_clustering_row);
+                new (&_data->_clustering_row) clustering_row(s, o._data->_clustering_row);
                 break;
             case kind::range_tombstone:
                 new (&_data->_range_tombstone) range_tombstone(o._data->_range_tombstone);
@@ -349,14 +352,6 @@ public:
         }
     }
     mutation_fragment(mutation_fragment&& other) = default;
-    mutation_fragment& operator=(const mutation_fragment& other) {
-        if (this != &other) {
-            mutation_fragment copy(other);
-            this->~mutation_fragment();
-            new (this) mutation_fragment(std::move(copy));
-        }
-        return *this;
-    }
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
         if (this != &other) {
             this->~mutation_fragment();

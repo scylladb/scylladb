@@ -82,7 +82,7 @@ struct mock_consumer {
     }
     result consume_end_of_stream() {
         _result._consume_end_of_stream_called = true;
-        return _result;
+        return std::move(_result);
     }
 };
 

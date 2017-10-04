@@ -421,7 +421,7 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
         while (!_reader_heap.empty() && key(_fragment_heap).equal(*_schema, key(_reader_heap)));
         if (_fragment_heap.size() == 1) {
             _single_reader = { _fragment_heap.back().reader, mutation_fragment::kind::partition_start };
-            _current.emplace_back(_fragment_heap.back().fragment);
+            _current.emplace_back(std::move(_fragment_heap.back().fragment));
             _fragment_heap.clear();
             return make_ready_future<mutation_fragment_batch>(_current);
         }
@@ -951,7 +951,7 @@ future<> foreign_reader::fill_buffer(db::timeout_clock::time_point timeout) {
         _end_of_stream = end_of_steam;
         for (const auto& mf : *buffer) {
             // Need a copy since the mf is on the remote shard.
-            push_mutation_fragment(mf);
+            push_mutation_fragment(mutation_fragment(*_schema, mf));
         }
     });
 }

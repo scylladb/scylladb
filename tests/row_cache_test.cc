@@ -952,7 +952,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         auto original_partitions = partitions_type(partition_key::less_compare(*s));
         for (int i = 0; i < partition_count / 2; i++) {
             auto m = make_new_mutation(s, i + partition_count / 2);
-            original_partitions.emplace(m.key(), m.partition());
+            original_partitions.emplace(m.key(), mutation_partition(*s, m.partition()));
             cache.populate(m);
         }
 
@@ -961,7 +961,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         auto updated_partitions = partitions_type(partition_key::less_compare(*s));
         for (int i = 0; i < partition_count; i++) {
             auto m = make_new_large_mutation(s, i);
-            updated_partitions.emplace(m.key(), m.partition());
+            updated_partitions.emplace(m.key(), mutation_partition(*s, m.partition()));
             mt->apply(m);
         }
 
@@ -3120,7 +3120,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = cache.make_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -3129,14 +3129,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = cache.make_reader(s, query::full_partition_range, slice);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = cache.make_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
@@ -3147,7 +3147,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = cache.make_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -3156,14 +3156,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = cache.make_reader(s, query::full_partition_range, slice);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = cache.make_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });

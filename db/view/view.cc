@@ -367,7 +367,7 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
     auto marker = compute_row_marker(update);
     r.apply(marker);
     r.apply(update.tomb());
-    add_cells_to_view(*_base, *_view, update.cells(), r.cells());
+    add_cells_to_view(*_base, *_view, row(*_base, column_kind::regular_column, update.cells()), r.cells());
 }
 
 /**
@@ -677,7 +677,7 @@ future<stop_iteration> view_update_builder::on_results() {
     if (tombstone && _existing && !_existing->is_end_of_partition()) {
         // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
         if (_existing->is_clustering_row()) {
-            auto& existing = _existing->as_clustering_row();
+            auto existing = clustering_row(*_schema, _existing->as_clustering_row());
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
             generate_update(std::move(update), { std::move(existing) });
         }

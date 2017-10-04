@@ -37,9 +37,9 @@ mutation::data::data(partition_key&& key_, schema_ptr&& schema)
 { }
 
 mutation::data::data(schema_ptr&& schema, dht::decorated_key&& key, const mutation_partition& mp)
-    : _schema(std::move(schema))
+    : _schema(schema)
     , _dk(std::move(key))
-    , _p(mp)
+    , _p(*schema, mp)
 { }
 
 mutation::data::data(schema_ptr&& schema, dht::decorated_key&& key, mutation_partition&& mp)

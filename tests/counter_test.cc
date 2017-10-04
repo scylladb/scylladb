@@ -92,7 +92,9 @@ SEASTAR_TEST_CASE(test_apply) {
     return seastar::async([] {
         auto cdef = column_definition("name", counter_type, column_kind::regular_column);
 
-        auto verify_apply = [&] (atomic_cell_or_collection dst, atomic_cell_or_collection src, int64_t value) {
+        auto verify_apply = [&] (const atomic_cell_or_collection& a, const atomic_cell_or_collection& b, int64_t value) {
+            auto dst = a.copy(*cdef.type);
+            auto src = b.copy(*cdef.type);
             counter_cell_view::apply(cdef, dst, src);
 
             auto cv = counter_cell_view(dst.as_atomic_cell(cdef));

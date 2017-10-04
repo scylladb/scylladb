@@ -634,7 +634,7 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
         auto r = p->find_row(*s, clustering_key);
         if (r) {
             // FIXME: remove copy if only one data source
-            return make_ready_future<const_row_ptr>(std::make_unique<row>(*r));
+            return make_ready_future<const_row_ptr>(std::make_unique<row>(*s, column_kind::regular_column, *r));
         } else {
             return make_ready_future<const_row_ptr>();
         }

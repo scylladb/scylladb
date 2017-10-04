@@ -512,7 +512,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = mt->make_flat_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -521,14 +521,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = mt->make_flat_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
@@ -538,7 +538,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         {
             auto rd = mt->make_flat_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
 
@@ -547,14 +547,14 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             slice.options.set<query::partition_slice::option::with_digest>();
             auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
         {
             auto rd = mt->make_flat_reader(s);
             rd().get0()->as_partition_start();
-            clustering_row row = rd().get0()->as_clustering_row();
+            clustering_row row = std::move(rd().get0()->as_mutable_clustering_row());
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });

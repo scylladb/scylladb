@@ -1415,7 +1415,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
 
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
 
-                        auto row = mp.clustered_row(*s, clustering);
+                        auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                         return make_ready_future<>();
                     });
@@ -1449,7 +1449,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
                         auto& mp = mutation->partition();
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
-                        auto row = mp.clustered_row(*s, clustering);
+                        auto& row = mp.clustered_row(*s, clustering);
                         match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
                         return make_ready_future<>();
                     });
@@ -1483,7 +1483,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                     auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
                     return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
-                        auto row = mp.clustered_row(*s, clustering_key::make_empty());
+                        auto& row = mp.clustered_row(*s, clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
                         match_live_cell(row.cells(), *s, "cl2", data_value(data_value(to_bytes("cl2"))));
                         return make_ready_future<>();
@@ -1580,7 +1580,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
                     return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
-                        auto c_row = *(mp.clustered_rows().begin());
+                        auto& c_row = *(mp.clustered_rows().begin());
                         BOOST_REQUIRE(c_row.row().deleted_at().tomb() == tomb);
                     });
                 });

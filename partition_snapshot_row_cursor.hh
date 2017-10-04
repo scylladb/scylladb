@@ -361,7 +361,7 @@ public:
         if (digest_requested) {
             row->row().cells().prepare_hash(_schema, column_kind::regular_column);
         }
-        auto mf = mutation_fragment(clustering_row(*row));
+        auto mf = mutation_fragment(clustering_row(_schema, *row));
         auto& cr = mf.as_mutable_clustering_row();
         for (++it; it != _current_row.end(); ++it) {
             cr.apply(_schema, *it->it);
@@ -377,7 +377,7 @@ public:
             if (v.unique_owner) {
                 consumer(std::move(v.it->row()));
             } else {
-                consumer(deletable_row(v.it->row()));
+                consumer(deletable_row(_schema, v.it->row()));
             }
         }
     }
@@ -413,7 +413,7 @@ public:
         } else {
             // Copy row from older version because rows in evictable versions must
             // hold values which are independently complete to be consistent on eviction.
-            auto e = current_allocator().construct<rows_entry>(*_current_row[0].it);
+            auto e = current_allocator().construct<rows_entry>(_schema, *_current_row[0].it);
             e->set_continuous(latest_i != rows.end() && latest_i->continuous());
             _snp.tracker()->insert(*e);
             rows.insert_before(latest_i, *e);
