@@ -52,8 +52,9 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
+#include "utils/class_registrator.hh"
 
-const sstring auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME("org.apache.cassandra.auth.PasswordAuthenticator");
+const sstring auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME(auth::AUTH_PACKAGE_NAME + "PasswordAuthenticator");
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
@@ -63,6 +64,9 @@ static const sstring DEFAULT_USER_PASSWORD = auth::auth::DEFAULT_SUPERUSER_NAME;
 static const sstring CREDENTIALS_CF = "credentials";
 
 static logging::logger plogger("password_authenticator");
+
+static const class_registrator<auth::authenticator, auth::password_authenticator> password_auth_reg(
+                auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
 
 auth::password_authenticator::~password_authenticator()
 {}
@@ -285,8 +289,7 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
 ::shared_ptr<auth::authenticator::sasl_challenge> auth::password_authenticator::new_sasl_challenge() const {
     class plain_text_password_challenge: public sasl_challenge {
     public:
-        plain_text_password_challenge(const password_authenticator& a)
-                        : _authenticator(a)
+        plain_text_password_challenge()
         {}
 
         /**
@@ -341,12 +344,11 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
             return _complete;
         }
         future<::shared_ptr<authenticated_user>> get_authenticated_user() const override {
-            return _authenticator.authenticate(_credentials);
+            return authenticator::get().authenticate(_credentials);
         }
     private:
-        const password_authenticator& _authenticator;
         credentials_map _credentials;
         bool _complete = false;
     };
-    return ::make_shared<plain_text_password_challenge>(*this);
+    return ::make_shared<plain_text_password_challenge>();
 }

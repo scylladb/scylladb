@@ -52,7 +52,7 @@ public:
     password_authenticator();
     ~password_authenticator();
 
-    future<> init();
+    future<> init() override;
 
     const sstring& class_name() const override;
     bool require_authentication() const override;
