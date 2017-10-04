@@ -319,6 +319,10 @@ using maybe_empty =
 class abstract_type;
 class data_value;
 
+struct simple_date_native_type {
+    uint32_t days;
+};
+
 using data_type = shared_ptr<const abstract_type>;
 
 template <typename T>
@@ -354,6 +358,7 @@ public:
     data_value(float);
     data_value(double);
     data_value(net::ipv4_address);
+    data_value(simple_date_native_type);
     data_value(db_clock::time_point);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
@@ -1227,6 +1232,12 @@ shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
 
 template <>
 inline
+shared_ptr<const abstract_type> data_type_for<simple_date_native_type>() {
+    return simple_date_type;
+}
+
+template <>
+inline
 shared_ptr<const abstract_type> data_type_for<net::ipv4_address>() {
     return inet_addr_type;
 }
@@ -1247,6 +1258,18 @@ template <>
 inline
 shared_ptr<const abstract_type> data_type_for<double>() {
     return double_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<boost::multiprecision::cpp_int>() {
+    return varint_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<big_decimal>() {
+    return decimal_type;
 }
 
 namespace std {
