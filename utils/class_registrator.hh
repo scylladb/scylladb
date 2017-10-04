@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <memory>
+#include <seastar/core/shared_ptr.hh>
 #include <boost/range/algorithm/find_if.hpp>
 
 class no_such_class : public std::runtime_error {
@@ -32,12 +34,53 @@ public:
 // Args... are parameters for object's constructor
 template<typename BaseType, typename... Args>
 class class_registry {
-    using creator_type = std::function<std::unique_ptr<BaseType>(Args...)>;
+    template<typename T>
+    struct result_for {
+        typedef std::unique_ptr<T> type;
+        template<typename Impl>
+        static inline type make(Args&& ...args) {
+            return std::make_unique<Impl>(std::forward<Args>(args)...);
+        }
+    };
+    template<typename T>
+    struct result_for<seastar::shared_ptr<T>> {
+        typedef seastar::shared_ptr<T> type;
+        template<typename Impl>
+        static inline type make(Args&& ...args) {
+            return seastar::make_shared<Impl>(std::forward<Args>(args)...);
+        }
+    };
+    template<typename T>
+    struct result_for<seastar::lw_shared_ptr<T>> {
+        typedef seastar::lw_shared_ptr<T> type;
+        // lw_shared is not (yet?) polymorph, thus having automatic
+        // instantiation of it makes no sense. This way we get a nice
+        // compilation error if someone messes up.
+    };
+    template<typename T>
+    struct result_for<std::shared_ptr<T>> {
+        typedef std::shared_ptr<T> type;
+        template<typename Impl>
+        static inline type make(Args&& ...args) {
+            return std::make_shared<Impl>(std::forward<Args>(args)...);
+        }
+   };
+    template<typename T, typename D>
+    struct result_for<std::unique_ptr<T, D>> {
+        typedef std::unique_ptr<T, D> type;
+        template<typename Impl>
+        static inline type make(Args&& ...args) {
+            return std::make_unique<Impl, D>(std::forward<Args>(args)...);
+        }
+    };
 public:
+    using result_type = typename result_for<BaseType>::type;
+    using creator_type = std::function<result_type(Args...)>;
+
     static void register_class(sstring name, creator_type creator);
     template<typename T>
     static void register_class(sstring name);
-    static std::unique_ptr<BaseType> create(const sstring& name, Args&&...);
+    static result_type create(const sstring& name, Args&&...);
 
     static std::unordered_map<sstring, creator_type>& classes() {
         static std::unordered_map<sstring, creator_type> _classes;
@@ -53,16 +96,14 @@ public:
 };
 
 template<typename BaseType, typename... Args>
-void class_registry<BaseType, Args...>::register_class(sstring name, class_registry<BaseType, Args...>::creator_type creator) {
+void class_registry<BaseType, Args...>::register_class(sstring name, typename class_registry<BaseType, Args...>::creator_type creator) {
     classes().emplace(name, std::move(creator));
 }
 
 template<typename BaseType, typename... Args>
 template<typename T>
 void class_registry<BaseType, Args...>::register_class(sstring name) {
-    register_class(name, [](Args&&... args) {
-        return std::make_unique<T>(std::forward<Args>(args)...);
-    });
+    register_class(name, &result_for<BaseType>::template make<T>);
 }
 
 template<typename BaseType, typename... Args>
@@ -85,13 +126,13 @@ struct class_registrator {
     class_registrator(const sstring& name) {
         class_registry<BaseType, Args...>::template register_class<T>(name);
     }
-    class_registrator(const sstring& name, std::function<std::unique_ptr<T>(Args...)> creator) {
+    class_registrator(const sstring& name, typename class_registry<BaseType, Args...>::creator_type creator) {
         class_registry<BaseType, Args...>::register_class(name, creator);
     }
 };
 
 template<typename BaseType, typename... Args>
-std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
+typename class_registry<BaseType, Args...>::result_type class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
     auto it = classes().find(name);
     if (it == classes().end()) {
         throw no_such_class(sstring("unable to find class '") + name + sstring("'"));
@@ -101,7 +142,7 @@ std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstrin
 }
 
 template<typename BaseType, typename... Args>
-std::unique_ptr<BaseType> create_object(const sstring& name, Args&&... args) {
+typename class_registry<BaseType, Args...>::result_type  create_object(const sstring& name, Args&&... args) {
     return class_registry<BaseType, Args...>::create(name, std::forward<Args>(args)...);
 }
 
