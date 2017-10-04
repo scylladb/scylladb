@@ -90,6 +90,7 @@ boost_tests = [
     'vint_serialization_test',
     'duration_test',
     'restricted_reader_test',
+    'loading_cache_test',
 ]
 
 other_tests = [
