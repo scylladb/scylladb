@@ -144,12 +144,12 @@ private:
     public:
         struct end_iterator_tag {};
         virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges)
-                : _cf_names(ref(cf_names))
-                , _ranges(ref(ranges))
+                : _cf_names(std::ref(cf_names))
+                , _ranges(std::ref(ranges))
         { }
         virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges, end_iterator_tag)
-                : _cf_names(ref(cf_names))
-                , _ranges(ref(ranges))
+                : _cf_names(std::ref(cf_names))
+                , _ranges(std::ref(ranges))
                 , _cf_names_idx(cf_names.size())
                 , _ranges_idx(ranges.size())
         { }
