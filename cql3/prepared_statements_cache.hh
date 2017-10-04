@@ -96,7 +96,11 @@ private:
     using cache_value_ptr = typename cache_type::value_ptr;
     using cache_iterator = typename cache_type::iterator;
     using checked_weak_ptr = typename statements::prepared_statement::checked_weak_ptr;
-    using value_extractor_fn = std::function<checked_weak_ptr (prepared_cache_entry&)>;
+    struct value_extractor_fn {
+        checked_weak_ptr operator()(prepared_cache_entry& e) const {
+            return e->checked_weak_from_this();
+        }
+    };
 
     static const std::chrono::minutes entry_expiry;
 
@@ -114,7 +118,6 @@ private:
 public:
     prepared_statements_cache(logging::logger& logger)
         : _cache(memory::stats().total_memory() / 256, entry_expiry, logger)
-        , _value_extractor_fn([] (prepared_cache_entry& e) -> value_type { return e->checked_weak_from_this(); })
     {}
 
     template <typename LoadFunc>

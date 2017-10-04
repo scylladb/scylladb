@@ -137,7 +137,11 @@ private:
     using set_type = bi::unordered_set<entry, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using bi_set_bucket_traits = typename set_type::bucket_traits;
     using set_iterator = typename set_type::iterator;
-    using value_extractor_fn = std::function<value_type& (entry&)>;
+    struct value_extractor_fn {
+        value_type& operator()(entry& e) const {
+            return e.value();
+        }
+    };
     enum class shrinking_is_allowed { no, yes };
 
 public:
@@ -186,7 +190,6 @@ public:
     loading_shared_values()
         : _buckets(InitialBucketsCount)
         , _set(bi_set_bucket_traits(_buckets.data(), _buckets.size()))
-        , _value_extractor_fn([] (entry& e) -> value_type& { return e.value(); })
     {
         static_assert(noexcept(Stats::inc_evictions()), "Stats::inc_evictions must be non-throwing");
         static_assert(noexcept(Stats::inc_hits()), "Stats::inc_hits must be non-throwing");
