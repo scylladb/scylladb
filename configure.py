@@ -247,6 +247,7 @@ scylla_tests = [
     'tests/compress_test',
     'tests/chunked_vector_test',
     'tests/loading_cache_test',
+    'tests/restricted_reader_test',
 ]
 
 apps = [
@@ -667,6 +668,7 @@ for t in scylla_tests:
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc', 'tests/sstable_utils.cc']
 deps['tests/combined_mutation_reader_test'] += ['tests/sstable_utils.cc']
+deps['tests/restricted_reader_test'] += ['tests/sstable_utils.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']

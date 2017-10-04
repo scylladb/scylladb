@@ -442,6 +442,9 @@ public:
     virtual const io_priority_class& io_priority() override {
         return default_priority_class();
     }
+    virtual reader_resource_tracker resource_tracker() override {
+        return no_resource_tracking();
+    }
     virtual void reset(indexable_element) override { }
 };
 
@@ -553,6 +556,9 @@ public:
     }
     virtual const io_priority_class& io_priority() override {
         return default_priority_class();
+    }
+    virtual reader_resource_tracker resource_tracker() override {
+        return no_resource_tracking();
     }
     virtual void reset(indexable_element) override { }
 };

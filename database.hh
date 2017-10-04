@@ -837,6 +837,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         const io_priority_class& pc,
+        reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr);
@@ -1018,9 +1019,9 @@ public:
     using timeout_clock = lowres_clock;
 private:
     ::cf_stats _cf_stats;
-    static constexpr size_t max_concurrent_reads() { return 100; }
-    static constexpr size_t max_streaming_concurrent_reads() { return 10; } // They're rather heavyweight, so limit more
-    static constexpr size_t max_system_concurrent_reads() { return 10; }
+    static size_t max_memory_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    static size_t max_memory_streaming_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    static size_t max_memory_system_concurrent_reads() { return memory::stats().total_memory() * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
     struct db_stats {
         uint64_t total_writes = 0;
@@ -1029,6 +1030,10 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
+
+        uint64_t active_reads = 0;
+        uint64_t active_reads_streaming = 0;
+        uint64_t active_reads_system_keyspace = 0;
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
@@ -1046,10 +1051,10 @@ private:
     seastar::thread_scheduling_group _background_writer_scheduling_group;
     flush_cpu_controller _memtable_cpu_controller;
 
-    semaphore _read_concurrency_sem{max_concurrent_reads()};
-    semaphore _streaming_concurrency_sem{max_streaming_concurrent_reads()};
+    semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
+    semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
     restricted_mutation_reader_config _read_concurrency_config;
-    semaphore _system_read_concurrency_sem{max_system_concurrent_reads()};
+    semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
     restricted_mutation_reader_config _system_read_concurrency_config;
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
@@ -1225,6 +1230,10 @@ public:
         return _sstable_load_concurrency_sem;
     }
     void register_connection_drop_notifier(netw::messaging_service& ms);
+
+    db_stats& get_stats() {
+        return *_stats;
+    }
 
     friend class distributed_loader;
 };
