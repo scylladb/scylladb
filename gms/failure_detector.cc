@@ -67,10 +67,14 @@ clk::duration arrival_window::get_max_interval() {
     return std::chrono::milliseconds(cfg.fd_max_interval_ms());
 }
 
+static clk::duration get_min_interval() {
+    return gossiper::INTERVAL;
+}
+
 void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
     if (_tlast > clk::time_point::min()) {
         auto inter_arrival_time = value - _tlast;
-        if (inter_arrival_time <= get_max_interval()) {
+        if (inter_arrival_time <= get_max_interval() && inter_arrival_time >= get_min_interval()) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
             logger.debug("failure_detector: Ignoring interval time of {} for {}, mean={}, size={}", inter_arrival_time.count(), ep, mean(), size());
