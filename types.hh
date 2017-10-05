@@ -24,6 +24,7 @@
 #include <experimental/optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
+#include "data/cell.hh"
 #include <sstream>
 
 #include "core/sstring.hh"
@@ -421,10 +422,12 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
+    data::type_imr_descriptor _imr_state;
 public:
-    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)) {}
+    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti) {}
     virtual ~abstract_type() {}
+    const data::type_imr_descriptor& imr_state() const { return _imr_state; }
     virtual void serialize(const void* value, bytes::iterator& out) const = 0;
     void serialize(const data_value& value, bytes::iterator& out) const {
         return serialize(get_value_ptr(value), out);
@@ -781,7 +784,7 @@ public:
 
 protected:
     explicit collection_type_impl(sstring name, const kind& k)
-            : abstract_type(std::move(name), {}), _kind(k) {}
+            : abstract_type(std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
     virtual sstring cql3_type_name() const = 0;
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
@@ -911,7 +914,7 @@ class reversed_type_impl : public abstract_type {
     data_type _underlying_type;
     reversed_type_impl(data_type t)
         : abstract_type("org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
-                        t->value_length_if_fixed())
+                        t->value_length_if_fixed(), t->imr_state().type_info())
         , _underlying_type(t)
     {}
 protected:
