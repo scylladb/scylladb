@@ -216,11 +216,12 @@ class scylla_memory(gdb.Command):
         for i in range(int(nr)):
             sp = small_pools['_u']['a'][i]
             object_size = int(sp['_object_size'])
-            span_size = int(sp['_span_size']) * page_size
+            span_size = int(sp['_span_sizes']['preferred']) * page_size
             free_count = int(sp['_free_count'])
-            spans_in_use = int(sp['_spans_in_use'])
-            memory = spans_in_use * span_size
-            use_count = spans_in_use * int(span_size / object_size) - free_count
+            pages_in_use = int(sp['_pages_in_use'])
+            memory = pages_in_use * page_size
+            # use_count can be off if we used fallback spans rather than preferred spans
+            use_count = (memory / span_size) * int(span_size / object_size) - free_count
             wasted = free_count * object_size
             wasted_percent = wasted * 100.0 / memory if memory else 0
             gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
