@@ -43,6 +43,7 @@
 
 #include <vector>
 
+#include "index/secondary_index_manager.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/bound.hh"
 #include "types.hh"
@@ -107,15 +108,15 @@ public:
      */
     virtual void merge_with(::shared_ptr<restriction> other) = 0;
 
-#if 0
     /**
      * Check if the restriction is on indexed columns.
      *
      * @param indexManager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    public boolean hasSupportingIndex(SecondaryIndexManager indexManager);
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const = 0;
 
+#if 0
     /**
      * Adds to the specified list the <code>IndexExpression</code>s corresponding to this <code>Restriction</code>.
      *

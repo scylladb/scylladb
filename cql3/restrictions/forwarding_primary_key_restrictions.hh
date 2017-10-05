@@ -74,11 +74,9 @@ public:
         get_delegate()->merge_with(restriction);
     }
 
-#if 0
-    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) override {
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
         return get_delegate()->has_supporting_index(index_manager);
     }
-#endif
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
         return get_delegate()->values(options);

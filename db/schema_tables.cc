@@ -1593,6 +1593,8 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
     make_schema_mutations(s, timestamp, with_columns).copy_to(mutations);
 }
 
+static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
+
 static void make_update_indices_mutations(
         schema_ptr old_table,
         schema_ptr new_table,
@@ -1613,6 +1615,10 @@ static void make_update_indices_mutations(
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
+        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(new_table);
+        auto view = cf.get_index_manager().create_view_for_index(index);
+        auto view_mutations = make_view_mutations(view, timestamp, true);
+        view_mutations.copy_to(mutations);
     }
 
     mutations.emplace_back(std::move(indices_mutation));

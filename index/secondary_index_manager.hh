@@ -43,19 +43,35 @@
 
 #include "schema.hh"
 
-#include <seastar/core/sharded.hh>
+#include "cql3/operator.hh"
+
+#include <vector>
+#include <set>
 
 namespace secondary_index {
 
-class secondary_index_manager : public seastar::async_sharded_service<secondary_index_manager> {
+class index {
+    sstring _target_column;
+    index_metadata _im;
 public:
-  std::set<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    index(const sstring& target_column, const index_metadata& im);
+    bool depends_on(const column_definition& cdef) const;
+    bool supports_expression(const column_definition& cdef, const cql3::operator_type op) const;
+    const index_metadata& metadata() const;
 };
 
-extern seastar::sharded<secondary_index_manager> _the_secondary_index_manager;
-
-inline seastar::sharded<secondary_index_manager>& get_secondary_index_manager() {
-    return _the_secondary_index_manager;
-}
+class secondary_index_manager {
+    column_family& _cf;
+    /// The key of the map is the name of the index as stored in system tables.
+    std::unordered_map<sstring, index> _indices;
+public:
+    secondary_index_manager(column_family& cf);
+    void reload();
+    view_ptr create_view_for_index(const index_metadata& index) const;
+    std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
+    std::vector<index> list_indexes() const;
+private:
+    void add_index(const index_metadata& im);
+};
 
 }

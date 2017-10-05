@@ -47,6 +47,7 @@
 #include "cql3/query_options.hh"
 #include "types.hh"
 #include "schema.hh"
+#include "index/secondary_index_manager.hh"
 
 namespace cql3 {
 
@@ -74,15 +75,15 @@ public:
      */
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
-#if 0
     /**
      * Check if the restriction is on indexed columns.
      *
      * @param index_manager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) const = 0;
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const = 0;
 
+#if 0
     /**
      * Adds to the specified list the <code>index_expression</code>s corresponding to this <code>Restriction</code>.
      *

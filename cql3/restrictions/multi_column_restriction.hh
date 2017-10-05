@@ -128,19 +128,18 @@ protected:
         }
         return str;
     }
-#if 0
-    @Override
-    public final boolean hasSupportingIndex(SecondaryIndexManager indexManager)
-    {
-        for (ColumnDefinition columnDef : columnDefs)
-        {
-            SecondaryIndex index = indexManager.getIndexForColumn(columnDef.name.bytes);
-            if (index != null && isSupportedBy(index))
+
+    virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
+        for (const auto& index : index_manager.list_indexes()) {
+            if (is_supported_by(index))
                 return true;
         }
         return false;
     }
 
+    virtual bool is_supported_by(const secondary_index::index& index) const = 0;
+
+#if 0
     /**
      * Check if this type of restriction is supported for the specified column by the specified index.
      * @param index the Secondary index
@@ -170,6 +169,15 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return abstract_restriction::term_uses_function(_value, ks_name, function_name);
+    }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        for (auto* cdef : _column_defs) {
+            if (index.supports_expression(*cdef, cql3::operator_type::EQ)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     virtual sstring to_string() const override {
@@ -231,6 +239,15 @@ public:
 class multi_column_restriction::IN : public multi_column_restriction {
 public:
     using multi_column_restriction::multi_column_restriction;
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        for (auto* cdef : _column_defs) {
+            if (index.supports_expression(*cdef, cql3::operator_type::IN)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     virtual bool is_IN() const override {
         return true;
@@ -378,6 +395,15 @@ public:
     slice(schema_ptr schema, std::vector<const column_definition*> defs, statements::bound bound, bool inclusive, shared_ptr<term> term)
         : slice(schema, defs, term_slice::new_instance(bound, inclusive, term))
     { }
+
+    virtual bool is_supported_by(const secondary_index::index& index) const override {
+        for (auto* cdef : _column_defs) {
+            if (_slice.is_supported_by(*cdef, index)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     virtual bool is_slice() const override {
         return true;

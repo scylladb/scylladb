@@ -138,7 +138,7 @@ static data_type validate_alter(schema_ptr schema, const column_definition& def,
     return type;
 }
 
-static void validate_column_rename(const schema& schema, const column_identifier& from, const column_identifier& to)
+static void validate_column_rename(database& db, const schema& schema, const column_identifier& from, const column_identifier& to)
 {
     auto def = schema.get_column_definition(from.name());
     if (!def) {
@@ -154,8 +154,7 @@ static void validate_column_rename(const schema& schema, const column_identifier
     }
 
     if (!schema.indices().empty()) {
-        auto& sim = secondary_index::get_secondary_index_manager();
-        auto dependent_indices = sim.local().get_dependent_indices(*def);
+        auto dependent_indices = db.find_column_family(schema.id()).get_index_manager().get_dependent_indices(*def);
         if (!dependent_indices.empty()) {
             auto index_names = ::join(", ", dependent_indices | boost::adaptors::transformed([](const index_metadata& im) {
                 return im.name();
@@ -343,7 +342,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             auto from = entry.first->prepare_column_identifier(schema);
             auto to = entry.second->prepare_column_identifier(schema);
 
-            validate_column_rename(*schema, *from, *to);
+            validate_column_rename(db, *schema, *from, *to);
             cfm.with_column_rename(from->name(), to->name());
 
             // If the view includes a renamed column, it must be renamed in the view table and the definition.
@@ -353,7 +352,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
 
                     auto view_from = entry.first->prepare_column_identifier(view);
                     auto view_to = entry.second->prepare_column_identifier(view);
-                    validate_column_rename(*view, *view_from, *view_to);
+                    validate_column_rename(db, *view, *view_from, *view_to);
                     builder.with_column_rename(view_from->name(), view_to->name());
 
                     auto new_where = util::rename_column_in_where_clause(

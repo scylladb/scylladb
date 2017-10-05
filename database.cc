@@ -157,6 +157,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _cache(_schema, sstables_as_snapshot_source(), global_cache_tracker(), is_continuous::yes)
     , _commitlog(cl)
     , _compaction_manager(compaction_manager)
+    , _index_manager(*this)
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
 {
     if (!_config.enable_disk_writes) {
@@ -2527,6 +2528,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
     add_column_family(ks, schema, ks.make_column_family_config(*schema, get_config()));
+    find_column_family(schema).get_index_manager().reload();
     return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
 }
 
@@ -2544,6 +2546,7 @@ bool database::update_column_family(schema_ptr new_schema) {
             // Update view mutations received after base table drop.
         }
     }
+    cfm.get_index_manager().reload();
     return columns_changed;
 }
 

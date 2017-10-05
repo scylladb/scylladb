@@ -24,6 +24,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "index/secondary_index_manager.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
@@ -416,6 +417,7 @@ private:
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     compaction_manager& _compaction_manager;
+    secondary_index::secondary_index_manager _index_manager;
     int _compaction_disabled = 0;
     utils::phased_barrier _flush_barrier;
     seastar::gate _streaming_flush_gate;
@@ -769,6 +771,10 @@ public:
     future<> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
     void add_coordinator_read_latency(utils::estimated_histogram::duration latency);
     std::chrono::milliseconds get_coordinator_read_latency_percentile(double percentile);
+
+    secondary_index::secondary_index_manager& get_index_manager() {
+        return _index_manager;
+    }
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
@@ -1237,9 +1243,6 @@ public:
 
     friend class distributed_loader;
 };
-
-// FIXME: stub
-class secondary_index_manager {};
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
 

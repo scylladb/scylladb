@@ -59,6 +59,20 @@ sstring index_target::as_cql_string(schema_ptr schema) const {
     return sprint("%s(%s)", to_sstring(type), column->to_cql_string());
 }
 
+index_target::target_type index_target::from_sstring(const sstring& s)
+{
+    if (s == "keys") {
+        return index_target::target_type::keys;
+    } else if (s == "entries") {
+        return index_target::target_type::keys_and_values;
+    } else if (s == "values") {
+        return index_target::target_type::values;
+    } else if (s == "full") {
+        return index_target::target_type::full;
+    }
+    throw std::runtime_error(sprint("Unknown target type: %s", s));
+}
+
 sstring index_target::index_option(target_type type) {
     switch (type) {
         case target_type::keys: return secondary_index::index_keys_option_name;

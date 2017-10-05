@@ -68,6 +68,7 @@ struct index_target {
 
     static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);
+    static index_target::target_type from_sstring(const sstring& s);
 
     class raw {
     public:
