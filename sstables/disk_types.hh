@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <type_traits>
 #include <deque>
+#include "atomic_cell.hh"
 
 namespace sstables {
 
@@ -65,6 +66,11 @@ struct disk_string_vint_size {
 template <typename Size>
 struct disk_string_view {
     bytes_view value;
+};
+
+template<typename SizeType>
+struct disk_data_value_view {
+    atomic_cell_value_view value;
 };
 
 template <typename Size, typename Members>

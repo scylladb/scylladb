@@ -78,10 +78,10 @@ std::vector<counter_shard> counter_cell_view::shards_compatible_with_1_7_4() con
     return sorted_shards;
 }
 
-static bool apply_in_place(const column_definition& cdef, atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
+static bool apply_in_place(const column_definition& cdef, atomic_cell_mutable_view dst, atomic_cell_mutable_view src)
 {
-    auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell(cdef));
-    auto src_ccmv = counter_cell_mutable_view(src.as_mutable_atomic_cell(cdef));
+    auto dst_ccmv = counter_cell_mutable_view(dst);
+    auto src_ccmv = counter_cell_mutable_view(src);
     auto dst_shards = dst_ccmv.shards();
     auto src_shards = src_ccmv.shards();
 
@@ -143,16 +143,22 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
 
     assert(!dst_ac.is_counter_update());
     assert(!src_ac.is_counter_update());
+ with_linearized(dst_ac, [&] (counter_cell_view dst_ccv) {
+  with_linearized(src_ac, [&] (counter_cell_view src_ccv) {
 
-    if (counter_cell_view(dst_ac).shard_count() >= counter_cell_view(src_ac).shard_count()
+    if (dst_ccv.shard_count() >= src_ccv.shard_count()
         && dst.can_use_mutable_view() && src.can_use_mutable_view()) {
-        if (apply_in_place(cdef, dst, src)) {
-            return;
+        auto dst_amc = dst.as_mutable_atomic_cell(cdef);
+        auto src_amc = src.as_mutable_atomic_cell(cdef);
+        if (!dst_amc.is_value_fragmented() && !src_amc.is_value_fragmented()) {
+            if (apply_in_place(cdef, dst_amc, src_amc)) {
+                return;
+            }
         }
     }
 
-    auto dst_shards = counter_cell_view(dst_ac).shards();
-    auto src_shards = counter_cell_view(src_ac).shards();
+    auto dst_shards = dst_ccv.shards();
+    auto src_shards = src_ccv.shards();
 
     counter_cell_builder result;
     combine(dst_shards.begin(), dst_shards.end(), src_shards.begin(), src_shards.end(),
@@ -161,7 +167,9 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
             });
 
     auto cell = result.build(std::max(dst_ac.timestamp(), src_ac.timestamp()));
-    src = std::exchange(dst, atomic_cell_or_collection(*counter_type, cell));
+    src = std::exchange(dst, atomic_cell_or_collection(std::move(cell)));
+  });
+ });
 }
 
 stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
@@ -176,8 +184,10 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
         return { };
     }
 
-    auto a_shards = counter_cell_view(a).shards();
-    auto b_shards = counter_cell_view(b).shards();
+ return with_linearized(a, [&] (counter_cell_view a_ccv) {
+  return with_linearized(b, [&] (counter_cell_view b_ccv) {
+    auto a_shards = a_ccv.shards();
+    auto b_shards = b_ccv.shards();
 
     auto a_it = a_shards.begin();
     auto a_end = a_shards.end();
@@ -202,6 +212,8 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
         diff = atomic_cell::make_live(*counter_type, a.timestamp(), bytes_view());
     }
     return diff;
+  });
+ });
 }
 
 
@@ -239,12 +251,13 @@ void transform_counter_updates_to_shards(mutation& m, const mutation* current_st
             if (!acv.is_live()) {
                 return; // continue -- we are in lambda
             }
-            counter_cell_view ccv(acv);
+          counter_cell_view::with_linearized(acv, [&] (counter_cell_view ccv) {
             auto cs = ccv.local_shard();
             if (!cs) {
                 return; // continue
             }
             shards.emplace_back(std::make_pair(id, counter_shard(*cs)));
+          });
         });
 
         transformee.for_each_cell([&] (column_id id, atomic_cell_or_collection& ac_o_c) {

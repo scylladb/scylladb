@@ -57,7 +57,7 @@ public:
         return std::move(data.data);
     }
     collection_mutation_view as_collection_mutation() const {
-        return collection_mutation_view{_data};
+        return collection_mutation_view{atomic_cell_value_view(bytes_view(_data))};
     }
     bytes_view serialize() const {
         return _data;

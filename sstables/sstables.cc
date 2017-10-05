@@ -378,6 +378,15 @@ inline void write(sstable_version_types v, file_writer& out, const disk_string_v
     write(v, out, len, s.value);
 }
 
+template<typename SizeType>
+inline void write(sstable_version_types ver, file_writer& out, const disk_data_value_view<SizeType>& v) {
+    SizeType length;
+    check_truncate_and_assign(length, v.value.size_bytes());
+    write(ver, out, length);
+    using boost::range::for_each;
+    for_each(v.value, [&] (bytes_view fragment) { write(ver, out, fragment); });
+}
+
 // We cannot simply read the whole array at once, because we don't know its
 // full size. We know the number of elements, but if we are talking about
 // disk_strings, for instance, we have no idea how much of the stream each
@@ -1712,6 +1721,16 @@ void write_cell_value(file_writer& out, const abstract_type& type, bytes_view va
     }
 }
 
+void write_cell_value(file_writer& out, const abstract_type& type, atomic_cell_value_view value) {
+    if (!value.empty()) {
+        if (!type.value_length_if_fixed()) {
+            write_vint(out, value.size_bytes());
+        }
+        using boost::range::for_each;
+        for_each(value, [&] (bytes_view fragment) { write(sstable_version_types::mc, out, fragment); });
+    }
+}
+
 static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type timestamp) {
     c_stats.update_timestamp(timestamp);
     c_stats.cells_count++;
@@ -1770,19 +1789,20 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         column_mask mask = column_mask::counter;
         write(_version, out, mask, int64_t(0), timestamp);
 
-        counter_cell_view ccv(cell);
+      counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
         write_counter_value(ccv, out, _version, [v = _version] (file_writer& out, uint32_t value) {
             return write(v, out, value);
         });
 
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
+      });
     } else if (cell.is_live_and_has_ttl()) {
         // expiring cell
 
         column_mask mask = column_mask::expiration;
         uint32_t ttl = cell.ttl().count();
         uint32_t expiration = cell.expiry().time_since_epoch().count();
-        disk_string_view<uint32_t> cell_value { cell.value() };
+        disk_data_value_view<uint32_t> cell_value { cell.value() };
 
         _c_stats.update_local_deletion_time(expiration);
         // tombstone histogram is updated with expiration time because if ttl is longer
@@ -1795,7 +1815,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         // regular cell
 
         column_mask mask = column_mask::none;
-        disk_string_view<uint32_t> cell_value { cell.value() };
+        disk_data_value_view<uint32_t> cell_value { cell.value() };
 
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
 
@@ -1884,8 +1904,9 @@ void sstable::write_range_tombstone(file_writer& out,
 }
 
 void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
+  collection.data.with_linearized([&] (bytes_view collection_bv) {
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-    auto mview = t->deserialize_mutation_form(collection);
+    auto mview = t->deserialize_mutation_form(collection_bv);
     const bytes& column_name = cdef.name();
     if (mview.tomb) {
         write_range_tombstone(out, clustering_key, composite::eoc::start, clustering_key, composite::eoc::end, { column_name }, mview.tomb);
@@ -1894,6 +1915,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
         index_and_write_column_name(out, clustering_key, { column_name, cp.first });
         write_cell(out, cp.second, cdef);
     }
+  });
 }
 
 // This function is about writing a clustered_row to data file according to SSTables format.
@@ -2904,10 +2926,11 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     if (has_value) {
         if (cdef.is_counter()) {
             assert(!cell.is_counter_update());
-            counter_cell_view ccv(cell);
+          counter_cell_view::with_linearized(cell, [&] (counter_cell_view ccv) {
             write_counter_value(ccv, writer, sstable_version_types::mc, [] (file_writer& out, uint32_t value) {
                 return write_vint(out, value);
             });
+          });
         } else {
             write_cell_value(writer, *cdef.type, cell.value());
         }
@@ -2954,7 +2977,8 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
 void sstable_writer_m::write_collection(file_writer& writer, const column_definition& cdef,
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
     auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
-    auto mview = ctype.deserialize_mutation_form(collection);
+  collection.data.with_linearized([&] (bytes_view collection_bv) {
+    auto mview = ctype.deserialize_mutation_form(collection_bv);
     if (has_complex_deletion) {
         auto dt = to_deletion_time(mview.tomb);
         write_delta_deletion_time(writer, dt);
@@ -2972,6 +2996,7 @@ void sstable_writer_m::write_collection(file_writer& writer, const column_defini
         ++_c_stats.cells_count;
         write_cell(writer, cell, cdef, properties, cell_path);
     }
+  });
 }
 
 void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const row& row_body,
@@ -3071,11 +3096,13 @@ static bool row_has_complex_deletion(const schema& s, const row& r) {
             return stop_iteration::no;
         }
         auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-        auto mview = t->deserialize_mutation_form(c.as_collection_mutation());
+      return c.as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
+        auto mview = t->deserialize_mutation_form(c_bv);
         if (mview.tomb) {
             result = true;
         }
         return stop_iteration(static_cast<bool>(mview.tomb));
+    });
     });
 
     return result;

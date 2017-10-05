@@ -114,7 +114,7 @@ public:
         if (!ac.is_live()) {
             throw std::runtime_error("cell is dead");
         }
-        return std::make_pair(value_cast<sstring>(utf8_type->deserialize(ac.value())), ac.timestamp());
+        return std::make_pair(value_cast<sstring>(utf8_type->deserialize(ac.value().linearize())), ac.timestamp());
     }
 
     mutation_fragment make_row(const clustering_key& key, sstring v) {

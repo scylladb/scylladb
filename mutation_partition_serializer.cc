@@ -44,7 +44,7 @@ template<typename Writer>
 auto write_live_cell(Writer&& writer, atomic_cell_view c)
 {
     return std::move(writer).write_created_at(c.timestamp())
-                            .write_value(c.value())
+                            .write_fragmented_value(c.value())
                         .end_live_cell();
 }
 
@@ -59,7 +59,7 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
                                    .write_delta(delta)
                                    .end_counter_cell_update();
         } else {
-            counter_cell_view ccv(c);
+          return counter_cell_view::with_linearized(c, [&] (counter_cell_view ccv) {
             auto shards = std::move(value).start_value_counter_cell_full()
                                           .start_shards();
             if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
@@ -72,6 +72,7 @@ auto write_counter_cell(Writer&& writer, atomic_cell_view c)
                 }
             }
             return std::move(shards).end_shards().end_counter_cell_full();
+          });
         }
     }().end_counter_cell();
 }
@@ -83,7 +84,7 @@ auto write_expiring_cell(Writer&& writer, atomic_cell_view c)
                             .write_expiry(c.expiry())
                             .start_c()
                                 .write_created_at(c.timestamp())
-                                .write_value(c.value())
+                                .write_fragmented_value(c.value())
                             .end_c()
                         .end_expiring_cell();
 }
@@ -101,8 +102,9 @@ auto write_dead_cell(Writer&& writer, atomic_cell_view c)
 template<typename Writer>
 auto write_collection_cell(Writer&& collection_writer, collection_mutation_view cmv, const column_definition& def)
 {
+  return cmv.data.with_linearized([&] (bytes_view cmv_bv) {
     auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-    auto m_view = ctype->deserialize_mutation_form(cmv);
+    auto m_view = ctype->deserialize_mutation_form(cmv_bv);
     auto cells_writer = std::move(collection_writer).write_tomb(m_view.tomb).start_elements();
     for (auto&& c : m_view.cells) {
         auto cell_writer = cells_writer.add().write_key(c.first);
@@ -115,6 +117,7 @@ auto write_collection_cell(Writer&& collection_writer, collection_mutation_view 
         }
     }
     return std::move(cells_writer).end_elements().end_collection_cell();
+  });
 }
 
 template<typename Writer>

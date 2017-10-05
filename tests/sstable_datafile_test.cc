@@ -823,7 +823,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             auto cell = r->find_cell(set_col.id);
             BOOST_REQUIRE(cell);
             auto t = static_pointer_cast<const collection_type_impl>(set_col.type);
-            return t->deserialize_mutation_form(cell->as_collection_mutation());
+            auto bv = cell->as_collection_mutation().data.linearize();
+            return t->deserialize_mutation_form(bv).materialize(*t);
         };
 
         auto sst = make_sstable(s, tmpdir_path, 11, la, big);
@@ -832,7 +833,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                 return do_with(make_dkey(s, "key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
                     auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
                     return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
-                        auto verify_set = [&tomb] (auto m) {
+                        auto verify_set = [&tomb] (const collection_type_impl::mutation& m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
                             BOOST_REQUIRE(m.cells.size() == 3);
@@ -849,7 +850,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
                         // The static set
                         auto t = static_pointer_cast<const collection_type_impl>(static_set_col.type);
-                        auto mut = t->deserialize_mutation_form(scol->as_collection_mutation());
+                        auto bv = scol->as_collection_mutation().data.linearize();
+                        auto mut = t->deserialize_mutation_form(bv).materialize(*t);
                         verify_set(mut);
 
                         // The clustered set
@@ -2875,7 +2877,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             BOOST_REQUIRE(mfopt->is_clustering_row());
             const clustering_row* cr = &mfopt->as_clustering_row();
             cr->cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-                counter_cell_view ccv { c.as_atomic_cell(s->regular_column_at(id)) };
+              counter_cell_view::with_linearized(c.as_atomic_cell(s->regular_column_at(id)), [&] (counter_cell_view ccv) {
                 auto& col = s->column_at(column_kind::regular_column, id);
                 if (col.name_as_text() == "c1") {
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), 13);
@@ -2896,6 +2898,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
                 } else {
                     BOOST_FAIL(sprint("Unexpected column \'%s\'", col.name_as_text()));
                 }
+              });
             });
 
             mfopt = reader().get0();
@@ -4373,11 +4376,12 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                 size_t n = 0;
                 row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
                     auto acv = ac_o_c.as_atomic_cell(s->regular_column_at(id));
-                    auto ccv = counter_cell_view(acv);
+                  counter_cell_view::with_linearized(acv, [&] (counter_cell_view ccv) {
                     counter_shard_view::less_compare_by_id cmp;
                     BOOST_REQUIRE_MESSAGE(boost::algorithm::is_sorted(ccv.shards(), cmp), ccv << " is expected to be sorted");
                     BOOST_REQUIRE_EQUAL(ccv.total_value(), expected_value);
                     n++;
+                  });
                 });
                 BOOST_REQUIRE_EQUAL(n, 5);
             };

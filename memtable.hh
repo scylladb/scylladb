@@ -186,11 +186,13 @@ private:
                     update(item.as_atomic_cell(col));
                 } else {
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
-                    auto mview = ctype->deserialize_mutation_form(item.as_collection_mutation());
+                  item.as_collection_mutation().data.with_linearized([&] (bytes_view bv) {
+                    auto mview = ctype->deserialize_mutation_form(bv);
                     update(mview.tomb);
                     for (auto& entry : mview.cells) {
                         update(entry.second);
                     }
+                  });
                 }
             });
         }

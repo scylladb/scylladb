@@ -3681,7 +3681,7 @@ std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
     if (acv.is_live()) {
         return fprint(os, "atomic_cell{%s;ts=%d;expiry=%d,ttl=%d}",
-            to_hex(acv.value()),
+            to_hex(acv.value().linearize()),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);

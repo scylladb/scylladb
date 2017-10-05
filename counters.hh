@@ -79,7 +79,7 @@ static_assert(std::is_pod<counter_id>::value, "counter_id should be a POD type")
 
 std::ostream& operator<<(std::ostream& os, const counter_id& id);
 
-template<typename View>
+template<mutable_view is_mutable>
 class basic_counter_shard_view {
     enum class offset : unsigned {
         id = 0u,
@@ -88,7 +88,8 @@ class basic_counter_shard_view {
         total_size = unsigned(logical_clock) + sizeof(int64_t),
     };
 private:
-    typename View::pointer _base;
+    using pointer_type = std::conditional_t<is_mutable == mutable_view::no, const signed char*, signed char*>;
+    pointer_type _base;
 private:
     template<typename T>
     T read(offset off) const {
@@ -100,7 +101,7 @@ public:
     static constexpr auto size = size_t(offset::total_size);
 public:
     basic_counter_shard_view() = default;
-    explicit basic_counter_shard_view(typename View::pointer ptr) noexcept
+    explicit basic_counter_shard_view(pointer_type ptr) noexcept
         : _base(ptr) { }
 
     counter_id id() const { return read<counter_id>(offset::id); }
@@ -111,7 +112,7 @@ public:
         static constexpr size_t off = size_t(offset::value);
         static constexpr size_t size = size_t(offset::total_size) - off;
 
-        typename View::value_type tmp[size];
+        signed char tmp[size];
         std::copy_n(_base + off, size, tmp);
         std::copy_n(other._base + off, size, _base + off);
         std::copy_n(tmp, size, other._base + off);
@@ -138,7 +139,7 @@ public:
     };
 };
 
-using counter_shard_view = basic_counter_shard_view<bytes_view>;
+using counter_shard_view = basic_counter_shard_view<mutable_view::no>;
 
 std::ostream& operator<<(std::ostream& os, counter_shard_view csv);
 
@@ -287,28 +288,32 @@ public:
 // <counter_id>   := <int64_t><int64_t>
 // <shard>        := <counter_id><int64_t:value><int64_t:logical_clock>
 // <counter_cell> := <shard>*
-template<typename View>
+template<mutable_view is_mutable>
 class basic_counter_cell_view {
 protected:
-    atomic_cell_base<View> _cell;
+    using linearized_value_view = std::conditional_t<is_mutable == mutable_view::no,
+                                                     bytes_view, bytes_mutable_view>;
+    using pointer_type = typename linearized_value_view::pointer;
+    basic_atomic_cell_view<is_mutable> _cell;
+    linearized_value_view _value;
 private:
-    class shard_iterator : public std::iterator<std::input_iterator_tag, basic_counter_shard_view<View>> {
-        typename View::pointer _current;
-        basic_counter_shard_view<View> _current_view;
+    class shard_iterator : public std::iterator<std::input_iterator_tag, basic_counter_shard_view<is_mutable>> {
+        pointer_type _current;
+        basic_counter_shard_view<is_mutable> _current_view;
     public:
         shard_iterator() = default;
-        shard_iterator(typename View::pointer ptr) noexcept
+        shard_iterator(pointer_type ptr) noexcept
             : _current(ptr), _current_view(ptr) { }
 
-        basic_counter_shard_view<View>& operator*() noexcept {
+        basic_counter_shard_view<is_mutable>& operator*() noexcept {
             return _current_view;
         }
-        basic_counter_shard_view<View>* operator->() noexcept {
+        basic_counter_shard_view<is_mutable>* operator->() noexcept {
             return &_current_view;
         }
         shard_iterator& operator++() noexcept {
             _current += counter_shard_view::size;
-            _current_view = basic_counter_shard_view<View>(_current);
+            _current_view = basic_counter_shard_view<is_mutable>(_current);
             return *this;
         }
         shard_iterator operator++(int) noexcept {
@@ -318,7 +323,7 @@ private:
         }
         shard_iterator& operator--() noexcept {
             _current -= counter_shard_view::size;
-            _current_view = basic_counter_shard_view<View>(_current);
+            _current_view = basic_counter_shard_view<is_mutable>(_current);
             return *this;
         }
         shard_iterator operator--(int) noexcept {
@@ -335,22 +340,23 @@ private:
     };
 public:
     boost::iterator_range<shard_iterator> shards() const {
-        auto bv = _cell.value();
-        auto begin = shard_iterator(bv.data());
-        auto end = shard_iterator(bv.data() + bv.size());
+        auto begin = shard_iterator(_value.data());
+        auto end = shard_iterator(_value.data() + _value.size());
         return boost::make_iterator_range(begin, end);
     }
 
     size_t shard_count() const {
-        return _cell.value().size() / counter_shard_view::size;
+        return _cell.value().size_bytes() / counter_shard_view::size;
     }
-public:
+protected:
     // ac must be a live counter cell
-    explicit basic_counter_cell_view(atomic_cell_base<View> ac) noexcept : _cell(ac) {
+    explicit basic_counter_cell_view(basic_atomic_cell_view<is_mutable> ac, linearized_value_view vv) noexcept
+        : _cell(ac), _value(vv)
+    {
         assert(_cell.is_live());
         assert(!_cell.is_counter_update());
     }
-
+public:
     api::timestamp_type timestamp() const { return _cell.timestamp(); }
 
     static data_type total_value_type() { return long_type; }
@@ -381,8 +387,16 @@ public:
     }
 };
 
-struct counter_cell_view : basic_counter_cell_view<bytes_view> {
+struct counter_cell_view : basic_counter_cell_view<mutable_view::no> {
     using basic_counter_cell_view::basic_counter_cell_view;
+
+    template<typename Function>
+    static decltype(auto) with_linearized(basic_atomic_cell_view<mutable_view::no> ac, Function&& fn) {
+        return ac.value().with_linearized([&] (bytes_view value_view) {
+            counter_cell_view ccv(ac, value_view);
+            return fn(ccv);
+        });
+    }
 
     // Returns counter shards in an order that is compatible with Scylla 1.7.4.
     std::vector<counter_shard> shards_compatible_with_1_7_4() const;
@@ -397,8 +411,14 @@ struct counter_cell_view : basic_counter_cell_view<bytes_view> {
     friend std::ostream& operator<<(std::ostream& os, counter_cell_view ccv);
 };
 
-struct counter_cell_mutable_view : basic_counter_cell_view<bytes_mutable_view> {
+struct counter_cell_mutable_view : basic_counter_cell_view<mutable_view::yes> {
     using basic_counter_cell_view::basic_counter_cell_view;
+
+    explicit counter_cell_mutable_view(atomic_cell_mutable_view ac) noexcept
+        : basic_counter_cell_view<mutable_view::yes>(ac, ac.value().first_fragment())
+    {
+        assert(!ac.value().is_fragmented());
+    }
 
     void set_timestamp(api::timestamp_type ts) { _cell.set_timestamp(ts); }
 };

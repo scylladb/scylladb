@@ -318,7 +318,8 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
 }
 
 deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
-    auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) {
+    std::vector<bytes> linearized_values;
+    auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) -> bytes_view {
         auto* base_col = _base->get_column_definition(cdef.name());
         assert(base_col);
         switch (base_col->kind) {
@@ -328,10 +329,11 @@ deletable_row& view_updates::get_view_row(const partition_key& base_key, const c
             return update.key().get_component(*_base, base_col->position());
         default:
             auto& c = update.cells().cell_at(base_col->id);
-            if (base_col->is_atomic()) {
-                return c.as_atomic_cell(cdef).value();
+            auto value_view = base_col->is_atomic() ? c.as_atomic_cell(cdef).value() : c.as_collection_mutation().data;
+            if (value_view.is_fragmented()) {
+                return linearized_values.emplace_back(value_view.linearize());
             }
-            return c.as_collection_mutation().data;
+            return value_view.first_fragment();
         }
     });
     auto& partition = partition_for(partition_key::from_range(_view->partition_key_columns() | get_value));

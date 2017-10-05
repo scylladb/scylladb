@@ -48,6 +48,108 @@ T get_field(const bytes_view& v, unsigned offset) {
 
 class atomic_cell_or_collection;
 
+template<mutable_view is_mutable>
+class basic_atomic_cell_value_view {
+public:
+    using fragment_type = std::conditional_t<is_mutable == mutable_view::no,
+                                             bytes_view, bytes_mutable_view>;
+private:
+    fragment_type _value;
+public:
+    explicit basic_atomic_cell_value_view(fragment_type value) : _value(value) { }
+
+    class iterator {
+        fragment_type _view;
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = fragment_type;
+        using pointer = const fragment_type*;
+        using reference = const fragment_type&;
+        using difference_type = std::ptrdiff_t;
+
+        explicit iterator(fragment_type fv) noexcept
+            : _view(fv) { }
+
+        const fragment_type& operator*() const {
+            return _view;
+        }
+        const fragment_type* operator->() const {
+            return &_view;
+        }
+        iterator& operator++() {
+            _view = { };
+            return *this;
+        }
+        iterator operator++(int) {
+            auto it = *this;
+            operator++();
+            return it;
+        }
+
+        bool operator==(const iterator& other) const {
+            return _view.data() == other._view.data();
+        }
+        bool operator!=(const iterator& other) const {
+            return !(*this == other);
+        }
+    };
+
+    using const_iterator = iterator;
+
+    auto begin() const {
+        return iterator(_value);
+    }
+    auto end() const {
+        return iterator(fragment_type());
+    }
+
+    bool operator==(const basic_atomic_cell_value_view& other) const noexcept {
+        return _value == other._value;
+    }
+    bool operator==(bytes_view bv) const noexcept {
+        return _value == bv;
+    }
+
+    size_t size_bytes() const noexcept {
+        return _value.size();
+    }
+
+    bool empty() const noexcept {
+        return _value.empty();
+    }
+
+    bool is_fragmented() const noexcept {
+        return false;
+    }
+
+    fragment_type first_fragment() const noexcept {
+        return _value;
+    }
+
+    bytes linearize() const {
+        return bytes(_value.begin(), _value.end());
+    }
+
+    template<typename Function>
+    decltype(auto) with_linearized(Function&& fn) const {
+        return fn(_value);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const basic_atomic_cell_value_view& vv) {
+        return os << vv.first_fragment();
+    }
+
+};
+
+using atomic_cell_value_view = basic_atomic_cell_value_view<mutable_view::no>;
+using atomic_cell_value_mutable_view = basic_atomic_cell_value_view<mutable_view::yes>;
+
+inline int compare_unsigned(atomic_cell_value_view a, atomic_cell_value_view b)
+{
+    assert(!a.is_fragmented() && !b.is_fragmented());
+    return compare_unsigned(a.first_fragment(), b.first_fragment());
+}
+
 /*
  * Represents atomic cell layout. Works on serialized form.
  *
@@ -102,11 +204,11 @@ private:
         return cell;
     }
 public:
-    static bytes_view value(bytes_view cell) {
-        return do_get_value(cell);
+    static atomic_cell_value_view value(bytes_view cell) {
+        return atomic_cell_value_view(do_get_value(cell));
     }
-    static bytes_mutable_view value(bytes_mutable_view cell) {
-        return do_get_value(cell);
+    static atomic_cell_value_mutable_view value(bytes_mutable_view cell) {
+        return atomic_cell_value_mutable_view(do_get_value(cell));
     }
     // Can be called on live counter update cells only
     static int64_t counter_update_value(bytes_view cell) {
@@ -232,6 +334,9 @@ public:
     auto value() const {
         return atomic_cell_type::value(_data);
     }
+    bool is_value_fragmented() const {
+        return false;
+    }
     // Can be called on live counter update cells only
     int64_t counter_update_value() const {
         return atomic_cell_type::counter_update_value(_data);
@@ -273,6 +378,10 @@ public:
 
     friend class atomic_cell;
 };
+
+template<mutable_view is_mutable>
+using basic_atomic_cell_view = std::conditional_t<is_mutable == mutable_view::no,
+                                                  atomic_cell_view, atomic_cell_mutable_view>;
 
 class atomic_cell_ref final : public atomic_cell_base<managed_bytes&> {
 public:
@@ -345,19 +454,18 @@ public:
 
 class collection_mutation_view {
 public:
-    bytes_view data;
-    bytes_view serialize() const { return data; }
-    static collection_mutation_view from_bytes(bytes_view v) { return { v }; }
+    // FIXME: encapsulate properly
+    atomic_cell_value_view data;
 };
 
 inline
 collection_mutation::collection_mutation(collection_mutation_view v)
-        : data(v.data) {
+        : data(v.data.linearize()) {
 }
 
 inline
 collection_mutation::operator collection_mutation_view() const {
-    return { data };
+    return { atomic_cell_value_view(bytes_view(data)) };
 }
 
 class column_definition;

@@ -595,7 +595,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell
         } else {
             return std::move(wr).skip_expiry();
         }
-    }().write_value(c.value());
+    }().write_fragmented_value(c.value());
     [&, wr = std::move(after_value)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_ttl>() && c.is_live_and_has_ttl()) {
             return std::move(wr).write_ttl(c.ttl());
@@ -621,6 +621,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
 template<typename RowWriter>
 void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
     assert(c.is_live());
+  counter_cell_view::with_linearized(c, [&] (counter_cell_view ccv) {
     auto wr = w.add().write();
     [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
@@ -629,9 +630,10 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             return std::move(wr).skip_timestamp();
         }
     }().skip_expiry()
-            .write_value(counter_cell_view::total_value_type()->decompose(counter_cell_view(c).total_value()))
+            .write_value(counter_cell_view::total_value_type()->decompose(ccv.total_value()))
             .skip_ttl()
             .end_qr_cell();
+  });
 }
 
 // Used to return the timestamp of the latest update to the row
@@ -1624,7 +1626,8 @@ bool row::compact_and_expire(
         } else {
             auto&& cell = c.as_collection_mutation();
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            auto m_view = ctype->deserialize_mutation_form(cell);
+          cell.data.with_linearized([&] (bytes_view cell_bv) {
+            auto m_view = ctype->deserialize_mutation_form(cell_bv);
             collection_type_impl::mutation m = m_view.materialize(*ctype);
             any_live |= m.compact_and_expire(tomb, query_time, can_gc, gc_before);
             if (m.cells.empty() && m.tomb <= tomb.tomb()) {
@@ -1632,6 +1635,7 @@ bool row::compact_and_expire(
             } else {
                 c = ctype->serialize_mutation_form(m);
             }
+          });
         }
         return erase;
     });

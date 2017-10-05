@@ -75,6 +75,11 @@ static atomic_cell make_atomic_cell(data_type dt, T value) {
     return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)));
 };
 
+template<typename T>
+static atomic_cell make_collection_member(data_type dt, T value) {
+    return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)));
+};
+
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
     auto reader = mt.make_flat_reader(mt.schema(), dht::partition_range::make_singular(dk));
@@ -119,7 +124,7 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
         BOOST_REQUIRE(i);
         auto cell = i->as_atomic_cell(r1_col);
         BOOST_REQUIRE(cell.is_live());
-        BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
+        BOOST_REQUIRE(int32_type->equal(cell.value().linearize(), int32_type->decompose(3)));
     });
 }
 
@@ -207,19 +212,19 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
-        auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_atomic_cell(utf8_type, sstring("101")));
+        auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_collection_member(utf8_type, sstring("101")));
         mutation m1(s, key);
         m1.set_static_cell(column, my_map_type->serialize_mutation_form(mmut1));
         mt->apply(m1);
-        auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell(utf8_type, sstring("102")));
+        auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102")));
         mutation m2(s, key);
         m2.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2));
         mt->apply(m2);
-        auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_atomic_cell(utf8_type, sstring("103")));
+        auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_collection_member(utf8_type, sstring("103")));
         mutation m3(s, key);
         m3.set_static_cell(column, my_map_type->serialize_mutation_form(mmut3));
         mt->apply(m3);
-        auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell(utf8_type, sstring("102 override")));
+        auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102 override")));
         mutation m2o(s, key);
         m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
         mt->apply(m2o);
@@ -229,7 +234,8 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_map_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_map_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 3);
         // FIXME: more strict tests
     });
@@ -265,7 +271,8 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_set_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_set_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 3);
         // FIXME: more strict tests
     });
@@ -280,19 +287,19 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
-        auto mmut1 = make_collection_mutation({}, make_key(), make_atomic_cell(int32_type, 101));
+        auto mmut1 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 101));
         mutation m1(s, key);
         m1.set_static_cell(column, my_list_type->serialize_mutation_form(mmut1));
         mt->apply(m1);
-        auto mmut2 = make_collection_mutation({}, make_key(), make_atomic_cell(int32_type, 102));
+        auto mmut2 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2(s, key);
         m2.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2));
         mt->apply(m2);
-        auto mmut3 = make_collection_mutation({}, make_key(), make_atomic_cell(int32_type, 103));
+        auto mmut3 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 103));
         mutation m3(s, key);
         m3.set_static_cell(column, my_list_type->serialize_mutation_form(mmut3));
         mt->apply(m3);
-        auto mmut2o = make_collection_mutation({}, make_key(), make_atomic_cell(int32_type, 102));
+        auto mmut2o = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2o(s, key);
         m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
         mt->apply(m2o);
@@ -302,7 +309,8 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_list_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_list_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 4);
         // FIXME: more strict tests
     });
@@ -347,7 +355,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                     BOOST_REQUIRE(i);
                     auto cell = i->as_atomic_cell(r1_col);
                     BOOST_REQUIRE(cell.is_live());
-                    BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
+                    BOOST_REQUIRE(int32_type->equal(cell.value().linearize(), int32_type->decompose(r1)));
                 }
             };
             verify_row(1001, 2001);
@@ -485,7 +493,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
                     auto cell = re.row().cells().find_cell(r1_col.id);
                     if (cell) {
-                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell(r1_col).value()));
+                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell(r1_col).value().linearize()));
                     }
                 }
                 return true;
@@ -899,7 +907,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2));
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2)->find_cell(2));
         auto cmv = m2_1.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        auto cm = my_set_type->deserialize_mutation_form(cmv);
+        auto cmv_b = cmv.data.linearize();
+        auto cm = my_set_type->deserialize_mutation_form(cmv_b);
         BOOST_REQUIRE(cm.cells.size() == 1);
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
 
@@ -916,7 +925,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(0));
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(1));
         cmv = m1_2.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cm = my_set_type->deserialize_mutation_form(cmv);
+        cmv_b = cmv.data.linearize();
+        cm = my_set_type->deserialize_mutation_form(cmv_b);
         BOOST_REQUIRE(cm.cells.size() == 1);
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
 
@@ -962,7 +972,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         BOOST_REQUIRE(i);
         auto cell = i->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell.is_live());
-        BOOST_REQUIRE(bytes_type->equal(cell.value(), bytes_type->decompose(data_value(blob1))));
+        BOOST_REQUIRE(bytes_type->equal(cell.value().linearize(), bytes_type->decompose(data_value(blob1))));
 
         // Stress managed_bytes::linearize and scatter by merging a value into the cell
         mutation m2(s, key);
@@ -975,7 +985,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         BOOST_REQUIRE(i2);
         auto cell2 = i2->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell2.is_live());
-        BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
+        BOOST_REQUIRE(bytes_type->equal(cell2.value().linearize(), bytes_type->decompose(data_value(blob2))));
     });
 }
 

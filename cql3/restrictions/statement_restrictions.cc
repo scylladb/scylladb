@@ -430,7 +430,7 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
     }
 }
 
-static bytes_view_opt do_get_value(const schema& schema,
+static std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
         const column_definition& cdef,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -438,21 +438,21 @@ static bytes_view_opt do_get_value(const schema& schema,
         gc_clock::time_point now) {
     switch(cdef.kind) {
         case column_kind::partition_key:
-            return key.get_component(schema, cdef.component_index());
+            return atomic_cell_value_view(key.get_component(schema, cdef.component_index()));
         case column_kind::clustering_key:
-            return ckey.get_component(schema, cdef.component_index());
+            return atomic_cell_value_view(ckey.get_component(schema, cdef.component_index()));
         default:
             auto cell = cells.find_cell(cdef.id);
             if (!cell) {
-                return stdx::nullopt;
+                return std::nullopt;
             }
             assert(cdef.is_atomic());
             auto c = cell->as_atomic_cell(cdef);
-            return c.is_dead(now) ? stdx::nullopt : bytes_view_opt(c.value());
+            return c.is_dead(now) ? std::nullopt : std::optional<atomic_cell_value_view>(c.value());
     }
 }
 
-bytes_view_opt single_column_restriction::get_value(const schema& schema,
+std::optional<atomic_cell_value_view> single_column_restriction::get_value(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
         const row& cells,
@@ -472,7 +472,12 @@ bool single_column_restriction::EQ::is_satisfied_by(const schema& schema,
     auto operand = value(options);
     if (operand) {
         auto cell_value = get_value(schema, key, ckey, cells, now);
-        return cell_value && _column_def.type->compare(*operand, *cell_value) == 0;
+        if (!cell_value) {
+            return false;
+        }
+        return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
+            return _column_def.type->compare(*operand, cell_value_bv) == 0;
+        });
     }
     return false;
 }
@@ -491,9 +496,11 @@ bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
         return false;
     }
     auto operands = values(options);
+  return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
     return std::any_of(operands.begin(), operands.end(), [&] (auto&& operand) {
-        return operand && _column_def.type->compare(*operand, *cell_value) == 0;
+        return operand && _column_def.type->compare(*operand, cell_value_bv) == 0;
     });
+  });
 }
 
 static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options) {
@@ -526,7 +533,9 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
     if (!cell_value) {
         return false;
     }
-    return to_range(_slice, options).contains(*cell_value, _column_def.type->as_tri_comparator());
+    return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
+        return to_range(_slice, options).contains(cell_value_bv, _column_def.type->as_tri_comparator());
+    });
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
@@ -552,7 +561,8 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
     auto&& element_type = col_type->is_set() ? col_type->name_comparator() : col_type->value_comparator();
     if (_column_def.type->is_multi_cell()) {
         auto cell = cells.find_cell(_column_def.id);
-        auto&& elements = col_type->deserialize_mutation_form(cell->as_collection_mutation()).cells;
+      return cell->as_collection_mutation().data.with_linearized([&] (bytes_view collection_bv) {
+        auto&& elements = col_type->deserialize_mutation_form(collection_bv).cells;
         auto end = std::remove_if(elements.begin(), elements.end(), [now] (auto&& element) {
             return element.second.is_dead(now);
         });
@@ -562,7 +572,9 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
                 continue;
             }
             auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
-                return element_type->compare(element.second.value(), *val) == 0;
+                return element.second.value().with_linearized([&] (bytes_view value_bv) {
+                    return element_type->compare(value_bv, *val) == 0;
+                });
             });
             if (found == end) {
                 return false;
@@ -589,16 +601,26 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
             auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
                 return map_key_type->compare(element.first, *map_key) == 0;
             });
-            if (found == end || element_type->compare(found->second.value(), *map_value) != 0) {
+            if (found == end) {
+                return false;
+            }
+            auto cmp = found->second.value().with_linearized([&] (bytes_view value_bv) {
+                return element_type->compare(value_bv, *map_value);
+            });
+            if (cmp != 0) {
                 return false;
             }
         }
+        return true;
+      });
     } else {
         auto cell_value = get_value(schema, key, ckey, cells, now);
         if (!cell_value) {
             return false;
         }
-        auto deserialized = _column_def.type->deserialize(*cell_value);
+        auto deserialized = cell_value->with_linearized([&] (bytes_view cell_value_bv) {
+            return _column_def.type->deserialize(cell_value_bv);
+        });
         for (auto&& value : _values) {
             auto val = value->bind_and_get(options);
             if (!val) {
@@ -669,7 +691,9 @@ bool token_restriction::EQ::is_satisfied_by(const schema& schema,
     for (auto&& operand : values(options)) {
         if (operand) {
             auto cell_value = do_get_value(schema, **cdef, key, ckey, cells, now);
-            satisfied = cell_value && (*cdef)->type->compare(*operand, *cell_value) == 0;
+            satisfied = cell_value && cell_value->with_linearized([&] (bytes_view cell_value_bv) {
+                return (*cdef)->type->compare(*operand, cell_value_bv) == 0;
+            });
         }
         if (!satisfied) {
             break;
@@ -691,7 +715,9 @@ bool token_restriction::slice::is_satisfied_by(const schema& schema,
         if (!cell_value) {
             return false;
         }
-        satisfied = range.contains(*cell_value, cdef->type->as_tri_comparator());
+        satisfied = cell_value->with_linearized([&] (bytes_view cell_value_bv) {
+            return range.contains(cell_value_bv, cdef->type->as_tri_comparator());
+        });
         if (!satisfied) {
             break;
         }

@@ -113,7 +113,7 @@ public:
     class contains;
 
 protected:
-    bytes_view_opt get_value(const schema& schema,
+    std::optional<atomic_cell_value_view> get_value(const schema& schema,
             const partition_key& key,
             const clustering_key_prefix& ckey,
             const row& cells,

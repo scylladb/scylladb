@@ -47,8 +47,9 @@ private:
         if (!is_compatible(new_def, old_type, kind)) {
             return;
         }
+      cell.data.with_linearized([&] (bytes_view cell_bv) {
         auto&& ctype = static_pointer_cast<const collection_type_impl>(old_type);
-        auto old_view = ctype->deserialize_mutation_form(cell);
+        auto old_view = ctype->deserialize_mutation_form(cell_bv);
 
         collection_type_impl::mutation_view new_view;
         if (old_view.tomb.timestamp > new_def.dropped_at()) {
@@ -60,6 +61,7 @@ private:
             }
         }
         dst.apply(new_def, ctype->serialize_mutation_form(std::move(new_view)));
+      });
     }
 public:
     converting_mutation_partition_applier(

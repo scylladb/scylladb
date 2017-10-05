@@ -108,7 +108,7 @@ collection_mutation read_collection_cell(const collection_type_impl& ctype, ser:
     for (auto&& e : elements) {
         mut.cells.emplace_back(e.key(), read_atomic_cell(*ctype.value_comparator(), e.value()));
     }
-    return collection_type_impl::serialize_mutation_form(mut);
+    return ctype.serialize_mutation_form(mut);
 }
 
 template<typename Visitor>

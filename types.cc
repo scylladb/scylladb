@@ -2098,7 +2098,9 @@ collection_type_impl::as_cql3_type() const {
 
 bytes
 collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
-    return to_value(deserialize_mutation_form(mut), sf);
+  return mut.data.with_linearized([&] (bytes_view bv) {
+    return to_value(deserialize_mutation_form(bv), sf);
+  });
 }
 
 collection_type_impl::mutation
@@ -2422,12 +2424,19 @@ map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 
 bytes
 map_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
+    std::vector<bytes> linearized;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
             tmp.emplace_back(e.first);
-            tmp.emplace_back(e.second.value());
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
@@ -2477,8 +2486,7 @@ bool map_type_impl::references_duration() const {
     return _keys->references_duration() || _values->references_duration();
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) const -> mutation_view {
-    auto&& in = cm.data;
+auto collection_type_impl::deserialize_mutation_form(bytes_view in) const -> mutation_view {
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -2502,13 +2510,14 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm
 }
 
 bool collection_type_impl::is_empty(collection_mutation_view cm) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) { // FIXME: we can guarantee that this is in the first fragment
     auto has_tomb = read_simple<bool>(in);
     return !has_tomb && read_simple<uint32_t>(in) == 0;
+  });
 }
 
 bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) {
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
         auto ts = read_simple<api::timestamp_type>(in);
@@ -2526,10 +2535,11 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
         }
     }
     return false;
+  });
 }
 
 api::timestamp_type collection_type_impl::last_update(collection_mutation_view cm) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) {
     api::timestamp_type max = api::missing_timestamp;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -2545,11 +2555,13 @@ api::timestamp_type collection_type_impl::last_update(collection_mutation_view c
         max = std::max(value.timestamp(), max);
     }
     return max;
+  });
 }
 
 template <typename Iterator>
 collection_mutation
 do_serialize_mutation_form(
+        const collection_type_impl& ctype,
         const tombstone& tomb,
         boost::iterator_range<Iterator> cells) {
     auto element_size = [] (size_t c, auto&& e) -> size_t {
@@ -2577,9 +2589,10 @@ do_serialize_mutation_form(
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
+
         writeb(v.serialize());
     }
-    return collection_mutation{std::move(ret)};
+    return collection_mutation(std::move(ret));
 }
 
 bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb, gc_clock::time_point query_time,
@@ -2619,26 +2632,28 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+collection_type_impl::serialize_mutation_form(const mutation& mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+collection_type_impl::serialize_mutation_form(mutation_view mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
+    return do_serialize_mutation_form(*this, mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
         return e.second.is_live(t, now, false);
     }));
 }
 
 collection_mutation
 collection_type_impl::merge(collection_mutation_view a, collection_mutation_view b) const {
-    auto aa = deserialize_mutation_form(a);
-    auto bb = deserialize_mutation_form(b);
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
     mutation_view merged;
     merged.cells.reserve(aa.cells.size() + bb.cells.size());
     using element_type = std::pair<bytes_view, atomic_cell_view>;
@@ -2672,13 +2687,17 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
             merge);
     merged.tomb = std::max(aa.tomb, bb.tomb);
     return serialize_mutation_form(merged);
+  });
+ });
 }
 
 collection_mutation
 collection_type_impl::difference(collection_mutation_view a, collection_mutation_view b) const
 {
-    auto aa = deserialize_mutation_form(a);
-    auto bb = deserialize_mutation_form(b);
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
     mutation_view diff;
     diff.cells.reserve(std::max(aa.cells.size(), bb.cells.size()));
     auto key_type = name_comparator();
@@ -2698,6 +2717,8 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
         diff.tomb = aa.tomb;
     }
     return serialize_mutation_form(diff);
+  });
+ });
 }
 
 bytes_opt
@@ -3166,11 +3187,18 @@ list_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 
 bytes
 list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
+    std::vector<bytes> linearized;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            tmp.emplace_back(e.second.value());
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size(), sf);

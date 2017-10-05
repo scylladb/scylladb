@@ -239,18 +239,18 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
     public:
         void accept_partition_tombstone(tombstone) override {}
         void accept_static_cell(column_id, atomic_cell_view v)  override {
-            size += v.value().size();
+            size += v.value().size_bytes();
         }
         void accept_static_cell(column_id, collection_mutation_view v) override {
-            size += v.data.size();
+            size += v.data.size_bytes();
         }
         void accept_row_tombstone(const range_tombstone&) override {}
         void accept_row(position_in_partition_view, const row_tombstone&, const row_marker&, is_dummy, is_continuous) override {}
         void accept_row_cell(column_id, atomic_cell_view v) override {
-            size += v.value().size();
+            size += v.value().size_bytes();
         }
         void accept_row_cell(column_id id, collection_mutation_view v) override {
-            size += v.data.size();
+            size += v.data.size_bytes();
         }
 
         size_t size = 0;
