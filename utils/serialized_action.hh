@@ -36,6 +36,17 @@ private:
     std::function<future<>()> _func;
     seastar::shared_future<> _pending;
     seastar::semaphore _sem;
+private:
+    future<> do_trigger(seastar::shared_promise<> pr) {
+        _pending = {};
+        return futurize_apply(_func).then_wrapped([pr = std::move(pr)] (auto&& f) mutable {
+            if (f.failed()) {
+                pr.set_exception(f.get_exception());
+            } else {
+                pr.set_value();
+            }
+        });
+    }
 public:
     serialized_action(std::function<future<>()> func)
         : _func(std::move(func))
@@ -48,22 +59,29 @@ public:
     // returns a future which resolves when that action completes.
     // At most one action can run at any given moment.
     // A single action is started on behalf of all earlier triggers.
-    future<> trigger() {
+    //
+    // When action is not currently running, it is started immediately if !later or
+    // at some point in time soon after current fiber defers when later is true.
+    future<> trigger(bool later = false) {
         if (_pending.valid()) {
             return _pending;
         }
         seastar::shared_promise<> pr;
         _pending = pr.get_shared_future();
-        return with_semaphore(_sem, 1, [this, pr = std::move(pr)]() mutable {
-            _pending = {};
-            return futurize_apply(_func).then_wrapped([pr = std::move(pr)](auto&& f) mutable {
-                if (f.failed()) {
-                    pr.set_exception(f.get_exception());
-                } else {
-                    pr.set_value();
-                }
-            });
+        return with_semaphore(_sem, 1, [this, pr = std::move(pr), later] () mutable {
+            if (later) {
+                return seastar::later().then([this, pr = std::move(pr)] () mutable {
+                    return do_trigger(std::move(pr));
+                });
+            }
+            return do_trigger(std::move(pr));
         });
+    }
+
+    // Like trigger(), but defers invocation of the action to allow for batching
+    // more requests.
+    future<> trigger_later() {
+        return trigger(true);
     }
 
     // Waits for all invocations initiated in the past.
