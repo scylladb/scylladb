@@ -56,6 +56,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/util/defer.hh>
 #include <chrono>
 #include "dht/i_partitioner.hh"
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -1326,9 +1327,22 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     //     local_state.get_heart_beat_state().get_heart_beat_version(), oldVersion, addr);
     // }
 
+    std::vector<application_state> changed;
+    auto&& remote_map = remote_state.get_application_state_map();
+
+    // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
+    // state indefinitely. Unless the value changes again, we wouldn't retry notifications.
+    // Some values are set only once, so listeners would never be re-run.
+    // Listeners should decide which failures are non-fatal and swallow them.
+    auto run_listeners = seastar::defer([&] () noexcept {
+        for (auto&& key : changed) {
+            do_on_change_notifications(addr, key, remote_map.at(key));
+        }
+    });
+
     // we need to make two loops here, one to apply, then another to notify,
     // this way all states in an update are present and current when the notifications are received
-    for (const auto& remote_entry : remote_state.get_application_state_map()) {
+    for (const auto& remote_entry : remote_map) {
         const auto& remote_key = remote_entry.first;
         const auto& remote_value = remote_entry.second;
         auto remote_gen = remote_state.get_heart_beat_state().get_generation();
@@ -1339,10 +1353,11 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
             throw std::runtime_error(err);
         }
 
-        local_state.add_application_state(remote_key, remote_value);
-    }
-    for (const auto& entry : remote_state.get_application_state_map()) {
-        do_on_change_notifications(addr, entry.first, entry.second);
+        const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
+        if (!local_val || remote_value.version > local_val->version) {
+            changed.push_back(remote_key);
+            local_state.add_application_state(remote_key, remote_value);
+        }
     }
 }
 
