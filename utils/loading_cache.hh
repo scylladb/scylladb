@@ -427,8 +427,8 @@ private:
     future<> reload(ts_value_lru_entry& lru_entry) {
         return _load(lru_entry.key()).then_wrapped([this, key = lru_entry.key()] (auto&& f) mutable {
             // if the entry has been evicted by now - simply end here
-            set_iterator it = set_find(key);
-            if (it == set_end()) {
+            set_iterator it = this->set_find(key);
+            if (it == this->set_end()) {
                 _logger.trace("{}: entry was dropped during the reload", key);
                 return make_ready_future<>();
             }
