@@ -105,7 +105,7 @@ private:
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
     semaphore _callback_running{1};
-    semaphore _apply_state_locally_semaphore{1};
+    semaphore _apply_state_locally_semaphore{100};
 public:
     future<> timer_callback_lock() { return _callback_running.wait(); }
     void timer_callback_unlock() { _callback_running.signal(); }
