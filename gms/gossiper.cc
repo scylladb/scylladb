@@ -824,9 +824,12 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) {
     return max_version;
 }
 
+// Runs inside seastar::async context
 void gossiper::evict_from_membership(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
-    endpoint_state_map.erase(endpoint);
+    container().invoke_on_all([endpoint] (auto& g) {
+        g.endpoint_state_map.erase(endpoint);
+    }).get();
     _expire_time_endpoint_map.erase(endpoint);
     get_local_failure_detector().remove(endpoint);
     quarantine_endpoint(endpoint);
@@ -886,6 +889,32 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
 #endif
 }
 
+future<> gossiper::replicate(inet_address ep, const endpoint_state& es) {
+    return container().invoke_on_all([ep, es, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
+        if (engine().cpu_id() != orig) {
+            g.endpoint_state_map[ep].apply_application_state(es);
+        }
+    });
+}
+
+future<> gossiper::replicate(inet_address ep, const std::map<application_state, versioned_value>& src, const std::vector<application_state>& changed) {
+    return container().invoke_on_all([ep, &src, &changed, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
+        if (engine().cpu_id() != orig) {
+            for (auto&& key : changed) {
+                g.endpoint_state_map[ep].apply_application_state(key, src.at(key));
+            }
+        }
+    });
+}
+
+future<> gossiper::replicate(inet_address ep, application_state key, const versioned_value& value) {
+    return container().invoke_on_all([ep, key, &value, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
+        if (engine().cpu_id() != orig) {
+            g.endpoint_state_map[ep].apply_application_state(key, value);
+        }
+    });
+}
+
 future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
     return seastar::async([this, g = this->shared_from_this(), endpoint, host_id, local_host_id] {
         auto& state = get_endpoint_state(endpoint);
@@ -908,6 +937,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         eps.add_application_state(application_state::STATUS, storage_service_value_factory().removing_nonlocal(host_id));
         eps.add_application_state(application_state::REMOVAL_COORDINATOR, storage_service_value_factory().removal_coordinator(local_host_id));
         endpoint_state_map[endpoint] = eps;
+        replicate(endpoint, eps).get();
     });
 }
 
@@ -921,6 +951,7 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID ho
         logger.info("Completing removal of {}", endpoint);
         add_expire_time_for_endpoint(endpoint, expire_time);
         endpoint_state_map[endpoint] = eps;
+        replicate(endpoint, eps).get();
         // ensure at least one gossip round occurs before returning
         sleep(INTERVAL * 2).get();
     });
@@ -1274,6 +1305,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
+    replicate(ep, eps).get();
 
     if (_in_shadow_round) {
         // In shadow round, we only interested in the peer's endpoint_state,
@@ -1362,6 +1394,14 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
         for (auto&& key : changed) {
             do_on_change_notifications(addr, key, remote_map.at(key));
         }
+    });
+
+    // We must replicate endpoint states before listeners run.
+    // Exceptions during replication will cause abort because node's state
+    // would be inconsistent across shards. Changes listeners depend on state
+    // being replicated to all shards.
+    auto replicate_changes = seastar::defer([&] () noexcept {
+        replicate(addr, remote_map, changed).get();
     });
 
     // we need to make two loops here, one to apply, then another to notify,
@@ -1505,8 +1545,10 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
 
         auto generation = local_state.get_heart_beat_state().get_generation();
 
-        //notify snitches that Gossiper is about to start
-        return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting().then([this, generation] {
+        return replicate(get_broadcast_address(), local_state).then([] {
+            //notify snitches that Gossiper is about to start
+            return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
+        }).then([this, generation] {
             logger.trace("gossip started with generation {}", generation);
             _enabled = true;
             _nr_run = 0;
@@ -1616,6 +1658,7 @@ future<> gossiper::add_local_application_state(application_state state, versione
             es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
             if (es) {
                 es->add_application_state(state, value);
+                gossiper.replicate(ep_addr, state, value).get();
                 gossiper.do_on_change_notifications(ep_addr, state, value);
             }
         }).handle_exception([] (auto ep) {

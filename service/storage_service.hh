@@ -700,20 +700,6 @@ private:
     future<> replicate_tm_only();
 
     /**
-     * Replicates token_metadata and gossiper::endpoint_state_map contents on
-     * shard0 instances to other shards.
-     *
-     * Should be called with a _replicate_task and a gossiper::timer_callback
-     * semaphores taken.
-     * Should run on shard 0 only.
-     *
-     * @param g0 a "shared_from_this()" pointer to a gossiper instance on shard0
-     *
-     * @return a ready future when replication is complete.
-     */
-    future<> replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0);
-
-    /**
      * Handle node bootstrap
      *
      * @param endpoint bootstrapping node

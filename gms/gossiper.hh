@@ -81,7 +81,7 @@ class i_failure_detector;
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
+class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
 private:
@@ -224,6 +224,15 @@ private:
     std::vector<inet_address> _shadow_live_endpoints;
 
     void run();
+    // Replicates given endpoint_state to all other shards.
+    // The state state doesn't have to be kept alive around until completes.
+    future<> replicate(inet_address, const endpoint_state&);
+    // Replicates "states" from "src" to all other shards.
+    // "src" and "states" must be kept alive until completes and must not change.
+    future<> replicate(inet_address, const std::map<application_state, versioned_value>& src, const std::vector<application_state>& states);
+    // Replicates given value to all other shards.
+    // The value must be kept alive until completes and not change.
+    future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     gossiper();
 

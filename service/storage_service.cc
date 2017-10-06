@@ -1373,30 +1373,6 @@ future<> storage_service::replicate_tm_only() {
     });
 }
 
-// Should run under gossiper::timer_callback lock. Serialized.
-future<> storage_service::replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0) {
-    // sanity: check that gossiper is fully initialized like we expect it to be
-    return get_storage_service().invoke_on_all([](storage_service& local_ss) {
-        if (!gms::get_gossiper().local_is_initialized()) {
-            auto err = sprint("replicate_to_all_cores is called before gossiper is fully initialized");
-            slogger.warn("{}", err);
-            throw std::runtime_error(err);
-        }
-    }).then([this, g0] {
-        _shadow_token_metadata = _token_metadata;
-        g0->shadow_endpoint_state_map = g0->endpoint_state_map;
-        g0->maybe_enable_features();
-
-        return get_storage_service().invoke_on_all([g0, this](storage_service& local_ss) {
-            if (engine().cpu_id() != 0) {
-                gms::get_local_gossiper().endpoint_state_map = g0->shadow_endpoint_state_map;
-                gms::get_local_gossiper().maybe_enable_features();
-                local_ss._token_metadata = _shadow_token_metadata;
-            }
-        });
-    });
-}
-
 future<> storage_service::replicate_to_all_cores() {
     // sanity checks: this function is supposed to be run on shard 0 only and
     // when gossiper has already been initialized.
@@ -1406,31 +1382,13 @@ future<> storage_service::replicate_to_all_cores() {
         throw std::runtime_error(err);
     }
 
-    if (!gms::get_gossiper().local_is_initialized()) {
-        auto err = sprint("replicate_to_all_cores is called before gossiper on shard0 is initialized");
-        slogger.warn("{}", err);
-        throw std::runtime_error(err);
-    }
-
     return _replicate_action.trigger_later().then([self = shared_from_this()] {});
 }
 
 future<> storage_service::do_replicate_to_all_cores() {
-        auto g0 = gms::get_local_gossiper().shared_from_this();
-
-        return g0->timer_callback_lock().then([this, g0] {
-            bool endpoint_map_changed = g0->shadow_endpoint_state_map != g0->endpoint_state_map;
-            if (endpoint_map_changed) {
-                return replicate_tm_and_ep_map(g0).finally([g0] {
-                    g0->timer_callback_unlock();
-                });
-            } else {
-                g0->timer_callback_unlock();
-                return replicate_tm_only();
-            }
-        }).handle_exception([g0] (auto e) {
-            slogger.error("Fail to replicate _token_metadata: {}", e);
-        });
+    return replicate_tm_only().handle_exception([] (auto e) {
+        slogger.error("Fail to replicate _token_metadata: {}", e);
+    });
 }
 
 future<> storage_service::gossip_snitch_info() {
