@@ -101,7 +101,8 @@ int get_generation_number() {
 }
 
 storage_service::storage_service(distributed<database>& db)
-        : _db(db) {
+        : _db(db)
+        , _replicate_action([this] { return do_replicate_to_all_cores(); }) {
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
@@ -1361,7 +1362,7 @@ future<> storage_service::init_server(int delay) {
     });
 }
 
-// should run under _replicate_task lock
+// Serialized
 future<> storage_service::replicate_tm_only() {
     _shadow_token_metadata = _token_metadata;
 
@@ -1372,7 +1373,7 @@ future<> storage_service::replicate_tm_only() {
     });
 }
 
-// should run under _replicate_task and gossiper::timer_callback locks
+// Should run under gossiper::timer_callback lock. Serialized.
 future<> storage_service::replicate_tm_and_ep_map(shared_ptr<gms::gossiper> g0) {
     // sanity: check that gossiper is fully initialized like we expect it to be
     return get_storage_service().invoke_on_all([](storage_service& local_ss) {
@@ -1411,16 +1412,14 @@ future<> storage_service::replicate_to_all_cores() {
         throw std::runtime_error(err);
     }
 
-    // FIXME: There is no back pressure. If the remote cores are slow, and
-    // replication is called often, it will queue tasks to the semaphore
-    // without end.
-    return _replicate_task.wait().then([this] {
+    return _replicate_action.trigger_later().then([self = shared_from_this()] {});
+}
 
+future<> storage_service::do_replicate_to_all_cores() {
         auto g0 = gms::get_local_gossiper().shared_from_this();
 
         return g0->timer_callback_lock().then([this, g0] {
             bool endpoint_map_changed = g0->shadow_endpoint_state_map != g0->endpoint_state_map;
-
             if (endpoint_map_changed) {
                 return replicate_tm_and_ep_map(g0).finally([g0] {
                     g0->timer_callback_unlock();
@@ -1429,16 +1428,9 @@ future<> storage_service::replicate_to_all_cores() {
                 g0->timer_callback_unlock();
                 return replicate_tm_only();
             }
+        }).handle_exception([g0] (auto e) {
+            slogger.error("Fail to replicate _token_metadata: {}", e);
         });
-    }).then_wrapped([this, ss0 = this->shared_from_this()](auto&& f){
-        try {
-            _replicate_task.signal();
-            f.get();
-        } catch (...) {
-            slogger.error("Fail to replicate _token_metadata");
-        }
-        return make_ready_future<>();
-    });
 }
 
 future<> storage_service::gossip_snitch_info() {

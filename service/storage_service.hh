@@ -53,6 +53,7 @@
 #include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/serialized_action.hh"
 #include "database.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
@@ -685,12 +686,13 @@ private:
     sstring get_application_state_value(inet_address endpoint, application_state appstate);
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
     future<> replicate_to_all_cores();
-    semaphore _replicate_task{1};
+    future<> do_replicate_to_all_cores();
+    serialized_action _replicate_action;
 private:
     /**
      * Replicates token_metadata contents on shard0 instance to other shards.
      *
-     * Should be called with a _replicate_task semaphore taken.
+     * Should be serialized.
      * Should run on shard 0 only.
      *
      * @return a ready future when replication is complete.
