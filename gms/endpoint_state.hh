@@ -118,11 +118,7 @@ public:
     }
 
     void add_application_state(application_state key, versioned_value value) {
-        if (_application_state.count(key)) {
-            _application_state.at(key) = value;
-        } else {
-            _application_state.emplace(key, value);
-        }
+        _application_state[key] = std::move(value);
     }
 
     /* getters and setters */
