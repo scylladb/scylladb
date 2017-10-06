@@ -85,11 +85,9 @@ boost_tests = [
     'counter_test',
     'cell_locker_test',
     'view_schema_test',
-    'combined_mutation_reader_test',
     'clustering_ranges_walker_test',
     'vint_serialization_test',
     'duration_test',
-    'restricted_reader_test',
     'loading_cache_test',
     'castas_fcts_test',
 ]
