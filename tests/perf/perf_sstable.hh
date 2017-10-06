@@ -142,19 +142,12 @@ public:
 
     future<double> read_all_indexes(int idx) {
         return do_with(test(_sst[0]), [] (auto& sst) {
-            auto start = test_env::now();
-            auto total = make_lw_shared<size_t>(0);
-            auto& summary = sst.get_summary();
-            auto idx = boost::irange(0, int(summary.header.size));
+            const auto start = test_env::now();
 
-            return do_for_each(idx.begin(), idx.end(), [&sst, total] (uint64_t entry) {
-                return sst.read_indexes(entry).then([total] (auto il) {
-                    *total += il.size();
-                });
-            }).then([total, start] {
+            return sst.read_indexes().then([start] (const auto& indexes) {
                 auto end = test_env::now();
                 auto duration = std::chrono::duration<double>(end - start).count();
-                return *total / duration;
+                return indexes.size() / duration;
             });
         });
     }

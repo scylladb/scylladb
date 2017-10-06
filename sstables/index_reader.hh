@@ -291,7 +291,7 @@ public:
         }
         return advance_to_end();
     }
-public:
+
     index_reader(shared_sstable sst, const io_priority_class& pc)
         : _sstable(std::move(sst))
         , _pc(pc)
@@ -314,20 +314,12 @@ public:
         sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
     }
 
-    // Cannot be used twice on the same summary_idx and together with advance_to().
-    [[deprecated]]
-    future<index_list> get_index_entries(uint64_t summary_idx) {
-        return advance_to_page(summary_idx).then([this] {
-            return _current_list ? _current_list.release() : index_list();
-        });
-    }
-
     // Valid if partition_data_ready()
     index_entry& current_partition_entry() {
         assert(_current_list);
         return (*_current_list)[_current_index_idx];
     }
-public:
+
     // Returns tombstone for current partition, if it was recorded in the sstable.
     // It may be unavailable for old sstables for which this information was not generated.
     // Can be called only when partition_data_ready().

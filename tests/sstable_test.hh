@@ -29,6 +29,7 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "core/thread.hh"
+#include "sstables/index_reader.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -72,8 +73,27 @@ public:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
         return _sst->data_read(pos, len, default_priority_class());
     }
-    future<index_list> read_indexes(uint64_t summary_idx) {
-        return _sst->read_indexes(summary_idx, default_priority_class());
+
+    future<index_list> read_indexes() {
+        auto l = make_lw_shared<index_list>();
+        return do_with(_sst->get_index_reader(default_priority_class()), [l] (auto& ir) {
+            return ir->read_partition_data().then([&, l] {
+                l->push_back(ir->current_partition_entry());
+            }).then([&, l] {
+                return repeat([&, l] {
+                    return ir->advance_to_next_partition().then([&, l] {
+                        if (ir->eof()) {
+                            return stop_iteration::yes;
+                        }
+
+                        l->push_back(ir->current_partition_entry());
+                        return stop_iteration::no;
+                    });
+                });
+            });
+        }).then([l] {
+            return *l;
+        });
     }
 
     future<> read_statistics() {

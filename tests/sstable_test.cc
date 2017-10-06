@@ -107,36 +107,22 @@ SEASTAR_TEST_CASE(composite_index) {
     return working_sst(composite_schema(), "tests/sstables/composite", 1);
 }
 
-template<uint64_t SummaryIdx, uint64_t Expected>
-future<> index_read(schema_ptr schema, sstring path) {
+future<index_list> index_read(schema_ptr schema, sstring path) {
     return reusable_sst(std::move(schema), path, 1).then([] (sstable_ptr ptr) {
-        return sstables::test(ptr).read_indexes(SummaryIdx).then([ptr] (auto vec) {
-            BOOST_REQUIRE(vec.size() == Expected);
-            return make_ready_future<>();
-        });
+        return sstables::test(ptr).read_indexes();
     });
 }
 
-template<uint64_t SummaryIdx, uint64_t Expected>
-future<> simple_index_read() {
-    return index_read<SummaryIdx, Expected>(uncompressed_schema(), "tests/sstables/uncompressed");
+SEASTAR_TEST_CASE(simple_index_read) {
+    return index_read(uncompressed_schema(), "tests/sstables/uncompressed").then([] (auto vec) {
+        BOOST_REQUIRE(vec.size() == 4);
+    });
 }
 
-template<uint64_t SummaryIdx, uint64_t Expected>
-future<> composite_index_read() {
-    return index_read<SummaryIdx, Expected>(composite_schema(), "tests/sstables/composite");
-}
-
-SEASTAR_TEST_CASE(simple_index_read_0_4) {
-    return simple_index_read<0, 4>();
-}
-
-SEASTAR_TEST_CASE(simple_index_read_1_0) {
-    return simple_index_read<1, 0>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_20) {
-    return composite_index_read<0, 20>();
+SEASTAR_TEST_CASE(composite_index_read) {
+    return index_read(composite_schema(), "tests/sstables/composite").then([] (auto vec) {
+        BOOST_REQUIRE(vec.size() == 20);
+    });
 }
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
@@ -865,7 +851,7 @@ SEASTAR_TEST_CASE(all_in_place) {
 
 SEASTAR_TEST_CASE(full_index_search) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([] (auto sstp) {
-        return sstables::test(sstp).read_indexes(0).then([sstp] (auto index_list) {
+        return sstables::test(sstp).read_indexes().then([sstp] (auto index_list) {
             int idx = 0;
             for (auto& ie: index_list) {
                 auto key = key::from_bytes(to_bytes(ie.get_key_bytes()));
@@ -1042,10 +1028,9 @@ static future<shared_sstable> load_large_partition_sst() {
 SEASTAR_TEST_CASE(promoted_index_read) {
     return load_large_partition_sst().then([] (auto sstp) {
         schema_ptr s = large_partition_schema();
-        return sstables::test(sstp).read_indexes(0).then([sstp] (index_list vec) {
+        return sstables::test(sstp).read_indexes().then([sstp] (index_list vec) {
             BOOST_REQUIRE(vec.size() == 1);
-            index_entry &e = vec[0];
-            BOOST_REQUIRE(e.get_promoted_index_bytes().size() == 468);
+            BOOST_REQUIRE(vec.front().get_promoted_index_bytes().size() == 468);
         });
     });
 }

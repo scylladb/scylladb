@@ -2279,7 +2279,7 @@ SEASTAR_TEST_CASE(check_read_indexes) {
 
     auto fut = sst->load();
     return fut.then([sst] {
-        return sstables::test(sst).read_indexes(0).then([sst] (index_list list) {
+        return sstables::test(sst).read_indexes().then([sst] (index_list list) {
             BOOST_REQUIRE(list.size() == 130);
             return make_ready_future<>();
         });
