@@ -79,6 +79,7 @@
 #include "utils/phased_barrier.hh"
 #include "cpu_controller.hh"
 #include "dirty_memory_manager.hh"
+#include "reader_resource_tracker.hh"
 
 class cell_locker;
 class cell_locker_stats;

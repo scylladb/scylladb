@@ -367,12 +367,17 @@ SEASTAR_TEST_CASE(compressed_random_access_read) {
 class test_row_consumer : public row_consumer {
 public:
     const int64_t desired_timestamp;
-    test_row_consumer(int64_t t) : desired_timestamp(t) { }
     int count_row_start = 0;
     int count_cell = 0;
     int count_deleted_cell = 0;
     int count_range_tombstone = 0;
     int count_row_end = 0;
+
+    test_row_consumer(int64_t t)
+        : row_consumer(no_resource_tracking()
+        , default_priority_class()), desired_timestamp(t) {
+    }
+
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         BOOST_REQUIRE(bytes_view(key) == as_bytes("vinna"));
         BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
@@ -435,16 +440,12 @@ public:
         count_range_tombstone++;
         return proceed::yes;
     }
+
     virtual proceed consume_row_end() override {
         count_row_end++;
         return proceed::yes;
     }
-    virtual const io_priority_class& io_priority() override {
-        return default_priority_class();
-    }
-    virtual reader_resource_tracker resource_tracker() override {
-        return no_resource_tracking();
-    }
+
     virtual void reset(indexable_element) override { }
 };
 
@@ -523,6 +524,11 @@ public:
     int count_deleted_cell = 0;
     int count_row_end = 0;
     int count_range_tombstone = 0;
+
+    count_row_consumer()
+        : row_consumer(no_resource_tracking(), default_priority_class()) {
+    }
+
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_start++;
         return proceed::yes;
@@ -553,12 +559,6 @@ public:
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
         return proceed::yes;
-    }
-    virtual const io_priority_class& io_priority() override {
-        return default_priority_class();
-    }
-    virtual reader_resource_tracker resource_tracker() override {
-        return no_resource_tracking();
     }
     virtual void reset(indexable_element) override { }
 };

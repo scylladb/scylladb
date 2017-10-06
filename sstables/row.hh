@@ -27,8 +27,7 @@
 #include "core/temporary_buffer.hh"
 #include "consumer.hh"
 #include "sstables/types.hh"
-
-class reader_resource_tracker;
+#include "reader_resource_tracker.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -48,8 +47,18 @@ class reader_resource_tracker;
 // row into one buffer, the byte_views remain valid until consume_row_end()
 // is called.]
 class row_consumer {
+    reader_resource_tracker _resource_tracker;
+    const io_priority_class& _pc;
+
 public:
     using proceed = data_consumer::proceed;
+
+    row_consumer(reader_resource_tracker resource_tracker, const io_priority_class& pc)
+        : _resource_tracker(resource_tracker)
+        , _pc(pc) {
+    }
+
+    virtual ~row_consumer() = default;
 
     // Consume the row's key and deletion_time. The latter determines if the
     // row is a tombstone, and if so, when it has been deleted.
@@ -94,10 +103,12 @@ public:
     virtual void reset(sstables::indexable_element) = 0;
 
     // Under which priority class to place I/O coming from this consumer
-    virtual const io_priority_class& io_priority() = 0;
+    const io_priority_class& io_priority() const {
+        return _pc;
+    }
 
     // The restriction that applies to this consumer
-    virtual reader_resource_tracker resource_tracker() = 0;
-
-    virtual ~row_consumer() { }
+    reader_resource_tracker resource_tracker() const {
+        return _resource_tracker;
+    }
 };

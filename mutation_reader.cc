@@ -27,6 +27,7 @@
 #include "core/future-util.hh"
 #include "utils/move.hh"
 #include "stdx.hh"
+#include "reader_resource_tracker.hh"
 
 // Dumb selector implementation for combined_mutation_reader that simply
 // forwards it's list of readers.

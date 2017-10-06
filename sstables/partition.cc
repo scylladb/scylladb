@@ -53,7 +53,6 @@ public:
     };
 private:
     schema_ptr _schema;
-    const io_priority_class& _pc;
     const query::partition_slice& _slice;
     reader_resource_tracker _resource_tracker;
     bool _out_of_range = false;
@@ -309,8 +308,8 @@ public:
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
                     streamed_mutation::forwarding fwd)
-            : _schema(schema)
-            , _pc(pc)
+            : row_consumer(resource_tracker, pc)
+            , _schema(schema)
             , _slice(slice)
             , _resource_tracker(std::move(resource_tracker))
             , _fwd(fwd)
@@ -671,13 +670,6 @@ public:
             }
         }
         return proceed::yes;
-    }
-    virtual const io_priority_class& io_priority() override {
-        return _pc;
-    }
-
-    virtual reader_resource_tracker resource_tracker() override {
-        return _resource_tracker;
     }
 
     // Returns true if the consumer is positioned at partition boundary,

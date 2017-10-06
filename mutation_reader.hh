@@ -374,31 +374,6 @@ public:
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
 
-
-class reader_resource_tracker {
-    semaphore* _sem = nullptr;
-public:
-    reader_resource_tracker() = default;
-    explicit reader_resource_tracker(semaphore* sem)
-        : _sem(sem) {
-    }
-
-    bool operator==(const reader_resource_tracker& other) const {
-        return _sem == other._sem;
-    }
-
-    file track(file f) const;
-
-    semaphore* get_semaphore() const {
-        return _sem;
-    }
-};
-
-inline reader_resource_tracker no_resource_tracking() {
-    return reader_resource_tracker(nullptr);
-}
-
-
 struct restricted_mutation_reader_config {
     semaphore* resources_sem = nullptr;
     uint64_t* active_reads = nullptr;
