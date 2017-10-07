@@ -58,6 +58,32 @@ sstring time_point_to_string(const T& tp)
     return boost::posix_time::to_iso_extended_string(time);
 }
 
+sstring simple_date_to_string(const uint32_t days_count) {
+    date::days days{days_count - (1UL << 31)};
+    date::year_month_day ymd{date::local_days{days}};
+    std::ostringstream str;
+    str << ymd;
+    return str.str();
+}
+
+sstring time_to_string(const int64_t nanoseconds_count) {
+    std::chrono::nanoseconds nanoseconds{nanoseconds_count};
+    auto time = date::make_time(nanoseconds);
+    std::ostringstream str;
+    str << time;
+    return str.str();
+}
+
+sstring boolean_to_string(const bool b) {
+    return b ? "true" : "false";
+}
+
+sstring inet_to_string(const net::ipv4_address& addr) {
+    std::ostringstream out;
+    out << addr;
+    return out.str();
+}
+
 static const char* byte_type_name      = "org.apache.cassandra.db.marshal.ByteType";
 static const char* short_type_name     = "org.apache.cassandra.db.marshal.ShortType";
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
@@ -438,7 +464,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         if (b.size() != 1) {
             throw marshal_exception();
         }
-        return *b.begin() ? "true" : "false";
+        return boolean_to_string(*b.begin());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
@@ -860,11 +886,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         if (v.is_null()) {
             return "";
         }
-        date::days days{from_value(v).get() - (1UL << 31)};
-        date::year_month_day ymd{date::local_days{days}};
-        std::ostringstream str;
-        str << ymd;
-        return str.str();
+        return simple_date_to_string(from_value(v).get());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::date;
@@ -959,11 +981,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         if (v.is_null()) {
             return "";
         }
-        std::chrono::nanoseconds nanoseconds{from_value(v).get()};
-        auto time = date::make_time(nanoseconds);
-        std::ostringstream str;
-        str << time;
-        return str.str();
+        return time_to_string(from_value(v).get());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::time;
@@ -1127,8 +1145,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         if (v.is_null()) {
             return  "";
         }
-        boost::asio::ip::address_v4 ipv4(from_value(v).get().ip);
-        return ipv4.to_string();
+        return inet_to_string(from_value(v).get());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
