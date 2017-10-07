@@ -88,6 +88,10 @@ public:
        assert(broadcast_rpc_address());
        return *broadcast_rpc_address();
    }
+
+    static bool is_me(gms::inet_address addr) {
+        return addr == get_broadcast_address();
+    }
 };
 }
 
