@@ -25,6 +25,7 @@
 #include "writetime_or_ttl.hh"
 #include "selector_factories.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/castas_fcts.hh"
 #include "abstract_function_selector.hh"
 #include "writetime_or_ttl_selector.hh"
 
@@ -138,6 +139,30 @@ selectable::with_field_selection::raw::prepare(schema_ptr s) {
 
 bool
 selectable::with_field_selection::raw::processes_selection() const {
+    return true;
+}
+
+shared_ptr<selector::factory>
+selectable::with_cast::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+    std::vector<shared_ptr<selectable>> args{_arg};
+    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(args, db, s, defs);
+    auto&& fun = functions::castas_functions::get(_type->get_type(), factories->new_instances(), s);
+
+    return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
+}
+
+sstring
+selectable::with_cast::to_string() const {
+    return sprint("cast(%s as %s)", _arg->to_string(), _type->to_string());
+}
+
+shared_ptr<selectable>
+selectable::with_cast::raw::prepare(schema_ptr s) {
+    return ::make_shared<selectable::with_cast>(_arg->prepare(s), _type);
+}
+
+bool
+selectable::with_cast::raw::processes_selection() const {
     return true;
 }
 
