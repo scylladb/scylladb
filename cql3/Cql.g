@@ -399,6 +399,7 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
        | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
+       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = ::make_shared<selectable::with_cast::raw>(std::move(arg), std::move(t)); }
        )
        ( '.' fi=cident { tmp = make_shared<selectable::with_field_selection::raw>(std::move(tmp), std::move(fi)); } )*
     { $s = tmp; }
@@ -1571,6 +1572,7 @@ basic_unreserved_keyword returns [sstring str]
 K_SELECT:      S E L E C T;
 K_FROM:        F R O M;
 K_AS:          A S;
+K_CAST:        C A S T;
 K_WHERE:       W H E R E;
 K_AND:         A N D;
 K_KEY:         K E Y;

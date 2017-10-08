@@ -1662,3 +1662,11 @@ struct appending_hash<data_type> {
         feed_hash(h, v->name());
     }
 };
+
+/*
+ * Support for CAST(. AS .) functions.
+ */
+
+using castas_fctn = std::function<data_value(data_value)>;
+
+castas_fctn get_castas_fctn(data_type to_type, data_type from_type);
