@@ -491,6 +491,30 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     reader_resource_tracker _resource_tracker;
     tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
+
+    streamed_mutation_opt merge_accumulated_mutations() {
+        _done = true;
+        if (_mutations.empty()) {
+            return {};
+        }
+        _sstable_histogram.add(_mutations.size());
+        return merge_mutations(std::move(_mutations));
+    }
+
+    future<streamed_mutation_opt> read_from_all(std::vector<sstables::shared_sstable> candidates) {
+        return parallel_for_each(std::move(candidates),
+            [this](const sstables::shared_sstable& sstable) {
+                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
+                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this] (auto smo) {
+                    if (smo) {
+                        _mutations.emplace_back(std::move(*smo));
+                    }
+                });
+        }).then([this] {
+            return merge_accumulated_mutations();
+        });
+    }
+
 public:
     single_key_sstable_reader(column_family* cf,
                               schema_ptr schema,
@@ -520,22 +544,7 @@ public:
             return make_ready_future<streamed_mutation_opt>();
         }
         auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
-        return parallel_for_each(std::move(candidates),
-            [this](const sstables::shared_sstable& sstable) {
-                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this](auto smo) {
-                    if (smo) {
-                        _mutations.emplace_back(std::move(*smo));
-                    }
-                });
-        }).then([this] () -> streamed_mutation_opt {
-            _done = true;
-            if (_mutations.empty()) {
-                return { };
-            }
-            _sstable_histogram.add(_mutations.size());
-            return merge_mutations(std::move(_mutations));
-        });
+        return read_from_all(std::move(candidates));
     }
 };
 
