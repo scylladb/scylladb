@@ -191,7 +191,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
         return sleep(migration_delay).then([this, &proxy, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
             auto& gossiper = gms::get_local_gossiper();
-            auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+            auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             if (!ep_state) {
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
@@ -261,7 +261,7 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
     auto& gossiper = gms::get_local_gossiper();
-    auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+    auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
         return false;
     }

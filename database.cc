@@ -4252,7 +4252,7 @@ column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr
     if (it == _cluster_cache_hit_rates.end()) {
         // no data yet, get it from the gossiper
         auto& gossiper = gms::get_local_gossiper();
-        auto eps = gossiper.get_endpoint_state_for_endpoint(addr);
+        auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(addr);
         if (eps) {
             auto state = eps->get_application_state(gms::application_state::CACHE_HITRATES);
             float f = -1.0f; // missing state means old node

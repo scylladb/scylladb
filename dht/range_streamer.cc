@@ -193,7 +193,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
         inet_address source_ip = range_sources.find(desired_range)->second;
         auto& gossiper = gms::get_local_gossiper();
-        auto source_state = gossiper.get_endpoint_state_for_endpoint(source_ip);
+        auto* source_state = gossiper.get_endpoint_state_for_endpoint_ptr(source_ip);
         if (gossiper.is_enabled() && source_state && !source_state->is_alive()) {
             throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
         }
