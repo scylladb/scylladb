@@ -54,7 +54,6 @@ public:
 private:
     schema_ptr _schema;
     const query::partition_slice& _slice;
-    reader_resource_tracker _resource_tracker;
     bool _out_of_range = false;
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
     stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
@@ -308,10 +307,9 @@ public:
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
                     streamed_mutation::forwarding fwd)
-            : row_consumer(resource_tracker, pc)
+            : row_consumer(std::move(resource_tracker), pc)
             , _schema(schema)
             , _slice(slice)
-            , _resource_tracker(std::move(resource_tracker))
             , _fwd(fwd)
             , _range_tombstones(*_schema)
     { }
