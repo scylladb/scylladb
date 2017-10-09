@@ -177,7 +177,9 @@ inline
 future<> cache_streamed_mutation::process_static_row() {
     if (_snp->version()->partition().static_row_continuous()) {
         _read_context->cache().on_row_hit();
-        row sr = _snp->static_row();
+        row sr = _lsa_manager.run_in_read_section([this] {
+            return _snp->static_row();
+        });
         if (!sr.empty()) {
             push_mutation_fragment(mutation_fragment(static_row(std::move(sr))));
         }
