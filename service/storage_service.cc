@@ -1104,12 +1104,7 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
 }
 
 sstring storage_service::get_application_state_value(inet_address endpoint, application_state appstate) {
-    auto& gossiper = gms::get_local_gossiper();
-    auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!eps) {
-        return {};
-    }
-    auto v = eps->get_application_state(appstate);
+    auto v = gms::get_local_gossiper().get_application_state_ptr(endpoint, appstate);
     if (!v) {
         return {};
     }
