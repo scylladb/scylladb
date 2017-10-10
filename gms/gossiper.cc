@@ -1096,14 +1096,8 @@ std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_st
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) {
-    if (netw::get_local_messaging_service().knows_version(endpoint)) {
-        return true;
-    }
-    auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (eps && eps->get_application_state(application_state::NET_VERSION)) {
-        return true;
-    }
-    return false;
+    return netw::get_local_messaging_service().knows_version(endpoint) ||
+            get_application_state_ptr(endpoint, application_state::NET_VERSION);
 }
 
 bool gossiper::uses_vnodes(inet_address endpoint) {
