@@ -260,13 +260,8 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
-    auto& gossiper = gms::get_local_gossiper();
-    auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!ep_state) {
-        return false;
-    }
-    auto&& version_opt = ep_state->get_application_state(gms::application_state::SCHEMA_TABLES_VERSION);
-    return version_opt && version_opt->value == db::schema_tables::version;
+    auto* version = gms::get_local_gossiper().get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
+    return version && version->value == db::schema_tables::version;
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {
