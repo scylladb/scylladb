@@ -1830,14 +1830,9 @@ std::set<sstring> to_feature_set(sstring features_string) {
 }
 
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
-    std::set<sstring> features;
-    auto* ep_state = get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!ep_state) {
-        return features;
-    }
-    auto app_state = ep_state->get_application_state(application_state::SUPPORTED_FEATURES);
+    auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
     if (!app_state) {
-        return features;
+        return {};
     }
     return to_feature_set(app_state->value);
 }
