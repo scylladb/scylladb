@@ -130,7 +130,7 @@ public:
     /**
      * @return System.nanoTime() when state was updated last time.
      */
-    clk::time_point get_update_timestamp() {
+    clk::time_point get_update_timestamp() const {
         return _update_timestamp;
     }
 
@@ -138,7 +138,7 @@ public:
         _update_timestamp = clk::now();
     }
 
-    bool is_alive() {
+    bool is_alive() const {
         return _is_alive;
     }
 
@@ -150,7 +150,7 @@ public:
         _is_alive = false;
     }
 
-    bool is_shutdown() {
+    bool is_shutdown() const {
         auto app_state = get_application_state(application_state::STATUS);
         if (!app_state) {
             return false;

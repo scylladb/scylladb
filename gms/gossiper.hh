@@ -385,7 +385,10 @@ private:
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint);
 
-    std::experimental::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
+    const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const;
+
+    // Use with caution, copies might be expensive (see #764)
+    stdx::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip
     void reset_endpoint_state_map();

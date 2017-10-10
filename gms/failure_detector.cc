@@ -154,7 +154,7 @@ int failure_detector::get_up_endpoint_count() {
 
 sstring failure_detector::get_endpoint_state(sstring address) {
     std::stringstream ss;
-    auto eps = get_local_gossiper().get_endpoint_state_for_endpoint(inet_address(address));
+    auto* eps = get_local_gossiper().get_endpoint_state_for_endpoint_ptr(inet_address(address));
     if (eps) {
         append_endpoint_state(ss, *eps);
         return sstring(ss.str());
@@ -163,7 +163,7 @@ sstring failure_detector::get_endpoint_state(sstring address) {
     }
 }
 
-void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_state& state) {
+void failure_detector::append_endpoint_state(std::stringstream& ss, const endpoint_state& state) {
     ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
     ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
     for (const auto& entry : state.get_application_state_map()) {

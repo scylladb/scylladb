@@ -156,7 +156,7 @@ public:
     }
 
 private:
-    void append_endpoint_state(std::stringstream& ss, endpoint_state& state);
+    void append_endpoint_state(std::stringstream& ss, const endpoint_state& state);
 
 public:
     /**
