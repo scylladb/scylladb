@@ -104,6 +104,7 @@ public:
     }
 
     std::experimental::optional<versioned_value> get_application_state(application_state key) const;
+    const versioned_value* get_application_state_ptr(application_state key) const;
 
     /**
      * TODO replace this with operations that don't expose private state
