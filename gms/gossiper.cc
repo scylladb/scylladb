@@ -1739,8 +1739,7 @@ void gossiper::force_newer_generation() {
     }
 }
 
-sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
-    auto app_state = ep_state.get_application_state(application_state::STATUS);
+static sstring do_get_gossip_status(const gms::versioned_value* app_state) {
     if (!app_state) {
         return "";
     }
@@ -1753,12 +1752,12 @@ sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
     return pieces[0];
 }
 
+sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
+    return do_get_gossip_status(ep_state.get_application_state_ptr(application_state::STATUS));
+}
+
 sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
-    auto* ep_state = get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!ep_state) {
-        return "";
-    }
-    return get_gossip_status(*ep_state);
+    return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
 future<> gossiper::wait_for_gossip_to_settle() {
