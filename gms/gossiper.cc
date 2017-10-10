@@ -432,6 +432,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                    If state does not exist just add it. If it does then add it if the remote generation is greater.
                    If there is a generation tie, attempt to break it by heartbeat version.
                    */
+                auto permit = this->lock_endpoint(ep).get0();
                 const endpoint_state& remote_state = map[ep];
                 auto es = this->get_endpoint_state_for_endpoint_ptr(ep);
                 if (es) {
@@ -548,6 +549,14 @@ void gossiper::do_status_check() {
             it++;
         }
     }
+}
+
+future<gossiper::endpoint_permit> gossiper::lock_endpoint(inet_address ep) {
+    return endpoint_locks.get_or_load(ep, [] (const inet_address& ep) { return semaphore(1); }).then([] (auto eptr) {
+        return get_units(*eptr, 1).then([eptr] (auto units) mutable {
+            return endpoint_permit{std::move(eptr), std::move(units)};
+        });
+    });
 }
 
 // Depends on:
@@ -923,6 +932,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     return get_gossiper().invoke_on(0, [address] (auto&& gossiper) {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
             inet_address endpoint(address);
+            auto permit = gossiper.lock_endpoint(endpoint).get0();
             auto es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             auto now = gossiper.now();
             int gen = std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count();
