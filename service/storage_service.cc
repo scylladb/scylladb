@@ -448,7 +448,7 @@ void storage_service::join_token_ring(int delay) {
                     auto existing = _token_metadata.get_endpoint(token);
                     if (existing) {
                         auto& gossiper = gms::get_local_gossiper();
-                        auto eps = gossiper.get_endpoint_state_for_endpoint(*existing);
+                        auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(*existing);
                         if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
                             throw std::runtime_error("Cannot replace a live node...");
                         }
@@ -590,7 +590,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
 sstring
 storage_service::get_rpc_address(const inet_address& endpoint) const {
     if (endpoint != get_broadcast_address()) {
-        auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
+        auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
         if (v) {
             return v.value().value;
         }
@@ -705,7 +705,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
         if (db().local().is_replacing() &&
             db().local().get_replace_address() &&
-            gossiper.get_endpoint_state_for_endpoint(db().local().get_replace_address().value())  &&
+                gossiper.get_endpoint_state_for_endpoint_ptr(db().local().get_replace_address().value())  &&
             (host_id == gossiper.get_host_id(db().local().get_replace_address().value()))) {
             slogger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
@@ -909,7 +909,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             _token_metadata.add_leaving_endpoint(endpoint);
             update_pending_ranges().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
-            auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+            auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             if (!state) {
                 auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
                 slogger.warn("{}", err);
@@ -1007,7 +1007,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
     } else {
         auto& gossiper = gms::get_local_gossiper();
-        auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+        auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
         if (!ep_state || gossiper.is_dead_state(*ep_state)) {
             slogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return;
@@ -1098,7 +1098,7 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
 void storage_service::update_peer_info(gms::inet_address endpoint) {
     using namespace gms;
     auto& gossiper = gms::get_local_gossiper();
-    auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+    auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
         return;
     }
@@ -1111,7 +1111,7 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
 
 sstring storage_service::get_application_state_value(inet_address endpoint, application_state appstate) {
     auto& gossiper = gms::get_local_gossiper();
-    auto eps = gossiper.get_endpoint_state_for_endpoint(endpoint);
+    auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!eps) {
         return {};
     }
@@ -1552,16 +1552,12 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
         auto& gossiper = gms::get_local_gossiper();
         gossiper.check_knows_remote_features(get_config_supported_features());
         // now that we've gossiped at least once, we should be able to find the node we're replacing
-        auto state = gossiper.get_endpoint_state_for_endpoint(replace_address);
+        auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(replace_address);
         if (!state) {
             throw std::runtime_error(sprint("Cannot replace_address %s because it doesn't exist in gossip", replace_address));
         }
         auto host_id = gossiper.get_host_id(replace_address);
-        auto eps = gossiper.get_endpoint_state_for_endpoint(replace_address);
-        if (!eps) {
-            throw std::runtime_error(sprint("Cannot replace_address %s because can not find gossip endpoint state", replace_address));
-        }
-        auto value = eps->get_application_state(application_state::TOKENS);
+        auto value = state->get_application_state(application_state::TOKENS);
         if (!value) {
             throw std::runtime_error(sprint("Could not find tokens for %s to replace", replace_address));
         }
@@ -3006,9 +3002,10 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
 
                     auto source_ip = address_list.front();
                     auto& gossiper = gms::get_local_gossiper();
-                    auto state = gossiper.get_endpoint_state_for_endpoint(source_ip);
-                    if (gossiper.is_enabled() && state && !state->is_alive())
+                    auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(source_ip);
+                    if (gossiper.is_enabled() && state && !state->is_alive()) {
                         throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
+                    }
                 }
             }
             // calculating endpoints to stream current ranges to if needed

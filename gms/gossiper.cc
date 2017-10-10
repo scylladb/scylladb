@@ -162,7 +162,7 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
     std::vector<gossip_digest> diff_digests;
     for (auto g_digest : g_digest_list) {
         auto ep = g_digest.get_endpoint();
-        auto ep_state = this->get_endpoint_state_for_endpoint(ep);
+        auto* ep_state = this->get_endpoint_state_for_endpoint_ptr(ep);
         int version = ep_state ? this->get_max_endpoint_state_version(*ep_state) : 0;
         int diff_version = ::abs(version - g_digest.get_max_version());
         diff_digests.emplace_back(gossip_digest(ep, g_digest.get_generation(), diff_version));
@@ -1060,7 +1060,16 @@ clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
     }
 }
 
-std::experimental::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
+const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) const {
+    auto it = endpoint_state_map.find(ep);
+    if (it == endpoint_state_map.end()) {
+        return nullptr;
+    } else {
+        return &it->second;
+    }
+}
+
+stdx::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return {};
@@ -1083,21 +1092,23 @@ std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_st
 bool gossiper::uses_host_id(inet_address endpoint) {
     if (netw::get_local_messaging_service().knows_version(endpoint)) {
         return true;
-    } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
+    }
+    auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (eps && eps->get_application_state(application_state::NET_VERSION)) {
         return true;
     }
     return false;
 }
 
 bool gossiper::uses_vnodes(inet_address endpoint) {
-    return uses_host_id(endpoint) && get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::TOKENS);
+    return uses_host_id(endpoint) && get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(application_state::TOKENS);
 }
 
 utils::UUID gossiper::get_host_id(inet_address endpoint) {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(sprint("Host %s does not use new-style tokens!", endpoint));
     }
-    sstring uuid = get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::HOST_ID)->value;
+    sstring uuid = get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(application_state::HOST_ID)->value;
     return utils::UUID(uuid);
 }
 
@@ -1137,8 +1148,8 @@ std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigg
 }
 
 int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
-    auto ep1 = get_endpoint_state_for_endpoint(addr1);
-    auto ep2 = get_endpoint_state_for_endpoint(addr2);
+    auto* ep1 = get_endpoint_state_for_endpoint_ptr(addr1);
+    auto* ep2 = get_endpoint_state_for_endpoint_ptr(addr2);
     if (!ep1 || !ep2) {
         auto err = sprint("Can not get endpoint_state for %s or %s", addr1, addr2);
         logger.warn("{}", err);
@@ -1273,7 +1284,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
         mark_dead(ep, ep_state);
     }
 
-    auto eps_new = get_endpoint_state_for_endpoint(ep);
+    auto* eps_new = get_endpoint_state_for_endpoint_ptr(ep);
     if (eps_new) {
         _subscribers.for_each([ep, eps_new] (auto& subscriber) {
             subscriber->on_join(ep, *eps_new);
@@ -1584,7 +1595,7 @@ future<> gossiper::do_stop_gossiping() {
     }
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
-        auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
+        auto* my_ep_state = get_endpoint_state_for_endpoint_ptr(get_broadcast_address());
         if (my_ep_state) {
             logger.info("My status = {}", get_gossip_status(*my_ep_state));
         }
@@ -1745,7 +1756,7 @@ sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
 }
 
 sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
-    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    auto* ep_state = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
         return "";
     }
@@ -1793,7 +1804,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
 }
 
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
-    auto eps = get_endpoint_state_for_endpoint(endpoint);
+    auto* eps = get_endpoint_state_for_endpoint_ptr(endpoint);
 
     // if there's no previous state, or the node was previously removed from the cluster, we're good
     if (!eps || is_dead_state(*eps)) {
@@ -1823,7 +1834,7 @@ std::set<sstring> to_feature_set(sstring features_string) {
 
 std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
     std::set<sstring> features;
-    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    auto* ep_state = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (!ep_state) {
         return features;
     }
