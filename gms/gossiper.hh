@@ -431,7 +431,7 @@ private:
     void handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
 public:
-    bool is_alive(inet_address ep);
+    bool is_alive(inet_address ep) const;
     bool is_dead_state(const endpoint_state& eps) const;
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);

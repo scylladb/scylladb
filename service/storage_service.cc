@@ -3002,8 +3002,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
 
                     auto source_ip = address_list.front();
                     auto& gossiper = gms::get_local_gossiper();
-                    auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(source_ip);
-                    if (gossiper.is_enabled() && state && !state->is_alive()) {
+                    if (gossiper.is_enabled() && !gossiper.is_alive(source_ip)) {
                         throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
                     }
                 }
