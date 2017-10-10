@@ -237,11 +237,7 @@ const std::unordered_map<inet_address, utils::UUID>& token_metadata::get_endpoin
 }
 
 bool token_metadata::is_member(inet_address endpoint) {
-    auto beg = _token_to_endpoint_map.cbegin();
-    auto end = _token_to_endpoint_map.cend();
-    return end != std::find_if(beg, end, [endpoint] (const auto& x) {
-        return x.second == endpoint;
-    });
+    return _topology.has_endpoint(endpoint);
 }
 
 void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
@@ -684,5 +680,12 @@ void topology::remove_endpoint(inet_address ep)
     _dc_racks[cur_dc_rack->second.dc][cur_dc_rack->second.rack].erase(ep);
     _current_locations.erase(cur_dc_rack);
 }
+
+bool topology::has_endpoint(inet_address ep) const
+{
+    auto i = _current_locations.find(ep);
+    return i != _current_locations.end();
+}
+
 /////////////////// class topology end /////////////////////////////////////////
 } // namespace locator

@@ -90,6 +90,11 @@ public:
      */
     void update_endpoint(inet_address ep);
 
+    /**
+     * Returns true iff contains given endpoint
+     */
+    bool has_endpoint(inet_address) const;
+
     std::unordered_map<sstring,
                        std::unordered_set<inet_address>>&
     get_datacenter_endpoints() {
