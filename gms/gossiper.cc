@@ -1722,6 +1722,14 @@ bool gossiper::is_alive(inet_address ep) const {
     return false;
 }
 
+const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint, application_state appstate) const {
+    auto* eps = get_endpoint_state_for_endpoint_ptr(std::move(endpoint));
+    if (!eps) {
+        return nullptr;
+    }
+    return eps->get_application_state_ptr(appstate);
+}
+
 /**
  * This method is used to mark a node as shutdown; that is it gracefully exited on its own and told us about it
  * @param endpoint endpoint that has shut itself down
