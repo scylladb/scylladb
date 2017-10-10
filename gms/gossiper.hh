@@ -387,6 +387,8 @@ public:
 
     const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const;
 
+    endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep);
+
     // Use with caution, copies might be expensive (see #764)
     stdx::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 

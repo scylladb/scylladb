@@ -1069,6 +1069,15 @@ const endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address
     }
 }
 
+endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) {
+    auto it = endpoint_state_map.find(ep);
+    if (it == endpoint_state_map.end()) {
+        return nullptr;
+    } else {
+        return &it->second;
+    }
+}
+
 stdx::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
