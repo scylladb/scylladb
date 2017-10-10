@@ -1659,7 +1659,7 @@ future<> gossiper::stop() {
     return make_ready_future();
 }
 
-bool gossiper::is_enabled() {
+bool gossiper::is_enabled() const {
     return _enabled;
 }
 
@@ -1673,7 +1673,7 @@ void gossiper::finish_shadow_round() {
     }
 }
 
-bool gossiper::is_in_shadow_round() {
+bool gossiper::is_in_shadow_round() const {
     return _in_shadow_round;
 }
 

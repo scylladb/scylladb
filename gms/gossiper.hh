@@ -494,11 +494,11 @@ public:
     future<> do_stop_gossiping();
 
 public:
-    bool is_enabled();
+    bool is_enabled() const;
 
     void finish_shadow_round();
 
-    bool is_in_shadow_round();
+    bool is_in_shadow_round() const;
 
     void goto_shadow_round();
 
