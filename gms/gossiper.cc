@@ -776,21 +776,19 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) {
 //
 // Runs inside seastar::async context
 void gossiper::convict(inet_address endpoint, double phi) {
-    auto it = endpoint_state_map.find(endpoint);
-    if (it == endpoint_state_map.end()) {
+    auto* state = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (!state || !state->is_alive()) {
         return;
     }
-    auto& state = it->second;
-    if (!state.is_alive()) {
-        return;
-    }
-    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
 
-    logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
+    if (logger.is_enabled(log_level::debug)) {
+        logger.debug("Convicting ep={} with status={}", endpoint, get_gossip_status(*state));
+        logger.trace("    phi={}, is_dead_state={}", phi, is_dead_state(*state));
+    }
     if (is_shutdown(endpoint)) {
         mark_as_shutdown(endpoint);
     } else {
-        mark_dead(endpoint, state);
+        mark_dead(endpoint, *state);
     }
 }
 
