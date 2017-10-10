@@ -376,17 +376,16 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
      * If the local endpoint state exists then report to the FD only
      * if the versions workout.
     */
-    auto it = endpoint_state_map.find(endpoint);
-    if (it != endpoint_state_map.end()) {
-        auto& local_endpoint_state = it->second;
+    auto* local_endpoint_state = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (local_endpoint_state) {
         i_failure_detector& fd = get_local_failure_detector();
-        int local_generation = local_endpoint_state.get_heart_beat_state().get_generation();
+        int local_generation = local_endpoint_state->get_heart_beat_state().get_generation();
         int remote_generation = remote_endpoint_state.get_heart_beat_state().get_generation();
         if (remote_generation > local_generation) {
-            local_endpoint_state.update_timestamp();
+            local_endpoint_state->update_timestamp();
             // this node was dead and the generation changed, this indicates a reboot, or possibly a takeover
             // we will clean the fd intervals for it and relearn them
-            if (!local_endpoint_state.is_alive()) {
+            if (!local_endpoint_state->is_alive()) {
                 logger.debug("Clearing interval times for {} due to generation change", endpoint);
                 fd.remove(endpoint);
             }
@@ -395,10 +394,10 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
         }
 
         if (remote_generation == local_generation) {
-            int local_version = get_max_endpoint_state_version(local_endpoint_state);
+            int local_version = get_max_endpoint_state_version(*local_endpoint_state);
             int remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
             if (remote_version > local_version) {
-                local_endpoint_state.update_timestamp();
+                local_endpoint_state->update_timestamp();
                 // just a version change, report to the fd
                 fd.report(endpoint);
             }
