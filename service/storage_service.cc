@@ -1546,7 +1546,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
             throw std::runtime_error(sprint("Cannot replace_address %s because it doesn't exist in gossip", replace_address));
         }
         auto host_id = gossiper.get_host_id(replace_address);
-        auto value = state->get_application_state(application_state::TOKENS);
+        auto* value = state->get_application_state_ptr(application_state::TOKENS);
         if (!value) {
             throw std::runtime_error(sprint("Could not find tokens for %s to replace", replace_address));
         }
