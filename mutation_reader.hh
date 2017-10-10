@@ -647,3 +647,5 @@ template<typename FlattenedConsumer, typename... Args>
 stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
     return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }
+
+future<streamed_mutation_opt> streamed_mutation_from_flat_mutation_reader(flat_mutation_reader&&);
