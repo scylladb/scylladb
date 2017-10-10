@@ -703,17 +703,13 @@ void gossiper::run() {
 }
 
 bool gossiper::seen_any_seed() {
-    for (auto& entry : endpoint_state_map) {
+    return std::any_of(endpoint_state_map.begin(), endpoint_state_map.end(), [this] (auto& entry) {
         if (_seeds.count(entry.first)) {
             return true;
         }
-        auto& state = entry.second;
-        if (state.get_application_state_map().count(application_state::INTERNAL_IP) &&
-                _seeds.count(inet_address(state.get_application_state(application_state::INTERNAL_IP)->value))) {
-            return true;
-        }
-    }
-    return false;
+        auto* internal_ip = entry.second.get_application_state_ptr(application_state::INTERNAL_IP);
+        return internal_ip && _seeds.count(inet_address(internal_ip->value));
+    });
 }
 
 bool gossiper::is_seed(const gms::inet_address& endpoint) const {
