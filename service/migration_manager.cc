@@ -142,7 +142,7 @@ bool migration_manager::is_ready_for_bootstrap() {
             continue;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);
-        auto schema = eps.get_application_state(gms::application_state::SCHEMA);
+        auto* schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
         if (!schema) {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             return false;
