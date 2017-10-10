@@ -909,13 +909,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             _token_metadata.add_leaving_endpoint(endpoint);
             update_pending_ranges().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
-            auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-            if (!state) {
-                auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
-                slogger.warn("{}", err);
-                throw std::runtime_error(err);
-            }
-            auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
+            auto* value = gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
             if (!value) {
                 auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
                 slogger.warn("{}", err);
