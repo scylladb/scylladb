@@ -173,8 +173,7 @@ public:
 shared_sstable
 make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version_types v, sstable_format_types f, gc_clock::time_point now,
             io_error_handler_gen error_handler_gen, size_t buffer_size) {
-    // safe, since shared_from_this() takes ownership
-    return (new sstable(std::move(schema), std::move(dir), generation, v, f, now, std::move(error_handler_gen), buffer_size))->shared_from_this();
+    return make_lw_shared<sstable>(std::move(schema), std::move(dir), generation, v, f, now, std::move(error_handler_gen), buffer_size);
 }
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
