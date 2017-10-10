@@ -124,7 +124,7 @@ void migration_manager::unregister_listener(migration_listener* listener)
 
 future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
-    const auto& value = state.get_application_state(gms::application_state::SCHEMA);
+    const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
         return maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint);
@@ -196,7 +196,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
             }
-            const auto& value = ep_state->get_application_state(gms::application_state::SCHEMA);
+            const auto* value = ep_state->get_application_state_ptr(gms::application_state::SCHEMA);
             utils::UUID current_version{value->value};
             auto& db = proxy.get_db().local();
             if (db.get_version() == current_version) {
