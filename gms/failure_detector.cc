@@ -122,10 +122,12 @@ std::map<sstring, sstring> failure_detector::get_simple_states() {
         auto& state = entry.second;
         std::stringstream ss;
         ss << ep;
-        if (state.is_alive())
+
+        if (state.is_alive()) {
             nodes_status.emplace(sstring(ss.str()), "UP");
-        else
+        } else {
             nodes_status.emplace(sstring(ss.str()), "DOWN");
+        }
     }
     return nodes_status;
 }
