@@ -103,7 +103,6 @@ public:
         _heart_beat_state = hbs;
     }
 
-    std::experimental::optional<versioned_value> get_application_state(application_state key) const;
     const versioned_value* get_application_state_ptr(application_state key) const;
 
     /**
