@@ -590,9 +590,9 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
 sstring
 storage_service::get_rpc_address(const inet_address& endpoint) const {
     if (endpoint != get_broadcast_address()) {
-        auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
+        auto* v = gms::get_local_gossiper().get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
         if (v) {
-            return v.value().value;
+            return v->value;
         }
     }
     return boost::lexical_cast<std::string>(endpoint);
