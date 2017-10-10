@@ -1100,10 +1100,6 @@ bool gossiper::uses_host_id(inet_address endpoint) {
             get_application_state_ptr(endpoint, application_state::NET_VERSION);
 }
 
-bool gossiper::uses_vnodes(inet_address endpoint) {
-    return uses_host_id(endpoint) && get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(application_state::TOKENS);
-}
-
 utils::UUID gossiper::get_host_id(inet_address endpoint) {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(sprint("Host %s does not use new-style tokens!", endpoint));

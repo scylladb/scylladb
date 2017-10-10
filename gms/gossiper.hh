@@ -401,8 +401,6 @@ public:
 
     bool uses_host_id(inet_address endpoint);
 
-    bool uses_vnodes(inet_address endpoint);
-
     utils::UUID get_host_id(inet_address endpoint);
 
     std::experimental::optional<endpoint_state> get_state_for_version_bigger_than(inet_address for_endpoint, int version);
