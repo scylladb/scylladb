@@ -341,12 +341,12 @@ public:
     }
 
     future<value_ptr> get_ptr(const Key& k) {
-        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "");
         return get_ptr(k, _load);
     }
 
     future<Tp> get(const Key& k) {
-        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "");
 
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
