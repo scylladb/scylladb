@@ -785,9 +785,10 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
         invalidate_sync(m);
         STAP_PROBE(scylla, row_cache_update_end);
     });
+
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
-    auto t = seastar::thread(attr, [this, &m, updater = std::move(updater)] () mutable {
+    return seastar::async(std::move(attr), [this, &m, updater = std::move(updater)] () mutable {
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] {
             invalidate_sync(m);
@@ -838,10 +839,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
             });
             seastar::thread::yield();
         }
-    });
-    return do_with(std::move(t), [] (seastar::thread& t) {
-        return t.join();
-    }).then([cleanup = std::move(cleanup)] {});
+    }).finally([cleanup = std::move(cleanup)] {});
   });
 }
 
