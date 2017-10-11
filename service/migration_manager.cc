@@ -124,7 +124,7 @@ void migration_manager::unregister_listener(migration_listener* listener)
 
 future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
-    const auto& value = state.get_application_state(gms::application_state::SCHEMA);
+    const auto* value = state.get_application_state_ptr(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
         return maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint);
@@ -142,7 +142,7 @@ bool migration_manager::is_ready_for_bootstrap() {
             continue;
         }
         mlogger.debug("Checking schema state for {}.", endpoint);
-        auto schema = eps.get_application_state(gms::application_state::SCHEMA);
+        auto* schema = eps.get_application_state_ptr(gms::application_state::SCHEMA);
         if (!schema) {
             mlogger.debug("Schema state not yet available for {}.", endpoint);
             return false;
@@ -196,7 +196,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
                 mlogger.debug("epState vanished for {}, not submitting migration task", endpoint);
                 return make_ready_future<>();
             }
-            const auto& value = ep_state->get_application_state(gms::application_state::SCHEMA);
+            const auto* value = ep_state->get_application_state_ptr(gms::application_state::SCHEMA);
             utils::UUID current_version{value->value};
             auto& db = proxy.get_db().local();
             if (db.get_version() == current_version) {
@@ -260,13 +260,8 @@ future<> migration_manager::merge_schema_from(netw::messaging_service::msg_addr 
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const gms::inet_address& endpoint) {
-    auto& gossiper = gms::get_local_gossiper();
-    auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!ep_state) {
-        return false;
-    }
-    auto&& version_opt = ep_state->get_application_state(gms::application_state::SCHEMA_TABLES_VERSION);
-    return version_opt && version_opt->value == db::schema_tables::version;
+    auto* version = gms::get_local_gossiper().get_application_state_ptr(endpoint, gms::application_state::SCHEMA_TABLES_VERSION);
+    return version && version->value == db::schema_tables::version;
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint) {

@@ -590,9 +590,9 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
 sstring
 storage_service::get_rpc_address(const inet_address& endpoint) const {
     if (endpoint != get_broadcast_address()) {
-        auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint_ptr(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
+        auto* v = gms::get_local_gossiper().get_application_state_ptr(endpoint, gms::application_state::RPC_ADDRESS);
         if (v) {
-            return v.value().value;
+            return v->value;
         }
     }
     return boost::lexical_cast<std::string>(endpoint);
@@ -909,13 +909,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             _token_metadata.add_leaving_endpoint(endpoint);
             update_pending_ranges().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
-            auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-            if (!state) {
-                auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
-                slogger.warn("{}", err);
-                throw std::runtime_error(err);
-            }
-            auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
+            auto* value = gossiper.get_application_state_ptr(endpoint, application_state::REMOVAL_COORDINATOR);
             if (!value) {
                 auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
                 slogger.warn("{}", err);
@@ -1110,12 +1104,7 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
 }
 
 sstring storage_service::get_application_state_value(inet_address endpoint, application_state appstate) {
-    auto& gossiper = gms::get_local_gossiper();
-    auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
-    if (!eps) {
-        return {};
-    }
-    auto v = eps->get_application_state(appstate);
+    auto v = gms::get_local_gossiper().get_application_state_ptr(endpoint, appstate);
     if (!v) {
         return {};
     }
@@ -1557,7 +1546,7 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
             throw std::runtime_error(sprint("Cannot replace_address %s because it doesn't exist in gossip", replace_address));
         }
         auto host_id = gossiper.get_host_id(replace_address);
-        auto value = state->get_application_state(application_state::TOKENS);
+        auto* value = state->get_application_state_ptr(application_state::TOKENS);
         if (!value) {
             throw std::runtime_error(sprint("Could not find tokens for %s to replace", replace_address));
         }
@@ -3002,8 +2991,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
 
                     auto source_ip = address_list.front();
                     auto& gossiper = gms::get_local_gossiper();
-                    auto* state = gossiper.get_endpoint_state_for_endpoint_ptr(source_ip);
-                    if (gossiper.is_enabled() && state && !state->is_alive()) {
+                    if (gossiper.is_enabled() && !gossiper.is_alive(source_ip)) {
                         throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
                     }
                 }

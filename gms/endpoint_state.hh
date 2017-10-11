@@ -103,7 +103,6 @@ public:
         _heart_beat_state = hbs;
     }
 
-    std::experimental::optional<versioned_value> get_application_state(application_state key) const;
     const versioned_value* get_application_state_ptr(application_state key) const;
 
     /**
@@ -151,7 +150,7 @@ public:
     }
 
     bool is_shutdown() const {
-        auto app_state = get_application_state(application_state::STATUS);
+        auto* app_state = get_application_state_ptr(application_state::STATUS);
         if (!app_state) {
             return false;
         }

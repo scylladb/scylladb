@@ -4254,7 +4254,7 @@ column_family::cache_hit_rate column_family::get_hit_rate(gms::inet_address addr
         auto& gossiper = gms::get_local_gossiper();
         auto* eps = gossiper.get_endpoint_state_for_endpoint_ptr(addr);
         if (eps) {
-            auto state = eps->get_application_state(gms::application_state::CACHE_HITRATES);
+            auto* state = eps->get_application_state_ptr(gms::application_state::CACHE_HITRATES);
             float f = -1.0f; // missing state means old node
             if (state) {
                 sstring me = sprint("%s.%s", _schema->ks_name(), _schema->cf_name());
