@@ -36,6 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/map.hpp>
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/i_failure_detector.hh"
@@ -122,34 +123,22 @@ std::map<sstring, sstring> failure_detector::get_simple_states() {
         auto& state = entry.second;
         std::stringstream ss;
         ss << ep;
-        if (state.is_alive())
+
+        if (state.is_alive()) {
             nodes_status.emplace(sstring(ss.str()), "UP");
-        else
+        } else {
             nodes_status.emplace(sstring(ss.str()), "DOWN");
+        }
     }
     return nodes_status;
 }
 
 int failure_detector::get_down_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (!state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return get_local_gossiper().endpoint_state_map.size() - get_up_endpoint_count();
 }
 
 int failure_detector::get_up_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return boost::count_if(get_local_gossiper().endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
 }
 
 sstring failure_detector::get_endpoint_state(sstring address) {

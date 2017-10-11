@@ -387,6 +387,10 @@ public:
 
     const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const;
 
+    endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep);
+
+    const versioned_value* get_application_state_ptr(inet_address endpoint, application_state appstate) const;
+
     // Use with caution, copies might be expensive (see #764)
     stdx::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 
@@ -396,8 +400,6 @@ public:
     std::unordered_map<inet_address, endpoint_state>& get_endpoint_states();
 
     bool uses_host_id(inet_address endpoint);
-
-    bool uses_vnodes(inet_address endpoint);
 
     utils::UUID get_host_id(inet_address endpoint);
 
@@ -429,7 +431,7 @@ private:
     void handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
 public:
-    bool is_alive(inet_address ep);
+    bool is_alive(inet_address ep) const;
     bool is_dead_state(const endpoint_state& eps) const;
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
@@ -492,11 +494,11 @@ public:
     future<> do_stop_gossiping();
 
 public:
-    bool is_enabled();
+    bool is_enabled() const;
 
     void finish_shadow_round();
 
-    bool is_in_shadow_round();
+    bool is_in_shadow_round() const;
 
     void goto_shadow_round();
 

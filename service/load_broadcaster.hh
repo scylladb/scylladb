@@ -72,9 +72,9 @@ public:
     }
 
     void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
-        auto local_value = ep_state.get_application_state(gms::application_state::LOAD);
+        auto* local_value = ep_state.get_application_state_ptr(gms::application_state::LOAD);
         if (local_value) {
-            on_change(endpoint, gms::application_state::LOAD, local_value.value());
+            on_change(endpoint, gms::application_state::LOAD, *local_value);
         }
     }
     
