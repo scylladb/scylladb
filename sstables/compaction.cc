@@ -240,7 +240,7 @@ private:
         return ::make_range_sstable_reader(_cf.schema(),
                 ssts,
                 query::full_partition_range,
-                query::full_slice,
+                _cf.schema()->full_slice(),
                 service::get_local_compaction_priority(),
                 no_resource_tracking(),
                 nullptr,

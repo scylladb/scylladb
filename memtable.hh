@@ -182,13 +182,17 @@ public:
     //
     // Mutations returned by the reader will all have given schema.
     mutation_reader make_reader(schema_ptr,
-                                const dht::partition_range& range = query::full_partition_range,
-                                const query::partition_slice& slice = query::full_slice,
+                                const dht::partition_range& range,
+                                const query::partition_slice& slice,
                                 const io_priority_class& pc = default_priority_class(),
                                 tracing::trace_state_ptr trace_state_ptr = nullptr,
                                 streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                 mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
+    mutation_reader make_reader(schema_ptr s, const dht::partition_range& range = query::full_partition_range) {
+        auto& full_slice = s->full_slice();
+        return make_reader(s, range, full_slice);
+    }
 
     mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
 

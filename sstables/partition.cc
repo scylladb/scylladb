@@ -318,7 +318,7 @@ public:
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
                     streamed_mutation::forwarding fwd)
-            : mp_row_consumer(schema, query::full_slice, pc, std::move(resource_tracker), fwd) { }
+            : mp_row_consumer(schema, schema->full_slice(), pc, std::move(resource_tracker), fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -1052,7 +1052,7 @@ public:
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd)
         : _get_data_source([this, sst = std::move(sst), s = std::move(schema), toread, last_end, &pc, resource_tracker = std::move(resource_tracker), fwd] {
-            auto consumer = mp_row_consumer(s, query::full_slice, pc, std::move(resource_tracker), fwd);
+            auto consumer = mp_row_consumer(s, s->full_slice(), pc, std::move(resource_tracker), fwd);
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), std::move(toread), last_end);
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
@@ -1061,7 +1061,7 @@ public:
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd)
         : _get_data_source([this, sst = std::move(sst), s = std::move(schema), &pc, resource_tracker = std::move(resource_tracker), fwd] {
-            auto consumer = mp_row_consumer(s, query::full_slice, pc, std::move(resource_tracker), fwd);
+            auto consumer = mp_row_consumer(s, s->full_slice(), pc, std::move(resource_tracker), fwd);
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }

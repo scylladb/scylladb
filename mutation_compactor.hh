@@ -146,7 +146,7 @@ public:
         , _gc_before(saturating_subtract(_query_time, s.gc_grace_seconds()))
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t) { return can_gc(t); })
-        , _slice(query::full_slice)
+        , _slice(s.full_slice())
         , _consumer(std::move(consumer))
         , _range_tombstones(s, false)
     {

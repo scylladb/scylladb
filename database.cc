@@ -693,7 +693,7 @@ column_family::make_reader(schema_ptr s,
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
                            const dht::partition_range& range) const {
-    auto& slice = query::full_slice;
+    auto& slice = s->full_slice();
     auto& pc = service::get_local_streaming_read_priority();
 
     std::vector<mutation_reader> readers;
@@ -711,7 +711,7 @@ column_family::make_streaming_reader(schema_ptr s,
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
-    auto& slice = query::full_slice;
+    auto& slice = s->full_slice();
     auto& pc = service::get_local_streaming_read_priority();
 
     auto source = mutation_source([this] (schema_ptr s, const dht::partition_range& range, const query::partition_slice& slice,

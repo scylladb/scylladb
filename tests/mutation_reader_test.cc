@@ -90,6 +90,7 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
 SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
     return seastar::async([] {
         auto s = make_schema();
+        auto& slice = s->full_slice();
 
         mutation m1(partition_key::from_single_value(*s, "keyA"), s);
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
@@ -100,7 +101,7 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
-        assert_that(make_combined_reader(make_reader_returning_many({m1, m2}), make_reader_returning_many({m2, m3})))
+        assert_that(make_combined_reader(make_reader_returning_many({m1, m2}, slice), make_reader_returning_many({m2, m3}, slice)))
             .produces(m1)
             .produces(m2)
             .produces(m3)
@@ -340,7 +341,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
             };
             auto fft_range = dht::partition_range::make_starting_with(ring[9]);
 
-            assert_that(make_multi_range_reader(s, std::move(source), ranges, query::full_slice))
+            assert_that(make_multi_range_reader(s, std::move(source), ranges, s->full_slice()))
                     .produces(keys[1])
                     .produces(keys[2])
                     .produces(keys[4])
@@ -461,7 +462,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                     table,
                     s.schema(),
                     query::full_partition_range,
-                    query::full_slice,
+                    s.schema()->full_slice(),
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
@@ -474,7 +475,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                 s.schema(),
                 sstables,
                 query::full_partition_range,
-                query::full_slice,
+                s.schema()->full_slice(),
                 seastar::default_priority_class(),
                 no_resource_tracking(),
                 nullptr,
@@ -556,9 +557,9 @@ public:
     tracking_reader(semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
         : _reader(make_mutation_reader<sstable_range_wrapping_reader>(
                         std::move(sst),
-                        std::move(schema),
+                        schema,
                         query::full_partition_range,
-                        query::full_slice,
+                        schema->full_slice(),
                         default_priority_class(),
                         reader_resource_tracker(resources_sem),
                         streamed_mutation::forwarding::no,

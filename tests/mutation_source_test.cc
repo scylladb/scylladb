@@ -126,7 +126,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
         BOOST_TEST_MESSAGE("Creating new streamed_mutation");
         mutation_reader rd = ms(s,
             query::full_partition_range,
-            query::full_slice,
+            s->full_slice(),
             default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::yes);
@@ -263,7 +263,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
     auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
     mutation_reader rd = ms(s,
         pr,
-        query::full_slice,
+        s->full_slice(),
         default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::no,
@@ -467,7 +467,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     mutation_source ms = populate(s, std::vector<mutation>({m}));
     mutation_reader rd = ms(s,
         query::full_partition_range,
-        query::full_slice,
+        s->full_slice(),
         default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::yes);
@@ -802,12 +802,12 @@ static void test_clustering_slices(populate_fn populate) {
     // Test out-of-range partition keys
     {
         auto pr = dht::partition_range::make_singular(keys[0]);
-        assert_that(ds(s, pr, query::full_slice))
+        assert_that(ds(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
     {
         auto pr = dht::partition_range::make_singular(keys[2]);
-        assert_that(ds(s, pr, query::full_slice))
+        assert_that(ds(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
 }
@@ -827,7 +827,7 @@ static void test_query_only_static_row(populate_fn populate) {
     // fully populate cache
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms(s.schema(), prange, query::full_slice))
+        assert_that(ms(s.schema(), prange, s.schema()->full_slice()))
             .produces(m1)
             .produces_end_of_stream();
     }

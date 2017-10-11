@@ -67,7 +67,7 @@ private:
         for (auto&& mt : _memtables) {
             readers.push_back(mt->make_reader(new_mt->schema(),
                  query::full_partition_range,
-                 query::full_slice,
+                 new_mt->schema()->full_slice(),
                  default_priority_class(),
                  nullptr,
                  streamed_mutation::forwarding::no,

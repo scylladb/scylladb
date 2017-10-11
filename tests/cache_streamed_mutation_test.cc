@@ -266,7 +266,7 @@ void test_single_row(int ck,
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_full_range) {
     return seastar::async([] {
-        test_single_row(1, false, is_continuous::yes, query::full_slice, { 1 }, {
+        test_single_row(1, false, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -343,7 +343,7 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_right) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_full_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::yes, query::full_slice, { 1 }, {
+        test_single_row(1, true, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -424,7 +424,7 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_right) {
 
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_full_range) {
     return seastar::async([] {
-        test_single_row(1, true, is_continuous::no, query::full_slice, { 1 }, {
+        test_single_row(1, true, is_continuous::no, SCHEMA->full_slice(), { 1 }, {
             expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -543,7 +543,7 @@ void test_two_rows(int ck1,
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_full_range) {
     return seastar::async([] {
-        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, query::full_slice, { 1, 3 }, {
+        test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -680,7 +680,7 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_continuous_full_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, query::full_slice, { 1, 3 }, {
+        test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
@@ -830,7 +830,7 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row2) {
 
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_full_range) {
     return seastar::async([] {
-        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, query::full_slice, { 1, 3 }, {
+        test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, SCHEMA->full_slice(), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)

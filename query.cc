@@ -40,8 +40,6 @@ thread_local semaphore result_memory_tracker::_dummy { 0 };
 const dht::partition_range full_partition_range = dht::partition_range::make_open_ended_both_sides();
 const clustering_range full_clustering_range = clustering_range::make_open_ended_both_sides();
 
-const query::partition_slice full_slice = query::partition_slice({ full_clustering_range }, { }, { }, { });
-
 std::ostream& operator<<(std::ostream& out, const specific_ranges& s);
 
 std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {

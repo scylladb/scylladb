@@ -653,7 +653,7 @@ future<mutation>
 read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name) {
     schema_ptr s = keyspaces();
     auto key = partition_key::from_singular(*s, keyspace_name);
-    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), query::full_slice);
+    auto cmd = make_lw_shared<query::read_command>(s->id(), s->version(), s->full_slice());
     return query_partition_mutation(proxy.local(), std::move(s), std::move(cmd), std::move(key));
 }
 

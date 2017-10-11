@@ -178,9 +178,9 @@ mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b, m
 mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>,
-    const query::partition_slice& slice = query::full_slice,
+    const query::partition_slice& slice,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range&);
+mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range& = query::full_partition_range);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
@@ -333,14 +333,19 @@ public:
     // All parameters captured by reference must remain live as long as returned
     // mutation_reader or streamed_mutation obtained through it are alive.
     mutation_reader operator()(schema_ptr s,
-        partition_range range = query::full_partition_range,
-        const query::partition_slice& slice = query::full_slice,
+        partition_range range,
+        const query::partition_slice& slice,
         io_priority pc = default_priority_class(),
         tracing::trace_state_ptr trace_state = nullptr,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
         return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    }
+
+    mutation_reader operator()(schema_ptr s, partition_range range = query::full_partition_range) const {
+        auto& full_slice = s->full_slice();
+        return (*this)(std::move(s), range, full_slice);
     }
 
     partition_presence_checker make_partition_presence_checker() {
@@ -398,13 +403,20 @@ struct restricted_mutation_reader_config {
 mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config,
         mutation_source ms,
         schema_ptr s,
-        const dht::partition_range& range = query::full_partition_range,
-        const query::partition_slice& slice = query::full_slice,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
         tracing::trace_state_ptr trace_state = nullptr,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
+inline mutation_reader make_restricted_reader(const restricted_mutation_reader_config& config,
+        mutation_source ms,
+        schema_ptr s,
+        const dht::partition_range& range = query::full_partition_range) {
+    auto& full_slice = s->full_slice();
+    return make_restricted_reader(config, std::move(ms), std::move(s), range, full_slice);
+}
 
 template<>
 struct move_constructor_disengages<mutation_source> {

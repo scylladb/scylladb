@@ -151,7 +151,7 @@ struct table {
 
     std::unique_ptr<reader> make_scanning_reader() {
         ++scans_started;
-        return make_reader(query::full_partition_range, query::full_slice);
+        return make_reader(query::full_partition_range, s.schema()->full_slice());
     }
 };
 

@@ -1842,7 +1842,7 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
             ::apply(cache, underlying, m);
         };
 
-        auto make_sm = [&] (const query::partition_slice& slice = query::full_slice) {
+        auto make_sm = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s, query::full_partition_range, slice);
             auto smo = rd().get0();
             BOOST_REQUIRE(smo);
@@ -1851,11 +1851,11 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
             return assert_that_stream(std::move(sm));
         };
 
-        auto sm1 = make_sm();
+        auto sm1 = make_sm(s->full_slice());
 
         apply(m2);
 
-        auto sm2 = make_sm();
+        auto sm2 = make_sm(s->full_slice());
 
         auto slice_with_key2 = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(table.make_ckey(2)))
@@ -1906,7 +1906,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice = query::full_slice) {
+        auto make_sm = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s.schema(), pr, slice);
             auto smo = rd().get0();
             BOOST_REQUIRE(smo);
@@ -1925,7 +1925,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
             auto sma2 = make_sm(slice_after_7);
 
-            auto sma = make_sm();
+            auto sma = make_sm(s.schema()->full_slice());
             sma.produces_row_with_key(s.make_ckey(0));
             sma.produces_range_tombstone(rt1);
 
@@ -1944,7 +1944,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
         {
             populate_range(cache);
 
-            auto sma = make_sm();
+            auto sma = make_sm(s.schema()->full_slice());
             sma.produces_row_with_key(s.make_ckey(0));
             sma.produces_range_tombstone(rt1);
 
@@ -1981,7 +1981,7 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice = query::full_slice) {
+        auto make_sm = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s.schema(), pr, slice);
             auto smo = rd().get0();
             BOOST_REQUIRE(smo);
@@ -1992,7 +1992,7 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
 
         {
             populate_range(cache, pr, s.make_ckey_range(0, 1));
-            auto rd = make_sm(); // to keep current version alive
+            auto rd = make_sm(s.schema()->full_slice()); // to keep current version alive
 
             mutation m2(pk, s.schema());
             s.add_row(m2, s.make_ckey(2), "v");
