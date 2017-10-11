@@ -408,6 +408,10 @@ public:
     void apply_to(schema_builder&) const;
 };
 
+namespace query {
+class partition_slice;
+}
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -481,6 +485,8 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
     column_mapping _column_mapping;
+    shared_ptr<query::partition_slice> _full_slice;
+
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
@@ -712,6 +718,9 @@ public:
     }
     bool is_view() const {
         return bool(_view_info);
+    }
+    const query::partition_slice& full_slice() const {
+        return *_full_slice;
     }
     // Returns all index names of this schema.
     std::vector<sstring> index_names() const;
