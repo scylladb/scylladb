@@ -38,6 +38,7 @@
 #include "sstables/compaction_manager.hh"
 #include "tmpdir.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/murmur3_partitioner.hh"
 #include "range.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/compaction_strategy_impl.hh"
@@ -1706,18 +1707,23 @@ static range<dht::token> create_token_range_from_keys(sstring start_key, sstring
     return range<dht::token>::make(start, end);
 }
 
-static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
+namespace dht {
+    extern std::unique_ptr<i_partitioner> default_partitioner;
+}
+
+static std::vector<std::pair<sstring, dht::token>> token_generation_for_shard(unsigned tokens_to_generate, unsigned shard,
+        unsigned ignore_msb = 0, unsigned smp_count = smp::count) {
     unsigned tokens = 0;
     unsigned key_id = 0;
     std::vector<std::pair<sstring, dht::token>> key_and_token_pair;
 
     key_and_token_pair.reserve(tokens_to_generate);
-    dht::set_global_partitioner(to_sstring("org.apache.cassandra.dht.Murmur3Partitioner"));
+    dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
 
     while (tokens < tokens_to_generate) {
         sstring key = to_sstring(key_id++);
         dht::token token = create_token_from_key(key);
-        if (engine().cpu_id() != dht::global_partitioner().shard_of(token)) {
+        if (shard != dht::global_partitioner().shard_of(token)) {
             continue;
         }
         tokens++;
@@ -1730,6 +1736,10 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_
     });
 
     return key_and_token_pair;
+}
+
+static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_shard(unsigned tokens_to_generate) {
+    return token_generation_for_shard(tokens_to_generate, engine().cpu_id());
 }
 
 static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, int64_t gen, uint64_t fake_data_size,
@@ -4054,6 +4064,77 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             auto descriptor = cs.get_sstables_for_compaction(*cf, { sst });
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
+    });
+}
+
+SEASTAR_TEST_CASE(sstable_owner_shards) {
+    return seastar::async([] {
+        cell_locker_stats cl_stats;
+
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            auto sst = make_sstable(s, tmp->path, (*gen)++, la, big);
+            sst->set_unshared();
+            return sst;
+        };
+        auto make_insert = [&] (auto p) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1);
+            BOOST_REQUIRE(m.decorated_key().token() == p.second);
+            return m;
+        };
+
+        auto make_shared_sstable = [&] (std::unordered_set<unsigned> shards, unsigned ignore_msb, unsigned smp_count) {
+            auto mut = [&] (auto shard) {
+                auto tokens = token_generation_for_shard(1, shard, ignore_msb, smp_count);
+                return make_insert(tokens[0]);
+            };
+            auto muts = boost::copy_range<std::vector<mutation>>(shards
+                | boost::adaptors::transformed([&] (auto shard) { return mut(shard); }));
+            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(1, ignore_msb);
+            auto sst = make_sstable_containing(sst_gen, std::move(muts));
+            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
+            sst = reusable_sst(s, tmp->path, sst->generation()).get0();
+            // restore partitioner
+            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp::count);
+            return sst;
+        };
+
+        auto assert_sstable_owners = [&] (std::unordered_set<unsigned> expected_owners, unsigned ignore_msb, unsigned smp_count) {
+            assert(expected_owners.size() <= smp_count);
+            auto sst = make_shared_sstable(expected_owners, ignore_msb, smp_count);
+            dht::default_partitioner = std::make_unique<dht::murmur3_partitioner>(smp_count, ignore_msb);
+            auto owners = boost::copy_range<std::unordered_set<unsigned>>(sst->get_shards_for_this_sstable());
+            BOOST_REQUIRE(boost::algorithm::all_of(expected_owners, [&] (unsigned expected_owner) {
+                return owners.count(expected_owner);
+            }));
+        };
+
+        assert_sstable_owners({ 0 }, 0, 1);
+        assert_sstable_owners({ 0 }, 0, 1);
+
+        assert_sstable_owners({ 0 }, 0, 4);
+        assert_sstable_owners({ 0, 1 }, 0, 4);
+        assert_sstable_owners({ 0, 2 }, 0, 4);
+        assert_sstable_owners({ 0, 1, 2, 3 }, 0, 4);
+
+        assert_sstable_owners({ 0 }, 12, 4);
+        assert_sstable_owners({ 0, 1 }, 12, 4);
+        assert_sstable_owners({ 0, 2 }, 12, 4);
+        assert_sstable_owners({ 0, 1, 2, 3 }, 12, 4);
+
+        assert_sstable_owners({ 10 }, 0, 63);
+        assert_sstable_owners({ 10 }, 12, 63);
+        assert_sstable_owners({ 10, 15 }, 0, 63);
+        assert_sstable_owners({ 10, 15 }, 12, 63);
+        assert_sstable_owners({ 0, 10, 15, 20, 30, 40, 50 }, 0, 63);
+        assert_sstable_owners({ 0, 10, 15, 20, 30, 40, 50 }, 12, 63);
     });
 }
 

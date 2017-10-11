@@ -488,6 +488,7 @@ private:
     uint64_t _bytes_on_disk = 0;
     db_clock::time_point _data_file_write_time;
     std::vector<nonwrapping_range<bytes_view>> _clustering_components_ranges;
+    std::vector<unsigned> _shards;
     stdx::optional<dht::decorated_key> _first;
     stdx::optional<dht::decorated_key> _last;
 
@@ -626,6 +627,8 @@ private:
     void write_deletion_time(file_writer& out, const tombstone t);
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
+
+    std::vector<unsigned> compute_shards_for_this_sstable() const;
 public:
     std::unique_ptr<index_reader> get_index_reader(const io_priority_class& pc);
 
@@ -690,7 +693,9 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
-    std::vector<unsigned> get_shards_for_this_sstable() const;
+    std::vector<unsigned> get_shards_for_this_sstable() const {
+        return _shards;
+    }
 
     uint32_t get_sstable_level() const {
         return get_stats_metadata().sstable_level;

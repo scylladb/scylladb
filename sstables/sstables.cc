@@ -1289,6 +1289,8 @@ future<> sstable::open_data() {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
         return this->update_info_for_opened_data();
+    }).then([this] {
+        _shards = compute_shards_for_this_sstable();
     });
 }
 
@@ -1395,6 +1397,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
         _components = std::move(info.components);
         _data_file = make_checked_file(_read_error_handler, info.data.to_file());
         _index_file = make_checked_file(_read_error_handler, info.index.to_file());
+        _shards = std::move(info.owners);
         validate_min_max_metadata();
         return update_info_for_opened_data();
     });
@@ -1404,9 +1407,8 @@ future<sstable_open_info> sstable::load_shared_components(const schema_ptr& s, s
         const io_priority_class& pc) {
     auto sst = sstables::make_sstable(s, dir, generation, v, f);
     return sst->load(pc).then([sst] () mutable {
-        auto shards = sst->get_shards_for_this_sstable();
         auto info = sstable_open_info{make_lw_shared<shareable_components>(std::move(*sst->_components)),
-            std::move(shards), std::move(sst->_data_file), std::move(sst->_index_file)};
+            std::move(sst->_shards), std::move(sst->_data_file), std::move(sst->_index_file)};
         return make_ready_future<sstable_open_info>(std::move(info));
     });
 }
@@ -2906,7 +2908,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 }
 
 std::vector<unsigned>
-sstable::get_shards_for_this_sstable() const {
+sstable::compute_shards_for_this_sstable() const {
     std::unordered_set<unsigned> shards;
     dht::partition_range_vector token_ranges;
     const auto* sm = _components->scylla_metadata
