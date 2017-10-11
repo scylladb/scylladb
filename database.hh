@@ -302,6 +302,7 @@ public:
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
         seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
         bool enable_metrics_reporting = false;
+        double single_key_parallel_scan_threshold = 0.5;
     };
     struct no_commitlog {};
     struct stats {
@@ -448,6 +449,10 @@ private:
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
+
+    mutable bool _single_key_optimization_enabled = true;
+    mutable int64_t _single_key_optimization_probing_read_counter = 0;
+
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables

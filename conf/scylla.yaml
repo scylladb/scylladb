@@ -798,3 +798,19 @@ commitlog_total_space_in_mb: -1
 #
 # Keep at 12 for new clusters.
 murmur3_partitioner_ignore_msb_bits: 12
+
+# The threshold at which the single-key sstable read optimization is turned off
+#
+# Reads that involve only whole rows (known up-front) of a single partition can
+# be optimized by reading the data-source from the most recent to the oldest
+# one and possibly not having to read all of the data-sources. In some cases
+# however most of the data sources has to be read anyway. This is ineffective
+# as they are read sequentially and it hurts latency. This option regulates when
+# exactly this optimization is considered ineffective and turned off.
+# The threshold is the proportion of the extra data source candidates that can
+# be read before the optimization is considered ineffective and switched off.
+# The threshold is number between 0 and 1, 0 forces the optimization off and 1
+# forces it on. Increase the treshold to favor throughput over latency for
+# single-row reads, decrease the treshold to improve latency at the expense of
+# throughput.
+# single_key_parallel_scan_threshold: 0.5
