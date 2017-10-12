@@ -152,6 +152,8 @@ void cache_tracker::touch(cache_entry& e) {
 void cache_tracker::insert(cache_entry& entry) {
     ++_stats.partition_insertions;
     ++_stats.partitions;
+    // partition_range_cursor depends on this to detect invalidation of _end
+    _region.allocator().invalidate_references();
     _lru.push_front(entry);
 }
 
