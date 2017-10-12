@@ -1133,9 +1133,9 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 void storage_service::set_tokens(std::unordered_set<token> tokens) {
     slogger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
-    _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
     auto local_tokens = get_local_tokens().get0();
     set_gossip_tokens(local_tokens);
+    _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
     set_mode(mode::NORMAL, "node is now in normal status", true);
     replicate_to_all_cores().get();
 }
