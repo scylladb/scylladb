@@ -716,8 +716,6 @@ public:
     future<range<partition_key>>
     get_sstable_key_range(const schema& s);
 
-    future<std::vector<shard_id>> get_owning_shards_from_unloaded();
-
     const std::vector<nonwrapping_range<bytes_view>>& clustering_components_ranges() const;
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here

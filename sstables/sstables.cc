@@ -2842,17 +2842,6 @@ sstable::get_sstable_key_range(const schema& s) {
     });
 }
 
-future<std::vector<shard_id>>
-sstable::get_owning_shards_from_unloaded() {
-    return when_all(read_summary(default_priority_class()), read_scylla_metadata(default_priority_class())).then(
-            [this] (std::tuple<future<>, future<>> rets) {
-        std::get<0>(rets).get();
-        std::get<1>(rets).get();
-        set_first_and_last_keys();
-        return get_shards_for_this_sstable();
-    });
-}
-
 /**
  * Returns a pair of positions [p1, p2) in the summary file corresponding to entries
  * covered by the specified range, or a disengaged optional if no such pair exists.
