@@ -66,6 +66,10 @@ public:
         return _key.key().external_memory_usage();
     }
 
+    size_t size_in_allocator_without_rows(allocation_strategy& allocator) {
+        return allocator.object_memory_size_in_allocator(this) + external_memory_usage_without_rows();
+    }
+
     struct compare {
         dht::decorated_key::less_comparator _c;
 
