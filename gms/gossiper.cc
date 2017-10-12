@@ -107,6 +107,25 @@ auto& storage_service_value_factory() {
     return service::get_local_storage_service().value_factory;
 }
 
+class feature_enabler : public i_endpoint_state_change_subscriber {
+    gossiper& _g;
+public:
+    feature_enabler(gossiper& g) : _g(g) {}
+    void on_join(inet_address ep, endpoint_state state) override {
+        _g.maybe_enable_features();
+    }
+    void on_change(inet_address ep, application_state state, const versioned_value&) override {
+        if (state == application_state::SUPPORTED_FEATURES) {
+            _g.maybe_enable_features();
+        }
+    }
+    void before_change(inet_address, endpoint_state, application_state, const versioned_value&) override { }
+    void on_alive(inet_address, endpoint_state) override {}
+    void on_dead(inet_address, endpoint_state) override {}
+    void on_remove(inet_address) override {}
+    void on_restart(inet_address, endpoint_state) override {}
+};
+
 gossiper::gossiper() {
     // Gossiper's stuff below runs only on CPU0
     if (engine().cpu_id() != 0) {
@@ -118,6 +137,7 @@ gossiper::gossiper() {
     fat_client_timeout = quarantine_delay() / 2;
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this);
+    register_(make_shared<feature_enabler>(*this));
     // Register this instance with JMX
     namespace sm = seastar::metrics;
     auto ep = get_broadcast_address();
@@ -670,7 +690,6 @@ void gossiper::run() {
             if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
                 if (endpoint_map_changed) {
                     shadow_endpoint_state_map = endpoint_state_map;
-                    maybe_enable_features();
                 }
 
                 if (live_endpoint_changed) {
@@ -687,7 +706,6 @@ void gossiper::run() {
                     if (engine().cpu_id() != 0) {
                         if (endpoint_map_changed) {
                             local_gossiper.endpoint_state_map = shadow_endpoint_state_map;
-                            local_gossiper.maybe_enable_features();
                         }
 
                         if (live_endpoint_changed) {
@@ -2040,6 +2058,7 @@ void gossiper::unregister_feature(feature* f) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::maybe_enable_features() {
     if (_registered_features.empty()) {
         _features_condvar.broadcast();
@@ -2047,17 +2066,19 @@ void gossiper::maybe_enable_features() {
     }
 
     auto&& features = get_supported_features();
-    for (auto it = _registered_features.begin(); it != _registered_features.end(); ) {
-        if (features.find(it->first) != features.end()) {
-            for (auto&& f : it->second) {
-                f->enable();
+    container().invoke_on_all([&features] (gossiper& g) {
+        for (auto it = g._registered_features.begin(); it != g._registered_features.end();) {
+            if (features.find(it->first) != features.end()) {
+                for (auto&& f : it->second) {
+                    f->enable();
+                }
+                it = g._registered_features.erase(it);
+            } else {
+                ++it;
             }
-            it = _registered_features.erase(it);
-        } else {
-            ++it;
         }
-    }
-    _features_condvar.broadcast();
+        g._features_condvar.broadcast();
+    }).get();
 }
 
 feature::feature(sstring name, bool enabled)
