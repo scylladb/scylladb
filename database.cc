@@ -824,7 +824,7 @@ void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level
     add_sstable(sst, std::move(shards));
 }
 
-void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable) noexcept {
+void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept {
     assert(!shards_for_the_sstable.empty());
     if (*boost::min_element(shards_for_the_sstable) == engine().cpu_id()) {
         _stats.live_disk_space_used += disk_space_used_by_sstable;
@@ -833,12 +833,12 @@ void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sst
     }
 }
 
-void column_family::add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable) {
+void column_family::add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable) {
     // allow in-progress reads to continue using old list
     auto new_sstables = make_lw_shared(*_sstables);
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
-    update_stats_for_new_sstable(sstable->bytes_on_disk(), std::move(shards_for_the_sstable));
+    update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
 }
 
 future<>

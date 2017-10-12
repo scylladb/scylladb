@@ -693,7 +693,7 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
-    std::vector<unsigned> get_shards_for_this_sstable() const {
+    const std::vector<unsigned>& get_shards_for_this_sstable() const {
         return _shards;
     }
 

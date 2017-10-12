@@ -449,14 +449,14 @@ private:
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
 private:
-    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, std::vector<unsigned>&& shards_for_the_sstable) noexcept;
+    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
     // the writes contained in this sstable.
     // Cache must be synchronized atomically with this, otherwise write atomicity may not be respected.
     // Doesn't trigger compaction.
     // Strong exception guarantees.
-    void add_sstable(sstables::shared_sstable sstable, std::vector<unsigned>&& shards_for_the_sstable);
+    void add_sstable(sstables::shared_sstable sstable, const std::vector<unsigned>& shards_for_the_sstable);
     // returns an empty pointer if sstable doesn't belong to current shard.
     future<sstables::shared_sstable> open_sstable(sstables::foreign_sstable_open_info info, sstring dir,
         int64_t generation, sstables::sstable_version_types v, sstables::sstable_format_types f);
