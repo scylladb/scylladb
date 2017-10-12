@@ -386,6 +386,7 @@ public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint);
 
     const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const;
+    endpoint_state& get_endpoint_state(inet_address ep);
 
     endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep);
 

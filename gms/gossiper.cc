@@ -124,9 +124,9 @@ gossiper::gossiper() {
     _metrics.add_group("gossip", {
         sm::make_derive("heart_beat",
             [ep, this] {
-                auto it = this->endpoint_state_map.find(ep);
-                if (it != this->endpoint_state_map.end()) {
-                    return it->second.get_heart_beat_state().get_heart_beat_version();
+                auto es = get_endpoint_state_for_endpoint_ptr(ep);
+                if (es) {
+                    return es->get_heart_beat_state().get_heart_beat_version();
                 } else {
                     return 0;
                 }
@@ -433,9 +433,9 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                    If there is a generation tie, attempt to break it by heartbeat version.
                    */
                 const endpoint_state& remote_state = map[ep];
-                auto it = endpoint_state_map.find(ep);
-                if (it != endpoint_state_map.end()) {
-                    endpoint_state& local_ep_state_ptr = it->second;
+                auto es = this->get_endpoint_state_for_endpoint_ptr(ep);
+                if (es) {
+                    endpoint_state& local_ep_state_ptr = *es;
                     int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
                     int remote_generation = remote_state.get_heart_beat_state().get_generation();
                     logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
@@ -743,8 +743,8 @@ std::set<inet_address> gossiper::get_live_members() {
 std::set<inet_address> gossiper::get_live_token_owners() {
     std::set<inet_address> token_owners;
     for (auto& member : get_live_members()) {
-        auto it = endpoint_state_map.find(member);
-        if (it != endpoint_state_map.end() && !is_dead_state(it->second) && service::get_local_storage_service().get_token_metadata().is_member(member)) {
+        auto es = get_endpoint_state_for_endpoint_ptr(member);
+        if (es && !is_dead_state(*es) && service::get_local_storage_service().get_token_metadata().is_member(member)) {
             token_owners.insert(member);
         }
     }
@@ -853,9 +853,9 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
     }
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
     for (auto& endpoint : endpoints) {
-        auto it = endpoint_state_map.find(endpoint);
-        if (it != endpoint_state_map.end()) {
-            auto& eps = it->second;
+        auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
+        if (es) {
+            auto& eps = *es;
             generation = eps.get_heart_beat_state().get_generation();
             max_version = get_max_endpoint_state_version(eps);
         }
@@ -876,7 +876,7 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
 
 future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
     return seastar::async([this, g = this->shared_from_this(), endpoint, host_id, local_host_id] {
-        auto& state = endpoint_state_map.at(endpoint);
+        auto& state = get_endpoint_state(endpoint);
         // remember this node's generation
         int generation = state.get_heart_beat_state().get_generation();
         logger.info("Removing host: {}", host_id);
@@ -884,7 +884,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
         sleep(ring_delay).get();
         // make sure it did not change
-        auto& eps = endpoint_state_map.at(endpoint);
+        auto& eps = get_endpoint_state(endpoint);
         if (eps.get_heart_beat_state().get_generation() != generation) {
             throw std::runtime_error(sprint("Endpoint %s generation changed while trying to remove it", endpoint));
         }
@@ -901,7 +901,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
 
 future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
     return seastar::async([this, g = this->shared_from_this(), endpoint, host_id] {
-        auto& eps = endpoint_state_map.at(endpoint);
+        auto& eps = get_endpoint_state(endpoint);
         eps.update_timestamp(); // make sure we don't evict it too soon
         eps.get_heart_beat_state().force_newer_generation_unsafe();
         auto expire_time = compute_expire_time();
@@ -923,16 +923,14 @@ future<> gossiper::assassinate_endpoint(sstring address) {
     return get_gossiper().invoke_on(0, [address] (auto&& gossiper) {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
             inet_address endpoint(address);
-            auto& endpoint_state_map = gossiper.endpoint_state_map;
+            auto es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
             auto now = gossiper.now();
-            auto is_exist = endpoint_state_map.count(endpoint);
             int gen = std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count();
             int ver = 9999;
-            endpoint_state&& ep_state = is_exist ? endpoint_state_map.at(endpoint) :
-                                                   endpoint_state(heart_beat_state(gen, ver));
+            endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
             std::vector<dht::token> tokens;
             logger.warn("Assassinating {} via gossip", endpoint);
-            if (is_exist) {
+            if (es) {
                 auto& ss = service::get_local_storage_service();
                 auto tokens = ss.get_token_metadata().get_tokens(endpoint);
                 if (tokens.empty()) {
@@ -946,11 +944,11 @@ future<> gossiper::assassinate_endpoint(sstring address) {
                 // make sure it did not change
                 sleep(ss.get_ring_delay()).get();
 
-                auto it = endpoint_state_map.find(endpoint);
-                if (it == endpoint_state_map.end()) {
+                es = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
+                if (!es) {
                     logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
                 } else {
-                    auto& new_state = it->second;
+                    auto& new_state = *es;
                     if (new_state.get_heart_beat_state().get_generation() != generation) {
                         throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
                     } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
@@ -978,13 +976,13 @@ bool gossiper::is_known_endpoint(inet_address endpoint) {
 
 future<int> gossiper::get_current_generation_number(inet_address endpoint) {
     return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
-        return gossiper.endpoint_state_map.at(endpoint).get_heart_beat_state().get_generation();
+        return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_generation();
     });
 }
 
 future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
     return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
-        return gossiper.endpoint_state_map.at(endpoint).get_heart_beat_state().get_heart_beat_version();
+        return gossiper.get_endpoint_state(endpoint).get_heart_beat_state().get_heart_beat_version();
     });
 }
 
@@ -1041,13 +1039,12 @@ future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
 }
 
 bool gossiper::is_gossip_only_member(inet_address endpoint) {
-    auto it = endpoint_state_map.find(endpoint);
-    if (it == endpoint_state_map.end()) {
+    auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (!es) {
         return false;
     }
-    auto& eps = it->second;
     auto& ss = service::get_local_storage_service();
-    return !is_dead_state(eps) && !ss.get_token_metadata().is_member(endpoint);
+    return !is_dead_state(*es) && !ss.get_token_metadata().is_member(endpoint);
 }
 
 clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
@@ -1077,6 +1074,14 @@ endpoint_state* gossiper::get_endpoint_state_for_endpoint_ptr(inet_address ep) {
     } else {
         return &it->second;
     }
+}
+
+endpoint_state& gossiper::get_endpoint_state(inet_address ep) {
+    auto ptr = get_endpoint_state_for_endpoint_ptr(ep);
+    if (!ptr) {
+        throw std::out_of_range(sprint("ep=%s", ep));
+    }
+    return *ptr;
 }
 
 stdx::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
@@ -1113,9 +1118,9 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) {
 
 std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
     std::experimental::optional<endpoint_state> reqd_endpoint_state;
-    auto it = endpoint_state_map.find(for_endpoint);
-    if (it != endpoint_state_map.end()) {
-        auto& eps = it->second;
+    auto es = get_endpoint_state_for_endpoint_ptr(for_endpoint);
+    if (es) {
+        auto& eps = *es;
         /*
              * Here we try to include the Heart Beat state only if it is
              * greater than the version passed in. It might happen that
@@ -1188,11 +1193,11 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
             // After sending echo message, the Node might not be in the
             // endpoint_state_map anymore, use the reference of local_state
             // might cause user-after-free
-            auto it = endpoint_state_map.find(addr);
-            if (it == endpoint_state_map.end()) {
+            auto es = get_endpoint_state_for_endpoint_ptr(addr);
+            if (!es) {
                 logger.info("Node {} is not in endpoint_state_map anymore", addr);
             } else {
-                endpoint_state& state = it->second;
+                endpoint_state& state = *es;
                 logger.debug("Mark Node {} alive after EchoMessage", addr);
                 real_mark_alive(addr, state);
             }
@@ -1417,18 +1422,19 @@ void gossiper::examine_gossiper(std::vector<gossip_digest>& g_digest_list,
         int remote_generation = g_digest.get_generation();
         int max_remote_version = g_digest.get_max_version();
         /* Get state associated with the end point in digest */
-        auto it = endpoint_state_map.find(g_digest.get_endpoint());
+        auto&& ep = g_digest.get_endpoint();
+        auto es = get_endpoint_state_for_endpoint_ptr(ep);
         /* Here we need to fire a GossipDigestAckMessage. If we have some
              * data associated with this endpoint locally then we follow the
              * "if" path of the logic. If we have absolutely nothing for this
              * endpoint we need to request all the data for this endpoint.
              */
-        if (it != endpoint_state_map.end()) {
-            endpoint_state& ep_state_ptr = it->second;
+        if (es) {
+            endpoint_state& ep_state_ptr = *es;
             int local_generation = ep_state_ptr.get_heart_beat_state().get_generation();
             /* get the max version of all keys in the state associated with this endpoint */
             int max_local_version = get_max_endpoint_state_version(ep_state_ptr);
-            logger.trace("examine_gossiper(): ep={}, remote={}.{}, local={}.{}", it->first,
+            logger.trace("examine_gossiper(): ep={}, remote={}.{}, local={}.{}", ep,
                 remote_generation, max_remote_version, local_generation, max_local_version);
             if (remote_generation == local_generation && max_remote_version == max_local_version) {
                 continue;
@@ -1560,9 +1566,9 @@ void gossiper::add_saved_endpoint(inet_address ep) {
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
     auto ep_state = endpoint_state(heart_beat_state(0));
-    auto it = endpoint_state_map.find(ep);
-    if (it != endpoint_state_map.end()) {
-        ep_state = it->second;
+    auto es = get_endpoint_state_for_endpoint_ptr(ep);
+    if (es) {
+        ep_state = *es;
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
         ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(0));
     }
@@ -1579,13 +1585,14 @@ future<> gossiper::add_local_application_state(application_state state, versione
     return get_gossiper().invoke_on(0, [state, value = std::move(value)] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), state, value = std::move(value)] () mutable {
             inet_address ep_addr = gossiper.get_broadcast_address();
-            if (!gossiper.endpoint_state_map.count(ep_addr)) {
+            auto es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
+            if (!es) {
                 auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_state = %s, value = %s",
                                   ep_addr, state, value);
                 logger.error("{}", err);
                 throw std::runtime_error(err);
             }
-            endpoint_state ep_state_before = gossiper.endpoint_state_map.at(ep_addr);
+            endpoint_state ep_state_before = *es;
             // Fire "before change" notifications:
             gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
             // Notifications may have taken some time, so preventively raise the version
@@ -1593,9 +1600,9 @@ future<> gossiper::add_local_application_state(application_state state, versione
             // if another value with a newer version was received in the meantime:
             value = storage_service_value_factory().clone_with_higher_version(value);
             // Add to local application state and fire "on change" notifications:
-            if (gossiper.endpoint_state_map.count(ep_addr)) {
-                auto& ep_state = gossiper.endpoint_state_map.at(ep_addr);
-                ep_state.add_application_state(state, value);
+            es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
+            if (es) {
+                es->add_application_state(state, value);
                 gossiper.do_on_change_notifications(ep_addr, state, value);
             }
         }).handle_exception([] (auto ep) {
@@ -1746,9 +1753,9 @@ const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint
  */
 // Runs inside seastar::async context
 void gossiper::mark_as_shutdown(const inet_address& endpoint) {
-    auto it = endpoint_state_map.find(endpoint);
-    if (it != endpoint_state_map.end()) {
-        auto& ep_state = it->second;
+    auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
+    if (es) {
+        auto& ep_state = *es;
         ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
         mark_dead(endpoint, ep_state);
@@ -1757,10 +1764,9 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
 }
 
 void gossiper::force_newer_generation() {
-    auto it = endpoint_state_map.find(get_broadcast_address());
-    if (it != endpoint_state_map.end()) {
-        auto& ep_state = it->second;
-        ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+    auto es = get_endpoint_state_for_endpoint_ptr(get_broadcast_address());
+    if (es) {
+        es->get_heart_beat_state().force_newer_generation_unsafe();
     }
 }
 
