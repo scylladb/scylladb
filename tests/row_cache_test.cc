@@ -2048,3 +2048,51 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto keys = s.make_pkeys(10);
+        std::vector<mutation> muts;
+
+        for (auto&& k : keys) {
+            mutation m(k, s.schema());
+            m.partition().apply(s.new_tombstone());
+            muts.push_back(m);
+            underlying.apply(m);
+        }
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        // Check the case when one reader inserts entries after the other reader's range but before
+        // that readers upper bound at the time the read started.
+
+        auto range1 = dht::partition_range::make({keys[0]}, {keys[3]});
+        auto range2 = dht::partition_range::make({keys[4]}, {keys[8]});
+
+        populate_range(cache, dht::partition_range::make_singular({keys[0]}));
+        populate_range(cache, dht::partition_range::make_singular({keys[1]}));
+        populate_range(cache, dht::partition_range::make_singular({keys[6]}));
+
+        // FIXME: When readers have buffering across partitions, limit buffering to 1
+        auto rd1 = assert_that(cache.make_reader(s.schema(), range1));
+        rd1.produces(muts[0]);
+
+        auto rd2 = assert_that(cache.make_reader(s.schema(), range2));
+        rd2.produces(muts[4]);
+
+        rd1.produces(muts[1]);
+        rd1.produces(muts[2]);
+        rd1.produces(muts[3]);
+        rd1.produces_end_of_stream();
+
+        rd2.produces(muts[5]);
+        rd2.produces(muts[6]);
+        rd2.produces(muts[7]);
+        rd2.produces(muts[8]);
+        rd1.produces_end_of_stream();
+    });
+}
