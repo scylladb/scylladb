@@ -230,4 +230,8 @@ public:
         return _rp_set;
     }
     friend class iterator_reader;
+
+    dirty_memory_manager& get_dirty_memory_manager() {
+        return _dirty_mgr;
+    }
 };
