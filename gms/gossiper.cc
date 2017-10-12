@@ -598,12 +598,6 @@ void gossiper::run() {
             heart_beat_state& hbs = endpoint_state_map[br_addr].get_heart_beat_state();
             hbs.update_heart_beat();
 
-            //
-            // We don't care about heart_beat change on other CPUs - so ingnore this
-            // specific change.
-            //
-            shadow_endpoint_state_map[br_addr].get_heart_beat_state() = hbs;
-
             logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
             std::vector<gossip_digest> g_digests;
             this->make_random_gossip_digest(g_digests);
@@ -683,15 +677,10 @@ void gossiper::run() {
             //      them across all other shards.
             //    - Reschedule the gossiper only after execution on all nodes is done.
             //
-            bool endpoint_map_changed = (shadow_endpoint_state_map != endpoint_state_map);
             bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
             bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
 
-            if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
-                if (endpoint_map_changed) {
-                    shadow_endpoint_state_map = endpoint_state_map;
-                }
-
+            if (live_endpoint_changed || unreachable_endpoint_changed) {
                 if (live_endpoint_changed) {
                     _shadow_live_endpoints = _live_endpoints;
                 }
@@ -700,14 +689,9 @@ void gossiper::run() {
                     _shadow_unreachable_endpoints = _unreachable_endpoints;
                 }
 
-                _the_gossiper.invoke_on_all([this, endpoint_map_changed,
-                    live_endpoint_changed, unreachable_endpoint_changed] (gossiper& local_gossiper) {
+                _the_gossiper.invoke_on_all([this, live_endpoint_changed, unreachable_endpoint_changed] (gossiper& local_gossiper) {
                     // Don't copy gossiper(CPU0) maps into themselves!
                     if (engine().cpu_id() != 0) {
-                        if (endpoint_map_changed) {
-                            local_gossiper.endpoint_state_map = shadow_endpoint_state_map;
-                        }
-
                         if (live_endpoint_changed) {
                             local_gossiper._live_endpoints = _shadow_live_endpoints;
                         }

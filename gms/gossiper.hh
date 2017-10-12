@@ -130,7 +130,6 @@ public:
 public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
-    std::unordered_map<inet_address, endpoint_state> shadow_endpoint_state_map;
     // Used for serializing changes to endpoint_state_map and running of associated change listeners.
     endpoint_locks_map endpoint_locks;
 
