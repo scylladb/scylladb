@@ -189,6 +189,14 @@ public:
         _dirty_bytes_released_pre_accounted += delta;
     }
 
+    void pin_real_dirty_memory(int64_t delta) {
+        _real_region_group.update(delta);
+    }
+
+    void unpin_real_dirty_memory(int64_t delta) {
+        _real_region_group.update(-delta);
+    }
+
     size_t real_dirty_memory() const {
         return _real_region_group.memory_used();
     }
