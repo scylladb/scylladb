@@ -210,6 +210,7 @@ public:
         uint64_t reads;
         uint64_t reads_with_misses;
         uint64_t reads_done;
+        uint64_t pinned_dirty_memory_overload;
 
         uint64_t active_reads() const {
             return reads_done - reads;
@@ -237,6 +238,7 @@ public:
     void on_row_miss();
     void on_miss_already_populated();
     void on_mispopulate();
+    void pinned_dirty_memory_overload(uint64_t bytes);
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;

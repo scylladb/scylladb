@@ -35,6 +35,7 @@
 #include "cache_streamed_mutation.hh"
 #include "read_context.hh"
 #include "schema_upgrader.hh"
+#include "dirty_memory_manager.hh"
 
 using namespace std::chrono_literals;
 using namespace cache;
@@ -116,6 +117,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("sstable_reader_recreations", sm::description("number of times sstable reader was recreated due to memtable flush"), _stats.underlying_recreations),
         sm::make_derive("sstable_partition_skips", sm::description("number of times sstable reader was fast forwarded across partitions"), _stats.underlying_partition_skips),
         sm::make_derive("sstable_row_skips", sm::description("number of times sstable reader was fast forwarded within a partition"), _stats.underlying_row_skips),
+        sm::make_derive("pinned_dirty_memory_overload", sm::description("amount of pinned bytes that we tried to unpin over the limit. This should sit constantly at 0, and any number different than 0 is indicative of a bug"), _stats.pinned_dirty_memory_overload),
     });
 }
 
@@ -189,6 +191,10 @@ void cache_tracker::on_mispopulate() {
 
 void cache_tracker::on_miss_already_populated() {
     ++_stats.concurrent_misses_same_key;
+}
+
+void cache_tracker::pinned_dirty_memory_overload(uint64_t bytes) {
+    _stats.pinned_dirty_memory_overload += bytes;
 }
 
 allocation_strategy& cache_tracker::allocator() {
@@ -775,9 +781,45 @@ row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
     return _underlying_phase - 1;
 }
 
+// makes sure that cache updates handles real dirty memory correctly.
+class real_dirty_memory_accounter {
+  dirty_memory_manager& _mgr;
+  cache_tracker& _tracker;
+  uint64_t _bytes;
+public:
+  real_dirty_memory_accounter(memtable& m, cache_tracker& tracker)
+    : _mgr(m.get_dirty_memory_manager())
+    , _tracker(tracker)
+    , _bytes(m.occupancy().used_space()) {
+    _mgr.pin_real_dirty_memory(_bytes);
+  }
+
+  ~real_dirty_memory_accounter() {
+    _mgr.unpin_real_dirty_memory(_bytes);
+  }
+
+  real_dirty_memory_accounter(real_dirty_memory_accounter&& c) : _mgr(c._mgr), _tracker(c._tracker), _bytes(c._bytes) {
+    c._bytes = 0;
+  }
+  real_dirty_memory_accounter(const real_dirty_memory_accounter& c) = delete;
+
+  void unpin_memory(uint64_t bytes) {
+    // this should never happen - if it does it is a bug. But we'll try to recover and log
+    // instead of asserting. Once it happens, though, it can keep happening until the update is
+    // done. So using metrics is better-suited than printing to the logs
+    if (bytes > _bytes) {
+        _tracker.pinned_dirty_memory_overload(bytes - _bytes);
+    }
+    auto delta = std::min(bytes, _bytes);
+    _bytes -= delta;
+    _mgr.unpin_real_dirty_memory(delta);
+  }
+};
+
 template <typename Updater>
 future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater) {
   return do_update(std::move(eu), [this, &m, updater = std::move(updater)] {
+    real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     STAP_PROBE(scylla, row_cache_update_start);
@@ -788,7 +830,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
 
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
-    return seastar::async(std::move(attr), [this, &m, updater = std::move(updater)] () mutable {
+    return seastar::async(std::move(attr), [this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] {
             invalidate_sync(m);
@@ -813,9 +855,12 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                           with_linearized_managed_bytes([&] {
                            {
                             memtable_entry& mem_e = *i;
+                            auto size_entry = mem_e.size_in_allocator(_tracker.allocator());
+
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
                             updater(cache_i, mem_e, is_present);
+                            real_dirty_acc.unpin_memory(size_entry);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
                             --quota;
