@@ -70,6 +70,14 @@ public:
         return allocator.object_memory_size_in_allocator(this) + external_memory_usage_without_rows();
     }
 
+    size_t size_in_allocator(allocation_strategy& allocator) {
+        auto size = size_in_allocator_without_rows(allocator);
+        for (auto&& v : _pe.versions()) {
+            size += v.size_in_allocator(allocator);
+        }
+        return size;
+    }
+
     struct compare {
         dht::decorated_key::less_comparator _c;
 
