@@ -168,7 +168,7 @@ if __name__ == "__main__":
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
 
-    all_ok = True
+    failed_tests = []
 
     n_total = len(test_to_run)
     env = os.environ
@@ -212,12 +212,15 @@ if __name__ == "__main__":
                 print('=== stdout START ===')
                 print(str(out, encoding='UTF-8'))
                 print('=== stdout END ===')
-            all_ok = False
+            failed_tests.append(path)
         else:
             print_status('%s PASSED %s' % (prefix, path))
 
-    if all_ok:
+    if not failed_tests:
         print('\nOK.')
     else:
-        print_status('')
+        print('\n\nThe following test(s) have failed:')
+        for test in failed_tests:
+            print('  {}'.format(test))
+        print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(test_to_run)))
         sys.exit(1)
