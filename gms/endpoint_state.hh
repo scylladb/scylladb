@@ -90,10 +90,12 @@ public:
         , _is_alive(true) {
     }
 
+    // Valid only on shard 0
     heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
 
+    // Valid only on shard 0
     const heart_beat_state& get_heart_beat_state() const {
         return _heart_beat_state;
     }
@@ -124,6 +126,8 @@ public:
     /* getters and setters */
     /**
      * @return System.nanoTime() when state was updated last time.
+     *
+     * Valid only on shard 0.
      */
     clk::time_point get_update_timestamp() const {
         return _update_timestamp;
