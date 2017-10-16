@@ -113,28 +113,34 @@ static void assert_single_version(lw_shared_ptr<partition_snapshot> snp) {
 }
 
 struct expected_row {
-    int ck;
+    position_in_partition pos;
     is_continuous continuous;
     is_dummy dummy;
 
     struct dummy_tag_t { };
 
-    expected_row(int k, is_continuous cont)
-        : ck(k), continuous(cont), dummy(false) { }
+    expected_row(int k, is_continuous cont, is_dummy dummy = is_dummy::no)
+        : pos(position_in_partition::for_key(make_ck(k))), continuous(cont), dummy(dummy) { }
+    expected_row(position_in_partition pos, is_continuous cont, is_dummy dummy = is_dummy::no)
+        : pos(pos), continuous(cont), dummy(dummy) { }
     expected_row(dummy_tag_t, is_continuous cont)
-        : continuous(cont), dummy(true) { }
+        : pos(position_in_partition::after_all_clustered_rows()), continuous(cont), dummy(true) { }
 
     void check(const rows_entry& r) const {
-        clustering_key::equality ck_eq(*SCHEMA);
+        position_in_partition::equal_compare ck_eq(*SCHEMA);
+        if (!ck_eq(r.position(), pos)) {
+            BOOST_FAIL(sprint("Expected %s, but got %s", pos, r.position()));
+        }
         BOOST_REQUIRE_EQUAL(r.continuous(), continuous);
         BOOST_REQUIRE_EQUAL(r.dummy(), dummy);
-        if (!r.dummy()) {
-            BOOST_REQUIRE(ck_eq(r.key(), make_ck(ck)));
-        }
+    }
+
+    position_in_partition key() const {
+        return pos;
     }
 
     friend std::ostream& operator<<(std::ostream& out, const expected_row& e) {
-        return out << "{ck=" << e.ck << ", cont=" << bool(e.continuous) << ", dummy=" << bool(e.dummy) << "}";
+        return out << "{pos=" << e.key() << ", cont=" << bool(e.continuous) << ", dummy=" << bool(e.dummy) << "}";
     }
 };
 
