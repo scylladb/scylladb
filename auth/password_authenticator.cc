@@ -125,7 +125,7 @@ static sstring gensalt() {
     sstring salt;
 
     if (!prefix.empty()) {
-        return prefix + salt;
+        return prefix + input;
     }
 
     // Try in order:
