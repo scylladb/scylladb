@@ -66,7 +66,8 @@ namespace statements {
 class select_statement : public cql_statement {
 public:
     using parameters = raw::select_statement::parameters;
-private:
+    using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
+protected:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
     static thread_local const ::shared_ptr<parameters> _default_parameters;
     schema_ptr _schema;
@@ -81,7 +82,6 @@ private:
     using compare_fn = raw::select_statement::compare_fn<T>;
 
     using result_row_type = raw::select_statement::result_row_type;
-    using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
 
     /**
      * The comparator used to orders results when multiple keys are selected (using IN).
@@ -90,8 +90,8 @@ private:
 
     query::partition_slice::option_set _opts;
     cql_stats& _stats;
-private:
-    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
+protected :
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
         service::query_state& state, const query_options& options);
     friend class select_statement_executor;
 public:
@@ -135,9 +135,60 @@ public:
 
     ::shared_ptr<restrictions::statement_restrictions> get_restrictions() const;
 
-private:
+protected:
     int32_t get_limit(const query_options& options) const;
     bool needs_post_query_ordering() const;
+};
+
+class primary_key_select_statement : public select_statement {
+public:
+    primary_key_select_statement(schema_ptr schema,
+                     uint32_t bound_terms,
+                     ::shared_ptr<parameters> parameters,
+                     ::shared_ptr<selection::selection> selection,
+                     ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                     bool is_reversed,
+                     ordering_comparator_type ordering_comparator,
+                     ::shared_ptr<term> limit,
+                     cql_stats &stats);
+};
+
+class indexed_table_select_statement : public select_statement {
+    secondary_index::index _index;
+public:
+    static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
+                                                                    schema_ptr schema,
+                                                                    uint32_t bound_terms,
+                                                                    ::shared_ptr<parameters> parameters,
+                                                                    ::shared_ptr<selection::selection> selection,
+                                                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                                    bool is_reversed,
+                                                                    ordering_comparator_type ordering_comparator,
+                                                                    ::shared_ptr<term> limit,
+                                                                    cql_stats &stats);
+
+    indexed_table_select_statement(schema_ptr schema,
+                                   uint32_t bound_terms,
+                                   ::shared_ptr<parameters> parameters,
+                                   ::shared_ptr<selection::selection> selection,
+                                   ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                   bool is_reversed,
+                                   ordering_comparator_type ordering_comparator,
+                                   ::shared_ptr<term> limit,
+                                   cql_stats &stats,
+                                   const secondary_index::index& index);
+
+private:
+    static stdx::optional<secondary_index::index> find_idx(database& db,
+                                                           schema_ptr schema,
+                                                           ::shared_ptr<restrictions::statement_restrictions> restrictions);
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
+                                                                                     service::query_state& state, const query_options& options) override;
+
+    future<dht::partition_range_vector> find_index_partition_ranges(distributed<service::storage_proxy>& proxy,
+                                                                    service::query_state& state,
+                                                                    const query_options& options);
 };
 
 }
