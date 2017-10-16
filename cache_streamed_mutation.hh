@@ -293,7 +293,21 @@ future<> cache_streamed_mutation::read_from_underlying() {
                     } else if (can_populate()) {
                         rows_entry::compare less(*_schema);
                         auto& rows = _snp->version()->partition().clustered_rows();
-                        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+                        if (query::is_single_row(*_schema, *_ck_ranges_curr)) {
+                            with_allocator(_snp->region().allocator(), [&] {
+                                auto e = alloc_strategy_unique_ptr<rows_entry>(
+                                    current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
+                                // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
+                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto inserted = insert_result.second;
+                                auto it = insert_result.first;
+                                if (inserted) {
+                                    e.release();
+                                    auto next = std::next(it);
+                                    it->set_continuous(next->continuous());
+                                }
+                            });
+                        } else if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
@@ -441,7 +455,11 @@ void cache_streamed_mutation::move_to_current_range() {
     auto adjacent = _next_row.advance_to(_lower_bound);
     _next_row_in_range = !after_current_range(_next_row.position());
     if (!adjacent && !_next_row.continuous()) {
-        if (_ck_ranges_curr->start()) {
+        // FIXME: We don't insert a dummy for singular range to avoid allocating 3 entries
+        // for a hit (before, at and after). If we supported the concept of an incomplete row,
+        // we could insert such a row for the lower bound if it's full instead, for both singular and
+        // non-singular ranges.
+        if (_ck_ranges_curr->start() && !query::is_single_row(*_schema, *_ck_ranges_curr)) {
             // Insert dummy for lower bound
             if (can_populate()) {
                 // FIXME: _lower_bound could be adjacent to the previous row, in which case we could skip this
