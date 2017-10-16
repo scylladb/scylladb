@@ -28,6 +28,7 @@
 #include "utils/move.hh"
 #include "stdx.hh"
 #include "reader_resource_tracker.hh"
+#include "flat_mutation_reader.hh"
 
 // Dumb selector implementation for combined_mutation_reader that simply
 // forwards it's list of readers.
@@ -530,4 +531,78 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         }
         return make_combined_reader(std::move(rd), mutation_reader::forwarding::yes);
     });
+}
+
+mutation_reader mutation_reader_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader&& mr) {
+    class converting_reader final : public mutation_reader::impl {
+        struct state final {
+            flat_mutation_reader _mr;
+            state(flat_mutation_reader&& r) : _mr(std::move(r)) { }
+        };
+        schema_ptr _schema;
+        lw_shared_ptr<state> _state;
+
+        void move_to_next_partition() {
+            _state->_mr.next_partition();
+        }
+    public:
+        converting_reader(schema_ptr s, flat_mutation_reader&& mr)
+            : _schema(std::move(s)), _state(make_lw_shared<state>(std::move(mr)))
+        { }
+
+        virtual future<streamed_mutation_opt> operator()() override {
+            class partition_reader final : public streamed_mutation::impl {
+                lw_shared_ptr<state> _state;
+            public:
+                partition_reader(lw_shared_ptr<state> state, schema_ptr s, dht::decorated_key dk, tombstone t)
+                    : streamed_mutation::impl(std::move(s), std::move(dk), std::move(t))
+                    , _state(std::move(state))
+                { }
+
+                virtual future<> fill_buffer() override {
+                    if (_end_of_stream) {
+                        return make_ready_future<>();
+                    }
+                    return _state->_mr.consume_pausable([this] (mutation_fragment_opt&& mfopt) {
+                        assert(bool(mfopt));
+                        if (mfopt->is_end_of_partition()) {
+                            _end_of_stream = true;
+                            return stop_iteration::yes;
+                        } else {
+                            this->push_mutation_fragment(std::move(*mfopt));
+                            return is_buffer_full() ? stop_iteration::yes : stop_iteration::no;
+                        }
+                    }).then([this] {
+                        if (_state->_mr.is_end_of_stream() && _state->_mr.is_buffer_empty()) {
+                            _end_of_stream = true;
+                        }
+                    });
+                }
+
+                virtual future<> fast_forward_to(position_range cr) {
+                    forward_buffer_to(cr.start());
+                    _end_of_stream = false;
+                    return _state->_mr.fast_forward_to(std::move(cr));
+                }
+            };
+            move_to_next_partition();
+            return _state->_mr().then([this] (auto&& mfopt) {
+                if (!mfopt) {
+                    return make_ready_future<streamed_mutation_opt>();
+                }
+                assert(mfopt->is_partition_start());
+                partition_start& ph = mfopt->as_mutable_partition_start();
+                return make_ready_future<streamed_mutation_opt>(
+                    make_streamed_mutation<partition_reader>(_state,
+                                                     _schema,
+                                                     std::move(ph.key()),
+                                                     std::move(ph.partition_tombstone())));
+            });
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            return _state->_mr.fast_forward_to(pr);
+        }
+    };
+    return make_mutation_reader<converting_reader>(std::move(s), std::move(mr));
 }

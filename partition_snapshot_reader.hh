@@ -27,6 +27,8 @@ struct partition_snapshot_reader_dummy_accounter {
    void operator()(const clustering_row& cr) {}
    void operator()(const static_row& sr) {}
    void operator()(const range_tombstone& rt) {}
+   void operator()(const partition_start& ph) {}
+   void operator()(const partition_end& eop) {}
 };
 extern partition_snapshot_reader_dummy_accounter no_accounter;
 

@@ -426,7 +426,7 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
             }
             f.get();
         } else {
-            if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+            if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
                 break;
             }
         }
@@ -434,17 +434,20 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
     return make_ready_future<stop_iteration>(c.consume_end_of_partition());
 }
 
-/*
+GCC6_CONCEPT(
 template<typename T>
 concept bool FlattenedConsumer() {
-    return StreamedMutationConsumer() && requires(T obj, const dht::decorated_key& dk) {
+    return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
         obj.consume_new_partition(dk);
         obj.consume_end_of_partition();
     };
 }
-*/
-template<typename FlattenedConsumer>
-auto consume_flattened(mutation_reader mr, FlattenedConsumer&& c, bool reverse_mutations = false)
+)
+template<typename Consumer>
+GCC6_CONCEPT(
+    requires FlattenedConsumer<Consumer>()
+)
+auto consume_flattened(mutation_reader mr, Consumer&& c, bool reverse_mutations = false)
 {
     return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
         return repeat([&, reverse_mutations] {
@@ -503,7 +506,7 @@ auto consume_flattened_in_thread(mutation_reader& mr, FlattenedConsumer& c, Stre
                 }
                 sm.fill_buffer().get0();
             } else {
-                if (sm.pop_mutation_fragment().consume(c) == stop_iteration::yes) {
+                if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -547,3 +550,7 @@ make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partiti
                         const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
                         tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+
+class flat_mutation_reader;
+
+mutation_reader mutation_reader_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader&&);

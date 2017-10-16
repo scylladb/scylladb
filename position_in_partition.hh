@@ -51,14 +51,24 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
     abort();
 }
 
+enum class partition_region {
+    partition_start,
+    static_row,
+    clustered,
+    partition_end,
+};
+
+
 class position_in_partition_view {
     friend class position_in_partition;
 
+    partition_region _type;
     int _bound_weight = 0;
-    const clustering_key_prefix* _ck; // nullptr for static row
+    const clustering_key_prefix* _ck; // nullptr when _type != clustered
 private:
-    position_in_partition_view(int bound_weight, const clustering_key_prefix* ck)
-        : _bound_weight(bound_weight)
+    position_in_partition_view(partition_region type, int bound_weight, const clustering_key_prefix* ck)
+        : _type(type)
+        , _bound_weight(bound_weight)
         , _ck(ck)
     { }
     // Returns placement of this position_in_partition relative to *_ck,
@@ -75,18 +85,22 @@ private:
         }
     }
 public:
+    struct partition_start_tag_t { };
+    struct end_of_partition_tag_t { };
     struct static_row_tag_t { };
     struct clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
-    position_in_partition_view(static_row_tag_t) : _ck(nullptr) { }
+    explicit position_in_partition_view(partition_start_tag_t) : _type(partition_region::partition_start), _ck(nullptr) { }
+    explicit position_in_partition_view(end_of_partition_tag_t) : _type(partition_region::partition_end), _ck(nullptr) { }
+    explicit position_in_partition_view(static_row_tag_t) : _type(partition_region::static_row), _ck(nullptr) { }
     position_in_partition_view(clustering_row_tag_t, const clustering_key_prefix& ck)
-        : _ck(&ck) { }
+        : _type(partition_region::clustered), _ck(&ck) { }
     position_in_partition_view(const clustering_key_prefix& ck)
-        : _ck(&ck) { }
+        : _type(partition_region::clustered), _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
-        : _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
 
     static position_in_partition_view for_range_start(const query::clustering_range& r) {
         return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
@@ -105,7 +119,7 @@ public:
     }
 
     static position_in_partition_view for_static_row() {
-        return {static_row_tag_t()};
+        return position_in_partition_view(static_row_tag_t());
     }
 
     static position_in_partition_view for_key(const clustering_key& ck) {
@@ -113,20 +127,24 @@ public:
     }
 
     static position_in_partition_view after_key(const clustering_key& ck) {
-        return {1, &ck};
+        return {partition_region::clustered, 1, &ck};
     }
 
-    bool is_static_row() const { return !_ck; }
-    bool is_clustering_row() const { return _ck && !_bound_weight; }
+    bool is_partition_start() const { return _type == partition_region::partition_start; }
+    bool is_partition_end() const { return _type == partition_region::partition_end; }
+    bool is_static_row() const { return _type == partition_region::static_row; }
+    bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
+    bool has_clustering_key() const { return _type == partition_region::clustered; }
 
     // Returns true if all fragments that can be seen for given schema have
-    // positions >= than this.
+    // positions >= than this. partition_start is ignored.
     bool is_before_all_fragments(const schema& s) const {
-        return !_ck || (!s.has_static_columns() && _bound_weight < 0 && _ck->is_empty(s));
+        return _type == partition_region::partition_start || _type == partition_region::static_row
+               || (_type == partition_region::clustered && !s.has_static_columns() && _bound_weight < 0 && key().is_empty(s));
     }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return _ck && _ck->is_empty(s) && _bound_weight > 0;
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
     }
 
     // Valid when >= before_all_clustered_rows()
@@ -145,9 +163,12 @@ public:
 };
 
 class position_in_partition {
+    partition_region _type;
     int _bound_weight = 0;
     stdx::optional<clustering_key_prefix> _ck;
 public:
+    struct partition_start_tag_t { };
+    struct end_of_partition_tag_t { };
     struct static_row_tag_t { };
     struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
@@ -155,18 +176,20 @@ public:
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
-    explicit position_in_partition(static_row_tag_t) { }
+    explicit position_in_partition(partition_start_tag_t) : _type(partition_region::partition_start) { }
+    explicit position_in_partition(end_of_partition_tag_t) : _type(partition_region::partition_end) { }
+    explicit position_in_partition(static_row_tag_t) : _type(partition_region::static_row) { }
     position_in_partition(clustering_row_tag_t, clustering_key_prefix ck)
-        : _ck(std::move(ck)) { }
+        : _type(partition_region::clustered), _ck(std::move(ck)) { }
     position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
         // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
-        : _bound_weight(1), _ck(std::move(ck)) { }
+        : _type(partition_region::clustered), _bound_weight(1), _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
-        : _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
     position_in_partition(after_static_row_tag_t) :
         position_in_partition(range_tag_t(), bound_view::bottom()) { }
     explicit position_in_partition(position_in_partition_view view)
-        : _bound_weight(view._bound_weight)
+        : _type(view._type), _bound_weight(view._bound_weight)
         {
             if (view._ck) {
                 _ck = *view._ck;
@@ -192,11 +215,14 @@ public:
     static position_in_partition for_range_start(const query::clustering_range&);
     static position_in_partition for_range_end(const query::clustering_range&);
 
-    bool is_static_row() const { return !_ck; }
-    bool is_clustering_row() const { return _ck && !_bound_weight; }
+    bool is_partition_start() const { return _type == partition_region::partition_start; }
+    bool is_partition_end() const { return _type == partition_region::partition_end; }
+    bool is_static_row() const { return _type == partition_region::static_row; }
+    bool is_clustering_row() const { return has_clustering_key() && !_bound_weight; }
+    bool has_clustering_key() const { return _type == partition_region::clustered; }
 
     bool is_after_all_clustered_rows(const schema& s) const {
-        return _ck && _ck->is_empty(s) && _bound_weight > 0;
+        return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
     }
 
     template<typename Hasher>
@@ -210,14 +236,11 @@ public:
         }
     }
 
-    clustering_key_prefix& key() {
-        return *_ck;
-    }
     const clustering_key_prefix& key() const {
         return *_ck;
     }
     operator position_in_partition_view() const {
-        return { _bound_weight, _ck ? &*_ck : nullptr };
+        return { _type, _bound_weight, _ck ? &*_ck : nullptr };
     }
 
     // Defines total order on the union of position_and_partition and composite objects.
@@ -235,11 +258,18 @@ public:
     class composite_tri_compare {
         const schema& _s;
     public:
+        static int rank(partition_region t) {
+            return static_cast<int>(t);
+        }
+
         composite_tri_compare(const schema& s) : _s(s) {}
 
         int operator()(position_in_partition_view a, position_in_partition_view b) const {
-            if (a.is_static_row() || b.is_static_row()) {
-                return b.is_static_row() - a.is_static_row();
+            if (a._type != b._type) {
+                return rank(a._type) - rank(b._type);
+            }
+            if (!a._ck) {
+                return 0;
             }
             auto&& types = _s.clustering_key_type()->types();
             auto cmp = [&] (const data_type& t, bytes_view c1, bytes_view c2) { return t->compare(c1, c2); };
@@ -253,8 +283,12 @@ public:
             if (b.empty()) {
                 return 1; // a cannot be empty.
             }
-            if (a.is_static_row() || b.is_static()) {
-                return b.is_static() - a.is_static_row();
+            partition_region b_type = b.is_static() ? partition_region::static_row : partition_region::clustered;
+            if (a._type != b_type) {
+                return rank(a._type) - rank(b_type);
+            }
+            if (!a._ck) {
+                return 0;
             }
             auto&& types = _s.clustering_key_type()->types();
             auto b_values = b.values();
@@ -303,10 +337,11 @@ public:
     private:
         template<typename T, typename U>
         int compare(const T& a, const U& b) const {
-            bool a_rt_weight = bool(a._ck);
-            bool b_rt_weight = bool(b._ck);
-            if (!a_rt_weight || !b_rt_weight) {
-                return a_rt_weight - b_rt_weight;
+            if (a._type != b._type) {
+                return composite_tri_compare::rank(a._type) - composite_tri_compare::rank(b._type);
+            }
+            if (!a._ck) {
+                return 0;
             }
             return _cmp(*a._ck, a._bound_weight, *b._ck, b._bound_weight);
         }
@@ -346,6 +381,9 @@ public:
         clustering_key_prefix::equality _equal;
         template<typename T, typename U>
         bool compare(const T& a, const U& b) const {
+            if (a._type != b._type) {
+                return false;
+            }
             bool a_rt_weight = bool(a._ck);
             bool b_rt_weight = bool(b._ck);
             return a_rt_weight == b_rt_weight

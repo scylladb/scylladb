@@ -27,6 +27,7 @@
 #include "mutation_source_test.hh"
 #include "counters.hh"
 #include "simple_schema.hh"
+#include "flat_mutation_reader.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -843,7 +844,7 @@ static void test_query_only_static_row(populate_fn populate) {
     }
 }
 
-void run_mutation_source_tests(populate_fn populate) {
+void run_mutation_reader_tests(populate_fn populate) {
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
     test_streamed_mutation_fragments_have_monotonic_positions(populate);
@@ -853,6 +854,34 @@ void run_mutation_source_tests(populate_fn populate) {
     test_streamed_mutation_forwarding_is_consistent_with_slicing(populate);
     test_range_queries(populate);
     test_query_only_static_row(populate);
+}
+
+void run_conversion_to_mutation_reader_tests(populate_fn populate) {
+    populate_fn populate_with_flat_mutation_reader_conversion = [&populate] (schema_ptr s, const std::vector<mutation>& m) {
+        auto source = populate(s, m);
+        return mutation_source([source] (schema_ptr s,
+                                         const dht::partition_range& range,
+                                         const query::partition_slice& slice,
+                                         const io_priority_class& pc,
+                                         tracing::trace_state_ptr trace_state,
+                                         streamed_mutation::forwarding fwd,
+                                         mutation_reader::forwarding fwd_mr)
+                               {
+                                   auto&& res = source(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                                   return mutation_reader_from_flat_mutation_reader(
+                                       s, flat_mutation_reader_from_mutation_reader(s, std::move(res), fwd));
+                               });
+    };
+    run_mutation_reader_tests(populate_with_flat_mutation_reader_conversion);
+}
+
+void run_flat_mutation_reader_tests(populate_fn populate) {
+    run_conversion_to_mutation_reader_tests(populate);
+}
+
+void run_mutation_source_tests(populate_fn populate) {
+    run_mutation_reader_tests(populate);
+    run_flat_mutation_reader_tests(populate);
 }
 
 struct mutation_sets {
