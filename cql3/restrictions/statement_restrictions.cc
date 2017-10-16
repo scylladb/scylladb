@@ -303,6 +303,10 @@ bool statement_restrictions::uses_function(const sstring& ks_name, const sstring
             || _nonprimary_key_restrictions->uses_function(ks_name, function_name);
 }
 
+const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_restrictions() const {
+    return _index_restrictions;
+}
+
 void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
