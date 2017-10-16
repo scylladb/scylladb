@@ -144,7 +144,7 @@ future<> test_counter_update(cql_test_env& env, test_config& cfg) {
                            "\"C1\" = \"C1\" + 2,"
                            "\"C2\" = \"C2\" + 3,"
                            "\"C3\" = \"C3\" + 4,"
-                           "\"C4\" = \"C4\" + 5"
+                           "\"C4\" = \"C4\" + 5 "
                            "WHERE \"KEY\" = ?;")
         .then([&env, &cfg] (auto id) {
             return time_parallel([&env, &cfg, id] {
