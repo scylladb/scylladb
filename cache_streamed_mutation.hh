@@ -319,8 +319,7 @@ future<> cache_streamed_mutation::read_from_underlying() {
 
 inline
 void cache_streamed_mutation::maybe_update_continuity() {
-    if (can_populate()) {
-        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+    if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
             if (_next_row.is_in_latest_version()) {
                 _next_row.get_iterator_in_latest_version()->set_continuous(true);
             } else {
@@ -337,7 +336,6 @@ void cache_streamed_mutation::maybe_update_continuity() {
                     }
                 });
             }
-        }
     } else {
         _read_context->cache().on_mispopulate();
     }
