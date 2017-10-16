@@ -169,14 +169,14 @@ public:
     bool contains_tombstone(position_in_partition_view start, position_in_partition_view end) const {
         position_in_partition::less_compare less(_schema);
 
-        if (_trim && less(end, *_trim)) {
+        if (_trim && !less(*_trim, end)) {
             return false;
         }
 
         auto i = _current;
         while (i != _end) {
             auto range_start = position_in_partition_view::for_range_start(*i);
-            if (less(end, range_start)) {
+            if (!less(range_start, end)) {
                 return false;
             }
             auto range_end = position_in_partition_view::for_range_end(*i);
