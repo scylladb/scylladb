@@ -2338,6 +2338,140 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
     });
 }
 
+SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck1", int32_type, column_kind::clustering_key)
+            .with_column("ck2", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s);
+
+        auto pk = dht::global_partitioner().decorate_key(*s,
+            partition_key::from_single_value(*s, data_value(3).serialize()));
+        auto pr = dht::partition_range::make_singular(pk);
+
+        auto ck1 = clustering_key::from_deeply_exploded(*s, {data_value(1), data_value(1)});
+        auto ck2 = clustering_key::from_deeply_exploded(*s, {data_value(1), data_value(2)});
+        auto ck3 = clustering_key::from_deeply_exploded(*s, {data_value(2), data_value(1)});
+        auto ck4 = clustering_key::from_deeply_exploded(*s, {data_value(2), data_value(2)});
+        auto ck_3_4 = clustering_key_prefix::from_deeply_exploded(*s, {data_value(2)});
+        auto ck5 = clustering_key::from_deeply_exploded(*s, {data_value(3), data_value(1)});
+        auto ck6 = clustering_key::from_deeply_exploded(*s, {data_value(3), data_value(2)});
+
+        auto new_tombstone = [] {
+            return tombstone(api::new_timestamp(), gc_clock::now());
+        };
+
+        mutation m34(pk, s);
+        m34.partition().clustered_row(*s, ck3).apply(new_tombstone());
+        m34.partition().clustered_row(*s, ck4).apply(new_tombstone());
+
+        mutation m1(pk, s);
+        m1.partition().clustered_row(*s, ck2).apply(new_tombstone());
+        m1.apply(m34);
+        underlying.apply(m1);
+
+        mutation m2(pk, s);
+        m2.partition().clustered_row(*s, ck6).apply(new_tombstone());
+
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+        auto apply = [&] (mutation m) {
+            auto mt = make_lw_shared<memtable>(m.schema());
+            mt->apply(m);
+            cache.update([&] { underlying.apply(m); }, *mt).get();
+        };
+
+        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
+            auto rd = cache.make_reader(s, pr, slice ? *slice : s->full_slice());
+            auto smo = rd().get0();
+            BOOST_REQUIRE(smo);
+            streamed_mutation& sm = *smo;
+            sm.set_max_buffer_size(1);
+            return std::move(sm);
+        };
+
+        {
+            auto range_3_4 = query::clustering_range::make_singular(ck_3_4);
+            populate_range(cache, pr, range_3_4);
+            check_continuous(cache, pr, range_3_4);
+
+            auto slice1 = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_singular(ck2))
+                .build();
+            auto sm1 = make_sm(&slice1);
+
+            apply(m2);
+
+            populate_range(cache, pr, query::full_clustering_range);
+            check_continuous(cache, pr, query::full_clustering_range);
+
+            assert_that_stream(std::move(sm1))
+                .produces_row_with_key(ck2)
+                .produces_end_of_stream();
+
+            assert_that(cache.make_reader(s, pr))
+                .produces_compacted(m1 + m2)
+                .produces_end_of_stream();
+
+            auto slice34 = partition_slice_builder(*s)
+                .with_range(range_3_4)
+                .build();
+            assert_that(cache.make_reader(s, pr, slice34))
+                .produces_compacted(m34)
+                .produces_end_of_stream();
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        mutation m1(pk, s.schema());
+        s.add_row(m1, s.make_ckey(2), "v2");
+        s.add_row(m1, s.make_ckey(4), "v4");
+        s.add_row(m1, s.make_ckey(6), "v6");
+        underlying.apply(m1);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(2)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(2)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(6)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(6)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(3)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(3)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(4)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(4)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(1)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(1)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(5)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(5)));
+
+        populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
+        check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
+
+        assert_that(cache.make_reader(s.schema()))
+            .produces_compacted(m1)
+            .produces_end_of_stream();
+    });
+}
+
 SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
     return seastar::async([] {
         simple_schema s;
