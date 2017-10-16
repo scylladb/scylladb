@@ -93,12 +93,10 @@ auth::password_authenticator::password_authenticator()
 // and some old-fashioned random salt generation.
 
 static constexpr size_t rand_bytes = 16;
+static thread_local crypt_data tlcrypt = { 0, };
 
 static sstring hashpw(const sstring& pass, const sstring& salt) {
-    // crypt_data is huge. should this be a thread_local static?
-    auto tmp = std::make_unique<crypt_data>();
-    tmp->initialized = 0;
-    auto res = crypt_r(pass.c_str(), salt.c_str(), tmp.get());
+    auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
     if (res == nullptr) {
         throw std::system_error(errno, std::system_category());
     }
@@ -130,14 +128,11 @@ static sstring gensalt() {
         return prefix + salt;
     }
 
-    auto tmp = std::make_unique<crypt_data>();
-    tmp->initialized = 0;
-
     // Try in order:
     // blowfish 2011 fix, blowfish, sha512, sha256, md5
     for (sstring pfx : { "$2y$", "$2a$", "$6$", "$5$", "$1$" }) {
         salt = pfx + input;
-        if (crypt_r("fisk", salt.c_str(), tmp.get())) {
+        if (crypt_r("fisk", salt.c_str(), &tlcrypt)) {
             prefix = pfx;
             return salt;
         }
