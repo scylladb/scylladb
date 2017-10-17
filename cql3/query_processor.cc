@@ -38,19 +38,18 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include <seastar/core/metrics.hh>
+
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 
 #include "cql3/query_processor.hh"
+
+#include <cryptopp/md5.h>
+#include <seastar/core/metrics.hh>
+
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/util.hh"
-#include "untyped_result_set.hh"
-
-#include "transport/messages/result_message.hh"
-
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include <cryptopp/md5.h>
 
 namespace cql3 {
 

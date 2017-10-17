@@ -43,21 +43,22 @@
 
 #include <experimental/string_view>
 #include <unordered_map>
-#include <seastar/core/metrics_registration.hh>
 
-#include "core/shared_ptr.hh"
-#include "exceptions/exceptions.hh"
+#include <seastar/core/distributed.hh>
+#include <seastar/core/metrics_registration.hh>
+#include <seastar/core/shared_ptr.hh>
+
+#include "cql3/prepared_statements_cache.hh"
 #include "cql3/query_options.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/raw/cf_statement.hh"
+#include "cql3/untyped_result_set.hh"
+#include "exceptions/exceptions.hh"
+#include "log.hh"
 #include "service/migration_manager.hh"
 #include "service/query_state.hh"
-#include "log.hh"
-#include "core/distributed.hh"
-#include "statements/prepared_statement.hh"
 #include "transport/messages/result_message.hh"
-#include "untyped_result_set.hh"
-#include "prepared_statements_cache.hh"
 
 namespace cql3 {
 
