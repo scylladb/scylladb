@@ -134,124 +134,12 @@ public:
         return _cql_stats;
     }
 
-#if 0
-    public static final QueryProcessor instance = new QueryProcessor();
-#endif
 private:
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(QueryProcessor.class);
-    private static final MemoryMeter meter = new MemoryMeter().withGuessing(MemoryMeter.Guess.FALLBACK_BEST).ignoreKnownSingletons();
-    private static final long MAX_CACHE_PREPARED_MEMORY = Runtime.getRuntime().maxMemory() / 256;
-
-    private static EntryWeigher<MD5Digest, ParsedStatement.Prepared> cqlMemoryUsageWeigher = new EntryWeigher<MD5Digest, ParsedStatement.Prepared>()
-    {
-        @Override
-        public int weightOf(MD5Digest key, ParsedStatement.Prepared value)
-        {
-            return Ints.checkedCast(measure(key) + measure(value.statement) + measure(value.boundNames));
-        }
-    };
-
-    private static EntryWeigher<Integer, ParsedStatement.Prepared> thriftMemoryUsageWeigher = new EntryWeigher<Integer, ParsedStatement.Prepared>()
-    {
-        @Override
-        public int weightOf(Integer key, ParsedStatement.Prepared value)
-        {
-            return Ints.checkedCast(measure(key) + measure(value.statement) + measure(value.boundNames));
-        }
-    };
-#endif
     prepared_statements_cache _prepared_cache;
-    std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
-#if 0
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we don't
     // bother with expiration on those.
-    private static final ConcurrentMap<String, ParsedStatement.Prepared> internalStatements = new ConcurrentHashMap<>();
-
-    // Direct calls to processStatement do not increment the preparedStatementsExecuted/regularStatementsExecuted
-    // counters. Callers of processStatement are responsible for correctly notifying metrics
-    public static final CQLMetrics metrics = new CQLMetrics();
-
-    private static final AtomicInteger lastMinuteEvictionsCount = new AtomicInteger(0);
-
-    static
-    {
-        preparedStatements = new ConcurrentLinkedHashMap.Builder<MD5Digest, ParsedStatement.Prepared>()
-                             .maximumWeightedCapacity(MAX_CACHE_PREPARED_MEMORY)
-                             .weigher(cqlMemoryUsageWeigher)
-                             .listener(new EvictionListener<MD5Digest, ParsedStatement.Prepared>()
-                             {
-                                 public void onEviction(MD5Digest md5Digest, ParsedStatement.Prepared prepared)
-                                 {
-                                     metrics.preparedStatementsEvicted.inc();
-                                     lastMinuteEvictionsCount.incrementAndGet();
-                                 }
-                             }).build();
-
-        thriftPreparedStatements = new ConcurrentLinkedHashMap.Builder<Integer, ParsedStatement.Prepared>()
-                                   .maximumWeightedCapacity(MAX_CACHE_PREPARED_MEMORY)
-                                   .weigher(thriftMemoryUsageWeigher)
-                                   .listener(new EvictionListener<Integer, ParsedStatement.Prepared>()
-                                   {
-                                       public void onEviction(Integer integer, ParsedStatement.Prepared prepared)
-                                       {
-                                           metrics.preparedStatementsEvicted.inc();
-                                           lastMinuteEvictionsCount.incrementAndGet();
-                                       }
-                                   })
-                                   .build();
-
-        ScheduledExecutors.scheduledTasks.scheduleAtFixedRate(new Runnable()
-        {
-            public void run()
-            {
-                long count = lastMinuteEvictionsCount.getAndSet(0);
-                if (count > 0)
-                    logger.info("{} prepared statements discarded in the last minute because cache limit reached ({} bytes)",
-                                count,
-                                MAX_CACHE_PREPARED_MEMORY);
-            }
-        }, 1, 1, TimeUnit.MINUTES);
-    }
-
-    public static int preparedStatementsCount()
-    {
-        return preparedStatements.size() + thriftPreparedStatements.size();
-    }
-
-    // Work around initialization dependency
-    private static enum InternalStateInstance
-    {
-        INSTANCE;
-
-        private final QueryState queryState;
-
-        InternalStateInstance()
-        {
-            ClientState state = ClientState.forInternalCalls();
-            try
-            {
-                state.setKeyspace(SystemKeyspace.NAME);
-            }
-            catch (InvalidRequestException e)
-            {
-                throw new RuntimeException();
-            }
-            this.queryState = new QueryState(state);
-        }
-    }
-
-    private static QueryState internalQueryState()
-    {
-        return InternalStateInstance.INSTANCE.queryState;
-    }
-
-    private QueryProcessor()
-    {
-        MigrationManager.instance.register(new MigrationSubscriber());
-    }
-#endif
+    std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 public:
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         auto it = _prepared_cache.find(key);
@@ -261,109 +149,13 @@ public:
         return *it;
     }
 
-#if 0
-    public static void validateKey(ByteBuffer key) throws InvalidRequestException
-    {
-        if (key == null || key.remaining() == 0)
-        {
-            throw new InvalidRequestException("Key may not be empty");
-        }
-
-        // check that key can be handled by FBUtilities.writeShortByteArray
-        if (key.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-        {
-            throw new InvalidRequestException("Key length of " + key.remaining() +
-                                              " is longer than maximum of " + FBUtilities.MAX_UNSIGNED_SHORT);
-        }
-    }
-
-    public static void validateCellNames(Iterable<CellName> cellNames, CellNameType type) throws InvalidRequestException
-    {
-        for (CellName name : cellNames)
-            validateCellName(name, type);
-    }
-
-    public static void validateCellName(CellName name, CellNameType type) throws InvalidRequestException
-    {
-        validateComposite(name, type);
-        if (name.isEmpty())
-            throw new InvalidRequestException("Invalid empty value for clustering column of COMPACT TABLE");
-    }
-
-    public static void validateComposite(Composite name, CType type) throws InvalidRequestException
-    {
-        long serializedSize = type.serializer().serializedSize(name, TypeSizes.NATIVE);
-        if (serializedSize > Cell.MAX_NAME_LENGTH)
-            throw new InvalidRequestException(String.format("The sum of all clustering columns is too long (%s > %s)",
-                                                            serializedSize,
-                                                            Cell.MAX_NAME_LENGTH));
-    }
-#endif
 public:
     future<::shared_ptr<cql_transport::messages::result_message>> process_statement(::shared_ptr<cql_statement> statement,
             service::query_state& query_state, const query_options& options);
 
-#if 0
-    public static ResultMessage process(String queryString, ConsistencyLevel cl, QueryState queryState)
-    throws RequestExecutionException, RequestValidationException
-    {
-        return instance.process(queryString, queryState, QueryOptions.forInternalCalls(cl, Collections.<ByteBuffer>emptyList()));
-    }
-#endif
-
     future<::shared_ptr<cql_transport::messages::result_message>> process(const std::experimental::string_view& query_string,
             service::query_state& query_state, query_options& options);
 
-#if 0
-    public static ParsedStatement.Prepared parseStatement(String queryStr, QueryState queryState) throws RequestValidationException
-    {
-        return getStatement(queryStr, queryState.getClientState());
-    }
-
-    public static UntypedResultSet process(String query, ConsistencyLevel cl) throws RequestExecutionException
-    {
-        try
-        {
-            ResultMessage result = instance.process(query, QueryState.forInternalCalls(), QueryOptions.forInternalCalls(cl, Collections.<ByteBuffer>emptyList()));
-            if (result instanceof ResultMessage.Rows)
-                return UntypedResultSet.create(((ResultMessage.Rows)result).result);
-            else
-                return null;
-        }
-        catch (RequestValidationException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static QueryOptions makeInternalOptions(ParsedStatement.Prepared prepared, Object[] values)
-    {
-        if (prepared.boundNames.size() != values.length)
-            throw new IllegalArgumentException(String.format("Invalid number of values. Expecting %d but got %d", prepared.boundNames.size(), values.length));
-
-        List<ByteBuffer> boundValues = new ArrayList<ByteBuffer>(values.length);
-        for (int i = 0; i < values.length; i++)
-        {
-            Object value = values[i];
-            AbstractType type = prepared.boundNames.get(i).type;
-            boundValues.add(value instanceof ByteBuffer || value == null ? (ByteBuffer)value : type.decompose(value));
-        }
-        return QueryOptions.forInternalCalls(boundValues);
-    }
-
-    private static ParsedStatement.Prepared prepareInternal(String query) throws RequestValidationException
-    {
-        ParsedStatement.Prepared prepared = internalStatements.get(query);
-        if (prepared != null)
-            return prepared;
-
-        // Note: if 2 threads prepare the same query, we'll live so don't bother synchronizing
-        prepared = parseStatement(query, internalQueryState());
-        prepared.statement.validate(internalQueryState().getClientState());
-        internalStatements.putIfAbsent(query, prepared);
-        return prepared;
-    }
-#endif
 private:
     query_options make_internal_options(const statements::prepared_statement::checked_weak_ptr& p, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE,
             int32_t page_size = -1);
@@ -446,71 +238,6 @@ public:
      */
     api::timestamp_type next_timestamp();
 
-#if 0
-    public static UntypedResultSet executeInternalWithPaging(String query, int pageSize, Object... values)
-    {
-        try
-        {
-            ParsedStatement.Prepared prepared = prepareInternal(query);
-            if (!(prepared.statement instanceof SelectStatement))
-                throw new IllegalArgumentException("Only SELECTs can be paged");
-
-            SelectStatement select = (SelectStatement)prepared.statement;
-            QueryPager pager = QueryPagers.localPager(select.getPageableCommand(makeInternalOptions(prepared, values)));
-            return UntypedResultSet.create(select, pager, pageSize);
-        }
-        catch (RequestValidationException e)
-        {
-            throw new RuntimeException("Error validating query" + e);
-        }
-    }
-
-    /**
-     * Same than executeInternal, but to use for queries we know are only executed once so that the
-     * created statement object is not cached.
-     */
-    public static UntypedResultSet executeOnceInternal(String query, Object... values)
-    {
-        try
-        {
-            ParsedStatement.Prepared prepared = parseStatement(query, internalQueryState());
-            prepared.statement.validate(internalQueryState().getClientState());
-            ResultMessage result = prepared.statement.executeInternal(internalQueryState(), makeInternalOptions(prepared, values));
-            if (result instanceof ResultMessage.Rows)
-                return UntypedResultSet.create(((ResultMessage.Rows)result).result);
-            else
-                return null;
-        }
-        catch (RequestExecutionException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (RequestValidationException e)
-        {
-            throw new RuntimeException("Error validating query " + query, e);
-        }
-    }
-
-    public static UntypedResultSet resultify(String query, Row row)
-    {
-        return resultify(query, Collections.singletonList(row));
-    }
-
-    public static UntypedResultSet resultify(String query, List<Row> rows)
-    {
-        try
-        {
-            SelectStatement ss = (SelectStatement) getStatement(query, null).statement;
-            ResultSet cqlRows = ss.process(rows);
-            return UntypedResultSet.create(cqlRows);
-        }
-        catch (RequestValidationException e)
-        {
-            throw new AssertionError(e);
-        }
-    }
-#endif
-
     future<::shared_ptr<cql_transport::messages::result_message::prepared>>
     prepare(sstring query_string, service::query_state& query_state);
 
@@ -567,31 +294,6 @@ private:
     ::shared_ptr<cql_transport::messages::result_message::prepared>
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
 
-#if 0
-    public ResultMessage processPrepared(CQLStatement statement, QueryState queryState, QueryOptions options)
-    throws RequestExecutionException, RequestValidationException
-    {
-        List<ByteBuffer> variables = options.getValues();
-        // Check to see if there are any bound variables to verify
-        if (!(variables.isEmpty() && (statement.getBoundTerms() == 0)))
-        {
-            if (variables.size() != statement.getBoundTerms())
-                throw new InvalidRequestException(String.format("there were %d markers(?) in CQL but %d bound variables",
-                                                                statement.getBoundTerms(),
-                                                                variables.size()));
-
-            // at this point there is a match in count between markers and variables that is non-zero
-
-            if (logger.isTraceEnabled())
-                for (int i = 0; i < variables.size(); i++)
-                    logger.trace("[{}] '{}'", i+1, variables.get(i));
-        }
-
-        metrics.preparedStatementsExecuted.inc();
-        return processStatement(statement, queryState, options);
-    }
-#endif
-
 public:
     future<::shared_ptr<cql_transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
             service::query_state& query_state, query_options& options);
@@ -600,12 +302,6 @@ public:
             const service::client_state& client_state);
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
-#if 0
-    private static long measure(Object key)
-    {
-        return meter.measureDeep(key);
-    }
-#endif
 public:
     future<> stop();
 

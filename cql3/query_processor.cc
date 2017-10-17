@@ -184,10 +184,6 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement,
                                    service::query_state& query_state,
                                    const query_options& options)
 {
-#if 0
-        logger.trace("Process {} @CL.{}", statement, options.getConsistency());
-#endif
-
     return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options]() {
         auto& client_state = query_state.get_client_state();
 
@@ -272,9 +268,6 @@ prepared_cache_key_type query_processor::compute_thrift_id(const std::experiment
 std::unique_ptr<prepared_statement>
 query_processor::get_statement(const sstring_view& query, const service::client_state& client_state)
 {
-#if 0
-        Tracing.trace("Parsing {}", queryStr);
-#endif
     ::shared_ptr<raw::parsed_statement> statement = parse_statement(query);
 
     // Set keyspace for statement that require login
@@ -282,9 +275,6 @@ query_processor::get_statement(const sstring_view& query, const service::client_
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
     }
-#if 0
-        Tracing.trace("Preparing statement");
-#endif
     ++_stats.prepare_invocations;
     return statement->prepare(_db.local(), _cql_stats);
 }
