@@ -433,6 +433,18 @@ memtable::make_reader(schema_ptr s,
                       tracing::trace_state_ptr trace_state_ptr,
                       streamed_mutation::forwarding fwd,
                       mutation_reader::forwarding fwd_mr) {
+    return mutation_reader_from_flat_mutation_reader(s,
+            make_flat_reader(s, range, slice, pc, std::move(trace_state_ptr), fwd, fwd_mr));
+}
+
+flat_mutation_reader
+memtable::make_flat_reader(schema_ptr s,
+                      const dht::partition_range& range,
+                      const query::partition_slice& slice,
+                      const io_priority_class& pc,
+                      tracing::trace_state_ptr trace_state_ptr,
+                      streamed_mutation::forwarding fwd,
+                      mutation_reader::forwarding fwd_mr) {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         return _read_section(*this, [&] {
@@ -440,13 +452,14 @@ memtable::make_reader(schema_ptr s,
         auto i = partitions.find(pos, memtable_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
-            return make_reader_returning(i->read(shared_from_this(), s, slice, fwd));
+            return flat_mutation_reader_from_mutation_reader(s, make_reader_returning(i->read(shared_from_this(), s, slice, fwd)), fwd);
         } else {
-            return make_empty_reader();
+            return flat_mutation_reader_from_mutation_reader(s, make_empty_reader(), fwd);
         }
         });
     } else {
-        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, slice, pc, fwd, fwd_mr);
+        return flat_mutation_reader_from_mutation_reader(s,
+                make_mutation_reader<scanning_reader>(s, shared_from_this(), range, slice, pc, fwd, fwd_mr), fwd);
     }
 }
 
