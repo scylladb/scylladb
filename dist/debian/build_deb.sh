@@ -139,7 +139,7 @@ if [ "$TARGET" = "jessie" ]; then
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-5, libunwind-dev, antlr3/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-5, libunwind-dev, antlr3, libthrift-dev, antlr3-c++-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@//g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
@@ -153,7 +153,7 @@ elif [ "$TARGET" = "stretch" ] || [ "$TARGET" = "buster" ] || [ "$TARGET" = "sid
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind8-dev, antlr3/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind8-dev, antlr3, libthrift-dev, antlr3-c++-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@//g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
@@ -166,7 +166,7 @@ elif [ "$TARGET" = "trusty" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev, scylla-antlr35/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5, libunwind8-dev, scylla-antlr35, scylla-libthrift010-dev, scylla-antlr35-c++-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, num-utils/g" debian/control
     sed -i -e "s#@@INSTALL@@#dist/debian/sudoers.d/scylla etc/sudoers.d#g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@##g" debian/scylla-server.install
@@ -179,7 +179,7 @@ elif [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zes
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
-    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind-dev, antlr3/g" debian/control
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind-dev, antlr3, scylla-libthrift010-dev, scylla-antlr35-c++-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
     sed -i -e "s#@@INSTALL@@##g" debian/scylla-server.install
     sed -i -e "s#@@HKDOTTIMER_D@@#dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system#g" debian/scylla-server.install
