@@ -24,6 +24,7 @@
 #include <algorithm>
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <seastar/util/defer.hh>
 
 void flat_mutation_reader::impl::forward_buffer_to(schema_ptr& schema, const position_in_partition& pos) {
     _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos, &schema] (mutation_fragment& f) {
@@ -210,4 +211,118 @@ public:
 
 flat_mutation_reader make_empty_flat_reader() {
     return make_flat_mutation_reader<empty_flat_reader>();
+}
+
+streamed_mutation streamed_mutation_from_mutation_copy(mutation m, streamed_mutation::forwarding fwd)
+{
+    class reader final : public streamed_mutation::impl {
+        mutation _mutation;
+        position_in_partition::less_compare _cmp;
+        bool _static_row_done = false;
+        mutation_fragment_opt _rt;
+        mutation_fragment_opt _cr;
+    private:
+        void prepare_next_clustering_row() {
+            auto& crs = _mutation.partition().clustered_rows();
+            while (true) {
+                auto re = crs.unlink_leftmost_without_rebalance();
+                if (!re) {
+                    break;
+                }
+                auto re_deleter = defer([re] { current_deleter<rows_entry>()(re); });
+                if (!re->dummy()) {
+                    _cr = mutation_fragment(std::move(*re));
+                    break;
+                }
+            }
+        }
+        void prepare_next_range_tombstone() {
+            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto rt = rts.unlink_leftmost_without_rebalance();
+            if (rt) {
+                auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
+                _rt = mutation_fragment(std::move(*rt));
+            }
+        }
+        mutation_fragment_opt read_next() {
+            if (_cr && (!_rt || _cmp(_cr->position(), _rt->position()))) {
+                auto cr = move_and_disengage(_cr);
+                prepare_next_clustering_row();
+                return cr;
+            } else if (_rt) {
+                auto rt = move_and_disengage(_rt);
+                prepare_next_range_tombstone();
+                return rt;
+            }
+            return { };
+        }
+    private:
+        void do_fill_buffer() {
+            if (!_static_row_done) {
+                _static_row_done = true;
+                if (!_mutation.partition().static_row().empty()) {
+                    push_mutation_fragment(static_row(std::move(_mutation.partition().static_row())));
+                }
+            }
+            while (!is_end_of_stream() && !is_buffer_full()) {
+                auto mfopt = read_next();
+                if (mfopt) {
+                    push_mutation_fragment(std::move(*mfopt));
+                } else {
+                    _end_of_stream = true;
+                }
+            }
+        }
+    public:
+        explicit reader(mutation m)
+            : streamed_mutation::impl(m.schema(), m.decorated_key(), m.partition().partition_tombstone())
+            , _mutation(std::move(m))
+            , _cmp(*_mutation.schema())
+        {
+            auto mutation_destroyer = defer([this] { destroy_mutation(); });
+
+            prepare_next_clustering_row();
+            prepare_next_range_tombstone();
+
+            do_fill_buffer();
+
+            mutation_destroyer.cancel();
+        }
+
+        void destroy_mutation() noexcept {
+            // After unlink_leftmost_without_rebalance() was called on a bi::set
+            // we need to complete destroying the tree using that function.
+            // clear_and_dispose() used by mutation_partition destructor won't
+            // work properly.
+
+            auto& crs = _mutation.partition().clustered_rows();
+            auto re = crs.unlink_leftmost_without_rebalance();
+            while (re) {
+                current_deleter<rows_entry>()(re);
+                re = crs.unlink_leftmost_without_rebalance();
+            }
+
+            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto rt = rts.unlink_leftmost_without_rebalance();
+            while (rt) {
+                current_deleter<range_tombstone>()(rt);
+                rt = rts.unlink_leftmost_without_rebalance();
+            }
+        }
+
+        ~reader() {
+            destroy_mutation();
+        }
+
+        virtual future<> fill_buffer() override {
+            do_fill_buffer();
+            return make_ready_future<>();
+        }
+    };
+
+    auto sm = make_streamed_mutation<reader>(std::move(m));
+    if (fwd) {
+        return make_forwardable(std::move(sm)); // FIXME: optimize
+    }
+    return std::move(sm);
 }
