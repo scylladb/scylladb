@@ -9,3 +9,6 @@
 [submodule "dist/ami/files/scylla-ami"]
 	path = dist/ami/files/scylla-ami
 	url = ../scylla-ami
+[submodule "xxHash"]
+	path = xxHash
+	url = ../xxHash
