@@ -717,6 +717,10 @@ public:
     val(enable_keyspace_column_family_metrics, bool, false, Used, "Enable per keyspace and per column family metrics reporting") \
     val(enable_sstable_data_integrity_check, bool, false, Used, "Enable interposer which checks for integrity of every sstable write." \
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.") \
+    val(single_key_parallel_scan_threshold, double, 0.5, Used, "The threshold at which the single-key sstable read optimization is turned off." \
+        " The threshold is the proportion of the extra data source candidates that can be read before the optimization is considered ineffective" \
+        " and switched off. The threshold is number between 0 and 1, 0 forces the optimization off and 1 forces it on. Increase the treshold to" \
+        " favor throughput over latency for single-row reads, decrease the treshold to improve latency at the expense of throughput.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

@@ -671,7 +671,7 @@ for t in scylla_tests:
         deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc', 'tests/sstable_utils.cc']
-deps['tests/mutation_reader_test'] += ['tests/sstable_utils.cc']
+deps['tests/mutation_reader_test'] += ['tests/single_key_sstable_reader_test_cases.cc', 'tests/sstable_utils.cc']
 
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc', 'utils/managed_bytes.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/input_stream_test'] = ['tests/input_stream_test.cc']

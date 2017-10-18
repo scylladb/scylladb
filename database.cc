@@ -54,6 +54,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
@@ -159,6 +160,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
+    , _single_key_optimization_enabled(_config.single_key_parallel_scan_threshold != 0)
 {
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
@@ -475,7 +477,239 @@ public:
     }
 };
 
+/**
+ * Maintain what cells already have data.
+ *
+ * While traversing the data-sources we maintain which of the cells
+ * needed for the query have data. When all of them are covered, a
+ * timestamp can be calculated such that any new data that is older will
+ * not effect the results of the query. Thus if all the remaining
+ * data-sources have only older data than this timestamp we can consider
+ * the query satisfied.
+ */
+class cell_coverage {
+    schema_ptr _schema;
+    const dht::partition_range& _pr;
+    const query::partition_slice& _slice;
+
+    struct row_coverage {
+        // The index is column_id, unselected columns are set to
+        // api::max_timestamp.
+        std::vector<api::timestamp_type> cells;
+
+        row_coverage(std::vector<api::timestamp_type> cells)
+            : cells(std::move(cells)) {
+        }
+    };
+
+    using static_row_coverage = row_coverage;
+
+    struct clustering_row_coverage : public row_coverage {
+        const clustering_key_prefix& key;
+        api::timestamp_type row_marker = api::missing_timestamp;
+
+        clustering_row_coverage(const clustering_key_prefix& key, std::vector<api::timestamp_type> cells)
+            : row_coverage(std::move(cells))
+            , key(key) {
+        }
+
+        api::timestamp_type min_timestamp() const {
+            if (cells.empty()) {
+                return row_marker;
+            }
+            return std::min(*boost::min_element(cells), row_marker);
+        }
+    };
+
+    using clustering_rows_coverage = std::vector<clustering_row_coverage>;
+    using clustering_rows_coverage_iterator = clustering_rows_coverage::iterator;
+
+    static_row_coverage _static_row;
+    clustering_rows_coverage _clustering_rows;
+    api::timestamp_type _partition_tombstone = api::missing_timestamp;
+
+    clustering_row_coverage& find_clustering_row(const clustering_key_prefix& key) {
+        return *boost::find_if(_clustering_rows, [&key, cmp = clustering_key_prefix::tri_compare(*_schema)] (const clustering_row_coverage& r) {
+            return cmp(r.key, key) == 0;
+        });
+    }
+
+    boost::iterator_range<clustering_rows_coverage_iterator> find_clustering_rows(const bound_view& begin, const bound_view& end) {
+        const auto cmp_less = bound_view::compare(*_schema);
+        auto range_begin = _clustering_rows.begin();
+        const auto clustering_rows_end = _clustering_rows.end();
+
+        // Anything we might try to match here will be guaranteed to
+        // intersect with the clustering rows we have so begin will be
+        // either before the first clustering row or in range, thus
+        // no need to check whether range_begin != clustering_rows_end.
+        while (cmp_less(range_begin->key, begin)) {
+            ++range_begin;
+        }
+
+        auto range_end = range_begin;
+
+        while (range_end != clustering_rows_end && cmp_less(end, range_end->key)) {
+            ++range_end;
+        }
+
+        return {range_begin, range_end};
+    }
+
+    class consumer {
+        cell_coverage& _coverage;
+        std::vector<mutation_fragment> _fragments;
+        tombstone _partition_tombstone;
+
+        void apply_row_to_cells(auto& row, std::vector<api::timestamp_type>& cells) {
+            row.cells().for_each_cell([&cells] (column_id ci, const atomic_cell_or_collection& acoc) {
+                auto& ts = cells.at(ci);
+                ts = std::max(ts, acoc.as_atomic_cell().timestamp());
+            });
+        }
+
+        void apply_timestamp_to_cells(api::timestamp_type timestamp, std::vector<api::timestamp_type>& cells) {
+            for (auto& cell : cells) {
+                cell = std::max(cell, timestamp);
+            }
+        }
+
+    public:
+        consumer(cell_coverage& coverage)
+            : _coverage(coverage) {
+        }
+
+        stop_iteration consume(static_row sr) {
+            apply_row_to_cells(sr, _coverage._static_row.cells);
+
+            _fragments.emplace_back(std::move(sr));
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(clustering_row cr) {
+            auto& clustering_row_coverage = _coverage.find_clustering_row(cr.key());
+
+            apply_row_to_cells(cr, clustering_row_coverage.cells);
+
+            if (!cr.marker().is_missing()) {
+                clustering_row_coverage.row_marker = std::max(clustering_row_coverage.row_marker, cr.marker().timestamp());
+            }
+
+            const auto regular_tomb_ts = cr.tomb().regular().timestamp;
+            if (regular_tomb_ts != api::missing_timestamp) {
+                apply_timestamp_to_cells(regular_tomb_ts, clustering_row_coverage.cells);
+            }
+
+            _fragments.emplace_back(std::move(cr));
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(range_tombstone rt) {
+            if (rt.tomb.timestamp != api::missing_timestamp) {
+                auto clustering_row_coverages = _coverage.find_clustering_rows(rt.start_bound(), rt.end_bound());
+                for (auto& cr_coverage : clustering_row_coverages) {
+                    apply_timestamp_to_cells(rt.tomb.timestamp, cr_coverage.cells);
+                }
+            }
+
+            _fragments.emplace_back(std::move(rt));
+            return stop_iteration::no;
+        }
+
+        stop_iteration consume(tombstone tomb) {
+            if (tomb.timestamp != api::missing_timestamp) {
+                apply_timestamp_to_cells(tomb.timestamp, _coverage._static_row.cells);
+
+                for (auto& clustering_row_coverage : _coverage._clustering_rows) {
+                    apply_timestamp_to_cells(tomb.timestamp, clustering_row_coverage.cells);
+                }
+
+                _coverage._partition_tombstone = std::max(_coverage._partition_tombstone, tomb.timestamp);
+            }
+
+            _partition_tombstone = std::move(tomb);
+            return stop_iteration::no;
+        }
+
+        streamed_mutation consume_end_of_stream() {
+            return streamed_mutation_returning(
+                    _coverage._schema,
+                    _coverage._pr.start()->value().as_decorated_key(),
+                    std::move(_fragments),
+                    std::move(_partition_tombstone));
+        }
+    };
+
+    std::vector<api::timestamp_type> init_cells(std::size_t cell_count) const {
+        std::vector<api::timestamp_type> cells;
+        cells.resize(cell_count, api::min_timestamp);
+
+        return cells;
+    }
+
+    clustering_rows_coverage init_clustering_rows_coverage() {
+        clustering_rows_coverage c;
+
+        const auto& row_ranges = _slice.row_ranges(*_schema, *_pr.start()->value().key());
+        c.reserve(row_ranges.size());
+
+        const auto no_regular_columns = _schema->regular_columns().size();
+
+        for (auto& row_range : row_ranges) {
+            c.emplace_back(row_range.start()->value(), init_cells(no_regular_columns));
+        }
+
+        return c;
+    }
+
+public:
+    cell_coverage(schema_ptr schema, const dht::partition_range& pr, const query::partition_slice& slice)
+        : _schema(schema)
+        , _pr(pr)
+        , _slice(slice)
+        , _static_row(init_cells(_schema->static_columns().size()))
+        , _clustering_rows(init_clustering_rows_coverage()) {
+    }
+
+    // The original streamed mutation is decomposed and a new one is
+    // returned with the same content.
+    future<streamed_mutation> update_from(streamed_mutation sm) {
+        return do_with(std::move(sm), [this] (streamed_mutation& sm) {
+            return ::consume(sm, consumer(*this));
+        });
+    }
+
+    api::timestamp_type min_timestamp() const {
+        const bool is_any_row_marker_missing = std::any_of(_clustering_rows.cbegin(), _clustering_rows.cend(), [] (const clustering_row_coverage& c) {
+            return c.row_marker == api::missing_timestamp;
+        });
+        if (is_any_row_marker_missing) {
+            return api::missing_timestamp;
+        }
+
+        const auto partition_tombstone = _partition_tombstone == api::missing_timestamp ? api::max_timestamp : _partition_tombstone;
+
+        const auto min_cell_ts = *boost::min_element(
+                boost::range::join(_static_row.cells,
+                    _clustering_rows | boost::adaptors::transformed(std::mem_fn(&clustering_row_coverage::min_timestamp))));
+
+        return std::min(partition_tombstone, min_cell_ts);
+    }
+};
+
 class single_key_sstable_reader final : public mutation_reader::impl {
+public:
+    struct config {
+        utils::estimated_histogram& sstable_histogram;
+        double single_key_parallel_scan_threshold;
+        bool& single_key_optimization_enabled;
+        int64_t& optimization_probing_read_counter;
+        int64_t& read_count;
+        int64_t& optimization_hit_count;
+        metrics::histogram& optimization_extra_read_proportion;
+    };
+
+private:
     column_family* _cf;
     schema_ptr _schema;
     const dht::partition_range& _pr;
@@ -483,7 +717,6 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     std::vector<streamed_mutation> _mutations;
     bool _done = false;
     lw_shared_ptr<sstables::sstable_set> _sstables;
-    utils::estimated_histogram& _sstable_histogram;
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
     // the priority changes.
     const io_priority_class& _pc;
@@ -491,11 +724,146 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     reader_resource_tracker _resource_tracker;
     tracing::trace_state_ptr _trace_state;
     streamed_mutation::forwarding _fwd;
+    config _config;
+
+    struct single_key_optimization_stats {
+        std::size_t total{0};
+        std::size_t read{0};
+
+        single_key_optimization_stats(std::size_t total) : total(total) {}
+    };
+
+    bool probe_read() {
+        ++_config.optimization_probing_read_counter;
+
+        if (_config.optimization_probing_read_counter == 100) {
+            _config.optimization_probing_read_counter = 0;
+            return true;
+        }
+        return false;
+    }
+
+    // We optimize for queries that only select full rows with atomic cells.
+    bool is_eligible_for_single_key_optimization() {
+        return selects_only_full_rows_with_atomic_cells(_slice, *_pr.start()->value().key(), *_schema) &&
+            _config.single_key_parallel_scan_threshold > 0 &&
+            (_config.single_key_optimization_enabled || probe_read());
+    }
+
+    void evaluate_single_key_optimization_stats(single_key_optimization_stats stats) {
+        double proportion{0};
+
+        if (stats.read == 0) {
+            // If read wasn't updated then the early exit wasn't
+            // triggered and we read all data sources, thus we have
+            // the worst case.
+            if (_config.single_key_parallel_scan_threshold != 1) {
+                _config.single_key_optimization_enabled = false;
+            }
+            proportion = 1;
+        } else if (stats.read == 1) {
+            _config.single_key_optimization_enabled = true;
+            proportion = 0;
+        } else {
+            proportion = static_cast<double>(stats.read - 1) / static_cast<double>(stats.total - 1);
+            _config.single_key_optimization_enabled = proportion <= _config.single_key_parallel_scan_threshold;
+        }
+
+        auto it = _config.optimization_extra_read_proportion.buckets.begin();
+        const auto end = _config.optimization_extra_read_proportion.buckets.end();
+        double lower_bound{0};
+
+        while (it != end && proportion > lower_bound) {
+            lower_bound = it->upper_bound;
+            ++it->count;
+            ++it;
+        }
+    }
+
+    streamed_mutation_opt merge_accumulated_mutations() {
+        _done = true;
+        if (_mutations.empty()) {
+            return {};
+        }
+        _config.sstable_histogram.add(_mutations.size());
+        return merge_mutations(std::move(_mutations));
+    }
+
+    future<streamed_mutation_opt> read_from_all(std::vector<sstables::shared_sstable> candidates) {
+        return parallel_for_each(std::move(candidates),
+            [this](const sstables::shared_sstable& sstable) {
+                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
+                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this] (auto smo) {
+                    if (smo) {
+                        _mutations.emplace_back(std::move(*smo));
+                    }
+                });
+        }).then([this] {
+            return merge_accumulated_mutations();
+        });
+    }
+
+    future<streamed_mutation_opt> read_as_needed(std::vector<sstables::shared_sstable> candidates) {
+        boost::sort(candidates, [] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
+            // Sort in reverse order, so that the latest timestamps come first
+            return a->get_stats_metadata().max_timestamp > b->get_stats_metadata().max_timestamp;
+        });
+
+        auto stats = make_lw_shared<single_key_optimization_stats>(candidates.size());
+
+        return do_with(
+                std::move(candidates),
+                std::size_t{0},
+                cell_coverage(_schema, _pr, _slice),
+                [this, stats] (std::vector<sstables::shared_sstable>& candidates, std::size_t& index, cell_coverage& coverage) {
+            return repeat([&, stats] {
+                auto& sst = candidates[index];
+                tracing::trace(_trace_state,
+                        "Reading key {} from next sstable {}",
+                        _pr,
+                        seastar::value_of([sst] { return sst->get_filename(); }));
+
+                return sst->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([&, stats] (auto smo) {
+                    if (!smo) {
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    }
+
+                    return coverage.update_from(std::move(*smo)).then([&, stats] (streamed_mutation sm) {
+                        if (_fwd == streamed_mutation::forwarding::yes) {
+                            _mutations.emplace_back(make_forwardable(std::move(sm)));
+                        } else {
+                            _mutations.emplace_back(std::move(sm));
+                        }
+
+                        ++index;
+
+                        if (index == candidates.size()) {
+                            return stop_iteration::yes;
+                        }
+
+                        if (coverage.min_timestamp() > candidates[index]->get_stats_metadata().max_timestamp) {
+                            tracing::trace(_trace_state, "Query is satisfied, no need to read the remaining data sources");
+                            stats->read = index;
+                            return stop_iteration::yes;
+                        }
+
+                        return stop_iteration::no;
+                    });
+                });
+            });
+        }).then([this, stats] {
+            this->evaluate_single_key_optimization_stats(std::move(*stats));
+
+            return merge_accumulated_mutations();
+        });
+    }
+
 public:
+
     single_key_sstable_reader(column_family* cf,
+                              config config,
                               schema_ptr schema,
                               lw_shared_ptr<sstables::sstable_set> sstables,
-                              utils::estimated_histogram& sstable_histogram,
                               const dht::partition_range& pr, // must be singular
                               const query::partition_slice& slice,
                               const io_priority_class& pc,
@@ -507,12 +875,12 @@ public:
         , _pr(pr)
         , _key(sstables::key::from_partition_key(*_schema, *pr.start()->value().key()))
         , _sstables(std::move(sstables))
-        , _sstable_histogram(sstable_histogram)
         , _pc(pc)
         , _slice(slice)
         , _resource_tracker(std::move(resource_tracker))
         , _trace_state(std::move(trace_state))
         , _fwd(fwd)
+        , _config(std::move(config))
     { }
 
     virtual future<streamed_mutation_opt> operator()() override {
@@ -520,22 +888,19 @@ public:
             return make_ready_future<streamed_mutation_opt>();
         }
         auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
-        return parallel_for_each(std::move(candidates),
-            [this](const sstables::shared_sstable& sstable) {
-                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this](auto smo) {
-                    if (smo) {
-                        _mutations.emplace_back(std::move(*smo));
-                    }
-                });
-        }).then([this] () -> streamed_mutation_opt {
-            _done = true;
-            if (_mutations.empty()) {
-                return { };
-            }
-            _sstable_histogram.add(_mutations.size());
-            return merge_mutations(std::move(_mutations));
-        });
+
+        ++_config.read_count;
+
+        if (candidates.empty()) {
+            return make_ready_future<streamed_mutation_opt>();
+        }
+
+        if (is_eligible_for_single_key_optimization()) {
+            ++_config.optimization_hit_count;
+            return read_as_needed(std::move(candidates));
+        }
+
+        return read_from_all(std::move(candidates));
     }
 };
 
@@ -562,8 +927,16 @@ column_family::make_sstable_reader(schema_ptr s,
             return make_empty_reader(); // range doesn't belong to this shard
         }
 
+        single_key_sstable_reader::config reader_config{_stats.estimated_sstable_per_read,
+                _config.single_key_parallel_scan_threshold,
+                _single_key_optimization_enabled,
+                _single_key_optimization_probing_read_counter,
+                _stats.single_key_reader_read_count,
+                _stats.single_key_reader_optimization_hit_count,
+                _stats.single_key_reader_optimization_extra_read_proportion};
+
         if (config.resources_sem) {
-            auto ms = mutation_source([&config, sstables=std::move(sstables), this] (
+            auto ms = mutation_source([&config, reader_config = std::move(reader_config), sstables = std::move(sstables), this] (
                         schema_ptr s,
                         const dht::partition_range& pr,
                         const query::partition_slice& slice,
@@ -571,13 +944,29 @@ column_family::make_sstable_reader(schema_ptr s,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         mutation_reader::forwarding fwd_mr) {
-                    return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-                                _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd);
+                    return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this),
+                            std::move(reader_config),
+                            std::move(s),
+                            std::move(sstables),
+                            pr,
+                            slice,
+                            pc,
+                            reader_resource_tracker(config.resources_sem),
+                            std::move(trace_state),
+                            fwd);
                 });
             return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
-            return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-                        _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
+            return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this),
+                    std::move(reader_config),
+                    std::move(s),
+                    std::move(sstables),
+                    pr,
+                    slice,
+                    pc,
+                    no_resource_tracking(),
+                    std::move(trace_state),
+                    fwd);
         }
     } else {
         if (config.resources_sem) {
@@ -1240,7 +1629,15 @@ void column_family::set_metrics() {
                 ms::make_gauge("live_disk_space", ms::description("Live disk space used"), _stats.live_disk_space_used)(cf)(ks),
                 ms::make_gauge("total_disk_space", ms::description("Total disk space used"), _stats.total_disk_space_used)(cf)(ks),
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
-                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
+                ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks),
+                ms::make_gauge("single_key_reader_optimization_hit_rate",
+                        ms::description("Percentage of the total reads that hit the optimization."),
+                        [this] { return _stats.single_key_reader_read_count ? (_stats.single_key_reader_optimization_hit_count * 100) / _stats.single_key_reader_read_count : 0; })(cf)(ks)(_config.single_key_parallel_scan_threshold > 0),
+                ms::make_histogram("single_key_reader_optimization_extra_read_proportion",
+                        ms::description("The proportion of the extra data-sources read to serve the read."
+                            " It's a number between 0 and 1, where 0 is the best case and 1 is the worst case."
+                            " The best case is when out of N data sources only one had to be read, and the worst case is when all of them."),
+                        [this] { return _stats.single_key_reader_optimization_extra_read_proportion; })(cf)(ks)(_config.single_key_parallel_scan_threshold > 0)
         });
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
@@ -2716,6 +3113,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.background_writer_scheduling_group = _config.background_writer_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
+    cfg.single_key_parallel_scan_threshold = db_config.single_key_parallel_scan_threshold();
 
     return cfg;
 }
