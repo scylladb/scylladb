@@ -801,7 +801,7 @@ void column_family::load_sstable(sstables::shared_sstable& sst, bool reset_level
     if (schema()->is_counter() && !sst->has_scylla_component()) {
         throw std::runtime_error("Loading non-Scylla SSTables containing counters is not supported. Use sstableloader instead.");
     }
-    auto shards = sst->get_shards_for_this_sstable();
+    auto& shards = sst->get_shards_for_this_sstable();
     if (belongs_to_other_shard(shards)) {
         // If we're here, this sstable is shared by this and other
         // shard(s). Shared sstables cannot be deleted until all
@@ -1737,7 +1737,7 @@ static future<> invoke_all_resharding_jobs(global_column_family_ptr cf, std::vec
 
 static std::vector<sstables::shared_sstable> sstables_for_shard(const std::vector<sstables::shared_sstable>& sstables, shard_id shard) {
     auto belongs_to_shard = [] (const sstables::shared_sstable& sst, unsigned shard) {
-        auto shards = sst->get_shards_for_this_sstable();
+        auto& shards = sst->get_shards_for_this_sstable();
         return boost::range::find(shards, shard) != shards.end();
     };
 
@@ -1803,7 +1803,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         auto new_sstables_for_shard = sstables_for_shard(new_sstables, shard);
                         // sanity checks
                         for (auto& sst : new_sstables_for_shard) {
-                            auto shards = sst->get_shards_for_this_sstable();
+                            auto shards& = sst->get_shards_for_this_sstable();
                             if (shards.size() != 1) {
                                 throw std::runtime_error(sprint("resharded sstable %s doesn't belong to only one shard", sst->get_filename()));
                             }
