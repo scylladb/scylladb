@@ -91,10 +91,12 @@ public:
         , _is_alive(true) {
     }
 
+    // Valid only on shard 0
     heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
 
+    // Valid only on shard 0
     const heart_beat_state& get_heart_beat_state() const {
         return _heart_beat_state;
     }
@@ -119,16 +121,34 @@ public:
     }
 
     void add_application_state(application_state key, versioned_value value) {
-        if (_application_state.count(key)) {
-            _application_state.at(key) = value;
-        } else {
-            _application_state.emplace(key, value);
+        _application_state[key] = std::move(value);
+    }
+
+    void apply_application_state(application_state key, versioned_value&& value) {
+        auto&& e = _application_state[key];
+        if (e.version < value.version) {
+            e = std::move(value);
+        }
+    }
+
+    void apply_application_state(application_state key, const versioned_value& value) {
+        auto&& e = _application_state[key];
+        if (e.version < value.version) {
+            e = value;
+        }
+    }
+
+    void apply_application_state(const endpoint_state& es) {
+        for (auto&& e : es._application_state) {
+            apply_application_state(e.first, e.second);
         }
     }
 
     /* getters and setters */
     /**
      * @return System.nanoTime() when state was updated last time.
+     *
+     * Valid only on shard 0.
      */
     clk::time_point get_update_timestamp() const {
         return _update_timestamp;
