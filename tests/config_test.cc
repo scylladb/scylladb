@@ -808,17 +808,17 @@ inter_dc_tcp_nodelay: false
     
 )apa";
 
-namespace db {
+namespace utils {
 template<typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::config_source & v) {
-    typedef std::underlying_type<db::config::config_source>::type type;
+inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const utils::config_file::config_source & v) {
+    typedef std::underlying_type<utils::config_file::config_source>::type type;
     return os << type(v);
 }
 }
 
 namespace db {
 template<typename... T, typename... Args>
-inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::value<T...> & v) {
+inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::named_value<T...> & v) {
     return os << v();
 }
 }
@@ -830,12 +830,12 @@ SEASTAR_TEST_CASE(test_parse_yaml) {
 
     BOOST_CHECK_EQUAL(cfg.cluster_name(), "Test Cluster");
     BOOST_CHECK_EQUAL(cfg.cluster_name.is_set(), true);
-    BOOST_CHECK_EQUAL(cfg.cluster_name.source(), config::config_source::SettingsFile);
+    BOOST_CHECK_EQUAL(cfg.cluster_name.source(), utils::config_file::config_source::SettingsFile);
 
 
     BOOST_CHECK_EQUAL(cfg.compaction_throughput_mb_per_sec(), 16);
     BOOST_CHECK_EQUAL(cfg.compaction_throughput_mb_per_sec.is_set(), true);
-    BOOST_CHECK_EQUAL(cfg.compaction_throughput_mb_per_sec.source(), config::config_source::SettingsFile);
+    BOOST_CHECK_EQUAL(cfg.compaction_throughput_mb_per_sec.source(), utils::config_file::config_source::SettingsFile);
 
     /*
      * Horrible, unused, maybe invalid. Let's test it.
@@ -852,11 +852,11 @@ SEASTAR_TEST_CASE(test_parse_yaml) {
               - seeds: "127.0.0.1"
     */
     BOOST_CHECK_EQUAL(cfg.seed_provider.is_set(), true);
-    BOOST_CHECK_EQUAL(cfg.seed_provider.source(), config::config_source::SettingsFile);
+    BOOST_CHECK_EQUAL(cfg.seed_provider.source(), utils::config_file::config_source::SettingsFile);
     BOOST_CHECK_EQUAL(cfg.seed_provider().class_name, "org.apache.cassandra.locator.SimpleSeedProvider");
-    BOOST_CHECK_EQUAL(cfg.seed_provider().parameters,
-            seastar::program_options::string_map({{"seeds", "127.0.0.1"}})
-    );
+
+    const auto expected_seed_provider_params = std::unordered_map<sstring, sstring>({{"seeds", "127.0.0.1"}});
+    BOOST_CHECK_EQUAL(cfg.seed_provider().parameters, expected_seed_provider_params);
 
     return make_ready_future<>();
 }
