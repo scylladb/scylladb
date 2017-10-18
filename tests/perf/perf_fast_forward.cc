@@ -930,8 +930,8 @@ int main(int argc, char** argv) {
         sstring datadir = "./perf_large_partition_data";
         ::mkdir(datadir.c_str(), S_IRWXU);
 
-        db_cfg.enable_cache = app.configuration().count("enable-cache");
-        db_cfg.enable_commitlog = false;
+        db_cfg.enable_cache(app.configuration().count("enable-cache"));
+        db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
 
         if (!app.configuration().count("verbose")) {

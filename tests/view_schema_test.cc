@@ -1090,7 +1090,7 @@ SEASTAR_TEST_CASE(test_complex_timestamp_updates) {
 
 SEASTAR_TEST_CASE(test_complex_timestamp_updates_with_flush) {
     db::config cfg;
-    cfg.enable_cache = false;
+    cfg.enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         do_test_complex_timestamp_updates(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -2864,7 +2864,7 @@ SEASTAR_TEST_CASE(complex_restricted_timestamp_update_test) {
 
 SEASTAR_TEST_CASE(complex_restricted_timestamp_update_test_with_flush) {
     db::config cfg;
-    cfg.enable_cache = false;
+    cfg.enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         do_complex_restricted_timestamp_update_test(e, [&] {
             e.local_db().flush_all_memtables().get();
@@ -2965,7 +2965,7 @@ SEASTAR_TEST_CASE(complex_timestamp_deletion_test) {
 
 SEASTAR_TEST_CASE(complex_timestamp_deletion_test_with_flush) {
     db::config cfg;
-    cfg.enable_cache = false;
+    cfg.enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(e, [&] {
             e.local_db().flush_all_memtables().get();

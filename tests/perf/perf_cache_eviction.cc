@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
         }
 
         db::config cfg;
-        cfg.enable_commitlog = false;
-        cfg.enable_cache = true;
+        cfg.enable_commitlog(false);
+        cfg.enable_cache(true);
 
         return do_with_cql_env_thread([&app] (cql_test_env& env) {
             auto reads_enabled = !app.configuration().count("no-reads");

@@ -82,7 +82,7 @@ SEASTAR_TEST_CASE(test_default_authenticator) {
 
 SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
     db::config cfg;
-    cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
+    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
 
     return do_with_cql_env([](cql_test_env&) {
         BOOST_REQUIRE_EQUAL(auth::authenticator::get().require_authentication(), true);
@@ -93,7 +93,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
 
 SEASTAR_TEST_CASE(test_auth_users) {
     db::config cfg;
-    cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
+    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
 
     return do_with_cql_env([](cql_test_env&) {
         return seastar::async([] {
@@ -115,7 +115,7 @@ SEASTAR_TEST_CASE(test_auth_users) {
 
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
-    cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
+    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
 
     /**
      * Not using seastar::async due to apparent ASan bug.
@@ -197,7 +197,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
 
 SEASTAR_TEST_CASE(test_cassandra_hash) {
     db::config cfg;
-    cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
+    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
 
     return do_with_cql_env([](cql_test_env& env) {
         /**
