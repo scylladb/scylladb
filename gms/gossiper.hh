@@ -49,6 +49,7 @@
 #include "gms/application_state.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
+#include "utils/loading_shared_values.hh"
 #include "message/messaging_service_fwd.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -80,7 +81,7 @@ class i_failure_detector;
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
+class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper>, public seastar::peering_sharded_service<gossiper> {
 public:
     using clk = seastar::lowres_system_clock;
 private:
@@ -105,7 +106,7 @@ private:
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
     semaphore _callback_running{1};
-    semaphore _apply_state_locally_semaphore{1};
+    semaphore _apply_state_locally_semaphore{100};
 public:
     future<> timer_callback_lock() { return _callback_running.wait(); }
     void timer_callback_unlock() { _callback_running.signal(); }
@@ -120,9 +121,17 @@ public:
 public:
     static clk::time_point inline now() { return clk::now(); }
 public:
+    using endpoint_locks_map = utils::loading_shared_values<inet_address, semaphore>;
+    struct endpoint_permit {
+        endpoint_locks_map::entry_ptr _ptr;
+        semaphore_units<> _units;
+    };
+    future<endpoint_permit> lock_endpoint(inet_address);
+public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
-    std::unordered_map<inet_address, endpoint_state> shadow_endpoint_state_map;
+    // Used for serializing changes to endpoint_state_map and running of associated change listeners.
+    endpoint_locks_map endpoint_locks;
 
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVING_TOKEN,
@@ -214,6 +223,15 @@ private:
     std::vector<inet_address> _shadow_live_endpoints;
 
     void run();
+    // Replicates given endpoint_state to all other shards.
+    // The state state doesn't have to be kept alive around until completes.
+    future<> replicate(inet_address, const endpoint_state&);
+    // Replicates "states" from "src" to all other shards.
+    // "src" and "states" must be kept alive until completes and must not change.
+    future<> replicate(inet_address, const std::map<application_state, versioned_value>& src, const std::vector<application_state>& states);
+    // Replicates given value to all other shards.
+    // The value must be kept alive until completes and not change.
+    future<> replicate(inet_address, application_state key, const versioned_value& value);
 public:
     gossiper();
 
@@ -386,6 +404,7 @@ public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint);
 
     const endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep) const;
+    endpoint_state& get_endpoint_state(inet_address ep);
 
     endpoint_state* get_endpoint_state_for_endpoint_ptr(inet_address ep);
 

@@ -214,7 +214,7 @@ public:
     /// The loader object does not survive deferring, so the caller must deal with its liveness.
     template<typename Loader>
     future<entry_ptr> get_or_load(const key_type& key, Loader&& loader) noexcept {
-        static_assert(std::is_same<future<value_type>, std::result_of_t<Loader(const key_type&)>>::value, "Bad Loader signature");
+        static_assert(std::is_same<future<value_type>, typename futurize<std::result_of_t<Loader(const key_type&)>>::type>::value, "Bad Loader signature");
         try {
             auto i = _set.find(key, Hash(), typename entry::key_eq());
             lw_shared_ptr<entry> e;
@@ -233,7 +233,7 @@ public:
                 _set.insert(*e);
                 // get_shared_future() may throw, so make sure to call it before invoking the loader(key)
                 f = e->loaded().get_shared_future();
-                loader(key).then_wrapped([e](future<value_type>&& val_fut) mutable {
+                futurize_apply([&] { return loader(key); }).then_wrapped([e](future<value_type>&& val_fut) mutable {
                     if (val_fut.failed()) {
                         e->loaded().set_exception(val_fut.get_exception());
                     } else {
