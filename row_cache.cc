@@ -37,11 +37,14 @@
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
 
+namespace cache {
+
+logging::logger clogger("cache");
+
+}
+
 using namespace std::chrono_literals;
 using namespace cache;
-
-
-static logging::logger clogger("cache");
 
 thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
 
