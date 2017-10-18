@@ -113,6 +113,10 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
 
     // Holds the lower bound of a position range which hasn't been processed yet.
     // Only fragments with positions < _lower_bound have been emitted.
+    //
+    // It is assumed that !_lower_bound.is_clustering_row(). We depend on this when
+    // calling range_tombstone::trim_front() and when inserting dummy entries. Dummy
+    // entries are assumed to be only at !is_clustering_row() positions.
     position_in_partition _lower_bound;
     position_in_partition_view _upper_bound;
 
