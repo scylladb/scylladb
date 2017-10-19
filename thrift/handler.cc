@@ -261,20 +261,20 @@ public:
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
-            return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level]() mutable {
+            return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
                 return service::get_local_storage_proxy().query(
                         schema,
                         cmd,
                         std::move(pranges),
                         cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit](auto result) {
-                    return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
+                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto result) {
+                    return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         if (schema->is_counter()) {
-                            counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit);
+                            counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
                             v.consume(cmd->slice, aggregator);
                             return aggregator.release_as_map();
                         }
-                        column_aggregator aggregator(*schema, cmd->slice, cell_limit);
+                        column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, aggregator);
                         return aggregator.release_as_map();
                     });
@@ -292,15 +292,15 @@ public:
             auto cell_limit = predicate.__isset.slice_range ? static_cast<uint32_t>(predicate.slice_range.count) : std::numeric_limits<uint32_t>::max();
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
-            return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level]() mutable {
+            return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
                 return service::get_local_storage_proxy().query(
                         schema,
                         cmd,
                         std::move(pranges),
                         cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit](auto&& result) {
-                    return query::result_view::do_with(*result, [schema, cmd, cell_limit](query::result_view v) {
-                        column_counter counter(*schema, cmd->slice, cell_limit);
+                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto&& result) {
+                    return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
+                        column_counter counter(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, counter);
                         return counter.release_as_map();
                     });
@@ -649,7 +649,7 @@ public:
                         cl_from_thrift(cl),
                         nullptr).then([schema, cmd, column_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
-                        column_aggregator aggregator(*schema, cmd->slice, column_limit);
+                        column_aggregator aggregator(*schema, cmd->slice, column_limit, { });
                         v.consume(cmd->slice, aggregator);
                         auto cols = aggregator.release();
                         return !cols.empty() ? std::move(cols.begin()->second) : std::vector<ColumnOrSuperColumn>();
@@ -1538,9 +1538,13 @@ private:
         std::map<std::string, typename Aggregator::type> _aggregation;
         typename Aggregator::type* _current_aggregation;
     public:
-        column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit)
-                : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0)
-        { }
+        column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit, std::vector<std::string>&& expected)
+                : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0) {
+            // For compatibility reasons, return expected keys even if they don't exist
+            for (auto&& k : expected) {
+                _aggregation[std::move(k)] = { };
+            }
+        }
         std::vector<std::pair<std::string, typename Aggregator::type>> release() {
             return std::vector<std::pair<std::string, typename Aggregator::type>>(
                         boost::make_move_iterator(_aggregation.begin()),
@@ -1665,7 +1669,7 @@ private:
                  dht::partition_range::bound(std::move(end), true)}};
     }
     static std::vector<KeySlice> to_key_slices(const schema& s, const query::partition_slice& slice, query::result_view v, uint32_t cell_limit) {
-        column_aggregator aggregator(s, slice, cell_limit);
+        column_aggregator aggregator(s, slice, cell_limit, { });
         v.consume(slice, aggregator);
         auto&& cols = aggregator.release();
         std::vector<KeySlice> ret;
