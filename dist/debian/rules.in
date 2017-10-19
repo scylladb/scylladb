@@ -24,4 +24,4 @@ override_dh_installcron:
 override_dh_strip:
 	dh_strip --dbg-package=scylla-server-dbg
 %:
-	dh $@
+	dh $@ --with-python3 --buildsystem=pybuild
