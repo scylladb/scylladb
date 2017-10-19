@@ -1535,23 +1535,22 @@ private:
         const query::partition_slice& _slice;
         const uint32_t _cell_limit;
         uint32_t _current_cell_limit;
-        std::vector<std::pair<std::string, typename Aggregator::type>> _aggregation;
+        std::map<std::string, typename Aggregator::type> _aggregation;
         typename Aggregator::type* _current_aggregation;
     public:
         column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit)
                 : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0)
         { }
-        std::vector<std::pair<std::string, typename Aggregator::type>>&& release() {
-            return std::move(_aggregation);
-        }
-        std::map<std::string, typename Aggregator::type> release_as_map() {
-            return std::map<std::string, typename Aggregator::type>(
+        std::vector<std::pair<std::string, typename Aggregator::type>> release() {
+            return std::vector<std::pair<std::string, typename Aggregator::type>>(
                         boost::make_move_iterator(_aggregation.begin()),
                         boost::make_move_iterator(_aggregation.end()));
         }
+        std::map<std::string, typename Aggregator::type>&& release_as_map() {
+            return std::move(_aggregation);
+        }
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
-            _aggregation.emplace_back(partition_key_to_string(_s, key), typename Aggregator::type());
-            _current_aggregation = &_aggregation.back().second;
+            _current_aggregation = &_aggregation[partition_key_to_string(_s, key)];
             _current_cell_limit = _cell_limit;
         }
         void accept_new_partition(uint32_t row_count) {
