@@ -613,7 +613,7 @@ memtable_entry::read(lw_shared_ptr<memtable> mtbl,
     if (_schema->version() != target_schema->version()) {
         auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, std::move(cr));
         mutation m = mutation(target_schema, _key, std::move(mp));
-        return flat_mutation_reader_from_mutation(std::move(m), fwd);
+        return flat_mutation_reader_from_mutations({std::move(m)}, fwd);
     }
     auto snp = _pe.read(mtbl->region(), _schema);
     return make_partition_snapshot_flat_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
