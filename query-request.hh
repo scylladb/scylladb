@@ -48,13 +48,6 @@ bool is_single_partition(const dht::partition_range& range) {
 
 typedef std::vector<clustering_range> clustering_row_ranges;
 
-inline
-bool selects_only_full_rows(const clustering_row_ranges& r, const schema& s) {
-    return std::all_of(r.cbegin(), r.cend(), [&s] (const clustering_range& cr) {
-        return cr.is_singular() && cr.start()->value().is_full(s);
-    });
-}
-
 class specific_ranges {
 public:
     specific_ranges(partition_key pk, clustering_row_ranges ranges)
@@ -161,16 +154,6 @@ public:
 };
 
 constexpr auto max_partitions = std::numeric_limits<uint32_t>::max();
-
-inline
-bool selects_only_full_rows_with_atomic_cells(const partition_slice& slice, const partition_key& pkey, const schema& s) {
-    return selects_only_full_rows(slice.row_ranges(s, pkey), s) &&
-        //FIXME readers are assumed to return whole rows, regardless of
-        //the selected columns. Once this is fixed (#2885) update to
-        //look at the slice's columns.
-        std::all_of(s.static_columns().begin(), s.static_columns().end(), std::mem_fn(&column_definition::is_atomic)) &&
-        std::all_of(s.regular_columns().begin(), s.regular_columns().end(), std::mem_fn(&column_definition::is_atomic));
-}
 
 // Full specification of a query to the database.
 // Intended for passing across replicas.

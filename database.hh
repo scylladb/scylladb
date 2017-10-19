@@ -302,7 +302,6 @@ public:
         seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
         seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
         bool enable_metrics_reporting = false;
-        double single_key_parallel_scan_threshold = 0.5;
     };
     struct no_commitlog {};
     struct stats {
@@ -323,29 +322,6 @@ public:
         utils::timed_rate_moving_average_and_histogram tombstone_scanned;
         utils::timed_rate_moving_average_and_histogram live_scanned;
         utils::estimated_histogram estimated_coordinator_read;
-        /**
-         * Hit rate is the percentage of the total reads that hit the
-         * optimization.
-         * Proportion is the proportion of the extra data-sources read
-         * to serve the read. It's a number between 0 and 1, where 0 is
-         * the best case and 1 is the worst case. The best case is when
-         * out of N data sources only one had to be read, and the worst
-         * case is when all of them.
-         */
-        int64_t single_key_reader_read_count{0};
-        int64_t single_key_reader_optimization_hit_count{0};
-        metrics::histogram single_key_reader_optimization_extra_read_proportion{0, 0.0, {
-            {0, 0.1},
-            {0, 0.2},
-            {0, 0.3},
-            {0, 0.4},
-            {0, 0.5},
-            {0, 0.6},
-            {0, 0.7},
-            {0, 0.8},
-            {0, 0.9},
-            {0, 1.0}
-        }};
     };
 
     struct snapshot_details {
@@ -472,10 +448,6 @@ private:
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
-
-    mutable bool _single_key_optimization_enabled = true;
-    mutable int64_t _single_key_optimization_probing_read_counter = 0;
-
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables

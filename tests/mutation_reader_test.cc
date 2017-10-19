@@ -33,12 +33,13 @@
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
 #include "tests/simple_schema.hh"
-#include "tests/sstable_test.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "sstable_mutation_readers.hh"
+#include "cell_locking.hh"
 #include "sstables/sstables.hh"
+#include "database.hh"
 
 #include "disk-error-handler.hh"
 

@@ -43,9 +43,6 @@ public:
     api::timestamp_type new_timestamp() {
         return _timestamp++;
     }
-    void set_timestamp(api::timestamp_type t) {
-        _timestamp = t;
-    }
     tombstone new_tombstone() {
         return {new_timestamp(), gc_clock::now()};
     }
@@ -86,16 +83,6 @@ public:
     dht::decorated_key make_pkey(sstring pk) {
         auto key = partition_key::from_single_value(*_s, data_value(pk).serialize());
         return dht::global_partitioner().decorate_key(*_s, key);
-    }
-
-    api::timestamp_type add_row_marker(mutation& m, const clustering_key& key, api::timestamp_type t = api::missing_timestamp) {
-        if (t == api::missing_timestamp) {
-            t = new_timestamp();
-        }
-
-        m.partition().apply_insert(*_s, key, t);
-
-        return t;
     }
 
     api::timestamp_type add_row(mutation& m, const clustering_key& key, const sstring& v, api::timestamp_type t = api::missing_timestamp) {

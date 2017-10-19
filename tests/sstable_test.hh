@@ -30,8 +30,6 @@
 #include "schema_builder.hh"
 #include "core/thread.hh"
 #include "sstables/index_reader.hh"
-#include "sstables/compaction_manager.hh"
-#include "cell_locking.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -45,10 +43,6 @@ public:
         _cf->_sstables->insert(std::move(sstable));
     }
 
-    bool get_single_key_optimization_enabled() const {
-        return _cf->_single_key_optimization_enabled;
-    }
-
     static void update_sstables_known_generation(column_family& cf, unsigned generation) {
         cf.update_sstables_known_generation(generation);
     }
@@ -59,29 +53,6 @@ public:
 
     static int64_t calculate_shard_from_sstable_generation(int64_t generation) {
         return column_family::calculate_shard_from_sstable_generation(generation);
-    }
-};
-
-// Convenience wrapper that also keeps alive all the referenced objects.
-struct column_family_wrapper {
-    std::unique_ptr<compaction_manager> cm;
-    std::unique_ptr<cell_locker_stats> cls;
-    lw_shared_ptr<column_family> cf;
-    column_family_test cft;
-
-    column_family_wrapper(schema_ptr schema, column_family::config cfg)
-        : cm(std::make_unique<compaction_manager>())
-        , cls(std::make_unique<cell_locker_stats>())
-        , cf(make_lw_shared<column_family>(schema, cfg, column_family::no_commitlog{}, *cm, *cls))
-        , cft(cf) {
-    }
-
-    column_family& wrapped() {
-        return *cf;
-    }
-
-    column_family_test& wrapped_test() {
-        return cft;
     }
 };
 
