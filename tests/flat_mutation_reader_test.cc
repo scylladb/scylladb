@@ -41,7 +41,7 @@
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
-static void test_double_conversion(const std::vector<mutation>& mutations) {
+static void test_double_conversion_through_mutation_reader(const std::vector<mutation>& mutations) {
     BOOST_REQUIRE(!mutations.empty());
     auto schema = mutations[0].schema();
     auto base_reader = make_reader_returning_many(mutations);
@@ -78,7 +78,7 @@ static void check_two_readers_are_the_same(schema_ptr schema, mutation_reader& n
     BOOST_REQUIRE(mfopt->is_end_of_partition());
 }
 
-static void test_conversion_to_flat_mutation_reader(const std::vector<mutation>& mutations) {
+static void test_conversion_to_flat_mutation_reader_through_mutation_reader(const std::vector<mutation>& mutations) {
     BOOST_REQUIRE(!mutations.empty());
     auto schema = mutations[0].schema();
     auto base_reader = make_reader_returning_many(mutations);
@@ -91,17 +91,51 @@ static void test_conversion_to_flat_mutation_reader(const std::vector<mutation>&
     }
 }
 
+static void test_conversion(const std::vector<mutation>& mutations) {
+    BOOST_REQUIRE(!mutations.empty());
+    auto schema = mutations[0].schema();
+    auto flat_reader = flat_mutation_reader_from_mutations(std::vector<mutation>(mutations), streamed_mutation::forwarding::no);
+    for (auto& m : mutations) {
+        mutation_opt m2 = read_mutation_from_flat_mutation_reader(schema, flat_reader).get0();
+        BOOST_REQUIRE(m2);
+        BOOST_REQUIRE_EQUAL(m, *m2);
+    }
+    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(schema, flat_reader).get0());
+}
+
 /*
  * =================
  * ===== Tests =====
  * =================
  */
 
+SEASTAR_TEST_CASE(test_conversions_through_mutation_reader_single_mutation) {
+    return seastar::async([] {
+        for_each_mutation([&] (const mutation& m) {
+            test_double_conversion_through_mutation_reader({m});
+            test_conversion_to_flat_mutation_reader_through_mutation_reader({m});
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_double_conversion_through_mutation_reader_two_mutations) {
+    return seastar::async([] {
+        for_each_mutation_pair([&] (auto&& m, auto&& m2, are_equal) {
+            if (m.decorated_key().less_compare(*m.schema(), m2.decorated_key())) {
+                test_double_conversion_through_mutation_reader({m, m2});
+                test_conversion_to_flat_mutation_reader_through_mutation_reader({m, m2});
+            } else if (m2.decorated_key().less_compare(*m.schema(), m.decorated_key())) {
+                test_double_conversion_through_mutation_reader({m2, m});
+                test_conversion_to_flat_mutation_reader_through_mutation_reader({m2, m});
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_conversions_single_mutation) {
     return seastar::async([] {
         for_each_mutation([&] (const mutation& m) {
-            test_double_conversion({m});
-            test_conversion_to_flat_mutation_reader({m});
+            test_conversion({m});
         });
     });
 }
@@ -110,11 +144,9 @@ SEASTAR_TEST_CASE(test_double_conversion_two_mutations) {
     return seastar::async([] {
         for_each_mutation_pair([&] (auto&& m, auto&& m2, are_equal) {
             if (m.decorated_key().less_compare(*m.schema(), m2.decorated_key())) {
-                test_double_conversion({m, m2});
-                test_conversion_to_flat_mutation_reader({m, m2});
+                test_conversion({m, m2});
             } else if (m2.decorated_key().less_compare(*m.schema(), m.decorated_key())) {
-                test_double_conversion({m2, m});
-                test_conversion_to_flat_mutation_reader({m2, m});
+                test_conversion({m2, m});
             }
         });
     });
