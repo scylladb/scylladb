@@ -4,7 +4,7 @@ Homepage: http://scylladb.com
 Section: database
 Priority: optional
 Standards-Version: 3.9.5
-Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, thrift-compiler, ragel, ninja-build, git, libboost-program-options1.55-dev | libboost-program-options-dev, libboost-filesystem1.55-dev | libboost-filesystem-dev, libboost-system1.55-dev | libboost-system-dev, libboost-thread1.55-dev | libboost-thread-dev, libboost-test1.55-dev | libboost-test-dev, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, pciutils, libprotobuf-dev, protobuf-compiler, systemtap-sdt-dev, cmake, libssl-dev, @@BUILD_DEPENDS@@
+Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, thrift-compiler, ragel, ninja-build, git, scylla-libboost-program-options163-dev | libboost-program-options1.55-dev | libboost-program-options-dev, scylla-libboost-filesystem163-dev | libboost-filesystem1.55-dev | libboost-filesystem-dev, scylla-libboost-system163-dev | libboost-system1.55-dev | libboost-system-dev, scylla-libboost-thread163-dev | libboost-thread1.55-dev | libboost-thread-dev, scylla-libboost-test163-dev | libboost-test1.55-dev | libboost-test-dev, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, pciutils, libprotobuf-dev, protobuf-compiler, systemtap-sdt-dev, cmake, libssl-dev, @@BUILD_DEPENDS@@
 
 Package: scylla-conf
 Architecture: any

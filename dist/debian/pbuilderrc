@@ -14,17 +14,7 @@ if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] |
     MIRRORSITE="http://archive.ubuntu.com/ubuntu/"
     COMPONENTS="main restricted universe multiverse"
     DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg"
-    if [ "$DIST" = "trusty" ]; then
-        OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ trusty-updates main restricted universe multiverse|deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu trusty main|deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu trusty main"
-        if [ $REBUILD -eq 0 ]; then
-            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
-        fi
-    else
-        OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ $DIST-updates main restricted universe multiverse"
-        if [ $REBUILD -eq 0 ]; then
-            OTHERMIRROR="$OTHERMIRROR|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
-        fi
-    fi
+    OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ $DIST-updates main restricted universe multiverse|deb http://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu $DIST main|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
 elif [ "$DIST" = "jessie" ] || [ "$DIST" = "stretch" ] || [ "$DIST" = "buster" ] || [ "$DIST" = "sid" ]; then
     MIRRORSITE="http://deb.debian.org/debian/"
     COMPONENTS="main contrib non-free"

@@ -692,6 +692,9 @@ warnings = [
     '-Wno-return-stack-address',
     '-Wno-missing-braces',
     '-Wno-unused-lambda-capture',
+    '-Wno-misleading-indentation',
+    '-Wno-overflow',
+    '-Wno-noexcept-type',
     ]
 
 warnings = [w
@@ -791,7 +794,8 @@ if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
-seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags)]
+seastar_ldflags = args.user_ldflags
+seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
