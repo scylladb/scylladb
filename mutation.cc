@@ -21,6 +21,7 @@
 
 #include "mutation.hh"
 #include "query-result-writer.hh"
+#include "flat_mutation_reader.hh"
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))
@@ -266,4 +267,58 @@ future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
     return consume(sm, mutation_rebuilder(sm.decorated_key(), sm.schema())).then([] (mutation_opt&& mo) {
         return std::move(*mo);
     });
+}
+
+future<mutation_opt> read_mutation_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader& r) {
+    if (r.is_buffer_empty()) {
+        if (r.is_end_of_stream()) {
+            return make_ready_future<mutation_opt>();
+        }
+        return r.fill_buffer().then([&r, s = std::move(s)] {
+            return read_mutation_from_flat_mutation_reader(std::move(s), r);
+        });
+    }
+    // r.is_buffer_empty() is always false at this point
+    struct adapter {
+        schema_ptr _s;
+        stdx::optional<mutation_rebuilder> _builder;
+        adapter(schema_ptr s) : _s(std::move(s)) { }
+
+        void consume_new_partition(const dht::decorated_key& dk) {
+            _builder = mutation_rebuilder(dk, std::move(_s));
+        }
+
+        stop_iteration consume(tombstone t) {
+            assert(_builder);
+            return _builder->consume(t);
+        }
+
+        stop_iteration consume(range_tombstone&& rt) {
+            assert(_builder);
+            return _builder->consume(std::move(rt));
+        }
+
+        stop_iteration consume(static_row&& sr) {
+            assert(_builder);
+            return _builder->consume(std::move(sr));
+        }
+
+        stop_iteration consume(clustering_row&& cr) {
+            assert(_builder);
+            return _builder->consume(std::move(cr));
+        }
+
+        stop_iteration consume_end_of_partition() {
+            assert(_builder);
+            return stop_iteration::yes;
+        }
+
+        mutation_opt consume_end_of_stream() {
+            if (!_builder) {
+                return mutation_opt();
+            }
+            return _builder->consume_end_of_stream();
+        }
+    };
+    return r.consume(adapter(std::move(s)));
 }

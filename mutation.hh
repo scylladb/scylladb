@@ -190,3 +190,8 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
 future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm);
+
+class flat_mutation_reader;
+
+// Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
+future<mutation_opt> read_mutation_from_flat_mutation_reader(schema_ptr, flat_mutation_reader&);
