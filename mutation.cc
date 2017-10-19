@@ -218,12 +218,11 @@ mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
 
 class mutation_rebuilder {
     mutation _m;
-    streamed_mutation& _sm;
     size_t _remaining_limit;
 
 public:
-    mutation_rebuilder(streamed_mutation& sm)
-        : _m(sm.decorated_key(), sm.schema()), _sm(sm), _remaining_limit(0) {
+    mutation_rebuilder(dht::decorated_key dk, schema_ptr s)
+        : _m(std::move(dk), std::move(s)), _remaining_limit(0) {
     }
 
     stop_iteration consume(tombstone t) {
@@ -259,12 +258,12 @@ future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm) {
         return make_ready_future<mutation_opt>();
     }
     return do_with(std::move(*sm), [] (auto& sm) {
-        return consume(sm, mutation_rebuilder(sm));
+        return consume(sm, mutation_rebuilder(sm.decorated_key(), sm.schema()));
     });
 }
 
 future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
-    return consume(sm, mutation_rebuilder(sm)).then([] (mutation_opt&& mo) {
+    return consume(sm, mutation_rebuilder(sm.decorated_key(), sm.schema())).then([] (mutation_opt&& mo) {
         return std::move(*mo);
     });
 }
