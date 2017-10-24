@@ -52,7 +52,7 @@ License:        AGPLv3
 URL:            http://www.scylladb.com/
 BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake python ragel
 %{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
-%{?rhel:BuildRequires: scylla-libstdc++71-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc71-c++, scylla-python34-pyparsing20}
+%{?rhel:BuildRequires: scylla-libstdc++72-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc72-c++, scylla-python34-pyparsing20}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs
 %{?rhel:Requires: python34 python34-PyYAML}
 %{?fedora:Requires: python3 python3-PyYAML}
@@ -73,7 +73,7 @@ This package contains ScyllaDB server.
 %endif
 %if 0%{?rhel}
 . /etc/profile.d/scylla.sh
-python3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.1 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
+python3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.2 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
