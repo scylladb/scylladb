@@ -152,7 +152,7 @@ public:
                             lw_shared_ptr<read_context> ctx,
                             lw_shared_ptr<partition_snapshot> snp,
                             row_cache& cache)
-        : streamed_mutation::impl(std::move(s), dk, snp->partition_tombstone())
+        : streamed_mutation::impl(std::move(s), std::move(dk), snp->partition_tombstone())
         , _snp(std::move(snp))
         , _position_cmp(*_schema)
         , _ck_ranges(std::move(crr))
