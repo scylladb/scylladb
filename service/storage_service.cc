@@ -999,7 +999,11 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             handle_state_left(endpoint, pieces);
         } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
             handle_state_moving(endpoint, pieces);
+        } else {
+            return; // did nothing.
         }
+        // we have (most likely) modified token metadata
+        replicate_to_all_cores().get();
     } else {
         auto& gossiper = gms::get_local_gossiper();
         auto* ep_state = gossiper.get_endpoint_state_for_endpoint_ptr(endpoint);
@@ -1016,7 +1020,6 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             }
         }
     }
-    replicate_to_all_cores().get();
 }
 
 
