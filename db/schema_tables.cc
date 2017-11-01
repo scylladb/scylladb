@@ -73,6 +73,7 @@
 #include "utils/joinpoint.hh"
 #include "view_info.hh"
 #include "cql_type_parser.hh"
+#include "db/timeout_clock.hh"
 
 using namespace db::system_keyspace;
 using namespace std::chrono_literals;
@@ -611,7 +612,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 {
     auto dk = dht::global_partitioner().decorate_key(*s, pkey);
     return do_with(dht::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
-        return proxy.query_mutations_locally(s, std::move(cmd), range)
+        return proxy.query_mutations_locally(s, std::move(cmd), range, db::no_timeout)
                 .then([dk = std::move(dk), s](foreign_ptr<lw_shared_ptr<reconcilable_result>> res, cache_temperature hit_rate) {
                     auto&& partitions = res->partitions();
                     if (partitions.size() == 0) {

@@ -54,6 +54,7 @@
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
+#include "db/config.hh"
 
 namespace compat {
 
@@ -226,7 +227,11 @@ private:
     seastar::metrics::metric_groups _metrics;
 private:
     void uninit_messaging_service();
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd,
+                                                                     dht::partition_range_vector&& partition_ranges,
+                                                                     db::consistency_level cl,
+                                                                     tracing::trace_state_ptr trace_state,
+                                                                     clock_type::time_point timeout);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
@@ -250,10 +255,18 @@ private:
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_request request,
                                                                            tracing::trace_state_ptr trace_state,
+                                                                           clock_type::time_point timeout,
                                                                            uint64_t max_size = query::result_memory_limiter::maximum_result_size);
-    future<query::result_digest, api::timestamp_type, cache_temperature> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, tracing::trace_state_ptr trace_state,
-                                                                                  uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    future<query::result_digest, api::timestamp_type, cache_temperature> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
+                                                                                                   tracing::trace_state_ptr trace_state,
+                                                                                                   clock_type::time_point timeout,
+                                                                                                   uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
+    future<foreign_ptr<lw_shared_ptr<query::result>>>
+    query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+                              dht::partition_range_vector partition_ranges,
+                              db::consistency_level cl,
+                              tracing::trace_state_ptr trace_state,
+                              clock_type::time_point timeout);
     dht::partition_range_vector get_restricted_ranges(const schema& s, dht::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
@@ -265,7 +278,8 @@ private:
     future<foreign_ptr<lw_shared_ptr<query::result>>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
-        db::consistency_level cl, tracing::trace_state_ptr trace_state);
+        db::consistency_level cl, tracing::trace_state_ptr trace_state,
+        clock_type::time_point timeout);
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
@@ -279,7 +293,8 @@ private:
     template<typename Range>
     future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, stdx::optional<clock_type::time_point> timeout_opt = { });
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_nonsingular_mutations_locally(
-            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
+            schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state,
+            uint64_t max_size, clock_type::time_point timeout);
 
     struct frozen_mutation_and_schema {
         frozen_mutation fm;
@@ -375,21 +390,35 @@ public:
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        tracing::trace_state_ptr trace_state);
+        tracing::trace_state_ptr trace_state,
+        clock_type::time_point timeout);
+
+    // helper method that uses the default timeout for this query (as specified in the config file)
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr s,
+        lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state) {
+        auto timeout = clock_type::now() + std::chrono::milliseconds(get_db().local().get_config().read_request_timeout_in_ms());
+        return query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout));
+    }
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range&,
+        clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr,
         uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges&,
+        clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr,
         uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector& pr,
+            clock_type::time_point timeout,
             tracing::trace_state_ptr trace_state = nullptr,
             uint64_t max_size = query::result_memory_limiter::maximum_result_size);
 

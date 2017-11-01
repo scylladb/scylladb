@@ -480,7 +480,6 @@ snapshot_source make_empty_snapshot_source();
 struct restricted_mutation_reader_config {
     db::timeout_semaphore* resources_sem = nullptr;
     uint64_t* active_reads = nullptr;
-    db::timeout_clock::time_point::duration timeout = {};
     size_t max_queue_length = std::numeric_limits<size_t>::max();
     std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
 

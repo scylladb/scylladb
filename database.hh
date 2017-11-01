@@ -839,14 +839,6 @@ public:
     friend class column_family_test;
 
     friend class distributed_loader;
-
-    db::timeout_clock::time_point read_request_timeout() const {
-        auto timeout = _config.read_concurrency_config.timeout;
-        if (timeout.count() == 0) {
-            return db::no_timeout;
-        }
-        return db::timeout_clock::now() + timeout;
-    }
 };
 
 using sstable_reader_factory_type = std::function<flat_mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
@@ -1193,10 +1185,12 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
-                                               tracing::trace_state_ptr trace_state, uint64_t max_result_size);
+    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_request request,
+                                                                  const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
+                                                                  uint64_t max_result_size, db::timeout_clock::time_point timeout = db::no_timeout);
     future<reconcilable_result, cache_temperature> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,
-                                                query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
+                                                query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state,
+                                                db::timeout_clock::time_point timeout = db::no_timeout);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
     future<> apply(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout = db::no_timeout);
