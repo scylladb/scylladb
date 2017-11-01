@@ -27,6 +27,7 @@
 #include "index/secondary_index_manager.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
+#include <seastar/core/execution_stage.hh>
 #include "net/byteorder.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/UUID.hh"
@@ -1101,6 +1102,9 @@ private:
     db::timeout_semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
+
+    concrete_execution_stage<future<lw_shared_ptr<query::result>>, column_family*, schema_ptr, const query::read_command&, query::result_request,
+            const dht::partition_range_vector&, tracing::trace_state_ptr, query::result_memory_limiter&, uint64_t, db::timeout_clock::time_point> _data_query_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;

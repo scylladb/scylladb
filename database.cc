@@ -36,6 +36,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/execution_stage.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -67,7 +68,6 @@
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
 #include "db/view/row_locking.hh"
-#include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
 #include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
@@ -2080,6 +2080,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, dbcfg.memtable_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
+    , _data_query_stage("data_query", _dbcfg.query_scheduling_group, &column_family::query)
     , _version(empty_version)
     , _compaction_manager(std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group))
     , _enable_incremental_backups(cfg.incremental_backups())
@@ -3019,13 +3020,11 @@ std::chrono::milliseconds column_family::get_coordinator_read_latency_percentile
     return _percentile_cache_value;
 }
 
-static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
-
 future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
+    return _data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
                             max_result_size,
                             timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
