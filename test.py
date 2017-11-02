@@ -94,6 +94,7 @@ boost_tests = [
 ]
 
 other_tests = [
+    'memory_footprint',
 ]
 
 last_len = 0
