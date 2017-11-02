@@ -35,7 +35,7 @@
 #include "canonical_mutation.hh"
 #include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
-#include "cql_test_env.hh"
+#include "test_services.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -215,8 +215,9 @@ int main(int argc, char** argv) {
         ("data-size", bpo::value<size_t>()->default_value(32), "cell data size");
 
     return app.run(argc, argv, [&] {
-      return do_with_cql_env([&] (auto&& env) {
         return seastar::async([&] {
+            storage_service_for_tests ssft;
+
             mutation_settings settings;
             settings.column_count = app.configuration()["column-count"].as<size_t>();
             settings.column_name_size = app.configuration()["column-name-size"].as<size_t>();
@@ -239,6 +240,5 @@ int main(int argc, char** argv) {
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
         });
-      });
     });
 }
