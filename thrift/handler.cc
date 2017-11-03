@@ -179,6 +179,8 @@ concept bool Aggregator =
 )
 }
 
+enum class query_order { no, yes };
+
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
@@ -272,11 +274,11 @@ public:
                         if (schema->is_counter()) {
                             counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
                             v.consume(cmd->slice, aggregator);
-                            return aggregator.release_as_map();
+                            return aggregator.release();
                         }
-                        column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
+                        column_aggregator<query_order::no> aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, aggregator);
-                        return aggregator.release_as_map();
+                        return aggregator.release();
                     });
                 });
             });
@@ -302,7 +304,7 @@ public:
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         column_counter counter(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, counter);
-                        return counter.release_as_map();
+                        return counter.release();
                     });
                 });
             });
@@ -649,7 +651,7 @@ public:
                         cl_from_thrift(cl),
                         nullptr).then([schema, cmd, column_limit](auto result) {
                     return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
-                        column_aggregator aggregator(*schema, cmd->slice, column_limit, { });
+                        column_aggregator<query_order::no> aggregator(*schema, cmd->slice, column_limit, { });
                         v.consume(cmd->slice, aggregator);
                         auto cols = aggregator.release();
                         return !cols.empty() ? std::move(cols.begin()->second) : std::vector<ColumnOrSuperColumn>();
@@ -1528,33 +1530,53 @@ private:
         return bytes_to_string(to_legacy(*s.partition_key_type(), key));
     }
 
+    template<typename Aggregator, query_order QueryOrder>
+    struct partition_index;
+
     template<typename Aggregator>
+    struct partition_index<Aggregator, query_order::no> {
+        using partition_type = std::map<std::string, typename Aggregator::type>;
+        partition_type _aggregation;
+        partition_index(std::vector<std::string>&& expected) {
+            // For compatibility reasons, return expected keys even if they don't exist
+            for (auto&& k : expected) {
+                _aggregation[std::move(k)] = { };
+            }
+        }
+        typename Aggregator::type* begin_aggregation(std::string partition_key) {
+            return &_aggregation[std::move(partition_key)];
+        }
+    };
+    template<typename Aggregator>
+    struct partition_index<Aggregator, query_order::yes> {
+        using partition_type = std::vector<std::pair<std::string, typename Aggregator::type>>;
+        partition_type _aggregation;
+        partition_index(std::vector<std::string>&& expected) {
+        }
+        typename Aggregator::type* begin_aggregation(std::string partition_key) {
+            _aggregation.emplace_back(std::move(partition_key), typename Aggregator::type());
+            return &_aggregation.back().second;
+        }
+    };
+
+    template<typename Aggregator, query_order QueryOrder>
     GCC6_CONCEPT( requires thrift::Aggregator<Aggregator> )
     class column_visitor : public Aggregator {
         const schema& _s;
         const query::partition_slice& _slice;
         const uint32_t _cell_limit;
         uint32_t _current_cell_limit;
-        std::map<std::string, typename Aggregator::type> _aggregation;
         typename Aggregator::type* _current_aggregation;
+        partition_index<Aggregator, QueryOrder> _index;
     public:
         column_visitor(const schema& s, const query::partition_slice& slice, uint32_t cell_limit, std::vector<std::string>&& expected)
-                : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0) {
-            // For compatibility reasons, return expected keys even if they don't exist
-            for (auto&& k : expected) {
-                _aggregation[std::move(k)] = { };
-            }
+                : _s(s), _slice(slice), _cell_limit(cell_limit), _current_cell_limit(0), _index(std::move(expected)) {
         }
-        std::vector<std::pair<std::string, typename Aggregator::type>> release() {
-            return std::vector<std::pair<std::string, typename Aggregator::type>>(
-                        boost::make_move_iterator(_aggregation.begin()),
-                        boost::make_move_iterator(_aggregation.end()));
-        }
-        std::map<std::string, typename Aggregator::type>&& release_as_map() {
-            return std::move(_aggregation);
+        typename partition_index<Aggregator, QueryOrder>::partition_type&& release() {
+            return std::move(_index._aggregation);
         }
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
-            _current_aggregation = &_aggregation[partition_key_to_string(_s, key)];
+            _current_aggregation = _index.begin_aggregation(partition_key_to_string(_s, key));
             _current_cell_limit = _cell_limit;
         }
         void accept_new_partition(uint32_t row_count) {
@@ -1589,21 +1611,22 @@ private:
             current_cols->emplace_back(make_column_or_supercolumn(name, cell));
         }
     };
-    using column_aggregator = column_visitor<column_or_supercolumn_builder>;
+    template<query_order QueryOrder>
+    using column_aggregator = column_visitor<column_or_supercolumn_builder, QueryOrder>;
     struct counter_column_or_supercolumn_builder {
         using type = std::vector<ColumnOrSuperColumn>;
         void on_column(std::vector<ColumnOrSuperColumn>* current_cols, const bytes& name, const query::result_atomic_cell_view& cell) {
             current_cols->emplace_back(make_counter_column_or_supercolumn(name, cell));
         }
     };
-    using counter_column_aggregator = column_visitor<counter_column_or_supercolumn_builder>;
+    using counter_column_aggregator = column_visitor<counter_column_or_supercolumn_builder, query_order::no>;
     struct counter {
         using type = int32_t;
         void on_column(int32_t* current_cols, const bytes_view& name, const query::result_atomic_cell_view& cell) {
             *current_cols += 1;
         }
     };
-    using column_counter = column_visitor<counter>;
+    using column_counter = column_visitor<counter, query_order::no>;
     static dht::partition_range_vector make_partition_range(const schema& s, const KeyRange& range) {
         if (range.__isset.row_filter) {
             fail(unimplemented::cause::INDEXES);
@@ -1669,7 +1692,7 @@ private:
                  dht::partition_range::bound(std::move(end), true)}};
     }
     static std::vector<KeySlice> to_key_slices(const schema& s, const query::partition_slice& slice, query::result_view v, uint32_t cell_limit) {
-        column_aggregator aggregator(s, slice, cell_limit, { });
+        column_aggregator<query_order::yes> aggregator(s, slice, cell_limit, { });
         v.consume(slice, aggregator);
         auto&& cols = aggregator.release();
         std::vector<KeySlice> ret;
