@@ -113,28 +113,34 @@ static void assert_single_version(lw_shared_ptr<partition_snapshot> snp) {
 }
 
 struct expected_row {
-    int ck;
+    position_in_partition pos;
     is_continuous continuous;
     is_dummy dummy;
 
     struct dummy_tag_t { };
 
-    expected_row(int k, is_continuous cont)
-        : ck(k), continuous(cont), dummy(false) { }
+    expected_row(int k, is_continuous cont, is_dummy dummy = is_dummy::no)
+        : pos(position_in_partition::for_key(make_ck(k))), continuous(cont), dummy(dummy) { }
+    expected_row(position_in_partition pos, is_continuous cont, is_dummy dummy = is_dummy::no)
+        : pos(pos), continuous(cont), dummy(dummy) { }
     expected_row(dummy_tag_t, is_continuous cont)
-        : continuous(cont), dummy(true) { }
+        : pos(position_in_partition::after_all_clustered_rows()), continuous(cont), dummy(true) { }
 
     void check(const rows_entry& r) const {
-        clustering_key::equality ck_eq(*SCHEMA);
+        position_in_partition::equal_compare ck_eq(*SCHEMA);
+        if (!ck_eq(r.position(), pos)) {
+            BOOST_FAIL(sprint("Expected %s, but got %s", pos, r.position()));
+        }
         BOOST_REQUIRE_EQUAL(r.continuous(), continuous);
         BOOST_REQUIRE_EQUAL(r.dummy(), dummy);
-        if (!r.dummy()) {
-            BOOST_REQUIRE(ck_eq(r.key(), make_ck(ck)));
-        }
+    }
+
+    position_in_partition key() const {
+        return pos;
     }
 
     friend std::ostream& operator<<(std::ostream& out, const expected_row& e) {
-        return out << "{ck=" << e.ck << ", cont=" << bool(e.continuous) << ", dummy=" << bool(e.dummy) << "}";
+        return out << "{pos=" << e.key() << ", cont=" << bool(e.continuous) << ", dummy=" << bool(e.dummy) << "}";
     }
 };
 
@@ -264,6 +270,22 @@ void test_single_row(int ck,
     test_slice_single_version(underlying, m, slice, expected_sm_fragments, expected_cache_rows, { });
 }
 
+static expected_row after_cont(int ck) {
+    return expected_row(position_in_partition::after_key(make_ck(ck)), is_continuous::yes, is_dummy::yes);
+}
+
+static expected_row after_notc(int ck) {
+    return expected_row(position_in_partition::after_key(make_ck(ck)), is_continuous::no, is_dummy::yes);
+}
+
+static expected_row before_cont(int ck) {
+    return expected_row(position_in_partition::before_key(make_ck(ck)), is_continuous::yes, is_dummy::yes);
+}
+
+static expected_row before_notc(int ck) {
+    return expected_row(position_in_partition::before_key(make_ck(ck)), is_continuous::no, is_dummy::yes);
+}
+
 SEASTAR_TEST_CASE(test_single_row_not_cached_full_range) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, SCHEMA->full_slice(), { 1 }, {
@@ -286,6 +308,7 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_start_to_row) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
+            after_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -294,7 +317,8 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_start_to_row) {
 SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_row_to_end) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(1),
+            expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
@@ -303,21 +327,29 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_range_from_row_to_end) {
 SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_left) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_ending_with({make_ck(1), false}) }),
-            { }, { expected_row(expected_row::dummy_tag_t{}, is_continuous::no) });
+            { }, {
+                before_cont(1),
+                expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
+            });
     });
 }
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_exclusive_range_on_the_right) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }),
-            { }, { expected_row(expected_row::dummy_tag_t{}, is_continuous::no) });
+            { }, {
+                after_notc(1),
+                expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
+            });
     });
 }
 
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -326,7 +358,9 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range) {
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_left) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
+            after_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -335,7 +369,9 @@ SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_left) {
 SEASTAR_TEST_CASE(test_single_row_not_cached_small_range_on_right) {
     return seastar::async([] {
         test_single_row(1, false, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(1),
+            expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -390,7 +426,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_exclusive_range_on_the_ri
     return seastar::async([] {
         test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::yes),
-            expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
+            after_notc(1),
+            expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
 }
@@ -399,6 +436,7 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range) {
     return seastar::async([] {
         test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -417,6 +455,7 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_continuous_small_range_on_right) {
     return seastar::async([] {
         test_single_row(1, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -471,7 +510,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the
     return seastar::async([] {
         test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { }, {
             expected_row(1, is_continuous::no),
-            expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
+            after_notc(1),
+            expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
 }
@@ -479,7 +519,9 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_exclusive_range_on_the
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range) {
     return seastar::async([] {
         test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -488,7 +530,8 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range) {
 SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_left) {
     return seastar::async([] {
         test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(1)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -498,6 +541,7 @@ SEASTAR_TEST_CASE(test_single_row_cached_as_noncontinuous_small_range_on_right) 
     return seastar::async([] {
         test_single_row(1, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), make_ck(2)) }), { 1 }, {
             expected_row(1, is_continuous::no),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -573,6 +617,7 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row1) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(1)) }), { 1 }, {
             expected_row(1, is_continuous::yes),
+            after_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -583,6 +628,7 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row2) {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with(make_ck(3)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(3),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -591,7 +637,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_start_to_row2) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row1_to_end) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(1)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(1),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
@@ -601,7 +648,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row1_to_end) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_range_from_row2_to_end) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with(make_ck(3)) }), { 3 }, {
-            expected_row(3, is_continuous::no),
+            before_notc(3),
+            expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
@@ -611,6 +659,7 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_left) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_ending_with({make_ck(3), false}) }), { 1 }, {
             expected_row(1, is_continuous::yes),
+            before_cont(3),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -619,7 +668,8 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_left) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_right) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
-            expected_row(3, is_continuous::no), // TODO: this should be possible to mark continuous here
+            after_notc(1),
+            expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
@@ -628,14 +678,20 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_on_the_right) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows1) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }),
-            { }, { expected_row(expected_row::dummy_tag_t{}, is_continuous::no) });
+            { }, {
+                after_notc(1),
+                before_cont(3),
+                expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
+            });
     });
 }
 
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows2) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
-            expected_row(3, is_continuous::no), // TODO: this should be possible to mark continuous here
+            after_notc(1),
+            expected_row(3, is_continuous::yes),
+            after_cont(3),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -644,7 +700,9 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows2) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows3) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(1), {make_ck(3), false}) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(1),
+            expected_row(1, is_continuous::yes),
+            before_cont(3),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -653,8 +711,10 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_exclusive_range_between_rows3) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -663,7 +723,9 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row1) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -672,7 +734,9 @@ SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row1) {
 SEASTAR_TEST_CASE(test_two_rows_not_cached_small_range_row2) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -803,6 +867,7 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range) {
         test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -823,6 +888,7 @@ SEASTAR_TEST_CASE(test_two_rows_cached_continuous_small_range_row2) {
         test_two_rows(1, true, is_continuous::yes, 3, true, is_continuous::yes, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -912,7 +978,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_on_the_rig
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make_starting_with({make_ck(1), false}) }), { 3 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            after_notc(1),
+            expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::yes)
         });
     });
@@ -922,7 +989,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, {make_ck(3), false}) }), { }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            after_notc(1),
+            expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -932,7 +1000,8 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make({make_ck(1), false}, make_ck(3)) }), { 3 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            after_notc(1),
+            expected_row(3, is_continuous::yes),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -951,8 +1020,10 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_exclusive_range_between_ro
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range) {
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -961,7 +1032,9 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range) {
 SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row1) {
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(2)) }), { 1 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
+            after_cont(2),
             expected_row(3, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -972,7 +1045,9 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row2) {
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -981,7 +1056,9 @@ SEASTAR_TEST_CASE(test_two_rows_cached_non_continuous_small_range_row2) {
 SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous1) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -990,8 +1067,10 @@ SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous1) 
 SEASTAR_TEST_CASE(test_two_rows_first_not_cached_second_cached_non_continuous2) {
     return seastar::async([] {
         test_two_rows(1, false, is_continuous::no, 3, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1001,7 +1080,9 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached1) 
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1010,8 +1091,10 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached1) 
 SEASTAR_TEST_CASE(test_two_rows_first_cached_non_continuous_second_not_cached2) {
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::no, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1021,7 +1104,9 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached1) {
     return seastar::async([] {
         test_two_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1032,6 +1117,7 @@ SEASTAR_TEST_CASE(test_two_rows_first_cached_continuous_second_not_cached2) {
         test_two_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1090,6 +1176,7 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous1) {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(5, is_continuous::yes),
+            after_cont(6),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1099,8 +1186,10 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous2) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
             expected_row(1, is_continuous::yes),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
             expected_row(5, is_continuous::yes),
+            after_cont(6),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1111,6 +1200,7 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous3) {
         test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
             expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(5, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -1121,7 +1211,9 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous4) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::yes, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::yes),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(5, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -1131,9 +1223,11 @@ SEASTAR_TEST_CASE(test_three_rows_first_continuous4) {
 SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous1) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(6)) }), { 1, 3, 5 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
             expected_row(5, is_continuous::yes),
+            after_cont(6),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1143,8 +1237,10 @@ SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous2) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(6)) }), { 3, 5 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
             expected_row(5, is_continuous::yes),
+            after_cont(6),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
     });
@@ -1153,8 +1249,10 @@ SEASTAR_TEST_CASE(test_three_rows_first_noncontinuous2) {
 SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous3) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(0), make_ck(4)) }), { 1, 3 }, {
-            expected_row(1, is_continuous::no),
+            before_notc(0),
+            expected_row(1, is_continuous::yes),
             expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(5, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -1165,7 +1263,9 @@ SEASTAR_TEST_CASE(test_three_rows_first_nonecontinuous4) {
     return seastar::async([] {
         test_three_rows(1, true, is_continuous::no, 3, false, is_continuous::no, 5, true, is_continuous::no, make_slice({ query::clustering_range::make(make_ck(2), make_ck(4)) }), { 3 }, {
             expected_row(1, is_continuous::no),
-            expected_row(3, is_continuous::no),
+            before_notc(2),
+            expected_row(3, is_continuous::yes),
+            after_cont(4),
             expected_row(5, is_continuous::no),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         });
@@ -1221,6 +1321,8 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
         test_slice_single_version(underlying, cache, slice, {
             expected_fragment(rt),
         }, {
+            before_notc(0),
+            before_cont(1),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         }, { rt });
     });
@@ -1243,7 +1345,9 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
             expected_fragment(rt),
             expected_fragment(4)
         }, {
-            expected_row(4, is_continuous::no),
+            before_notc(0),
+            expected_row(4, is_continuous::yes),
+            after_cont(5),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         }, { rt });
     });
@@ -1265,7 +1369,9 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range4) {
         test_slice_single_version(underlying, cache, slice, {
             expected_fragment(4)
         }, {
-            expected_row(4, is_continuous::no),
+            before_notc(3),
+            expected_row(4, is_continuous::yes),
+            after_cont(5),
             expected_row(expected_row::dummy_tag_t{}, is_continuous::no)
         }, {});
     });

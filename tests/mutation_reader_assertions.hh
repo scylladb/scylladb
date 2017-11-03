@@ -59,6 +59,16 @@ public:
         return *this;
     }
 
+    reader_assertions& produces_compacted(mutation m, stdx::optional<query::clustering_row_ranges> ck_ranges = {}) {
+        BOOST_TEST_MESSAGE(sprint("Expecting after compaction: %s", m));
+        auto mo = read_next();
+        BOOST_REQUIRE(bool(mo));
+        mutation got = *mo;
+        got.partition().compact_for_compaction(*m.schema(), always_gc, gc_clock::now());
+        assert_that(got).is_equal_to(m, ck_ranges);
+        return *this;
+    }
+
     mutation_assertion next_mutation() {
         auto mo = read_next();
         BOOST_REQUIRE(bool(mo));

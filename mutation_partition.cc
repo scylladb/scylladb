@@ -334,6 +334,43 @@ mutation_partition::apply(const schema& s, const mutation_partition& p, const sc
     apply(s, std::move(tmp));
 }
 
+struct mutation_fragment_applier {
+    const schema& _s;
+    mutation_partition& _mp;
+
+    void operator()(tombstone t) {
+        _mp.apply(t);
+    }
+
+    void operator()(range_tombstone rt) {
+        _mp.apply_row_tombstone(_s, std::move(rt));
+    }
+
+    void operator()(static_row sr) {
+        _mp.static_row().apply(_s, column_kind::static_column, std::move(sr.cells()));
+    }
+
+    void operator()(partition_start ps) {
+        _mp.apply(ps.partition_tombstone());
+    }
+
+    void operator()(partition_end ps) {
+    }
+
+    void operator()(clustering_row cr) {
+        auto& dr = _mp.clustered_row(_s, std::move(cr.key()));
+        dr.apply(cr.tomb());
+        dr.apply(cr.marker());
+        dr.cells().apply(_s, column_kind::regular_column, std::move(cr.cells()));
+    }
+};
+
+void
+mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
+    mutation_fragment_applier applier{s, *this};
+    mf.visit(applier);
+}
+
 void
 mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
     if (s.version() != p_schema.version()) {
@@ -532,14 +569,18 @@ mutation_partition::clustered_row(const schema& s, position_in_partition_view po
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::lower_bound(const schema& schema, const query::clustering_range& r) const {
-    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.lower_bound(_rows, std::move(cmp));
+    if (!r.start()) {
+        return std::cbegin(_rows);
+    }
+    return _rows.lower_bound(position_in_partition_view::for_range_start(r), rows_entry::compare(schema));
 }
 
 mutation_partition::rows_type::const_iterator
 mutation_partition::upper_bound(const schema& schema, const query::clustering_range& r) const {
-    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    return r.upper_bound(_rows, std::move(cmp));
+    if (!r.end()) {
+        return std::cend(_rows);
+    }
+    return _rows.lower_bound(position_in_partition_view::for_range_end(r), rows_entry::compare(schema));
 }
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
@@ -2134,7 +2175,8 @@ void mutation_partition::evict() noexcept {
         // No rows would mean it is continuous.
         auto i = _rows.erase_and_dispose(_rows.begin(), std::prev(_rows.end()), current_deleter<rows_entry>());
         rows_entry& e = *i;
-        e._flags._last = true;
+        e._flags._before_ck = false;
+        e._flags._after_ck = true;
         e._flags._dummy = true;
         e._flags._continuous = false;
         e._row = {};

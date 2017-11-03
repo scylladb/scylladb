@@ -546,7 +546,7 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
 }
 
 std::vector<range_tombstone>
-partition_snapshot::range_tombstones(const schema& s, position_in_partition_view start, position_in_partition_view end)
+partition_snapshot::range_tombstones(const ::schema& s, position_in_partition_view start, position_in_partition_view end)
 {
     range_tombstone_list list(s);
     for (auto&& v : versions()) {

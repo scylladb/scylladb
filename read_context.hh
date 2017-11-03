@@ -190,7 +190,7 @@ public:
     bool is_range_query() const { return _range_query; }
     autoupdating_underlying_reader& underlying() { return _underlying; }
     row_cache::phase_type phase() const { return _phase; }
-    const dht::decorated_key& key() const { return _sm->decorated_key(); }
+    const dht::decorated_key& key() const { return _key ? *_key : _sm->decorated_key(); }
     void on_underlying_created() { ++_underlying_created; }
 private:
     future<> create_sm();

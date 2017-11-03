@@ -196,6 +196,8 @@ public:
     // References and iterators into versions owned by the snapshot
     // obtained between two equal change_mark objects were produced
     // by that snapshot are guaranteed to be still valid.
+    //
+    // Has a null state which is != than anything returned by get_change_mark().
     class change_mark {
         uint64_t _reclaim_count = 0;
         size_t _versions_count = 0; // merge_partition_versions() removes versions on merge
@@ -210,6 +212,9 @@ public:
         }
         bool operator!=(const change_mark& m) const {
             return !(*this == m);
+        }
+        explicit operator bool() const {
+            return _reclaim_count > 0;
         }
     };
 private:
@@ -257,11 +262,14 @@ public:
         return _entry != nullptr;
     }
 
+    const schema_ptr& schema() const { return _schema; }
+    logalloc::region& region() const { return _region; }
+
     tombstone partition_tombstone() const;
     row static_row() const;
     mutation_partition squashed() const;
     // Returns range tombstones overlapping with [start, end)
-    std::vector<range_tombstone> range_tombstones(const schema& s, position_in_partition_view start, position_in_partition_view end);
+    std::vector<range_tombstone> range_tombstones(const ::schema& s, position_in_partition_view start, position_in_partition_view end);
 };
 
 // Represents mutation_partition with snapshotting support a la MVCC.

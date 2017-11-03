@@ -51,6 +51,19 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
     abort();
 }
 
+inline
+int position_weight(bound_kind k) {
+    switch(k) {
+    case bound_kind::excl_end:
+    case bound_kind::incl_start:
+        return -1;
+    case bound_kind::incl_end:
+    case bound_kind::excl_start:
+        return 1;
+    }
+    abort();
+}
+
 enum class partition_region {
     partition_start,
     static_row,
@@ -58,19 +71,25 @@ enum class partition_region {
     partition_end,
 };
 
-
 class position_in_partition_view {
     friend class position_in_partition;
 
     partition_region _type;
     int _bound_weight = 0;
     const clustering_key_prefix* _ck; // nullptr when _type != clustered
-private:
+public:
     position_in_partition_view(partition_region type, int bound_weight, const clustering_key_prefix* ck)
         : _type(type)
         , _bound_weight(bound_weight)
         , _ck(ck)
     { }
+    bool is_before_key() const {
+        return _bound_weight < 0;
+    }
+    bool is_after_key() const {
+        return _bound_weight > 0;
+    }
+private:
     // Returns placement of this position_in_partition relative to *_ck,
     // or lexicographical_relation::at_prefix if !_ck.
     lexicographical_relation relation() const {
@@ -100,7 +119,7 @@ public:
     position_in_partition_view(const clustering_key_prefix& ck)
         : _type(partition_region::clustered), _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
-        : _type(partition_region::clustered), _bound_weight(weight(bv.kind)), _ck(&bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind)), _ck(&bv.prefix) { }
 
     static position_in_partition_view for_range_start(const query::clustering_range& r) {
         return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
@@ -173,6 +192,7 @@ public:
     struct after_static_row_tag_t { };
     struct clustering_row_tag_t { };
     struct after_clustering_row_tag_t { };
+    struct before_clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
 
@@ -184,8 +204,10 @@ public:
     position_in_partition(after_clustering_row_tag_t, clustering_key_prefix ck)
         // FIXME: Use lexicographical_relation::before_strictly_prefixed here. Refs #1446
         : _type(partition_region::clustered), _bound_weight(1), _ck(std::move(ck)) { }
+    position_in_partition(before_clustering_row_tag_t, clustering_key_prefix ck)
+        : _type(partition_region::clustered), _bound_weight(-1), _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
-        : _type(partition_region::clustered), _bound_weight(weight(bv.kind)), _ck(bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind)), _ck(bv.prefix) { }
     position_in_partition(after_static_row_tag_t) :
         position_in_partition(range_tag_t(), bound_view::bottom()) { }
     explicit position_in_partition(position_in_partition_view view)
@@ -204,12 +226,24 @@ public:
         return {position_in_partition::range_tag_t(), bound_view::top()};
     }
 
+    static position_in_partition before_key(clustering_key ck) {
+        return {before_clustering_row_tag_t(), std::move(ck)};
+    }
+
     static position_in_partition after_key(clustering_key ck) {
         return {after_clustering_row_tag_t(), std::move(ck)};
     }
 
     static position_in_partition for_key(clustering_key ck) {
         return {clustering_row_tag_t(), std::move(ck)};
+    }
+
+    static position_in_partition for_static_row() {
+        return position_in_partition{static_row_tag_t()};
+    }
+
+    static position_in_partition min() {
+        return for_static_row();
     }
 
     static position_in_partition for_range_start(const query::clustering_range&);

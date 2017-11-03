@@ -23,6 +23,60 @@
 
 #include "partition_version.hh"
 
+class partition_snapshot_row_cursor;
+
+// A non-owning reference to a row inside partition_snapshot which
+// maintains it's position and thus can be kept across reference invalidation points.
+class partition_snapshot_row_weakref final {
+    mutation_partition::rows_type::iterator _it;
+    partition_snapshot::change_mark _change_mark;
+    position_in_partition _pos = position_in_partition::min();
+public:
+    partition_snapshot_row_weakref() = default;
+    // Makes this object point to a row pointed to by given partition_snapshot_row_cursor.
+    explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&) noexcept;
+    explicit partition_snapshot_row_weakref(std::nullptr_t) {}
+    partition_snapshot_row_weakref(partition_snapshot& snp, mutation_partition::rows_type::iterator it)
+        : _it(it)
+        , _change_mark(snp.get_change_mark())
+        , _pos(it->position())
+    { }
+    partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&) noexcept;
+    partition_snapshot_row_weakref& operator=(std::nullptr_t) noexcept {
+        _change_mark = {};
+        return *this;
+    }
+    // Returns true iff the pointer is pointing at a row.
+    explicit operator bool() const { return _change_mark != partition_snapshot::change_mark(); }
+public:
+    // Returns the position of the row.
+    // Call only when pointing at a row.
+    const position_in_partition& position() const { return _pos; }
+    // Returns true iff the object is valid.
+    bool valid(partition_snapshot& snp) { return snp.get_change_mark() == _change_mark; }
+    // Brings the object back to validity and returns true iff the snapshot contains the row.
+    // When not pointing at a row, returns false.
+    bool refresh(partition_snapshot& snp) {
+        auto snp_cm = snp.get_change_mark();
+        if (snp_cm == _change_mark) {
+            return true;
+        }
+        if (!_change_mark) {
+            return false;
+        }
+        _change_mark = snp_cm;
+        rows_entry::compare less(*snp.schema());
+        for (auto&& v : snp.versions()) {
+            auto& rows = v.partition().clustered_rows();
+            _it = rows.find(_pos, less);
+            if (_it != rows.end()) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 // Allows iterating over rows of mutation_partition represented by given partition_snapshot.
 //
 // The cursor initially has a position before all rows and is not pointing at any row.
@@ -37,6 +91,7 @@
 // Insertion of row entries after cursor's position invalidates the cursor.
 //
 class partition_snapshot_row_cursor final {
+    friend class partition_snapshot_row_weakref;
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
         mutation_partition::rows_type::iterator end;
@@ -78,9 +133,7 @@ public:
         , _snp(snp)
         , _position(position_in_partition::static_row_tag_t{})
     { }
-    bool has_valid_row_from_latest_version() const {
-        return iterators_valid() && _current_row[0].version_no == 0;
-    }
+
     mutation_partition::rows_type::iterator get_iterator_in_latest_version() const {
         return _iterators[0];
     }
@@ -220,8 +273,6 @@ public:
     }
 
     bool is_in_latest_version() const;
-    bool previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const;
-    void set_continuous(bool val);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
         out << "{cursor: position=" << cur._position << ", ";
@@ -246,6 +297,21 @@ public:
             first = false;
             out << "{v=" << v.version_no << ", pos=" << v.it->position() << "}";
         }
+        out << "], iterators=[";
+        first = true;
+        auto v = cur._snp.versions().begin();
+        for (auto&& i : cur._iterators) {
+            if (!first) {
+                out << ", ";
+            }
+            first = false;
+            if (i == v->partition().clustered_rows().end()) {
+                out << "end";
+            } else {
+                out << i->position();
+            }
+            ++v;
+        }
         return out << "]}";
     };
 };
@@ -256,17 +322,15 @@ bool partition_snapshot_row_cursor::is_in_latest_version() const {
 }
 
 inline
-bool partition_snapshot_row_cursor::previous_row_in_latest_version_has_key(const clustering_key_prefix& key) const {
-    if (_current_row[0].it == _snp.version()->partition().clustered_rows().begin()) {
-        return false;
-    }
-    auto prev_it = _current_row[0].it;
-    --prev_it;
-    clustering_key_prefix::equality eq(_schema);
-    return eq(prev_it->key(), key);
-}
+partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c) noexcept
+    : _it(c._current_row[0].it)
+    , _change_mark(c._change_mark)
+    , _pos(c._position)
+{ }
 
 inline
-void partition_snapshot_row_cursor::set_continuous(bool val) {
-    _current_row[0].it->set_continuous(val);
+partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const partition_snapshot_row_cursor& c) noexcept {
+    this->~partition_snapshot_row_weakref();
+    new (this) partition_snapshot_row_weakref(c);
+    return *this;
 }

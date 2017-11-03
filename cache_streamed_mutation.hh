@@ -87,7 +87,8 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
         // Invariants:
         // - Upper bound of the read is min(_next_row.position(), _upper_bound)
         // - _next_row_in_range = _next.position() < _upper_bound
-        // - _last_row_key contains the key of last emitted clustering_row
+        // - _last_row points at a direct predecessor of the next row which is going to be read.
+        //   Used for populating continuity.
         reading_from_underlying,
 
         end_of_stream
@@ -101,7 +102,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
 
     lsa_manager _lsa_manager;
 
-    stdx::optional<clustering_key> _last_row_key;
+    partition_snapshot_row_weakref _last_row;
 
     // We need to be prepared that we may get overlapping and out of order
     // range tombstones. We must emit fragments with strictly monotonic positions,
@@ -112,6 +113,10 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
 
     // Holds the lower bound of a position range which hasn't been processed yet.
     // Only fragments with positions < _lower_bound have been emitted.
+    //
+    // It is assumed that !_lower_bound.is_clustering_row(). We depend on this when
+    // calling range_tombstone::trim_front() and when inserting dummy entries. Dummy
+    // entries are assumed to be only at !is_clustering_row() positions.
     position_in_partition _lower_bound;
     position_in_partition_view _upper_bound;
 
@@ -244,6 +249,7 @@ future<> cache_streamed_mutation::do_fill_buffer() {
             auto adjacent = _next_row.advance_to(_lower_bound);
             _next_row_in_range = !after_current_range(_next_row.position());
             if (!adjacent && !_next_row.continuous()) {
+                _last_row = nullptr; // We could insert a dummy here, but this path is unlikely.
                 start_reading_from_underlying();
                 return make_ready_future<>();
             }
@@ -282,13 +288,44 @@ future<> cache_streamed_mutation::read_from_underlying() {
                 }
                 if (_next_row_in_range) {
                     maybe_update_continuity();
+                    _last_row = _next_row;
                     add_to_buffer(_next_row);
                     move_to_next_entry();
                 } else {
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
+                    } else if (can_populate()) {
+                        rows_entry::compare less(*_schema);
+                        auto& rows = _snp->version()->partition().clustered_rows();
+                        if (query::is_single_row(*_schema, *_ck_ranges_curr)) {
+                            with_allocator(_snp->region().allocator(), [&] {
+                                auto e = alloc_strategy_unique_ptr<rows_entry>(
+                                    current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
+                                // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
+                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto inserted = insert_result.second;
+                                auto it = insert_result.first;
+                                if (inserted) {
+                                    e.release();
+                                    auto next = std::next(it);
+                                    it->set_continuous(next->continuous());
+                                }
+                            });
+                        } else if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+                            with_allocator(_snp->region().allocator(), [&] {
+                                auto e = alloc_strategy_unique_ptr<rows_entry>(
+                                    current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
+                                // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
+                                auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                                auto inserted = insert_result.second;
+                                if (inserted) {
+                                    e.release();
+                                } else {
+                                    insert_result.first->set_continuous(true);
+                                }
+                            });
+                        }
                     } else {
-                        // FIXME: Insert dummy entry at _upper_bound.
                         _read_context->cache().on_mispopulate();
                     }
                     move_to_next_range();
@@ -300,14 +337,23 @@ future<> cache_streamed_mutation::read_from_underlying() {
 
 inline
 void cache_streamed_mutation::maybe_update_continuity() {
-    if (can_populate() && _next_row.is_in_latest_version()) {
-        if (_last_row_key) {
-            if (_next_row.previous_row_in_latest_version_has_key(*_last_row_key)) {
-                _next_row.set_continuous(true);
+    if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
+            if (_next_row.is_in_latest_version()) {
+                _next_row.get_iterator_in_latest_version()->set_continuous(true);
+            } else {
+                // Cover entry from older version
+                with_allocator(_snp->region().allocator(), [&] {
+                    auto& rows = _snp->version()->partition().clustered_rows();
+                    rows_entry::compare less(*_schema);
+                    auto e = alloc_strategy_unique_ptr<rows_entry>(
+                        current_allocator().construct<rows_entry>(*_schema, _next_row.position(), is_dummy(_next_row.dummy()), is_continuous::yes));
+                    auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
+                    auto inserted = insert_result.second;
+                    if (inserted) {
+                        e.release();
+                    }
+                });
             }
-        } else if (!_ck_ranges_curr->start()) {
-            _next_row.set_continuous(true);
-        }
     } else {
         _read_context->cache().on_mispopulate();
     }
@@ -327,6 +373,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const mutation_fragment& mf) {
 inline
 void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
+        _last_row = nullptr;
         _read_context->cache().on_mispopulate();
         return;
     }
@@ -334,17 +381,11 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         mutation_partition& mp = _snp->version()->partition();
         rows_entry::compare less(*_schema);
 
-        // FIXME: If _next_row is up to date, but latest version doesn't have iterator in
-        // current row (could be far away, so we'd do this often), then this will do
-        // the lookup in mp. This is not necessary, because _next_row has iterators for
-        // next rows in each version, even if they're not part of the current row.
-        // They're currently buried in the heap, but you could keep a vector of
-        // iterators per each version in addition to the heap.
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(cr.key(), cr.tomb(), cr.marker(), cr.cells()));
         new_entry->set_continuous(false);
-        auto it = _next_row.has_valid_row_from_latest_version()
-                  ? _next_row.get_iterator_in_latest_version() : mp.clustered_rows().lower_bound(cr.key(), less);
+        auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
+                                              : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {
             _read_context->cache().on_row_insert();
@@ -353,25 +394,14 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
 
         rows_entry& e = *it;
-        if (_last_row_key) {
-            if (it == mp.clustered_rows().begin()) {
-                // FIXME: check whether entry for _last_row_key is in older versions and if so set
-                // continuity to true.
-                _read_context->cache().on_mispopulate();
-            } else {
-                auto prev_it = it;
-                --prev_it;
-                clustering_key_prefix::equality eq(*_schema);
-                if (eq(*_last_row_key, prev_it->key())) {
-                    e.set_continuous(true);
-                }
-            }
-        } else if (!_ck_ranges_curr->start()) {
+        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
             e.set_continuous(true);
         } else {
-            // FIXME: Insert dummy entry at _ck_ranges_curr->start()
             _read_context->cache().on_mispopulate();
         }
+        with_allocator(standard_allocator(), [&] {
+            _last_row = partition_snapshot_row_weakref(*_snp, it);
+        });
     });
 }
 
@@ -396,6 +426,7 @@ void cache_streamed_mutation::copy_from_cache_to_buffer() {
         }
     }
     if (_next_row_in_range) {
+        _last_row = _next_row;
         add_to_buffer(_next_row);
         move_to_next_entry();
     } else {
@@ -422,12 +453,30 @@ void cache_streamed_mutation::move_to_next_range() {
 
 inline
 void cache_streamed_mutation::move_to_current_range() {
-    _last_row_key = std::experimental::nullopt;
+    _last_row = nullptr;
     _lower_bound = position_in_partition::for_range_start(*_ck_ranges_curr);
     _upper_bound = position_in_partition_view::for_range_end(*_ck_ranges_curr);
-    auto complete_until_next = _next_row.advance_to(_lower_bound) || _next_row.continuous();
+    auto adjacent = _next_row.advance_to(_lower_bound);
     _next_row_in_range = !after_current_range(_next_row.position());
-    if (!complete_until_next) {
+    if (!adjacent && !_next_row.continuous()) {
+        // FIXME: We don't insert a dummy for singular range to avoid allocating 3 entries
+        // for a hit (before, at and after). If we supported the concept of an incomplete row,
+        // we could insert such a row for the lower bound if it's full instead, for both singular and
+        // non-singular ranges.
+        if (_ck_ranges_curr->start() && !query::is_single_row(*_schema, *_ck_ranges_curr)) {
+            // Insert dummy for lower bound
+            if (can_populate()) {
+                // FIXME: _lower_bound could be adjacent to the previous row, in which case we could skip this
+                auto it = with_allocator(_lsa_manager.region().allocator(), [&] {
+                    auto& rows = _snp->version()->partition().clustered_rows();
+                    auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
+                    return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
+                });
+                _last_row = partition_snapshot_row_weakref(*_snp, it);
+            } else {
+                _read_context->cache().on_mispopulate();
+            }
+        }
         start_reading_from_underlying();
     }
 }
@@ -485,7 +534,6 @@ inline
 void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
     auto& row = mf.as_clustering_row();
     drain_tombstones(row.position());
-    _last_row_key = row.key();
     _lower_bound = position_in_partition::after_key(row.key());
     push_mutation_fragment(std::move(mf));
 }
