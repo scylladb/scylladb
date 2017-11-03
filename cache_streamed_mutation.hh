@@ -501,14 +501,24 @@ void cache_streamed_mutation::move_to_next_entry() {
 
 inline
 void cache_streamed_mutation::drain_tombstones(position_in_partition_view pos) {
-    while (auto mfo = _tombstones.get_next(pos)) {
+    while (true) {
+        reserve_one();
+        auto mfo = _tombstones.get_next(pos);
+        if (!mfo) {
+            break;
+        }
         push_mutation_fragment(std::move(*mfo));
     }
 }
 
 inline
 void cache_streamed_mutation::drain_tombstones() {
-    while (auto mfo = _tombstones.get_next()) {
+    while (true) {
+        reserve_one();
+        auto mfo = _tombstones.get_next();
+        if (!mfo) {
+            break;
+        }
         push_mutation_fragment(std::move(*mfo));
     }
 }
