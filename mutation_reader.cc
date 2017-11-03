@@ -141,7 +141,7 @@ future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& p
 
     return parallel_for_each(_next, [this, &pr] (mutation_reader* mr) {
         return mr->fast_forward_to(pr);
-    }).then([this, pr] {
+    }).then([this, &pr] {
         add_readers(_selector->fast_forward_to(pr));
     });
 }
