@@ -541,12 +541,22 @@ void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor&
     }
 }
 
+// Maintains the following invariants, also in case of exception:
+//   (1) no fragment with position >= _lower_bound was pushed yet
+//   (2) If _lower_bound > mf.position(), mf was emitted
 inline
 void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
     auto& row = mf.as_clustering_row();
-    drain_tombstones(row.position());
-    _lower_bound = position_in_partition::after_key(row.key());
-    push_mutation_fragment(std::move(mf));
+    auto key = row.key();
+    try {
+        drain_tombstones(row.position());
+        push_mutation_fragment(std::move(mf));
+        _lower_bound = position_in_partition::after_key(std::move(key));
+    } catch (...) {
+        // We may have emitted some of the range tombstones which start after the old _lower_bound
+        _lower_bound = position_in_partition::for_key(std::move(key));
+        throw;
+    }
 }
 
 inline
