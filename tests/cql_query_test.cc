@@ -1205,7 +1205,6 @@ SEASTAR_TEST_CASE(test_duration_restrictions) {
                                     env,
                                     "create materialized view my_mv as"
                                     " select * from my_table0 "
-                                    " where name = 'abc' "
                                     " primary key (key, span);",
                                     "Cannot use Duration column 'span' in PRIMARY KEY of materialized view");
                         });
