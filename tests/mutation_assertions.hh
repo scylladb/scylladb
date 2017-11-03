@@ -31,7 +31,7 @@ public:
     { }
 
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
-    mutation_assertion& is_equal_to(const mutation& other, stdx::optional<query::clustering_row_ranges> ck_ranges = {}) {
+    mutation_assertion& is_equal_to(const mutation& other, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         if (ck_ranges) {
             mutation_assertion(_m.sliced(*ck_ranges)).is_equal_to(other.sliced(*ck_ranges));
             return *this;
