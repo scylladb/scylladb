@@ -14,7 +14,7 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup --no-fstrim-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-ec2-check --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup --no-fstrim-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
@@ -173,6 +173,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--developer-mode")
             DEV_MODE=1
+            shift 1
+            ;;
+        "--no-ec2-check")
+            EC2_CHECK=0
             shift 1
             ;;
         "--no-kernel-check")
