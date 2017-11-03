@@ -132,7 +132,7 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     future<> process_static_row();
     void move_to_end();
     void move_to_next_range();
-    void move_to_current_range();
+    void move_to_range(query::clustering_row_ranges::const_iterator);
     void move_to_next_entry();
     // Emits all delayed range tombstones with positions smaller than upper_bound.
     void drain_tombstones(position_in_partition_view upper_bound);
@@ -215,7 +215,7 @@ future<> cache_streamed_mutation::fill_buffer() {
             }
             _state = state::reading_from_cache;
             _lsa_manager.run_in_read_section([this] {
-                move_to_current_range();
+                move_to_range(_ck_ranges_curr);
             });
             return fill_buffer();
         };
@@ -292,7 +292,13 @@ future<> cache_streamed_mutation::read_from_underlying() {
                     maybe_update_continuity();
                     _last_row = _next_row;
                     add_to_buffer(_next_row);
-                    move_to_next_entry();
+                    try {
+                        move_to_next_entry();
+                    } catch (const std::bad_alloc&) {
+                        // We cannot reenter the section, since we may have moved to the new range, and
+                        // because add_to_buffer() should not be repeated.
+                        _snp->region().allocator().invalidate_references(); // Invalidates _next_row
+                    }
                 } else {
                     if (no_clustering_row_between(*_schema, _upper_bound, _next_row.position())) {
                         this->maybe_update_continuity();
@@ -330,7 +336,12 @@ future<> cache_streamed_mutation::read_from_underlying() {
                     } else {
                         _read_context->cache().on_mispopulate();
                     }
-                    move_to_next_range();
+                    try {
+                        move_to_next_range();
+                    } catch (const std::bad_alloc&) {
+                        // We cannot reenter the section, since we may have moved to the new range
+                        _snp->region().allocator().invalidate_references(); // Invalidates _next_row
+                    }
                 }
             });
             return make_ready_future<>();
@@ -444,19 +455,23 @@ void cache_streamed_mutation::move_to_end() {
 
 inline
 void cache_streamed_mutation::move_to_next_range() {
-    ++_ck_ranges_curr;
-    if (_ck_ranges_curr == _ck_ranges_end) {
+    auto next_it = std::next(_ck_ranges_curr);
+    if (next_it == _ck_ranges_end) {
         move_to_end();
+        _ck_ranges_curr = next_it;
     } else {
-        move_to_current_range();
+        move_to_range(next_it);
     }
 }
 
 inline
-void cache_streamed_mutation::move_to_current_range() {
+void cache_streamed_mutation::move_to_range(query::clustering_row_ranges::const_iterator next_it) {
+    auto lb = position_in_partition::for_range_start(*next_it);
+    auto ub = position_in_partition_view::for_range_end(*next_it);
     _last_row = nullptr;
-    _lower_bound = position_in_partition::for_range_start(*_ck_ranges_curr);
-    _upper_bound = position_in_partition_view::for_range_end(*_ck_ranges_curr);
+    _lower_bound = std::move(lb);
+    _upper_bound = std::move(ub);
+    _ck_ranges_curr = next_it;
     auto adjacent = _next_row.advance_to(_lower_bound);
     _next_row_in_range = !after_current_range(_next_row.position());
     if (!adjacent && !_next_row.continuous()) {
