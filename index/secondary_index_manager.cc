@@ -60,8 +60,8 @@ bool index::depends_on(const column_definition& cdef) const {
     return cdef.name_as_text() == _target_column;
 }
 
-bool index::supports_expression(const column_definition& cdef, const cql3::operator_type op) const {
-    return false;
+bool index::supports_expression(const column_definition& cdef, const cql3::operator_type& op) const {
+    return cdef.name_as_text() == _target_column && op == cql3::operator_type::EQ;
 }
 
 const index_metadata& index::metadata() const {
@@ -109,6 +109,9 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
     for (auto& col : schema->clustering_key_columns()) {
+        if (col == *index_target) {
+            continue;
+        }
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
     const sstring where_clause = sprint("%s IS NOT NULL", index_target_name);

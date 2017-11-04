@@ -272,10 +272,7 @@ statement_restrictions::statement_restrictions(database& db,
     }
 
     if (_uses_secondary_indexing && !for_view) {
-        fail(unimplemented::cause::INDEXES);
-#if 0
         validate_secondary_index_selections(selects_only_static_columns);
-#endif
     }
 }
 
@@ -304,6 +301,10 @@ bool statement_restrictions::uses_function(const sstring& ks_name, const sstring
     return  _partition_key_restrictions->uses_function(ks_name, function_name)
             || _clustering_columns_restrictions->uses_function(ks_name, function_name)
             || _nonprimary_key_restrictions->uses_function(ks_name, function_name);
+}
+
+const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_restrictions() const {
+    return _index_restrictions;
 }
 
 void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view) {

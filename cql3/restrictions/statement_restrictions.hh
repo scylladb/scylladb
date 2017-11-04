@@ -124,6 +124,8 @@ private:
 public:
     bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 
+    const std::vector<::shared_ptr<restrictions>>& index_restrictions() const;
+
     /**
      * Checks if the restrictions on the partition key is an IN restriction.
      *

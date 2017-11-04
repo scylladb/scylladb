@@ -71,6 +71,8 @@ private:
         , _text(std::move(text))
     {}
 public:
+    operator_type(const operator_type&) = delete;
+    operator_type& operator=(const operator_type&) = delete;
     const operator_type& reverse() const { return _reverse; }
     bool is_slice() const {
         return (*this == LT) || (*this == LTE) || (*this == GT) || (*this == GTE);
