@@ -272,7 +272,7 @@ void utils::config_file::read_from_yaml(const char* yaml) {
         }
         switch (cfg.status()) {
         case value_status::Invalid:
-            throw std::invalid_argument("Option " + label + "is not applicable");
+            throw std::invalid_argument("Option " + label + " is not applicable");
         case value_status::Unused:
         default:
             break;
