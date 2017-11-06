@@ -101,7 +101,13 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         file = relative_conf_dir("scylla.yaml").string();
     }
     return check_direct_io_support(file).then([file, &cfg] {
-        return cfg.read_from_file(file);
+        return cfg.read_from_file(file, [](auto & opt, auto & msg, auto status) {
+            auto level = log_level::warn;
+            if (status.value_or(db::config::value_status::Invalid) != db::config::value_status::Invalid) {
+                level = log_level::error;
+            }
+            startlog.log(level, "{} : {}", msg, opt);
+        });
     }).handle_exception([file](auto ep) {
         startlog.error("Could not read configuration file {}: {}", file, ep);
         return make_exception_future<>(ep);

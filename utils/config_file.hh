@@ -143,10 +143,25 @@ public:
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
 
-    void read_from_yaml(const sstring&);
-    void read_from_yaml(const char *);
-    future<> read_from_file(const sstring&);
-    future<> read_from_file(file);
+    /**
+     * Default behaviour for yaml parser is to throw on
+     * unknown stuff, invalid opts or conversion errors.
+     *
+     * Error handling function allows overriding this.
+     *
+     * error: <option name>, <message>, <optional value_status>
+     *
+     * The last arg, opt value_status will tell you the type of
+     * error occurred. If not set, the option found does not exist.
+     * If invalid, it is invalid. Otherwise, a parse error.
+     *
+     */
+    using error_handler = std::function<void(const sstring&, const sstring&, stdx::optional<value_status>)>;
+
+    void read_from_yaml(const sstring&, error_handler = {});
+    void read_from_yaml(const char *, error_handler = {});
+    future<> read_from_file(const sstring&, error_handler = {});
+    future<> read_from_file(file, error_handler = {});
 
     using configs = std::vector<cfg_ref>;
 
