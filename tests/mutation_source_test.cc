@@ -28,6 +28,7 @@
 #include "counters.hh"
 #include "simple_schema.hh"
 #include "flat_mutation_reader.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -874,8 +875,42 @@ void run_conversion_to_mutation_reader_tests(populate_fn populate) {
     run_mutation_reader_tests(populate_with_flat_mutation_reader_conversion);
 }
 
+void test_next_partition(populate_fn populate) {
+    simple_schema s;
+    auto pkeys = s.make_pkeys(4);
+
+    std::vector<mutation> mutations;
+    for (auto key : pkeys) {
+        mutation m(key, s.schema());
+        s.add_static_row(m, "s1");
+        s.add_row(m, s.make_ckey(0), "v1");
+        s.add_row(m, s.make_ckey(1), "v2");
+        mutations.push_back(std::move(m));
+    }
+    auto source = populate(s.schema(), mutations);
+    assert_that(s.schema(), source.make_flat_mutation_reader(s.schema()))
+        .next_partition() // Does nothing before first partition
+        .produces_partition_start(pkeys[0])
+        .produces_static_row()
+        .produces_row_with_key(s.make_ckey(0))
+        .produces_row_with_key(s.make_ckey(1))
+        .produces_partition_end()
+        .next_partition() // Does nothing between partitions
+        .produces_partition_start(pkeys[1])
+        .next_partition() // Moves to next partition
+        .produces_partition_start(pkeys[2])
+        .produces_static_row()
+        .next_partition()
+        .produces_partition_start(pkeys[3])
+        .produces_static_row()
+        .produces_row_with_key(s.make_ckey(0))
+        .next_partition()
+        .produces_end_of_stream();
+}
+
 void run_flat_mutation_reader_tests(populate_fn populate) {
     run_conversion_to_mutation_reader_tests(populate);
+    test_next_partition(populate);
 }
 
 void run_mutation_source_tests(populate_fn populate) {
