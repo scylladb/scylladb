@@ -726,6 +726,9 @@ public:
 
     seastar::logging_settings logging_settings(const boost::program_options::variables_map&) const;
 
+    boost::program_options::options_description_easy_init&
+    add_options(boost::program_options::options_description_easy_init&);
+
 private:
     template<typename T>
     struct log_legacy_value : public named_value<T, value_status::Used> {

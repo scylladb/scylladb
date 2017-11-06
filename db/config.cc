@@ -112,6 +112,17 @@ void config_file::named_value<db::config::seed_provider_type,
 
 }
 
+boost::program_options::options_description_easy_init&
+db::config::add_options(boost::program_options::options_description_easy_init& init) {
+    config_file::add_options(init);
+
+    data_file_directories.add_command_line_option(init, "datadir", "alias for 'data-file-directories'");
+    rpc_port.add_command_line_option(init, "thrift-port", "alias for 'rpc-port'");
+    native_transport_port.add_command_line_option(init, "cql-port", "alias for 'native-transport-port'");
+
+    return init;
+}
+
 boost::filesystem::path db::config::get_conf_dir() {
     using namespace boost::filesystem;
 
