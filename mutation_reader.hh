@@ -288,18 +288,43 @@ class mutation_source {
         streamed_mutation::forwarding,
         mutation_reader::forwarding
     )>;
+    class impl {
+    public:
+        virtual ~impl() { }
+        virtual mutation_reader make_mutation_reader(schema_ptr s,
+                                                     partition_range range,
+                                                     const query::partition_slice& slice,
+                                                     io_priority pc,
+                                                     tracing::trace_state_ptr trace_state,
+                                                     streamed_mutation::forwarding fwd,
+                                                     mutation_reader::forwarding fwd_mr) = 0;
+    };
+    class mutation_reader_mutation_source : public impl {
+        func_type _fn;
+    public:
+        mutation_reader_mutation_source(func_type&& fn) : _fn(std::move(fn)) { }
+        virtual mutation_reader make_mutation_reader(schema_ptr s,
+                                                     partition_range range,
+                                                     const query::partition_slice& slice,
+                                                     io_priority pc,
+                                                     tracing::trace_state_ptr trace_state,
+                                                     streamed_mutation::forwarding fwd,
+                                                     mutation_reader::forwarding fwd_mr) override {
+            return _fn(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        }
+    };
     // We could have our own version of std::function<> that is nothrow
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
-    lw_shared_ptr<func_type> _fn;
+    shared_ptr<impl> _impl;
     lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
-    explicit operator bool() const { return bool(_fn); }
+    explicit operator bool() const { return bool(_impl); }
     friend class optimized_optional<mutation_source>;
 public:
     mutation_source(func_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
-        : _fn(make_lw_shared<func_type>(std::move(fn)))
+        : _impl(seastar::make_shared<mutation_reader_mutation_source>(std::move(fn)))
         , _presence_checker_factory(make_lw_shared(std::move(pcf)))
     { }
     // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)
@@ -340,7 +365,7 @@ public:
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
     {
-        return (*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+        return _impl->make_mutation_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     }
 
     mutation_reader operator()(schema_ptr s, partition_range range = query::full_partition_range) const {
