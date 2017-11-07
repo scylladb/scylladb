@@ -34,14 +34,14 @@ class partition_snapshot_row_weakref final {
 public:
     partition_snapshot_row_weakref() = default;
     // Makes this object point to a row pointed to by given partition_snapshot_row_cursor.
-    explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&) noexcept;
+    explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&);
     explicit partition_snapshot_row_weakref(std::nullptr_t) {}
     partition_snapshot_row_weakref(partition_snapshot& snp, mutation_partition::rows_type::iterator it)
         : _it(it)
         , _change_mark(snp.get_change_mark())
         , _pos(it->position())
     { }
-    partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&) noexcept;
+    partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&);
     partition_snapshot_row_weakref& operator=(std::nullptr_t) noexcept {
         _change_mark = {};
         return *this;
@@ -328,15 +328,16 @@ bool partition_snapshot_row_cursor::is_in_latest_version() const {
 }
 
 inline
-partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c) noexcept
+partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c)
     : _it(c._current_row[0].it)
     , _change_mark(c._change_mark)
     , _pos(c._position)
 { }
 
 inline
-partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const partition_snapshot_row_cursor& c) noexcept {
+partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const partition_snapshot_row_cursor& c) {
+    auto tmp = partition_snapshot_row_weakref(c);
     this->~partition_snapshot_row_weakref();
-    new (this) partition_snapshot_row_weakref(c);
+    new (this) partition_snapshot_row_weakref(std::move(tmp));
     return *this;
 }
