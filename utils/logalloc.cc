@@ -33,6 +33,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
@@ -1296,6 +1297,7 @@ public:
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
         compaction_lock _(*this);
+        memory::on_alloc_point();
         if (size > max_managed_object_size) {
             auto ptr = standard_allocator().alloc(migrator, size, alignment);
             // This isn't very acurrate, the correct free_space value would be

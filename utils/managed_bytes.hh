@@ -27,6 +27,7 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include <seastar/core/unaligned.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include <unordered_map>
 #include <type_traits>
 
@@ -167,6 +168,7 @@ public:
     managed_bytes(const bytes& b) : managed_bytes(static_cast<bytes_view>(b)) {}
 
     managed_bytes(initialized_later, size_type size) {
+        memory::on_alloc_point();
         if (size <= max_inline_size) {
             _u.small.size = size;
         } else {

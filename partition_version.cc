@@ -478,9 +478,9 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_version* ve
         }
         range_tombstone_list& tombstones = dst.partition().row_tombstones();
         if (can_move) {
-            tombstones.apply_reversibly(s, current->partition().row_tombstones()).cancel();
+            tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
         } else {
-            tombstones.apply(s, current->partition().row_tombstones());
+            tombstones.apply_monotonically(s, current->partition().row_tombstones());
         }
         current = current->next();
     }

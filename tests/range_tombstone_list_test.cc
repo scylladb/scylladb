@@ -27,6 +27,7 @@
 #include "keys.hh"
 #include "schema_builder.hh"
 #include "range_tombstone_list.hh"
+#include "range_tombstone_list_assertions.hh"
 
 #include "disk-error-handler.hh"
 
@@ -689,4 +690,148 @@ BOOST_AUTO_TEST_CASE(test_difference_with_smaller_tombstone) {
     assert_rt(rtee(9, 10, 1), *it++);
     assert_rt(rtei(13, 14, 1), *it++);
     BOOST_REQUIRE(it == diff.end());
+}
+
+BOOST_AUTO_TEST_CASE(test_exception_safety) {
+    int pos = 1;
+    auto next_pos = [&] { return pos++; };
+
+    auto ts0 = 0;
+    auto ts1 = 1;
+
+    range_tombstone_list original(*s);
+    range_tombstone_list to_apply(*s);
+
+    original.apply(*s, rtie(next_pos(), next_pos(), ts0));
+    to_apply.apply(*s, rtie(next_pos(), next_pos(), ts0));
+    to_apply.apply(*s, rtie(next_pos(), next_pos(), ts0));
+    original.apply(*s, rtie(next_pos(), next_pos(), ts0));
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        auto p5 = next_pos();
+        auto p6 = next_pos();
+        to_apply.apply(*s, rtie(p1, p3, ts1));
+        to_apply.apply(*s, rtie(p4, p6, ts1));
+        original.apply(*s, rtie(p2, p5, ts0));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        auto p5 = next_pos();
+        auto p6 = next_pos();
+        to_apply.apply(*s, rtie(p1, p3, ts0));
+        to_apply.apply(*s, rtie(p4, p6, ts0));
+        original.apply(*s, rtie(p2, p5, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        auto p5 = next_pos();
+        auto p6 = next_pos();
+        to_apply.apply(*s, rtie(p1, p3, ts0));
+        to_apply.apply(*s, rtie(p4, p6, ts1));
+        original.apply(*s, rtie(p2, p5, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        auto p5 = next_pos();
+        auto p6 = next_pos();
+        to_apply.apply(*s, rtie(p1, p3, ts1));
+        to_apply.apply(*s, rtie(p4, p6, ts0));
+        original.apply(*s, rtie(p2, p5, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        auto p5 = next_pos();
+        auto p6 = next_pos();
+        to_apply.apply(*s, rtie(p1, p3, ts1));
+        to_apply.apply(*s, rtie(p4, p6, ts1));
+        original.apply(*s, rtie(p2, p5, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        to_apply.apply(*s, rtie(p1, p4, ts1));
+        original.apply(*s, rtie(p2, p3, ts0));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        to_apply.apply(*s, rtie(p1, p4, ts0));
+        original.apply(*s, rtie(p2, p3, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        to_apply.apply(*s, rtie(p2, p3, ts0));
+        original.apply(*s, rtie(p1, p4, ts1));
+    }
+
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        auto p3 = next_pos();
+        auto p4 = next_pos();
+        to_apply.apply(*s, rtie(p2, p3, ts1));
+        original.apply(*s, rtie(p1, p4, ts0));
+    }
+
+    auto expected = original;
+    expected.apply(*s, to_apply);
+
+    // test apply_monotonically()
+    auto&& injector = memory::local_failure_injector();
+    uint64_t i = 0;
+    do {
+        auto list = original;
+        try {
+            injector.fail_after(i++);
+            list.apply_monotonically(*s, to_apply);
+            injector.cancel();
+            assert_that(*s, list).is_equal_to(expected);
+        } catch (const std::bad_alloc&) { // expected
+            assert_that(*s, list).has_no_less_information_than(original);
+        }
+    } while (injector.failed());
+
+    // test apply_reversibly()
+    i = 0;
+    do {
+        auto list = original;
+        try {
+            injector.fail_after(i++);
+            list.apply_reversibly(*s, to_apply).cancel();
+            injector.cancel();
+            assert_that(*s, list).is_equal_to(expected);
+        } catch (const std::bad_alloc&) { // expected
+            assert_that(*s, list).is_equal_to_either(original, expected);
+        }
+    } while (injector.failed());
 }
