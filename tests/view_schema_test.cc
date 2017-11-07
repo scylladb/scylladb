@@ -135,30 +135,30 @@ SEASTAR_TEST_CASE(test_updates) {
                        "where k is not null and v is not null primary key (v, k)").get();
 
         e.execute_cql("insert into base (k, v) values (0, 0);").get();
-        eventually([&] {
         auto msg = e.execute_cql("select k, v from base where k = 0").get0();
         assert_that(msg).is_rows()
             .with_size(1)
             .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
-        });
+        eventually([&] {
         auto msg = e.execute_cql("select k, v from mv where v = 0").get0();
         assert_that(msg).is_rows()
             .with_size(1)
             .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
+        });
 
         e.execute_cql("insert into base (k, v) values (0, 1);").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select k, v from base where k = 0").get0();
+        msg = e.execute_cql("select k, v from base where k = 0").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
-        });
-        msg = e.execute_cql("select k, v from mv where v = 0").get0();
+        eventually([&] {
+        auto msg = e.execute_cql("select k, v from mv where v = 0").get0();
         assert_that(msg).is_rows().with_size(0);
         msg = e.execute_cql("select k, v from mv where v = 1").get0();
         assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
+        });
     });
 }
 
