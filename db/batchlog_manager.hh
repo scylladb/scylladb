@@ -84,9 +84,6 @@ public:
     // to be per shard and does no dispatching beyond delegating the the
     // shard qp (which is what you feed here).
     batchlog_manager(cql3::query_processor&);
-    batchlog_manager(distributed<cql3::query_processor>& qp)
-        : batchlog_manager(qp.local())
-    {}
 
     future<> start();
     future<> stop();
