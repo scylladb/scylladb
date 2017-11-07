@@ -41,6 +41,16 @@ GCC6_CONCEPT(
     }
 )
 
+GCC6_CONCEPT(
+    template<typename T>
+    concept bool FlattenedConsumer() {
+        return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
+            obj.consume_new_partition(dk);
+            obj.consume_end_of_partition();
+        };
+    }
+)
+
 /*
  * Allows iteration on mutations using mutation_fragments.
  * It iterates over mutations one by one and for each mutation
