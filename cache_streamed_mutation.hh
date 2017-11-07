@@ -553,7 +553,7 @@ inline
 void cache_streamed_mutation::maybe_add_to_cache(const range_tombstone& rt) {
     if (can_populate()) {
         _lsa_manager.run_in_update_section_with_allocator([&] {
-            _snp->version()->partition().apply_row_tombstone(*_schema, rt);
+            _snp->version()->partition().row_tombstones().apply_monotonically(*_schema, rt);
         });
     } else {
         _read_context->cache().on_mispopulate();
