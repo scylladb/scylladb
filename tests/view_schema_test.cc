@@ -2619,6 +2619,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
     });
 }
 
+#if 0
 SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b))").get();
@@ -2691,7 +2692,9 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
         });
     });
 }
+#endif
 
+#if 0
 SEASTAR_TEST_CASE(test_restricted_regular_column_timestamp_updates) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (k int primary key, c int, val int)").get();
@@ -2710,6 +2713,7 @@ SEASTAR_TEST_CASE(test_restricted_regular_column_timestamp_updates) {
         });
     });
 }
+#endif
 
 SEASTAR_TEST_CASE(test_old_timestamps_with_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
