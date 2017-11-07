@@ -422,3 +422,27 @@ bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& ot
         return rt1.equal(s, rt2);
     });
 }
+
+void range_tombstone_list::apply_monotonically(const schema& s, range_tombstone_list&& list) {
+    auto del = current_deleter<range_tombstone>();
+    auto it = list.begin();
+    while (it != list.end()) {
+        // FIXME: Optimize by stealing the entry
+        apply_monotonically(s, *it);
+        it = list._tombstones.erase_and_dispose(it, del);
+    }
+}
+
+void range_tombstone_list::apply_monotonically(const schema& s, const range_tombstone_list& list) {
+    for (auto&& rt : list) {
+        apply_monotonically(s, rt);
+    }
+}
+
+void range_tombstone_list::apply_monotonically(const schema& s, const range_tombstone& rt) {
+    // FIXME: Optimize given this has relaxed exception guarantees.
+    // Note that apply() doesn't have monotonic guarantee because it doesn't restore erased entries.
+    reverter rev(s, *this);
+    apply_reversibly(s, rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb, rev);
+    rev.cancel();
+}
