@@ -126,14 +126,9 @@ private:
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
                               const sstring& default_val) {
         gms::gossiper& local_gossiper = gms::get_local_gossiper();
-        auto state = local_gossiper.get_endpoint_state_for_endpoint(endpoint);
-
-        // First, look in the gossiper::endpoint_state_map...
-        if (state) {
-            auto ep_state = state->get_application_state(key);
-            if (ep_state) {
-                return ep_state->value;
-            }
+        auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
+        if (ep_state) {
+            return ep_state->value;
         }
 
         // ...if not found - look in the SystemTable...

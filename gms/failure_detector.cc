@@ -36,6 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <boost/range/adaptor/map.hpp>
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/i_failure_detector.hh"
@@ -66,10 +67,14 @@ clk::duration arrival_window::get_max_interval() {
     return std::chrono::milliseconds(cfg.fd_max_interval_ms());
 }
 
+static clk::duration get_min_interval() {
+    return gossiper::INTERVAL;
+}
+
 void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
     if (_tlast > clk::time_point::min()) {
         auto inter_arrival_time = value - _tlast;
-        if (inter_arrival_time <= get_max_interval()) {
+        if (inter_arrival_time <= get_max_interval() && inter_arrival_time >= get_min_interval()) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
             logger.debug("failure_detector: Ignoring interval time of {} for {}, mean={}, size={}", inter_arrival_time.count(), ep, mean(), size());
@@ -122,39 +127,27 @@ std::map<sstring, sstring> failure_detector::get_simple_states() {
         auto& state = entry.second;
         std::stringstream ss;
         ss << ep;
-        if (state.is_alive())
+
+        if (state.is_alive()) {
             nodes_status.emplace(sstring(ss.str()), "UP");
-        else
+        } else {
             nodes_status.emplace(sstring(ss.str()), "DOWN");
+        }
     }
     return nodes_status;
 }
 
 int failure_detector::get_down_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (!state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return get_local_gossiper().endpoint_state_map.size() - get_up_endpoint_count();
 }
 
 int failure_detector::get_up_endpoint_count() {
-    int count = 0;
-    for (auto& entry : get_local_gossiper().endpoint_state_map) {
-        auto& state = entry.second;
-        if (state.is_alive()) {
-            count++;
-        }
-    }
-    return count;
+    return boost::count_if(get_local_gossiper().endpoint_state_map | boost::adaptors::map_values, std::mem_fn(&endpoint_state::is_alive));
 }
 
 sstring failure_detector::get_endpoint_state(sstring address) {
     std::stringstream ss;
-    auto eps = get_local_gossiper().get_endpoint_state_for_endpoint(inet_address(address));
+    auto* eps = get_local_gossiper().get_endpoint_state_for_endpoint_ptr(inet_address(address));
     if (eps) {
         append_endpoint_state(ss, *eps);
         return sstring(ss.str());
@@ -163,7 +156,7 @@ sstring failure_detector::get_endpoint_state(sstring address) {
     }
 }
 
-void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_state& state) {
+void failure_detector::append_endpoint_state(std::stringstream& ss, const endpoint_state& state) {
     ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
     ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
     for (const auto& entry : state.get_application_state_map()) {

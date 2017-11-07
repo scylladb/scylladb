@@ -42,12 +42,12 @@
 
 namespace gms {
 
-std::experimental::optional<versioned_value> endpoint_state::get_application_state(application_state key) const {
+const versioned_value* endpoint_state::get_application_state_ptr(application_state key) const {
     auto it = _application_state.find(key);
     if (it == _application_state.end()) {
-        return {};
+        return nullptr;
     } else {
-        return _application_state.at(key);
+        return &it->second;
     }
 }
 

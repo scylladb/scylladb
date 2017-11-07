@@ -43,6 +43,8 @@
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
 #include <experimental/optional>
 #include <chrono>
 
@@ -54,7 +56,7 @@ namespace gms {
  */
 class endpoint_state {
 public:
-    using clk = std::chrono::system_clock;
+    using clk = seastar::lowres_system_clock;
 private:
     heart_beat_state _heart_beat_state;
     std::map<application_state, versioned_value> _application_state;
@@ -89,10 +91,12 @@ public:
         , _is_alive(true) {
     }
 
+    // Valid only on shard 0
     heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
 
+    // Valid only on shard 0
     const heart_beat_state& get_heart_beat_state() const {
         return _heart_beat_state;
     }
@@ -102,7 +106,7 @@ public:
         _heart_beat_state = hbs;
     }
 
-    std::experimental::optional<versioned_value> get_application_state(application_state key) const;
+    const versioned_value* get_application_state_ptr(application_state key) const;
 
     /**
      * TODO replace this with operations that don't expose private state
@@ -117,18 +121,36 @@ public:
     }
 
     void add_application_state(application_state key, versioned_value value) {
-        if (_application_state.count(key)) {
-            _application_state.at(key) = value;
-        } else {
-            _application_state.emplace(key, value);
+        _application_state[key] = std::move(value);
+    }
+
+    void apply_application_state(application_state key, versioned_value&& value) {
+        auto&& e = _application_state[key];
+        if (e.version < value.version) {
+            e = std::move(value);
+        }
+    }
+
+    void apply_application_state(application_state key, const versioned_value& value) {
+        auto&& e = _application_state[key];
+        if (e.version < value.version) {
+            e = value;
+        }
+    }
+
+    void apply_application_state(const endpoint_state& es) {
+        for (auto&& e : es._application_state) {
+            apply_application_state(e.first, e.second);
         }
     }
 
     /* getters and setters */
     /**
      * @return System.nanoTime() when state was updated last time.
+     *
+     * Valid only on shard 0.
      */
-    clk::time_point get_update_timestamp() {
+    clk::time_point get_update_timestamp() const {
         return _update_timestamp;
     }
 
@@ -136,7 +158,7 @@ public:
         _update_timestamp = clk::now();
     }
 
-    bool is_alive() {
+    bool is_alive() const {
         return _is_alive;
     }
 
@@ -146,6 +168,20 @@ public:
 
     void mark_dead() {
         _is_alive = false;
+    }
+
+    bool is_shutdown() const {
+        auto* app_state = get_application_state_ptr(application_state::STATUS);
+        if (!app_state) {
+            return false;
+        }
+        auto value = app_state->value;
+        std::vector<sstring> pieces;
+        boost::split(pieces, value, boost::is_any_of(","));
+        if (pieces.empty()) {
+            return false;
+        }
+        return pieces[0] == sstring(versioned_value::SHUTDOWN);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);

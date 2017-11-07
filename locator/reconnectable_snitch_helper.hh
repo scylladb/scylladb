@@ -56,7 +56,7 @@ private:
 
 private:
 
-    void reconnect(gms::inet_address public_address, gms::versioned_value local_address_value) {
+    void reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
         reconnect(public_address, gms::inet_address(local_address_value.value));
     }
 
@@ -97,10 +97,9 @@ public:
     }
 
     void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
-        auto internal_ip_state_opt = ep_state.get_application_state(gms::application_state::INTERNAL_IP);
-
-        if (internal_ip_state_opt) {
-            reconnect(endpoint, *internal_ip_state_opt);
+        auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
+        if (internal_ip_state) {
+            reconnect(endpoint, *internal_ip_state);
         }
     }
 
@@ -111,11 +110,7 @@ public:
     }
 
     void on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
-        auto internal_ip_state_opt = ep_state.get_application_state(gms::application_state::INTERNAL_IP);
-
-        if (internal_ip_state_opt) {
-            reconnect(endpoint, *internal_ip_state_opt);
-        }
+        on_join(std::move(endpoint), std::move(ep_state));
     }
 
     void on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
