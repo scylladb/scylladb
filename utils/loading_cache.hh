@@ -26,6 +26,7 @@
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
 
+#include <seastar/core/reactor.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 
