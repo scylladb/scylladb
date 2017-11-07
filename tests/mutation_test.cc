@@ -30,6 +30,7 @@
 #include "core/sstring.hh"
 #include "core/do_with.hh"
 #include "core/thread.hh"
+#include <seastar/util/alloc_failure_injector.hh>
 
 #include "database.hh"
 #include "utils/UUID_gen.hh"

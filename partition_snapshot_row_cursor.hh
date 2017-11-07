@@ -122,6 +122,7 @@ class partition_snapshot_row_cursor final {
         position_in_partition::equal_compare eq(_schema);
         do {
             boost::range::pop_heap(_heap, heap_less);
+            memory::on_alloc_point();
             _current_row.push_back(_heap.back());
             _heap.pop_back();
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
@@ -202,6 +203,7 @@ public:
     // The cursor is valid after the call.
     // Must be called under reclaim lock.
     bool advance_to(position_in_partition_view lower_bound) {
+        memory::on_alloc_point();
         rows_entry::compare less(_schema);
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
@@ -229,6 +231,7 @@ public:
     // If there is no next row, returns false and the cursor is no longer pointing at a row.
     // Can be only called on a valid cursor pointing at a row.
     bool next() {
+        memory::on_alloc_point();
         position_in_version::less_compare heap_less(_schema);
         assert(iterators_valid());
         for (auto&& curr : _current_row) {
