@@ -302,6 +302,8 @@ add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
+arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
+                        help='enable allocation failure injection')
 args = arg_parser.parse_args()
 
 defines = []
@@ -792,6 +794,8 @@ if args.staticboost:
     seastar_flags += ['--static-boost']
 if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
+if args.alloc_failure_injector:
+    seastar_flags += ['--enable-alloc-failure-injector']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_ldflags = args.user_ldflags

@@ -138,6 +138,19 @@ public:
         nop_reverter rev(s, *this);
         apply_reversibly(s, std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
     }
+    // Monotonic exception guarantees. In case of failure the object will contain at least as much information as before the call.
+    void apply_monotonically(const schema& s, const range_tombstone& rt);
+    // Merges another list with this object.
+    // Monotonic exception guarantees. In case of failure the object will contain at least as much information as before the call.
+    void apply_monotonically(const schema& s, const range_tombstone_list& list);
+    /// Merges another list with this object.
+    /// The other list must be governed by the same allocator as this object.
+    ///
+    /// Monotonic exception guarantees. In case of failure the object will contain at least as much information as before the call.
+    /// The other list will be left in a state such that it would still commute with this object to the same state as it
+    /// would if the call didn't fail.
+    void apply_monotonically(const schema& s, range_tombstone_list&& list);
+public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Returns range of tombstones which overlap with given range
     boost::iterator_range<const_iterator> slice(const schema& s, const query::clustering_range&) const;
