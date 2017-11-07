@@ -363,6 +363,7 @@ range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range
 
 range_tombstone_list::range_tombstones_type::iterator
 range_tombstone_list::reverter::erase(range_tombstones_type::iterator it) {
+    _ops.reserve(_ops.size() + 1);
     _ops.emplace_back(erase_undo_op(*it));
     return _dst._tombstones.erase(it);
 }
