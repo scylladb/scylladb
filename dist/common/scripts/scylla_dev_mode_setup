@@ -2,6 +2,8 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+. /usr/lib/scylla/scylla_lib.sh
+
 print_usage() {
     echo "scylla_developer_mode_setup --developer-mode [0|1]"
     echo "  --developer-mode   enable/disable developer mode"
