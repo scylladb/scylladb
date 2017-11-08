@@ -214,15 +214,15 @@ thrift_server::do_accepts(int which, bool keepalive) {
     _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
-        auto conn = new connection(*this, std::move(fd), addr);
-        conn->process().then_wrapped([this, conn] (future<> f) {
-            conn->shutdown();
-            delete conn;
-            try {
-                f.get();
-            } catch (std::exception& ex) {
-                tlogger.debug("request error {}", ex.what());
-            }
+        do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
+            return conn.process().then_wrapped([this, &conn] (future<> f) {
+                conn.shutdown();
+                try {
+                    f.get();
+                } catch (std::exception& ex) {
+                    tlogger.debug("request error {}", ex.what());
+                }
+            });
         });
         do_accepts(which, keepalive);
     }).handle_exception([this, which, keepalive] (auto ex) {
