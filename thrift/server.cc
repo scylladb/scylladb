@@ -214,23 +214,23 @@ thrift_server::listen(ipv4_addr addr, bool keepalive) {
 void
 thrift_server::do_accepts(int which, bool keepalive) {
     with_gate(_stop_gate, [&, this] {
-    return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
-        fd.set_nodelay(true);
-        fd.set_keepalive(keepalive);
-        with_gate(_stop_gate, [&, this] {
-        return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
-            return conn.process().then_wrapped([this, &conn] (future<> f) {
-                conn.shutdown();
-                try {
-                    f.get();
-                } catch (std::exception& ex) {
-                    tlogger.debug("request error {}", ex.what());
-                }
+        return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
+            fd.set_nodelay(true);
+            fd.set_keepalive(keepalive);
+            with_gate(_stop_gate, [&, this] {
+                return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
+                    return conn.process().then_wrapped([this, &conn] (future<> f) {
+                        conn.shutdown();
+                        try {
+                            f.get();
+                        } catch (std::exception& ex) {
+                            tlogger.debug("request error {}", ex.what());
+                        }
+                    });
+                });
             });
+            do_accepts(which, keepalive);
         });
-        });
-        do_accepts(which, keepalive);
-    });
     }).handle_exception([this, which, keepalive] (auto ex) {
         tlogger.debug("accept failed {}", ex);
         maybe_retry_accept(which, keepalive, std::move(ex));
