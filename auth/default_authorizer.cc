@@ -77,7 +77,7 @@ auth::default_authorizer::default_authorizer() {
 auth::default_authorizer::~default_authorizer() {
 }
 
-future<> auth::default_authorizer::init() {
+future<> auth::default_authorizer::start() {
     sstring create_table = sprint("CREATE TABLE %s.%s ("
                     "%s text,"
                     "%s text,"
@@ -90,6 +90,9 @@ future<> auth::default_authorizer::init() {
     return auth::setup_table(PERMISSIONS_CF, create_table);
 }
 
+future<> auth::default_authorizer::stop() {
+    return make_ready_future<>();
+}
 
 future<auth::permission_set> auth::default_authorizer::authorize(
                 ::shared_ptr<authenticated_user> user, data_resource resource) const {

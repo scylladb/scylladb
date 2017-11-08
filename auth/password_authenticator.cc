@@ -149,7 +149,7 @@ static sstring hashpw(const sstring& pass) {
     return hashpw(pass, gensalt());
 }
 
-future<> auth::password_authenticator::init() {
+future<> auth::password_authenticator::start() {
     gensalt(); // do this once to determine usable hashing
 
     sstring create_table = sprint(
@@ -180,6 +180,10 @@ future<> auth::password_authenticator::init() {
             });
         });
     });
+}
+
+future<> auth::password_authenticator::stop() {
+    return make_ready_future<>();
 }
 
 db::consistency_level auth::password_authenticator::consistency_for_user(const sstring& username) {

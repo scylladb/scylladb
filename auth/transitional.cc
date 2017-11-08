@@ -70,8 +70,11 @@ public:
     transitional_authenticator(std::unique_ptr<authenticator> a)
         : _authenticator(std::move(a))
     {}
-    future<> init() override {
-        return _authenticator->init();
+    future<> start() override {
+        return _authenticator->start();
+    }
+    future<> stop() override {
+        return _authenticator->stop();
     }
     const sstring& class_name() const override {
         return transitional_authenticator_name();
@@ -153,8 +156,11 @@ public:
     {}
     ~transitional_authorizer()
     {}
-    future<> init() override {
-        return _authorizer->init();
+    future<> start() override {
+        return _authorizer->start();
+    }
+    future<> stop() override {
+        return _authorizer->stop();
     }
     future<permission_set> authorize(::shared_ptr<authenticated_user> user, data_resource resource) const override {
         return user->is_super().then([](bool s) {

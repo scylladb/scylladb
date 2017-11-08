@@ -75,9 +75,9 @@ class authorizer {
 public:
     virtual ~authorizer() {}
 
-    virtual future<> init() {
-        return make_ready_future();
-    }
+    virtual future<> start() = 0;
+
+    virtual future<> stop() = 0;
 
     /**
      * The primary Authorizer method. Returns a set of permissions of a user on a resource.

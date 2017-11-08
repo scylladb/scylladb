@@ -64,6 +64,12 @@ auth::authorizer::setup(const sstring& type) {
     if (type == allow_all_authorizer_name()) {
         class allow_all_authorizer : public authorizer {
         public:
+            future<> start() override {
+                return make_ready_future<>();
+            }
+            future<> stop() override {
+                return make_ready_future<>();
+            }
             future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {
                 return make_ready_future<permission_set>(permissions::ALL);
             }
@@ -95,7 +101,7 @@ auth::authorizer::setup(const sstring& type) {
         return make_ready_future();
     } else {
         auto a = authorizer_registry::create(type);
-        auto f = a->init();
+        auto f = a->start();
         return f.then([a = std::move(a)]() mutable {
             global_authorizer = std::move(a);
         });

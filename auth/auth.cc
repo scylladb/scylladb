@@ -188,6 +188,8 @@ future<> auth::auth::shutdown() {
         get_local_delayed_tasks().cancel_all();
     }).then([] {
         return perm_cache.stop();
+    }).then([] {
+        return when_all_succeed(authorizer::get().stop(), authenticator::get().stop());
     });
 }
 

@@ -103,9 +103,9 @@ public:
     virtual ~authenticator()
     {}
 
-    virtual future<> init() {
-        return make_ready_future();
-    }
+    virtual future<> start() = 0;
+
+    virtual future<> stop() = 0;
 
     virtual const sstring& class_name() const = 0;
 

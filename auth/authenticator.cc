@@ -84,6 +84,12 @@ auth::authenticator::setup(const sstring& type) {
     if (type == allow_all_authenticator_name()) {
         class allow_all_authenticator : public authenticator {
         public:
+            future<> start() override {
+                return make_ready_future<>();
+            }
+            future<> stop() override {
+                return make_ready_future<>();
+            }
             const sstring& class_name() const override {
                 return allow_all_authenticator_name();
             }
@@ -120,7 +126,7 @@ auth::authenticator::setup(const sstring& type) {
         return make_ready_future();
     } else {
         auto a = authenticator_registry::create(type);
-        auto f = a->init();
+        auto f = a->start();
         return f.then([a = std::move(a)]() mutable {
             global_authenticator = std::move(a);
         });
