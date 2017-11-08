@@ -41,6 +41,16 @@ GCC6_CONCEPT(
     }
 )
 
+GCC6_CONCEPT(
+    template<typename T>
+    concept bool FlattenedConsumer() {
+        return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
+            obj.consume_new_partition(dk);
+            obj.consume_end_of_partition();
+        };
+    }
+)
+
 /*
  * Allows iteration on mutations using mutation_fragments.
  * It iterates over mutations one by one and for each mutation
@@ -104,6 +114,8 @@ public:
         GCC6_CONCEPT(
             requires FlatMutationReaderConsumer<Consumer>()
         )
+        // Stops when consumer returns stop_iteration::yes or end of stream is reached.
+        // Next call will start from the next mutation_fragment in the stream.
         future<> consume_pausable(Consumer consumer) {
             _consume_done = false;
             return do_until([this] { return (is_end_of_stream() && is_buffer_empty()) || _consume_done; }, [this, consumer = std::move(consumer)] () mutable {
@@ -114,6 +126,68 @@ public:
                 _consume_done = consumer(pop_mutation_fragment()) == stop_iteration::yes;
 
                 return make_ready_future<>();
+            });
+        }
+
+        template<typename Consumer>
+        GCC6_CONCEPT(
+            requires FlattenedConsumer<Consumer>()
+        )
+        // Stops when consumer returns stop_iteration::yes from consume_end_of_partition or end of stream is reached.
+        // Next call will receive fragments from the next partition.
+        // When consumer returns stop_iteration::yes from methods other than consume_end_of_partition then the read
+        // of the current partition is ended, consume_end_of_partition is called and if it returns stop_iteration::no
+        // then the read moves to the next partition.
+        //
+        // This method is useful because most of current consumers use this semantic.
+        //
+        //
+        // This method returns whatever is returned from Consumer::consume_end_of_stream().S
+        auto consume(Consumer consumer) {
+            struct consumer_adapter {
+                flat_mutation_reader::impl& _reader;
+                Consumer _consumer;
+                consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
+                    : _reader(reader)
+                    , _consumer(std::move(c))
+                { }
+                stop_iteration operator()(mutation_fragment&& mf) {
+                    return std::move(mf).consume(*this);
+                }
+                stop_iteration consume(static_row&& sr) {
+                    return handle_result(_consumer.consume(std::move(sr)));
+                }
+                stop_iteration consume(clustering_row&& cr) {
+                    return handle_result(_consumer.consume(std::move(cr)));
+                }
+                stop_iteration consume(range_tombstone&& rt) {
+                    return handle_result(_consumer.consume(std::move(rt)));
+                }
+                stop_iteration consume(partition_start&& ps) {
+                    _consumer.consume_new_partition(ps.key());
+                    if (ps.partition_tombstone()) {
+                        _consumer.consume(ps.partition_tombstone());
+                    }
+                    return stop_iteration::no;
+                }
+                stop_iteration consume(partition_end&& pe) {
+                    return _consumer.consume_end_of_partition();
+                }
+            private:
+                stop_iteration handle_result(stop_iteration si) {
+                    if (si) {
+                        if (_consumer.consume_end_of_partition()) {
+                            return stop_iteration::yes;
+                        }
+                        _reader.next_partition();
+                    }
+                    return stop_iteration::no;
+                }
+            };
+            return do_with(consumer_adapter(*this, std::move(consumer)), [this] (consumer_adapter& adapter) {
+                return consume_pausable(std::ref(adapter)).then([this, &adapter] {
+                    return adapter._consumer.consume_end_of_stream();
+                });
             });
         }
 
@@ -135,6 +209,14 @@ public:
     )
     auto consume_pausable(Consumer consumer) {
         return _impl->consume_pausable(std::move(consumer));
+    }
+
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires FlattenedConsumer<Consumer>()
+    )
+    auto consume(Consumer consumer) {
+        return _impl->consume(std::move(consumer));
     }
 
     void next_partition() { _impl->next_partition(); }
@@ -192,4 +274,4 @@ flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m);
 
 flat_mutation_reader make_empty_flat_reader();
 
-flat_mutation_reader flat_mutation_reader_from_mutation(mutation&&, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>&&, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);

@@ -213,16 +213,19 @@ flat_mutation_reader make_empty_flat_reader() {
     return make_flat_mutation_reader<empty_flat_reader>();
 }
 
-flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_mutation::forwarding fwd) {
+flat_mutation_reader
+flat_mutation_reader_from_mutations(std::vector<mutation>&& mutations, streamed_mutation::forwarding fwd) {
     class reader final : public flat_mutation_reader::impl {
-        mutation _mutation;
+        std::vector<mutation> _mutations;
+        std::vector<mutation>::iterator _cur;
+        std::vector<mutation>::iterator _end;
         position_in_partition::less_compare _cmp;
         bool _static_row_done = false;
         mutation_fragment_opt _rt;
         mutation_fragment_opt _cr;
     private:
         void prepare_next_clustering_row() {
-            auto& crs = _mutation.partition().clustered_rows();
+            auto& crs = _cur->partition().clustered_rows();
             while (true) {
                 auto re = crs.unlink_leftmost_without_rebalance();
                 if (!re) {
@@ -236,7 +239,7 @@ flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_m
             }
         }
         void prepare_next_range_tombstone() {
-            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto& rts = _cur->partition().row_tombstones().tombstones();
             auto rt = rts.unlink_leftmost_without_rebalance();
             if (rt) {
                 auto rt_deleter = defer([rt] { current_deleter<range_tombstone>()(rt); });
@@ -257,60 +260,77 @@ flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_m
         }
     private:
         void do_fill_buffer() {
-            if (!_static_row_done) {
-                _static_row_done = true;
-                if (!_mutation.partition().static_row().empty()) {
-                    push_mutation_fragment(static_row(std::move(_mutation.partition().static_row())));
-                }
-            }
             while (!is_end_of_stream() && !is_buffer_full()) {
+                if (!_static_row_done) {
+                    _static_row_done = true;
+                    if (!_cur->partition().static_row().empty()) {
+                        push_mutation_fragment(static_row(std::move(_cur->partition().static_row())));
+                    }
+                }
                 auto mfopt = read_next();
                 if (mfopt) {
                     push_mutation_fragment(std::move(*mfopt));
                 } else {
-                    _end_of_stream = true;
                     push_mutation_fragment(partition_end());
+                    ++_cur;
+                    if (_cur == _end) {
+                        _end_of_stream = true;
+                    } else {
+                        start_new_partition();
+                    }
                 }
             }
         }
-    public:
-        explicit reader(mutation&& m)
-            : _mutation(std::move(m))
-            , _cmp(*_mutation.schema())
-        {
-            auto mutation_destroyer = defer([this] { destroy_mutation(); });
-            push_mutation_fragment(partition_start(_mutation.decorated_key(),
-                                                   _mutation.partition().partition_tombstone()));
+        void start_new_partition() {
+            _static_row_done = false;
+            push_mutation_fragment(partition_start(_cur->decorated_key(),
+                                                   _cur->partition().partition_tombstone()));
 
             prepare_next_clustering_row();
             prepare_next_range_tombstone();
-
-            do_fill_buffer();
-
-            mutation_destroyer.cancel();
         }
-        void destroy_mutation() noexcept {
-            // After unlink_leftmost_without_rebalance() was called on a bi::set
-            // we need to complete destroying the tree using that function.
-            // clear_and_dispose() used by mutation_partition destructor won't
-            // work properly.
-
-            auto& crs = _mutation.partition().clustered_rows();
+        void destroy_current_mutation() {
+            auto &crs = _cur->partition().clustered_rows();
             auto re = crs.unlink_leftmost_without_rebalance();
             while (re) {
                 current_deleter<rows_entry>()(re);
                 re = crs.unlink_leftmost_without_rebalance();
             }
 
-            auto& rts = _mutation.partition().row_tombstones().tombstones();
+            auto &rts = _cur->partition().row_tombstones().tombstones();
             auto rt = rts.unlink_leftmost_without_rebalance();
             while (rt) {
                 current_deleter<range_tombstone>()(rt);
                 rt = rts.unlink_leftmost_without_rebalance();
             }
         }
+    public:
+        explicit reader(std::vector<mutation>&& mutations)
+            : _mutations(std::move(mutations))
+            , _cur(_mutations.begin())
+            , _end(_mutations.end())
+            , _cmp(*_cur->schema())
+        {
+            auto mutation_destroyer = defer([this] { destroy_mutations(); });
+            start_new_partition();
+
+            do_fill_buffer();
+
+            mutation_destroyer.cancel();
+        }
+        void destroy_mutations() noexcept {
+            // After unlink_leftmost_without_rebalance() was called on a bi::set
+            // we need to complete destroying the tree using that function.
+            // clear_and_dispose() used by mutation_partition destructor won't
+            // work properly.
+
+            while (_cur != _end) {
+                destroy_current_mutation();
+                ++_cur;
+            }
+        }
         ~reader() {
-            destroy_mutation();
+            destroy_mutations();
         }
         virtual future<> fill_buffer() override {
             do_fill_buffer();
@@ -318,9 +338,14 @@ flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_m
         }
         virtual void next_partition() override {
             clear_buffer_to_next_partition();
-            if (is_buffer_empty()) {
-                _end_of_stream = true;
-                destroy_mutation();
+            if (is_buffer_empty() && !is_end_of_stream()) {
+                destroy_current_mutation();
+                ++_cur;
+                if (_cur == _end) {
+                    _end_of_stream = true;
+                } else {
+                    start_new_partition();
+                }
             }
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
@@ -330,8 +355,9 @@ flat_mutation_reader flat_mutation_reader_from_mutation(mutation&& m, streamed_m
             throw std::runtime_error("This reader can't be fast forwarded to another position.");
         };
     };
-    schema_ptr s = m.schema();
-    auto res = make_flat_mutation_reader<reader>(std::move(m));
+    assert(!mutations.empty());
+    schema_ptr s = mutations[0].schema();
+    auto res = make_flat_mutation_reader<reader>(std::move(mutations));
     if (fwd) {
         return make_forwardable(std::move(s), std::move(res));
     }

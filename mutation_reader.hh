@@ -549,15 +549,6 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
     return make_ready_future<stop_iteration>(c.consume_end_of_partition());
 }
 
-GCC6_CONCEPT(
-template<typename T>
-concept bool FlattenedConsumer() {
-    return StreamedMutationConsumer<T>() && requires(T obj, const dht::decorated_key& dk) {
-        obj.consume_new_partition(dk);
-        obj.consume_end_of_partition();
-    };
-}
-)
 template<typename Consumer>
 GCC6_CONCEPT(
     requires FlattenedConsumer<Consumer>()
