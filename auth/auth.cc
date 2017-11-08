@@ -38,6 +38,9 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#include <chrono>
+
 #include <seastar/core/sleep.hh>
 
 #include <seastar/core/distributed.hh>
@@ -69,7 +72,7 @@ static logging::logger alogger("auth");
 
 // TODO: configurable
 using namespace std::chrono_literals;
-const std::chrono::milliseconds auth::auth::SUPERUSER_SETUP_DELAY = 10000ms;
+static const std::chrono::milliseconds SUPERUSER_SETUP_DELAY = 10000ms;
 
 class auth_migration_listener : public service::migration_listener {
     void on_create_keyspace(const sstring& ks_name) override {}
@@ -119,7 +122,7 @@ static delayed_tasks<>& get_local_delayed_tasks() {
 }
 
 void auth::auth::schedule_when_up(scheduled_func f) {
-    get_local_delayed_tasks().schedule_after(auth::SUPERUSER_SETUP_DELAY, std::move(f));
+    get_local_delayed_tasks().schedule_after(SUPERUSER_SETUP_DELAY, std::move(f));
 }
 
 future<> auth::auth::setup() {

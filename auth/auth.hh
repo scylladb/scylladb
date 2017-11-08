@@ -41,7 +41,6 @@
 
 #pragma once
 
-#include <chrono>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -62,7 +61,6 @@ public:
     static const sstring AUTH_KS;
     static const sstring USERS_CF;
     static const sstring AUTH_PACKAGE_NAME;
-    static const std::chrono::milliseconds SUPERUSER_SETUP_DELAY;
 
     static future<permission_set> get_permissions(::shared_ptr<authenticated_user>, data_resource);
 
