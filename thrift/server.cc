@@ -70,9 +70,10 @@ thrift_server::~thrift_server() {
 }
 
 future<> thrift_server::stop() {
+    auto f = _stop_gate.close();
     std::for_each(_listeners.begin(), _listeners.end(), std::mem_fn(&server_socket::abort_accept));
     std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
-    return make_ready_future<>();
+    return f;
 }
 
 struct handler_deleter {
@@ -212,10 +213,12 @@ thrift_server::listen(ipv4_addr addr, bool keepalive) {
 
 void
 thrift_server::do_accepts(int which, bool keepalive) {
-    _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
+    with_gate(_stop_gate, [&, this] {
+    return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
-        do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
+        with_gate(_stop_gate, [&, this] {
+        return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
             return conn.process().then_wrapped([this, &conn] (future<> f) {
                 conn.shutdown();
                 try {
@@ -225,7 +228,9 @@ thrift_server::do_accepts(int which, bool keepalive) {
                 }
             });
         });
+        });
         do_accepts(which, keepalive);
+    });
     }).handle_exception([this, which, keepalive] (auto ex) {
         tlogger.debug("accept failed {}", ex);
         maybe_retry_accept(which, keepalive, std::move(ex));
@@ -257,6 +262,8 @@ void thrift_server::maybe_retry_accept(int which, bool keepalive, std::exception
         }
     } catch (const std::bad_alloc&) {
         retry_with_backoff();
+    } catch (const seastar::gate_closed_exception&) {
+        return;
     } catch (...) {
         retry();
     }
