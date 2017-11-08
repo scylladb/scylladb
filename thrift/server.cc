@@ -204,11 +204,21 @@ thrift_server::do_accepts(int which, bool keepalive) {
             }
         });
         do_accepts(which, keepalive);
-    }).then_wrapped([] (future<> f) {
+    }).handle_exception([this, which, keepalive] (auto ex) {
+        tlogger.debug("accept failed {}", ex);
+        auto retry = [this, which, keepalive] { do_accepts(which, keepalive); };
         try {
-            f.get();
-        } catch (std::exception& ex) {
-            std::cout << "accept failed: " << ex.what() << "\n";
+            std::rethrow_exception(std::move(ex));
+        } catch (const std::system_error& e) {
+            switch (e.code().value()) {
+                // FIXME: Don't retry for other fatal errors
+                case EBADF:
+                    break;
+                default:
+                    retry();
+            }
+        } catch (...) {
+            retry();
         }
     });
 }
