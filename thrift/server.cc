@@ -70,6 +70,7 @@ thrift_server::~thrift_server() {
 }
 
 future<> thrift_server::stop() {
+    std::for_each(_listeners.begin(), _listeners.end(), std::mem_fn(&server_socket::abort_accept));
     std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
     return make_ready_future<>();
 }
