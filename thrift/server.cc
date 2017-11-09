@@ -50,6 +50,8 @@ using namespace apache::thrift::protocol;
 using namespace apache::thrift::async;
 using namespace ::cassandra;
 
+using namespace std::chrono_literals;
+
 class thrift_stats {
     seastar::metrics::metric_groups _metrics;
 public:
@@ -206,7 +208,14 @@ thrift_server::do_accepts(int which, bool keepalive) {
         do_accepts(which, keepalive);
     }).handle_exception([this, which, keepalive] (auto ex) {
         tlogger.debug("accept failed {}", ex);
-        auto retry = [this, which, keepalive] { do_accepts(which, keepalive); };
+        auto retry = [this, which, keepalive] {
+            tlogger.debug("retrying accept after failure");
+            do_accepts(which, keepalive);
+        };
+        auto retry_with_backoff = [&] {
+            // FIXME: Consider using exponential backoff
+            sleep(1ms).then([retry = std::move(retry)] { retry(); });
+        };
         try {
             std::rethrow_exception(std::move(ex));
         } catch (const std::system_error& e) {
@@ -214,9 +223,15 @@ thrift_server::do_accepts(int which, bool keepalive) {
                 // FIXME: Don't retry for other fatal errors
                 case EBADF:
                     break;
+                case ENFILE:
+                case EMFILE:
+                case ENOMEM:
+                    retry_with_backoff();
                 default:
                     retry();
             }
+        } catch (const std::bad_alloc&) {
+            retry_with_backoff();
         } catch (...) {
             retry();
         }
