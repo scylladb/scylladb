@@ -1072,7 +1072,12 @@ streamed_mutation cache_entry::read(row_cache& rc, read_context& reader) {
 streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
         streamed_mutation&& sm, row_cache::phase_type phase) {
     reader.enter_partition(std::move(sm), phase);
-    return do_read(rc, reader);
+    try {
+        return do_read(rc, reader);
+    } catch (...) {
+        sm = std::move(reader.get_streamed_mutation());
+        throw;
+    }
 }
 
 // Assumes reader is in the corresponding partition
