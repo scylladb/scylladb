@@ -1965,6 +1965,73 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
     });
 }
 
+// Makes sure that the reader is inside the first partition from the range
+streamed_mutation read_first_partition(row_cache& cache, dht::partition_range& pr, size_t read_ahead = 0) {
+    auto rd = cache.make_reader(cache.schema(), pr);
+    auto smo = rd().get0();
+    BOOST_REQUIRE(smo);
+    streamed_mutation& sm = *smo;
+    if (read_ahead) {
+        sm.set_max_buffer_size(read_ahead);
+    }
+    return std::move(sm);
+}
+
+SEASTAR_TEST_CASE(test_partition_isolation_across_update_of_unrelated_partitions) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pkeys = s.make_pkeys(3);
+        auto pr_k0 = dht::partition_range::make_singular(pkeys[0]);
+        auto pr_k1 = dht::partition_range::make_singular(pkeys[1]);
+
+        std::vector<mutation> muts;
+        for (auto&& pk : pkeys) {
+            mutation mut(pk, s.schema());
+            s.add_row(mut, s.make_ckey(1), "v");
+            muts.push_back(mut);
+        }
+
+        underlying.apply(muts[1]);
+
+        {
+            row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+            populate_range(cache, pr_k1);
+            auto rd1_v1 = assert_that_stream(read_first_partition(cache, pr_k1));
+
+            // this shouldn't touch pkeys[1]
+            apply(cache, underlying, muts[0]);
+
+            auto rd0_v2 = assert_that_stream(read_first_partition(cache, pr_k0));
+            auto rd1_v2 = assert_that_stream(read_first_partition(cache, pr_k1));
+
+            std::vector<mutation> muts_v3;
+            for (auto&& pk : pkeys) {
+                mutation mut(pk, s.schema());
+                s.add_row(mut, s.make_ckey(1), "v2");
+                muts_v3.push_back(mut);
+            }
+
+            apply(cache, underlying, muts_v3[0]);
+            apply(cache, underlying, muts_v3[1]);
+
+            auto rd0_v3 = assert_that_stream(read_first_partition(cache, pr_k0));
+            auto rd1_v3 = assert_that_stream(read_first_partition(cache, pr_k1));
+
+            rd0_v2.produces(muts[0]).produces_end_of_stream();
+            rd0_v3.produces(muts_v3[0]).produces_end_of_stream();
+            rd1_v1.produces(muts[1]).produces_end_of_stream();
+            rd1_v2.produces(muts[1]).produces_end_of_stream();
+            rd1_v3.produces(muts_v3[1]).produces_end_of_stream();
+        }
+
+        BOOST_REQUIRE_EQUAL(0, tracker.region().occupancy().used_space());
+    });
+}
+
 SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
     return seastar::async([] {
         simple_schema s;
