@@ -103,8 +103,27 @@ thrift_server::connection::connection(thrift_server& server, connected_socket&& 
 }
 
 thrift_server::connection::~connection() {
-    --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    if (is_linked()) {
+        --_server._current_connections;
+        _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    }
+}
+
+thrift_server::connection::connection(connection&& other)
+        : _server(other._server)
+        , _fd(std::move(other._fd))
+        , _read_buf(std::move(other._read_buf))
+        , _write_buf(std::move(other._write_buf))
+        , _transport(std::move(other._transport))
+        , _input(std::move(other._input))
+        , _output(std::move(other._output))
+        , _in_proto(std::move(other._in_proto))
+        , _out_proto(std::move(other._out_proto))
+        , _processor(std::move(other._processor)) {
+    if (other.is_linked()) {
+        boost::intrusive::list<connection>::node_algorithms::init(this_ptr());
+        boost::intrusive::list<connection>::node_algorithms::swap_nodes(other.this_ptr(), this_ptr());
+    }
 }
 
 future<>

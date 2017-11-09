@@ -79,6 +79,7 @@ class thrift_server {
     public:
         connection(thrift_server& server, connected_socket&& fd, socket_address addr);
         ~connection();
+        connection(connection&&);
         future<> process();
         future<> read();
         future<> write();
