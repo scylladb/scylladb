@@ -250,26 +250,37 @@ public:
         , _last_reclaim_count(std::numeric_limits<uint64_t>::max())
     { }
 
-    // Ensures that cache entry reference is valid.
-    // The cursor will point at the first entry with position >= the current position.
-    // Returns true if and only if the position of the cursor changed.
-    // Strong exception guarantees.
-    bool refresh() {
-        auto reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
-        if (reclaim_count == _last_reclaim_count) {
-            return true;
-        }
+    // Returns true iff the cursor is valid
+    bool valid() const {
+        return _cache.get().get_cache_tracker().allocator().invalidate_counter() == _last_reclaim_count;
+    }
 
+    // Repositions the cursor to the first entry with position >= pos.
+    // Returns true iff the position of the cursor is equal to pos.
+    // Can be called on invalid cursor, in which case it brings it back to validity.
+    // Strong exception guarantees.
+    bool advance_to(dht::ring_position_view pos) {
         auto cmp = cache_entry::compare(_cache.get()._schema);
-        if (cmp(_end_pos, _start_pos)) { // next() may have moved _start_pos past the _end_pos.
-            _end_pos = _start_pos;
+        if (cmp(_end_pos, pos)) { // next() may have moved _start_pos past the _end_pos.
+            _end_pos = pos;
         }
         _end = _cache.get()._partitions.lower_bound(_end_pos, cmp);
-        _it = _cache.get()._partitions.lower_bound(_start_pos, cmp);
-        auto same = !cmp(_start_pos, _it->position());
+        _it = _cache.get()._partitions.lower_bound(pos, cmp);
+        auto same = !cmp(pos, _it->position());
         set_position(*_it);
-        _last_reclaim_count = reclaim_count;
+        _last_reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
         return same;
+    }
+
+    // Ensures that cache entry reference is valid.
+    // The cursor will point at the first entry with position >= the current position.
+    // Returns true if and only if the position of the cursor did not change.
+    // Strong exception guarantees.
+    bool refresh() {
+        if (valid()) {
+            return true;
+        }
+        return advance_to(_start_pos);
     }
 
     // Positions the cursor at the next entry.
