@@ -525,10 +525,18 @@ private:
         return ce.read(_cache, *_read_context);
     }
 
+    static dht::ring_position_view as_ring_position_view(const stdx::optional<dht::partition_range::bound>& lower_bound) {
+        return lower_bound ? dht::ring_position_view(lower_bound->value(), dht::ring_position_view::after_key(!lower_bound->is_inclusive()))
+                           : dht::ring_position_view::min();
+    }
+
     streamed_mutation_opt do_read_from_primary() {
         return _cache._read_section(_cache._tracker.region(), [this] {
             return with_linearized_managed_bytes([&] () -> streamed_mutation_opt {
-                auto not_moved = _primary.refresh();
+                bool not_moved = true;
+                if (!_primary.valid()) {
+                    not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
+                }
 
                 if (_advance_primary && not_moved) {
                     _primary.next();
@@ -549,14 +557,14 @@ private:
                 } else {
                     if (_primary.in_range()) {
                         cache_entry& e = _primary.entry();
-                        _secondary_range = dht::partition_range(_lower_bound ? std::move(_lower_bound) : _pr->start(),
+                        _secondary_range = dht::partition_range(_lower_bound,
                             dht::partition_range::bound{e.key(), false});
                         _lower_bound = dht::partition_range::bound{e.key(), true};
                         _secondary_in_progress = true;
                         return stdx::nullopt;
                     } else {
                         dht::ring_position_comparator cmp(*_read_context->schema());
-                        auto range = _pr->trim_front(std::move(_lower_bound), cmp);
+                        auto range = _pr->trim_front(stdx::optional<dht::partition_range::bound>(_lower_bound), cmp);
                         if (!range) {
                             return stdx::nullopt;
                         }
@@ -599,6 +607,7 @@ public:
         , _read_context(std::move(context))
         , _primary(cache, range)
         , _secondary_reader(cache, *_read_context)
+        , _lower_bound(range.start())
     { }
 
     future<streamed_mutation_opt> operator()() {
@@ -614,7 +623,7 @@ public:
         _advance_primary = false;
         _pr = &pr;
         _primary = partition_range_cursor{_cache, pr};
-        _lower_bound = {};
+        _lower_bound = pr.start();
         return make_ready_future<>();
     }
 };
