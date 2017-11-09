@@ -2087,6 +2087,45 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
     });
 }
 
+SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pkeys = s.make_pkeys(7);
+        std::vector<mutation> muts;
+
+        for (auto&& pk : pkeys) {
+            mutation mut(pk, s.schema());
+            s.add_row(mut, s.make_ckey(1), "v");
+            muts.push_back(mut);
+            underlying.apply(mut);
+        }
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto&& injector = memory::local_failure_injector();
+
+        uint64_t i = 0;
+        do {
+            try {
+                cache.evict();
+                populate_range(cache, dht::partition_range::make_singular(pkeys[1]));
+                populate_range(cache, dht::partition_range::make({pkeys[3]}, {pkeys[5]}));
+
+                injector.fail_after(i++);
+                assert_that(cache.make_reader(s.schema()))
+                    .produces(muts)
+                    .produces_end_of_stream();
+                injector.cancel();
+            } catch (const std::bad_alloc&) {
+                // expected
+            }
+        } while (injector.failed());
+    });
+}
+
 SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
     return seastar::async([] {
         simple_schema s;
