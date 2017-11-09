@@ -128,22 +128,6 @@ class combined_mutation_reader : public mutation_reader::impl {
     struct mutation_and_reader {
         streamed_mutation m;
         mutation_reader* read;
-
-        bool operator<(const mutation_and_reader& other) const {
-            return read < other.read;
-        }
-
-        struct less_compare {
-            bool operator()(const mutation_and_reader& a, mutation_reader* b) const {
-                return a.read < b;
-            }
-            bool operator()(mutation_reader* a, const mutation_and_reader& b) const {
-                return a < b.read;
-            }
-            bool operator()(const mutation_and_reader& a, const mutation_and_reader& b) const {
-                return a < b;
-            }
-        };
     };
     std::vector<mutation_and_reader> _ptables;
     // comparison function for std::make_heap()/std::push_heap()
