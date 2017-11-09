@@ -4,18 +4,40 @@ VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 
+
 . /etc/os-release
+print_usage() {
+    echo "scylla_current_repo --target [distribution]"
+    echo "  --target    specify target distribution"
+    exit 1
+}
+TARGET=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--target")
+            TARGET="$2"
+            shift 2
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+if [ -z "$TARGET" ]; then
+    TARGET=$ID
+fi
 
 if [ "$SCYLLA_VERSION" = "666.development" ]; then
-    if [ "$ID" = "ubuntu" ]; then
-        CODENAME=`lsb_release -c|awk '{print $2}'`
-        if [ "$CODENAME" = "trusty" ]; then
-            CODENAME=ubuntu
-        fi
-        echo http://downloads.scylladb.com/deb/unstable/$CODENAME/master/latest/scylla.list
-    elif [ "$ID" = "centos" ]; then
+    if [ "$TARGET" = "ubuntu" ] || [ "$TARGET" = "debian" ]; then
+        TARGET=`lsb_release -c|awk '{print $2}'`
+    fi
+    if [ "$TARGET" = "trusty" ]; then
+        echo http://downloads.scylladb.com/deb/unstable/ubuntu/master/latest/scylla.list
+    elif [ "$TARGET" = "xenial" ]; then
+        echo http://downloads.scylladb.com/deb/unstable/xenial/master/latest/scylladb/scylla.list
+    elif [ "$TARGET" = "centos" ]; then
         echo http://downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo
-    elif [ "$ID" = "fedora" ]; then
+    elif [ "$TARGET" = "fedora" ]; then
         echo http://downloads.scylladb.com/rpm/unstable/fedora/master/latest/scylla.repo
     else
         echo "Unsupported distribution."
@@ -23,13 +45,15 @@ if [ "$SCYLLA_VERSION" = "666.development" ]; then
     fi
 else
     REPO_VERSION=$(echo $SCYLLA_VERSION |sed -e "s/^\([0-9]*\.[0-9]*\).*/\1/")
-    if [ "$ID" = "ubuntu" ]; then
-        CODENAME=`lsb_release -c|awk '{print $2}'`
-        echo http://downloads.scylladb.com/deb/ubuntu/scylla-$REPO_VERSION-$CODENAME.list
-    elif [ "$ID" = "centos" ]; then
+    if [ "$TARGET" = "ubuntu" ] || [ "$TARGET" = "debian" ]; then
+        TARGET=`lsb_release -c|awk '{print $2}'`
+    fi 
+    if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ]; then
+        echo http://downloads.scylladb.com/deb/ubuntu/scylla-$REPO_VERSION-$TARGET.list
+    elif [ "$TARGET" = "jessie" ]; then
+        echo http://downloads.scylladb.com/deb/debian/scylla-$REPO_VERSION-$TARGET.list
+    elif [ "$TARGET" = "centos" ]; then
         echo http://downloads.scylladb.com/rpm/centos/scylla-$REPO_VERSION.repo
-    elif [ "$ID" = "fedora" ]; then
-        echo http://downloads.scylladb.com/rpm/fedora/scylla-$REPO_VERSION.repo
     else
         echo "Unsupported distribution."
         exit 1

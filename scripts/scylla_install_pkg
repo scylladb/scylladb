@@ -57,9 +57,11 @@ if [ -f /etc/debian_version ]; then
     if [ "$REPO_FOR_INSTALL" != "" ]; then
         curl -o /etc/apt/sources.list.d/scylla_install.list $REPO_FOR_INSTALL
     fi
-    apt-get update
+    apt-get -o Acquire::AllowInsecureRepositories=true \
+            -o Acquire::AllowDowngradeToInsecureRepositories=true update
     if [ "$LOCAL_PKG" = "" ]; then
-        apt-get install -y --force-yes scylla
+        apt-get install -o APT::Get::AllowUnauthenticated=true \
+                        -y --force-yes scylla
     else
         if [ ! -f /usr/bin/gdebi ]; then
             apt-get install -y --force-yes gdebi-core
@@ -78,7 +80,8 @@ if [ -f /etc/debian_version ]; then
     if [ "$REPO_FOR_UPDATE" != "" ]; then
         curl -o /etc/apt/sources.list.d/scylla.list $REPO_FOR_UPDATE
     fi
-    apt-get update
+    apt-get -o Acquire::AllowInsecureRepositories=true \
+            -o Acquire::AllowDowngradeToInsecureRepositories=true update
 else
     if [ "$REPO_FOR_INSTALL" != "" ]; then
         curl -o /etc/yum.repos.d/scylla_install.repo $REPO_FOR_INSTALL

@@ -34,7 +34,7 @@ echo 'By default, Scylla sends certain information about this node to a data col
 echo
 
 SETUP=
-if [ "$ID" != "ubuntu" ]; then
+if is_systemd; then
 	SETUP=`systemctl is-active scylla-ami-setup`
 fi
 if [ "$SETUP" == "activating" ]; then
@@ -60,7 +60,7 @@ elif [ "$SETUP" == "failed" ]; then
 	echo " 'systemctl status scylla-ami-setup'"
 	echo
 else
-	if [ "$ID" != "ubuntu" ]; then
+	if is_systemd; then
 		SCYLLA=`systemctl is-active scylla-server`
 	else
 		if [ "`initctl status scylla-server|grep "running, process"`" != "" ]; then
@@ -95,7 +95,7 @@ else
 			echo "    $TYPE is not supported instance type!"
 			tput sgr0
 			echo -n "To continue startup ScyllaDB on this instance, run 'sudo scylla_io_setup' "
-			if [ "$ID" = "ubuntu" ]; then
+			if ! is_systemd; then
 				echo "then 'initctl start scylla-server'."
 			else
 				echo "then 'systemctl start scylla-server'."
@@ -107,7 +107,7 @@ else
 			echo "    ScyllaDB is not started!"
 			tput sgr0
 			echo "Please wait for startup. To see status of ScyllaDB, run "
-			if [ "$ID" = "ubuntu" ]; then
+			if ! is_systemd; then
 				echo " 'initctl status scylla-server'"
 				echo "and"
 				echo " 'sudo cat /var/log/upstart/scylla-server.log'"
