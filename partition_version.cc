@@ -540,7 +540,9 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to)
 lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
     schema_ptr entry_schema, partition_snapshot::phase_type phase)
 {
-    open_version(*entry_schema, phase);
+    with_allocator(r.allocator(), [&] {
+        open_version(*entry_schema, phase);
+    });
     if (_snapshot) {
         return _snapshot->shared_from_this();
     } else {
