@@ -455,10 +455,10 @@ public:
     }
 };
 
-template<typename Hasher>
 class partition_hasher {
     const schema& _schema;
-    Hasher& _hasher;
+    sha256_hasher _hasher;
+    partition_checksum _checksum;
 
     bound_view::compare _cmp;
     range_tombstone_list _rt_list;
@@ -518,10 +518,16 @@ private:
             consume_range_tombstone_start(rt);
             consume_range_tombstone_end(rt);
         }
+        _rt_list.clear();
+        _inside_range_tombstone = false;
     }
 public:
-    partition_hasher(const schema& s, Hasher& h)
-        : _schema(s), _hasher(h), _cmp(s), _rt_list(s) { }
+    explicit partition_hasher(const schema& s)
+        : _schema(s), _cmp(s), _rt_list(s) { }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        dk.key().feed_hash(_hasher, _schema);
+    }
 
     stop_iteration consume(tombstone t) {
         feed_hash(_hasher, t);
@@ -554,8 +560,19 @@ public:
         return stop_iteration::no;
     }
 
-    void consume_end_of_stream() {
+    stop_iteration consume_end_of_partition() {
         consume_range_tombstones_until_end();
+
+        std::array<uint8_t, 32> digest;
+        _hasher.finalize(digest);
+        _hasher = { };
+
+        _checksum.add(partition_checksum(digest));
+        return stop_iteration::no;
+    }
+
+    partition_checksum consume_end_of_stream() {
+        return std::move(_checksum);
     }
 };
 
