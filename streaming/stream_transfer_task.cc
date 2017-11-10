@@ -75,7 +75,7 @@ struct send_info {
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
-    mutation_reader reader;
+    flat_mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
               dht::partition_range_vector prs_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
@@ -84,10 +84,13 @@ struct send_info {
         , cf_id(cf_id_)
         , prs(std::move(prs_))
         , id(id_)
-        , dst_cpu_id(dst_cpu_id_) {
-        auto& cf = db.find_column_family(this->cf_id);
-        reader = cf.make_streaming_reader(cf.schema(), this->prs);
-    }
+        , dst_cpu_id(dst_cpu_id_)
+        , reader([&] {
+            auto& cf = db.find_column_family(cf_id);
+            return flat_mutation_reader_from_mutation_reader(cf.schema(), cf.make_streaming_reader(cf.schema(), prs),
+                                                             streamed_mutation::forwarding::no);
+        }())
+    { }
 };
 
 future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool fragmented) {
@@ -114,23 +117,18 @@ future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mut
 }
 
 future<> send_mutations(lw_shared_ptr<send_info> si) {
-    return repeat([si] () {
-        return si->reader().then([si] (auto smopt) {
-            if (smopt && si->db.column_family_exists(si->cf_id)) {
-                size_t fragment_size = default_frozen_fragment_size;
-                // Mutations cannot be sent fragmented if the receiving side doesn't support that.
-                if (!service::get_local_storage_service().cluster_supports_large_partitions()) {
-                    fragment_size = std::numeric_limits<size_t>::max();
-                }
-                return fragment_and_freeze(std::move(*smopt), [si] (auto fm, bool fragmented) {
-                    si->mutations_nr++;
-                    return do_send_mutations(si, std::move(fm), fragmented);
-                }, fragment_size).then([] { return stop_iteration::no; });
-            } else {
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }
-        });
-    }).then([si] {
+    size_t fragment_size = default_frozen_fragment_size;
+    // Mutations cannot be sent fragmented if the receiving side doesn't support that.
+    if (!service::get_local_storage_service().cluster_supports_large_partitions()) {
+        fragment_size = std::numeric_limits<size_t>::max();
+    }
+    return fragment_and_freeze(std::move(si->reader), [si] (auto fm, bool fragmented) {
+        if (!si->db.column_family_exists(si->cf_id)) {
+            return make_ready_future<stop_iteration>(stop_iteration::yes);
+        }
+        si->mutations_nr++;
+        return do_send_mutations(si, std::move(fm), fragmented);
+    }, fragment_size).then([si] {
         return si->mutations_done.wait(si->mutations_nr);
     });
 }
