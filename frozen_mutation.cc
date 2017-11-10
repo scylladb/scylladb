@@ -191,7 +191,7 @@ class fragmenting_mutation_freezer {
     size_t _dirty_size = 0;
     size_t _fragment_size;
 private:
-    future<> flush() {
+    future<stop_iteration> flush() {
         bytes_ostream out;
         ser::writer_of_mutation<bytes_ostream> wom(out);
         std::move(wom).write_table_id(_schema.id())
@@ -213,7 +213,7 @@ private:
     future<stop_iteration> maybe_flush() {
         if (_dirty_size >= _fragment_size) {
             _fragmented = true;
-            return flush().then([] { return stop_iteration::no; });
+            return flush();
         }
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
@@ -246,7 +246,7 @@ public:
 
     future<stop_iteration> consume_end_of_stream() {
         if (_dirty_size) {
-            return flush().then([] { return stop_iteration::yes; });
+            return flush().then([] (stop_iteration) { return stop_iteration::yes; });
         }
         return make_ready_future<stop_iteration>(stop_iteration::yes);
     }

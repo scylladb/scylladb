@@ -229,7 +229,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
             fragment_and_freeze(streamed_mutation_from_mutation(mutation(m)), [&] (auto fm, bool frag) {
                 BOOST_REQUIRE(!frag);
                 fms.emplace_back(std::move(fm));
-                return make_ready_future<>();
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }, std::numeric_limits<size_t>::max()).get0();
 
             BOOST_REQUIRE_EQUAL(fms.size(), 1);
@@ -244,7 +244,7 @@ SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
                 BOOST_REQUIRE(!fragmented || *fragmented == frag);
                 *fragmented = frag;
                 fms.emplace_back(std::move(fm));
-                return make_ready_future<>();
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             }, 1).get0();
 
             auto&& rows = m.partition().non_dummy_rows();

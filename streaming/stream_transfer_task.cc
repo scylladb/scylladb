@@ -90,7 +90,7 @@ struct send_info {
     }
 };
 
-future<> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool fragmented) {
+future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool fragmented) {
     return get_local_stream_manager().mutation_send_limiter().wait().then([si, fragmented, fm = std::move(fm)] () mutable {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
         auto fm_size = fm.representation().size();
@@ -109,6 +109,7 @@ future<> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool
         }).finally([] {
             get_local_stream_manager().mutation_send_limiter().signal();
         });
+        return stop_iteration::no;
     });
 }
 
