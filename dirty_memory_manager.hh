@@ -72,12 +72,18 @@ public:
 };
 
 class dirty_memory_manager: public logalloc::region_group_reclaimer {
+    logalloc::region_group_reclaimer _real_dirty_reclaimer;
     // We need a separate boolean, because from the LSA point of view, pressure may still be
     // mounting, in which case the pressure flag could be set back on if we force it off.
     bool _db_shutdown_requested = false;
 
     database* _db;
-    logalloc::region_group _region_group;
+    // The _real_region_group protects against actual dirty memory usage hitting the maximum. Usage
+    // for this group is the real dirty memory usage of the system.
+    logalloc::region_group _real_region_group;
+    // The _virtual_region_group accounts for virtual memory usage. It is defined as the real dirty
+    // memory usage minus bytes that were already written to disk.
+    logalloc::region_group _virtual_region_group;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
     // simultaneously can sustain high levels of throughput, the memory is not freed until the
@@ -145,45 +151,58 @@ public:
     // the user-supplied threshold.
     dirty_memory_manager(database& db, size_t threshold, double soft_limit)
         : logalloc::region_group_reclaimer(threshold / 2, threshold * soft_limit / 2)
+        , _real_dirty_reclaimer(threshold)
         , _db(&db)
-        , _region_group(*this)
+        , _real_region_group(_real_dirty_reclaimer)
+        , _virtual_region_group(&_real_region_group, *this)
         , _flush_serializer(1)
         , _waiting_flush(flush_when_needed()) {}
 
     dirty_memory_manager() : logalloc::region_group_reclaimer()
         , _db(nullptr)
-        , _region_group(*this)
+        , _real_region_group(_real_dirty_reclaimer)
+        , _virtual_region_group(&_real_region_group, *this)
         , _flush_serializer(1)
         , _waiting_flush(make_ready_future<>()) {}
 
     static dirty_memory_manager& from_region_group(logalloc::region_group *rg) {
-        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_region_group));
+        return *(boost::intrusive::get_parent_from_member(rg, &dirty_memory_manager::_virtual_region_group));
     }
 
     logalloc::region_group& region_group() {
-        return _region_group;
+        return _virtual_region_group;
     }
 
     const logalloc::region_group& region_group() const {
-        return _region_group;
+        return _virtual_region_group;
     }
 
     void revert_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _region_group.update(delta);
+        _real_region_group.update(-delta);
+        _virtual_region_group.update(delta);
         _dirty_bytes_released_pre_accounted -= delta;
     }
 
     void account_potentially_cleaned_up_memory(logalloc::region* from, int64_t delta) {
-        _region_group.update(-delta);
+        _real_region_group.update(delta);
+        _virtual_region_group.update(-delta);
         _dirty_bytes_released_pre_accounted += delta;
     }
 
+    void pin_real_dirty_memory(int64_t delta) {
+        _real_region_group.update(delta);
+    }
+
+    void unpin_real_dirty_memory(int64_t delta) {
+        _real_region_group.update(-delta);
+    }
+
     size_t real_dirty_memory() const {
-        return _region_group.memory_used() + _dirty_bytes_released_pre_accounted;
+        return _real_region_group.memory_used();
     }
 
     size_t virtual_dirty_memory() const {
-        return _region_group.memory_used();
+        return _virtual_region_group.memory_used();
     }
 
     future<> flush_one(memtable_list& cf, flush_permit&& permit);

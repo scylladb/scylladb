@@ -792,6 +792,8 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
+
+    size_t memory_usage() const;
 };
 
 // Represents a set of writes made to a single partition.
@@ -1044,6 +1046,8 @@ public:
 
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
+    size_t external_memory_usage() const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
