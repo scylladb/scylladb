@@ -1594,6 +1594,7 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
 }
 
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
+static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
 
 static void make_update_indices_mutations(
         schema_ptr old_table,
@@ -1609,6 +1610,9 @@ static void make_update_indices_mutations(
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
+        auto& cf = service::get_storage_proxy().local().get_db().local().find_column_family(old_table);
+        auto view = cf.get_index_manager().create_view_for_index(index);
+        make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
     }
 
     // newly added indices and old indices with updated attributes
