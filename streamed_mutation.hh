@@ -174,7 +174,7 @@ public:
 
     dht::decorated_key& key() { return _key; }
     const dht::decorated_key& key() const { return _key; }
-    tombstone& partition_tombstone() { return _partition_tombstone; }
+    tombstone partition_tombstone() const { return _partition_tombstone; }
 
     position_in_partition_view position() const;
 
