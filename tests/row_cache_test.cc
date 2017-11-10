@@ -2022,6 +2022,105 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
     });
 }
 
+SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+
+        // keys[0] - in underlying, in cache
+        // keys[1] - not in underlying, continuous in cache
+        // keys[2] - not in underlying, continuous in cache, with snapshot in source
+        // keys[3] - population upper bound
+        // keys[4] - in underlying, not in cache
+        auto pkeys = s.make_pkeys(5);
+        auto population_range = dht::partition_range::make_ending_with({pkeys[3]});
+
+        std::vector<mutation> muts;
+        std::vector<mutation> muts2;
+
+        for (auto&& pk : pkeys) {
+            mutation mut(s.schema(), pk);
+            s.add_row(mut, s.make_ckey(1), "v");
+            muts.push_back(mut);
+            s.add_row(mut, s.make_ckey(1), "v2");
+            muts2.push_back(mut);
+        }
+
+        std::vector<mutation> orig;
+        orig.push_back(muts[0]);
+        orig.push_back(muts[3]);
+        orig.push_back(muts[4]);
+
+        auto&& injector = memory::local_failure_injector();
+        uint64_t i = 0;
+        do {
+            memtable_snapshot_source underlying(s.schema());
+            for (auto&& m : orig) {
+                underlying.apply(m);
+            }
+
+            row_cache cache(s.schema(), snapshot_source([&] {
+                memory::disable_failure_guard dfg;
+                return underlying();
+            }), tracker);
+
+            auto make_reader = [&] (const dht::partition_range& pr) {
+                auto rd = cache.make_reader(s.schema(), pr);
+                rd.set_max_buffer_size(1);
+                rd.fill_buffer().get();
+                return rd;
+            };
+
+            populate_range(cache, population_range);
+            auto rd1_v1 = assert_that(make_reader(population_range));
+            stdx::optional<flat_mutation_reader> snap;
+
+            try {
+                auto mt = make_lw_shared<memtable>(cache.schema());
+                for (auto&& m : muts2) {
+                    mt->apply(m);
+                }
+
+                injector.fail_after(i++);
+
+                // Make snapshot on pkeys[2]
+                snap = mt->make_flat_reader(s.schema(), dht::partition_range::make_singular(pkeys[2]));
+                snap->set_max_buffer_size(1);
+                snap->fill_buffer().get();
+
+                cache.update([&] {
+                    auto mt2 = make_lw_shared<memtable>(cache.schema());
+                    for (auto&& m : muts2) {
+                        mt2->apply(m);
+                    }
+                    underlying.apply(std::move(mt2));
+                }, *mt).get();
+
+                injector.cancel();
+
+                assert_that(cache.make_reader(cache.schema()))
+                    .produces(muts2)
+                    .produces_end_of_stream();
+
+                rd1_v1.produces(muts[0])
+                    .produces(muts2[1])
+                    .produces(muts2[2])
+                    .produces(muts2[3])
+                    .produces_end_of_stream();
+            } catch (const std::bad_alloc&) {
+                // expected
+                assert_that(cache.make_reader(cache.schema()))
+                    .produces(orig)
+                    .produces_end_of_stream();
+
+                rd1_v1.produces(muts[0])
+                    .produces(muts[3])
+                    .produces_end_of_stream();
+            }
+        } while (injector.failed());
+    });
+}
+
 SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
     return seastar::async([] {
         cache_tracker tracker;
