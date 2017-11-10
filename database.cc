@@ -692,24 +692,6 @@ column_family::make_reader(schema_ptr s,
 
 mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
-                           const dht::partition_range& range) const {
-    auto& slice = s->full_slice();
-    auto& pc = service::get_local_streaming_read_priority();
-
-    std::vector<mutation_reader> readers;
-    readers.reserve(_memtables->size() + 1);
-
-    for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
-    }
-
-    readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
-
-    return make_combined_reader(std::move(readers), mutation_reader::forwarding::no);
-}
-
-mutation_reader
-column_family::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
     auto& slice = s->full_slice();
     auto& pc = service::get_local_streaming_read_priority();
