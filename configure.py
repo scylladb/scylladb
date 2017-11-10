@@ -883,13 +883,19 @@ os.makedirs(outdir, exist_ok = True)
 do_sanitize = True
 if args.static:
     do_sanitize = False
+
+# 'gold' linker doesn't come as a standard package on the Power platform yet
+gold_linker_flag = ''
+if not re.search("ppc", platform.machine()):
+    gold_linker_flag = '-fuse-ld=gold'
+
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
         cxxflags = {user_cflags} {warnings} {defines}
-        ldflags = -fuse-ld=gold {user_ldflags}
+        ldflags = {gold_linker_flag} {user_ldflags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
