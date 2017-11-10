@@ -38,7 +38,6 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
-#include "mutation_reader.hh"
 
 //
 // Representation layout:
@@ -269,12 +268,4 @@ future<> fragment_and_freeze(flat_mutation_reader mr, frozen_mutation_consumer_f
             });
         });
     });
-}
-
-future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c, size_t fragment_size)
-{
-    auto s = sm.schema();
-    auto mr = make_reader_returning(std::move(sm));
-    auto fmr = flat_mutation_reader_from_mutation_reader(std::move(s), std::move(mr), streamed_mutation::forwarding::no);
-    return fragment_and_freeze(std::move(fmr), std::move(c), fragment_size);
 }
