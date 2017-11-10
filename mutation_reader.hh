@@ -273,7 +273,7 @@ partition_presence_checker make_default_partition_presence_checker() {
     return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
 }
 
-mutation_reader mutation_reader_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader&&);
+mutation_reader mutation_reader_from_flat_mutation_reader(flat_mutation_reader&&);
 
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
@@ -352,8 +352,7 @@ class mutation_source {
                                                      tracing::trace_state_ptr trace_state,
                                                      streamed_mutation::forwarding fwd,
                                                      mutation_reader::forwarding fwd_mr) override {
-            return mutation_reader_from_flat_mutation_reader(s,
-                                                             _fn(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+            return mutation_reader_from_flat_mutation_reader(_fn(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         }
         virtual flat_mutation_reader make_flat_mutation_reader(schema_ptr s,
                                                                partition_range range,

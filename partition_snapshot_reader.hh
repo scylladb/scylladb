@@ -542,10 +542,10 @@ make_partition_snapshot_flat_reader(schema_ptr s,
                                     streamed_mutation::forwarding fwd,
                                     Args&&... args)
 {
-    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(s, std::move(dk),
+    auto res = make_flat_mutation_reader<partition_snapshot_flat_reader<MemoryAccounter>>(std::move(s), std::move(dk),
             snp, std::move(crr), region, read_section, std::move(pointer_to_container), std::forward<Args>(args)...);
     if (fwd) {
-        return make_forwardable(s, std::move(res)); // FIXME: optimize
+        return make_forwardable(std::move(res)); // FIXME: optimize
     } else {
         return std::move(res);
     }

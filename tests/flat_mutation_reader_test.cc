@@ -48,7 +48,7 @@ static void test_double_conversion_through_mutation_reader(const std::vector<mut
     auto flat_reader = flat_mutation_reader_from_mutation_reader(schema,
                                                                  std::move(base_reader),
                                                                  streamed_mutation::forwarding::no);
-    auto normal_reader = mutation_reader_from_flat_mutation_reader(schema, std::move(flat_reader));
+    auto normal_reader = mutation_reader_from_flat_mutation_reader(std::move(flat_reader));
     for (auto& m : mutations) {
         auto smopt = normal_reader().get0();
         BOOST_REQUIRE(smopt);

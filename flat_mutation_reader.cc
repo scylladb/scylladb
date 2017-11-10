@@ -126,7 +126,7 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
     return make_flat_mutation_reader<converting_reader>(std::move(s), std::move(legacy_reader), fwd);
 }
 
-flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m) {
+flat_mutation_reader make_forwardable(flat_mutation_reader m) {
     class reader : public flat_mutation_reader::impl {
         flat_mutation_reader _underlying;
         position_range _current = {
@@ -147,7 +147,7 @@ flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m) {
             });
         }
     public:
-        reader(schema_ptr s, flat_mutation_reader r) : impl(std::move(s)), _underlying(std::move(r)) { }
+        reader(flat_mutation_reader r) : impl(r.schema()), _underlying(std::move(r)) { }
         virtual future<> fill_buffer() override {
             return repeat([this] {
                 if (is_buffer_full()) {
@@ -195,7 +195,7 @@ flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m) {
             return _underlying.fast_forward_to(pr);
         }
     };
-    return make_flat_mutation_reader<reader>(std::move(s), std::move(m));
+    return make_flat_mutation_reader<reader>(std::move(m));
 }
 
 class empty_flat_reader final : public flat_mutation_reader::impl {
@@ -356,9 +356,9 @@ flat_mutation_reader_from_mutations(std::vector<mutation>&& mutations, streamed_
     };
     assert(!mutations.empty());
     schema_ptr s = mutations[0].schema();
-    auto res = make_flat_mutation_reader<reader>(s, std::move(mutations));
+    auto res = make_flat_mutation_reader<reader>(std::move(s), std::move(mutations));
     if (fwd) {
-        return make_forwardable(std::move(s), std::move(res));
+        return make_forwardable(std::move(res));
     }
     return res;
 }
