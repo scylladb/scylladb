@@ -888,7 +888,7 @@ void test_next_partition(populate_fn populate) {
         mutations.push_back(std::move(m));
     }
     auto source = populate(s.schema(), mutations);
-    assert_that(s.schema(), source.make_flat_mutation_reader(s.schema()))
+    assert_that(source.make_flat_mutation_reader(s.schema()))
         .next_partition() // Does nothing before first partition
         .produces_partition_start(pkeys[0])
         .produces_static_row()

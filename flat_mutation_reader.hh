@@ -72,6 +72,8 @@ public:
     protected:
         static constexpr size_t max_buffer_size_in_bytes = 8 * 1024;
         bool _end_of_stream = false;
+        schema_ptr _schema;
+        friend class flat_mutation_reader;
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -85,6 +87,7 @@ public:
         void forward_buffer_to(schema_ptr& s, const position_in_partition& pos);
         void clear_buffer_to_next_partition();
     public:
+        impl(schema_ptr s) : _schema(std::move(s)) { }
         virtual ~impl() {}
         virtual future<> fill_buffer() = 0;
         virtual void next_partition() = 0;
@@ -259,6 +262,7 @@ public:
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
+    const schema_ptr& schema() const { return _impl->_schema; }
 };
 
 template<typename Impl, typename... Args>
@@ -272,6 +276,6 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutat
 
 flat_mutation_reader make_forwardable(schema_ptr s, flat_mutation_reader m);
 
-flat_mutation_reader make_empty_flat_reader();
+flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 
 flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>&&, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);

@@ -296,7 +296,8 @@ public:
                      const query::partition_slice& slice,
                      const io_priority_class& pc,
                      mutation_reader::forwarding fwd_mr)
-         : iterator_reader(std::move(s), std::move(m), range)
+         : impl(s)
+         , iterator_reader(s, std::move(m), range)
          , _pc(pc)
          , _slice(slice)
          , _fwd_mr(fwd_mr)
@@ -496,7 +497,7 @@ memtable::make_flat_reader(schema_ptr s,
             upgrade_entry(*i);
             return i->read(shared_from_this(), s, slice, fwd);
         } else {
-            return make_empty_flat_reader();
+            return make_empty_flat_reader(std::move(s));
         }
         });
     } else {

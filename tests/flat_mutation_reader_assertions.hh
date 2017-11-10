@@ -26,15 +26,14 @@
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
-    schema_ptr _schema;
     flat_mutation_reader _reader;
 private:
     mutation_fragment_opt read_next() {
         return _reader().get0();
     }
 public:
-    flat_reader_assertions(schema_ptr s, flat_mutation_reader reader)
-        : _schema(std::move(s)), _reader(std::move(reader))
+    flat_reader_assertions(flat_mutation_reader reader)
+        : _reader(std::move(reader))
     { }
 
     flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk) {
@@ -46,7 +45,7 @@ public:
         if (!mfopt->is_partition_start()) {
             BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, *mfopt));
         }
-        if (!mfopt->as_partition_start().key().equal(*_schema, dk)) {
+        if (!mfopt->as_partition_start().key().equal(*_reader.schema(), dk)) {
             BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, *mfopt));
         }
         return *this;
@@ -74,7 +73,7 @@ public:
             BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
         }
         auto& actual = mfopt->as_clustering_row().key();
-        if (!actual.equal(*_schema, ck)) {
+        if (!actual.equal(*_reader.schema(), ck)) {
             BOOST_FAIL(sprint("Expected row with key %s, but key is %s", ck, actual));
         }
         return *this;
@@ -108,6 +107,6 @@ public:
 };
 
 inline
-flat_reader_assertions assert_that(schema_ptr s, flat_mutation_reader r) {
-    return { std::move(s), std::move(r) };
+flat_reader_assertions assert_that(flat_mutation_reader r) {
+    return { std::move(r) };
 }

@@ -321,7 +321,6 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         }
     };
 private:
-    schema_ptr _schema;
     // Keeps shared pointer to the container we read mutation from to make sure
     // that its lifetime is appropriately extended.
     boost::any _container_guard;
@@ -488,8 +487,8 @@ public:
                               query::clustering_key_filter_ranges crr,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
-        : MemoryAccounter(std::forward<Args>(args)...)
-        , _schema(std::move(s))
+        : impl(std::move(s))
+        , MemoryAccounter(std::forward<Args>(args)...)
         , _container_guard(std::move(pointer_to_container))
         , _ck_ranges(std::move(crr))
         , _current_ck_range(_ck_ranges.begin())
