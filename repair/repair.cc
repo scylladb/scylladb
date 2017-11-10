@@ -491,6 +491,28 @@ future<partition_checksum> partition_checksum::compute(streamed_mutation m, repa
     }
 }
 
+future<partition_checksum> partition_checksum::compute(flat_mutation_reader mr, repair_checksum hash_version)
+{
+    auto s = mr.schema();
+    return do_with(mutation_reader_from_flat_mutation_reader(std::move(mr)),
+                   partition_checksum(), [hash_version] (auto& reader, auto& checksum) {
+        return repeat([&reader, &checksum, hash_version] () {
+            return reader().then([&checksum, hash_version] (auto mopt) {
+                if (mopt) {
+                    return partition_checksum::compute(std::move(*mopt), hash_version).then([&checksum] (auto pc) {
+                        checksum.add(pc);
+                        return stop_iteration::no;
+                    });
+                } else {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+            });
+        }).then([&checksum] {
+            return checksum;
+        });
+    });
+}
+
 static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
     return *unaligned_cast<uint64_t>(b.data() + 8 * n);
 }
@@ -543,23 +565,8 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const dht::partition_range_vector& prs, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     auto reader = cf.make_streaming_reader(cf.schema(), prs);
-    return do_with(std::move(reader), partition_checksum(),
-        [hash_version] (auto& reader, auto& checksum) {
-        return repeat([&reader, &checksum, hash_version] () {
-            return reader().then([&checksum, hash_version] (auto mopt) {
-                if (mopt) {
-                    return partition_checksum::compute(std::move(*mopt), hash_version).then([&checksum] (auto pc) {
-                        checksum.add(pc);
-                        return stop_iteration::no;
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        }).then([&checksum] {
-            return checksum;
-        });
-    });
+    auto fmr = flat_mutation_reader_from_mutation_reader(cf.schema(), std::move(reader), streamed_mutation::forwarding::no);
+    return partition_checksum::compute(std::move(fmr), hash_version);
 }
 
 // It is counter-productive to allow a large number of range checksum
