@@ -38,6 +38,7 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
+#include "mutation_reader.hh"
 
 //
 // Representation layout:
@@ -178,7 +179,7 @@ future<frozen_mutation> freeze(streamed_mutation sm) {
 
 class fragmenting_mutation_freezer {
     const schema& _schema;
-    partition_key _key;
+    stdx::optional<partition_key> _key;
 
     tombstone _partition_tombstone;
     stdx::optional<static_row> _sr;
@@ -196,7 +197,7 @@ private:
         ser::writer_of_mutation<bytes_ostream> wom(out);
         std::move(wom).write_table_id(_schema.id())
                       .write_schema_version(_schema.version())
-                      .write_key(_key)
+                      .write_key(*_key)
                       .partition([&] (auto wr) {
                           serialize_mutation_fragments(_schema, _partition_tombstone,
                                                        std::move(_sr), std::move(_rts),
@@ -207,7 +208,7 @@ private:
         _rts.clear();
         _crs.clear();
         _dirty_size = 0;
-        return _consumer(frozen_mutation(std::move(out), _key), _fragmented);
+        return _consumer(frozen_mutation(std::move(out), *_key), _fragmented);
     }
 
     future<stop_iteration> maybe_flush() {
@@ -218,12 +219,15 @@ private:
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 public:
-    fragmenting_mutation_freezer(const schema& s, const partition_key& key, frozen_mutation_consumer_fn c, size_t fragment_size)
-        : _schema(s), _key(key), _rts(s), _consumer(c), _fragment_size(fragment_size) { }
+    fragmenting_mutation_freezer(const schema& s, frozen_mutation_consumer_fn c, size_t fragment_size)
+        : _schema(s), _rts(s), _consumer(c), _fragment_size(fragment_size) { }
 
-    void consume(tombstone pt) {
+    future<stop_iteration> consume(partition_start&& ps) {
+        _key = std::move(ps.key().key());
+        _fragmented = false;
         _dirty_size += sizeof(tombstone);
-        _partition_tombstone = pt;
+        _partition_tombstone = ps.partition_tombstone();
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 
     future<stop_iteration> consume(static_row&& sr) {
@@ -244,26 +248,33 @@ public:
         return maybe_flush();
     }
 
-    future<stop_iteration> consume_end_of_stream() {
+    future<stop_iteration> consume(partition_end&&) {
         if (_dirty_size) {
-            return flush().then([] (stop_iteration) { return stop_iteration::yes; });
+            return flush();
         }
-        return make_ready_future<stop_iteration>(stop_iteration::yes);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 };
 
-future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c, size_t fragment_size)
+future<> fragment_and_freeze(flat_mutation_reader mr, frozen_mutation_consumer_fn c, size_t fragment_size)
 {
-    fragmenting_mutation_freezer freezer(*sm.schema(), sm.key(), c, fragment_size);
-    return do_with(std::move(sm), std::move(freezer), [] (auto& sm, auto& freezer) {
-        freezer.consume(sm.partition_tombstone());
+    fragmenting_mutation_freezer freezer(*mr.schema(), c, fragment_size);
+    return do_with(std::move(mr), std::move(freezer), [] (auto& mr, auto& freezer) {
         return repeat([&] {
-            return sm().then([&] (auto mfopt) {
+            return mr().then([&] (auto mfopt) {
                 if (!mfopt) {
-                    return freezer.consume_end_of_stream();
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-                return std::move(*mfopt).consume_streamed_mutation(freezer);
+                return std::move(*mfopt).consume(freezer);
             });
         });
     });
+}
+
+future<> fragment_and_freeze(streamed_mutation sm, frozen_mutation_consumer_fn c, size_t fragment_size)
+{
+    auto s = sm.schema();
+    auto mr = make_reader_returning(std::move(sm));
+    auto fmr = flat_mutation_reader_from_mutation_reader(std::move(s), std::move(mr), streamed_mutation::forwarding::no);
+    return fragment_and_freeze(std::move(fmr), std::move(c), fragment_size);
 }
