@@ -576,62 +576,46 @@ public:
     }
 };
 
-future<partition_checksum> partition_checksum::compute_legacy(streamed_mutation m)
+future<partition_checksum> partition_checksum::compute_legacy(flat_mutation_reader mr)
 {
-    return mutation_from_streamed_mutation(std::move(m)).then([] (auto mopt) {
-        assert(mopt);
-        std::array<uint8_t, 32> digest;
-        sha256_hasher h;
-        feed_hash(h, *mopt);
-        h.finalize(digest);
-        return partition_checksum(digest);
-    });
-}
-
-future<partition_checksum> partition_checksum::compute_streamed(streamed_mutation m)
-{
-    auto& s = *m.schema();
-    auto h = make_lw_shared<sha256_hasher>();
-    m.key().feed_hash(*h, s);
-    return do_with(std::move(m), [&s, h] (auto& sm) mutable {
-        mutation_hasher<sha256_hasher> mh(s, *h);
-        return consume(sm, std::move(mh)).then([ h ] {
-            std::array<uint8_t, 32> digest;
-            h->finalize(digest);
-            return partition_checksum(digest);
+    auto s = mr.schema();
+    return do_with(mutation_reader_from_flat_mutation_reader(std::move(mr)),
+                   partition_checksum(), [] (auto& reader, auto& checksum) {
+        return repeat([&reader, &checksum] () {
+            return reader().then([&checksum] (auto smopt) {
+                if (!smopt) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return mutation_from_streamed_mutation(std::move(*smopt)).then([&checksum] (auto mopt) {
+                    assert(mopt);
+                    std::array<uint8_t, 32> digest;
+                    sha256_hasher h;
+                    feed_hash(h, *mopt);
+                    h.finalize(digest);
+                    checksum.add(partition_checksum(digest));
+                    return stop_iteration::no;
+                });
+            });
+        }).then([&checksum] {
+            return checksum;
         });
     });
 }
 
-future<partition_checksum> partition_checksum::compute(streamed_mutation m, repair_checksum hash_version)
+future<partition_checksum> partition_checksum::compute_streamed(flat_mutation_reader m)
+{
+    return do_with(std::move(m), [] (auto& m) {
+        return m.consume(partition_hasher(*m.schema()));
+    });
+}
+
+future<partition_checksum> partition_checksum::compute(flat_mutation_reader m, repair_checksum hash_version)
 {
     switch (hash_version) {
     case repair_checksum::legacy: return compute_legacy(std::move(m));
     case repair_checksum::streamed: return compute_streamed(std::move(m));
     default: throw std::runtime_error(sprint("Unknown hash version: %d", static_cast<int>(hash_version)));
     }
-}
-
-future<partition_checksum> partition_checksum::compute(flat_mutation_reader mr, repair_checksum hash_version)
-{
-    auto s = mr.schema();
-    return do_with(mutation_reader_from_flat_mutation_reader(std::move(mr)),
-                   partition_checksum(), [hash_version] (auto& reader, auto& checksum) {
-        return repeat([&reader, &checksum, hash_version] () {
-            return reader().then([&checksum, hash_version] (auto mopt) {
-                if (mopt) {
-                    return partition_checksum::compute(std::move(*mopt), hash_version).then([&checksum] (auto pc) {
-                        checksum.add(pc);
-                        return stop_iteration::no;
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        }).then([&checksum] {
-            return checksum;
-        });
-    });
 }
 
 static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
