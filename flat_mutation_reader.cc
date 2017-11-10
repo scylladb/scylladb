@@ -212,7 +212,7 @@ flat_mutation_reader make_empty_flat_reader(schema_ptr s) {
 }
 
 flat_mutation_reader
-flat_mutation_reader_from_mutations(std::vector<mutation>&& mutations, streamed_mutation::forwarding fwd) {
+flat_mutation_reader_from_mutations(std::vector<mutation> mutations, streamed_mutation::forwarding fwd) {
     class reader final : public flat_mutation_reader::impl {
         std::vector<mutation> _mutations;
         std::vector<mutation>::iterator _cur;
