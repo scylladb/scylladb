@@ -128,9 +128,54 @@ public:
     }
 };
 
+// We need a wider accumulator for average, since summing the inputs can overflow
+// the input type
+template <typename T>
+struct accumulator_for;
+
+template <>
+struct accumulator_for<int8_t> {
+    using type = __int128;
+};
+
+template <>
+struct accumulator_for<int16_t> {
+    using type = __int128;
+};
+
+template <>
+struct accumulator_for<int32_t> {
+    using type = __int128;
+};
+
+template <>
+struct accumulator_for<int64_t> {
+    using type = __int128;
+};
+
+template <>
+struct accumulator_for<float> {
+    using type = float;
+};
+
+template <>
+struct accumulator_for<double> {
+    using type = double;
+};
+
+template <>
+struct accumulator_for<boost::multiprecision::cpp_int> {
+    using type = boost::multiprecision::cpp_int;
+};
+
+template <>
+struct accumulator_for<big_decimal> {
+    using type = big_decimal;
+};
+
 template <typename Type>
 class impl_avg_function_for final : public aggregate_function::aggregate {
-   Type _sum{};
+   typename accumulator_for<Type>::type _sum{};
    int64_t _count = 0;
 public:
     virtual void reset() override {
