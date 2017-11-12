@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "utils/big_decimal.hh"
 #include "aggregate_function.hh"
 #include "native_aggregate_function.hh"
 
@@ -112,6 +113,22 @@ make_sum_function() {
 }
 
 template <typename Type>
+class impl_div_for_avg {
+public:
+    static Type div(const Type& x, const int64_t y) {
+        return x/y;
+    }
+};
+
+template <>
+class impl_div_for_avg<big_decimal> {
+public:
+    static big_decimal div(const big_decimal& x, const int64_t y) {
+        return x.div(y, big_decimal::rounding_mode::HALF_EVEN);
+    }
+};
+
+template <typename Type>
 class impl_avg_function_for final : public aggregate_function::aggregate {
    Type _sum{};
    int64_t _count = 0;
@@ -121,9 +138,9 @@ public:
         _count = 0;
     }
     virtual opt_bytes compute(cql_serialization_format sf) override {
-        Type ret = 0;
+        Type ret{};
         if (_count) {
-            ret = _sum / _count;
+            ret = impl_div_for_avg<Type>::div(_sum, _count);
         }
         return data_type_for<Type>()->decompose(ret);
     }

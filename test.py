@@ -91,6 +91,8 @@ boost_tests = [
     'duration_test',
     'loading_cache_test',
     'castas_fcts_test',
+    'big_decimal_test',
+    'aggregate_fcts_test',
 ]
 
 other_tests = [

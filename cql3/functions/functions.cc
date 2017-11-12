@@ -59,6 +59,14 @@ functions::init() {
         declare(make_to_blob_function(type->get_type()));
         declare(make_from_blob_function(type->get_type()));
     }
+    declare(aggregate_fcts::make_count_function<int8_t>());
+    declare(aggregate_fcts::make_max_function<int8_t>());
+    declare(aggregate_fcts::make_min_function<int8_t>());
+
+    declare(aggregate_fcts::make_count_function<int16_t>());
+    declare(aggregate_fcts::make_max_function<int16_t>());
+    declare(aggregate_fcts::make_min_function<int16_t>());
+
     declare(aggregate_fcts::make_count_function<int32_t>());
     declare(aggregate_fcts::make_max_function<int32_t>());
     declare(aggregate_fcts::make_min_function<int32_t>());
@@ -66,6 +74,14 @@ functions::init() {
     declare(aggregate_fcts::make_count_function<int64_t>());
     declare(aggregate_fcts::make_max_function<int64_t>());
     declare(aggregate_fcts::make_min_function<int64_t>());
+
+    declare(aggregate_fcts::make_count_function<boost::multiprecision::cpp_int>());
+    declare(aggregate_fcts::make_max_function<boost::multiprecision::cpp_int>());
+    declare(aggregate_fcts::make_min_function<boost::multiprecision::cpp_int>());
+
+    declare(aggregate_fcts::make_count_function<big_decimal>());
+    declare(aggregate_fcts::make_max_function<big_decimal>());
+    declare(aggregate_fcts::make_min_function<big_decimal>());
 
     declare(aggregate_fcts::make_count_function<float>());
     declare(aggregate_fcts::make_max_function<float>());
@@ -88,22 +104,22 @@ functions::init() {
 
     declare(make_varchar_as_blob_fct());
     declare(make_blob_as_varchar_fct());
+    declare(aggregate_fcts::make_sum_function<int8_t>());
+    declare(aggregate_fcts::make_sum_function<int16_t>());
     declare(aggregate_fcts::make_sum_function<int32_t>());
     declare(aggregate_fcts::make_sum_function<int64_t>());
     declare(aggregate_fcts::make_sum_function<float>());
     declare(aggregate_fcts::make_sum_function<double>());
-#if 0
-    declare(AggregateFcts.sumFunctionForDecimal);
-    declare(AggregateFcts.sumFunctionForVarint);
-#endif
+    declare(aggregate_fcts::make_sum_function<boost::multiprecision::cpp_int>());
+    declare(aggregate_fcts::make_sum_function<big_decimal>());
+    declare(aggregate_fcts::make_avg_function<int8_t>());
+    declare(aggregate_fcts::make_avg_function<int16_t>());
     declare(aggregate_fcts::make_avg_function<int32_t>());
     declare(aggregate_fcts::make_avg_function<int64_t>());
     declare(aggregate_fcts::make_avg_function<float>());
     declare(aggregate_fcts::make_avg_function<double>());
-#if 0
-    declare(AggregateFcts.avgFunctionForVarint);
-    declare(AggregateFcts.avgFunctionForDecimal);
-#endif
+    declare(aggregate_fcts::make_avg_function<boost::multiprecision::cpp_int>());
+    declare(aggregate_fcts::make_avg_function<big_decimal>());
 
     // also needed for smp:
 #if 0
