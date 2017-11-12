@@ -249,6 +249,7 @@ scylla_tests = [
     'tests/loading_cache_test',
     'tests/castas_fcts_test',
     'tests/big_decimal_test',
+    'tests/aggregate_fcts_test',
 ]
 
 apps = [
