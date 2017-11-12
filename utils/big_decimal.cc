@@ -20,6 +20,7 @@
  */
 
 #include "big_decimal.hh"
+#include <cassert>
 #include "marshal_exception.hh"
 
 #include <regex>
@@ -93,4 +94,50 @@ int big_decimal::compare(const big_decimal& other) const
     boost::multiprecision::cpp_int x = _unscaled_value * boost::multiprecision::pow(rescale, max_scale - _scale);
     boost::multiprecision::cpp_int y = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
     return x == y ? 0 : x < y ? -1 : 1;
+}
+
+big_decimal& big_decimal::operator+=(const big_decimal& other)
+{
+    if (_scale == other._scale) {
+        _unscaled_value += other._unscaled_value;
+    } else {
+        boost::multiprecision::cpp_int rescale(10);
+        auto max_scale = std::max(_scale, other._scale);
+        boost::multiprecision::cpp_int u = _unscaled_value * boost::multiprecision::pow(rescale,  max_scale - _scale);
+        boost::multiprecision::cpp_int v = other._unscaled_value * boost::multiprecision::pow(rescale, max_scale - other._scale);
+        _unscaled_value = u + v;
+        _scale = max_scale;
+    }
+    return *this;
+}
+
+big_decimal big_decimal::div(const ::uint64_t y, const rounding_mode mode) const
+{
+    if (mode != rounding_mode::HALF_EVEN) {
+        assert(0);
+    }
+
+    // Implementation of Division with Half to Even (aka Bankers) Rounding
+    const boost::multiprecision::cpp_int sign = _unscaled_value >= 0 ? +1 : -1;
+    const boost::multiprecision::cpp_int a = sign * _unscaled_value;
+    const uint64_t r = uint64_t(a % y);
+
+    boost::multiprecision::cpp_int q = a / y;
+
+    /*
+     * Value r/y is fractional part of (*this)/y that is used to determine
+     *   the direction of rounding.
+     * For rounding one has to consider r/y cmp 1/2 or equivalently:
+     *   2*r cmp y.
+     */
+    if (2*r < y) {
+        /* Number has its final value */
+    } else if (2*r > y) {
+        q += 1;
+    } else if (q % 2 == 1) {
+        /* Change to closest even number */
+        q += 1;
+    }
+
+    return big_decimal(_scale, sign * q);
 }
