@@ -262,6 +262,7 @@ public:
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
+    mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
     const schema_ptr& schema() const { return _impl->_schema; }
 };
 
