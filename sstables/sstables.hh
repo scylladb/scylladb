@@ -99,34 +99,6 @@ public:
     data_consume_context& operator=(data_consume_context&&) noexcept;
 };
 
-// mutation_reader is an object returned by sstable::read_rows() et al. which
-// allows getting each sstable row in sequence, in mutation format.
-//
-// The read() method reads the next mutation, returning a disengaged optional
-// on EOF. As usual for future-returning functions, a caller which starts a
-// read() MUST ensure that the mutation_reader object continues to live until
-// the returned future is fulfilled.  Moreover, the sstable whose read_rows()
-// method was used to open this mutation_reader must also live between the
-// time read() is called and its future ends.
-// As soon as the future returned by read() completes, the object may safely
-// be deleted. In other words, when the read() future is fulfilled, we can
-// be sure there are no background tasks still scheduled.
-class mutation_reader {
-    class impl;
-    std::unique_ptr<impl> _pimpl;
-    // This object can only be constructed by sstable::read_rows() et al.
-    mutation_reader(std::unique_ptr<impl>);
-    friend class sstable;
-public:
-    future<streamed_mutation_opt> read();
-    future<> fast_forward_to(const dht::partition_range&);
-    // Define (as defaults) the destructor and move operations in the source
-    // file, so here we don't need to know the incomplete impl type.
-    ~mutation_reader();
-    mutation_reader(mutation_reader&&);
-    mutation_reader& operator=(mutation_reader&&);
-};
-
 class key;
 class sstable_writer;
 struct foreign_sstable_open_info;
@@ -321,7 +293,7 @@ public:
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        ::mutation_reader::forwarding fwd_mr = ::mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
     mutation_reader read_range_rows(schema_ptr schema, const dht::partition_range& range) {
         auto& full_slice = schema->full_slice();
@@ -347,7 +319,7 @@ public:
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();
 
-    future<> write_components(::mutation_reader mr,
+    future<> write_components(mutation_reader mr,
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,
@@ -753,7 +725,6 @@ public:
     friend class components_writer;
     friend class sstable_writer;
     friend class index_reader;
-    friend class mutation_reader::impl;
 };
 
 struct entry_descriptor {

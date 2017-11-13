@@ -1044,12 +1044,12 @@ sstables::deletion_time promoted_index_view::get_deletion_time() const {
 }
 
 
-class mutation_reader::impl {
+class sstable_mutation_reader : public mutation_reader::impl {
 private:
     lw_shared_ptr<sstable_data_source> _ds;
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
 public:
-    impl(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread, uint64_t last_end,
+    sstable_mutation_reader(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread, uint64_t last_end,
          const io_priority_class &pc,
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd)
@@ -1058,7 +1058,7 @@ public:
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), std::move(toread), last_end);
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
-    impl(shared_sstable sst, schema_ptr schema,
+    sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc,
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd)
@@ -1067,14 +1067,14 @@ public:
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
-    impl(shared_sstable sst,
+    sstable_mutation_reader(shared_sstable sst,
          schema_ptr schema,
          const dht::partition_range& pr,
          const query::partition_slice& slice,
          const io_priority_class& pc,
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd,
-         ::mutation_reader::forwarding fwd_mr)
+         mutation_reader::forwarding fwd_mr)
         : _get_data_source([this, pr, sst = std::move(sst), s = std::move(schema), &pc, &slice, resource_tracker = std::move(resource_tracker), fwd, fwd_mr] () mutable {
             auto lh_index = sst->get_index_reader(pc); // lh = left hand
             auto rh_index = sst->get_index_reader(pc);
@@ -1091,10 +1091,10 @@ public:
         }) { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
-    impl(impl&&) = delete;
-    impl(const impl&) = delete;
+    sstable_mutation_reader(sstable_mutation_reader&&) = delete;
+    sstable_mutation_reader(const sstable_mutation_reader&) = delete;
 
-    future<streamed_mutation_opt> read() {
+    future<streamed_mutation_opt> operator()() {
         if (_ds) {
             return _ds->read_next_partition();
         }
@@ -1231,20 +1231,8 @@ future<streamed_mutation_opt> sstable_data_source::read_from_datafile() {
     });
 }
 
-mutation_reader::~mutation_reader() = default;
-mutation_reader::mutation_reader(mutation_reader&&) = default;
-mutation_reader& mutation_reader::operator=(mutation_reader&&) = default;
-mutation_reader::mutation_reader(std::unique_ptr<impl> p)
-    : _pimpl(std::move(p)) { }
-future<streamed_mutation_opt> mutation_reader::read() {
-    return _pimpl->read();
-}
-future<> mutation_reader::fast_forward_to(const dht::partition_range& pr) {
-    return _pimpl->fast_forward_to(pr);
-}
-
 mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
-    return std::make_unique<mutation_reader::impl>(shared_from_this(), schema, pc, no_resource_tracking(), fwd);
+    return make_mutation_reader<sstable_mutation_reader>(shared_from_this(), schema, pc, no_resource_tracking(), fwd);
 }
 
 static
@@ -1295,8 +1283,8 @@ sstable::read_range_rows(schema_ptr schema,
                          const io_priority_class& pc,
                          reader_resource_tracker resource_tracker,
                          streamed_mutation::forwarding fwd,
-                         ::mutation_reader::forwarding fwd_mr) {
-    return std::make_unique<mutation_reader::impl>(
+                         mutation_reader::forwarding fwd_mr) {
+    return make_mutation_reader<sstable_mutation_reader>(
         shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr);
 }
 

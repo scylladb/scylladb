@@ -433,10 +433,10 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
-                    ::mutation_reader::forwarding::yes));
+                    mutation_reader::forwarding::yes));
         }
 
-        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), ::mutation_reader::forwarding::yes);
+        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), mutation_reader::forwarding::yes);
 
         auto incremental_reader = make_range_sstable_reader(
                 s.schema(),
@@ -447,7 +447,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                 no_resource_tracking(),
                 nullptr,
                 streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::yes);
+                mutation_reader::forwarding::yes);
 
         // merge c[0] with d[1]
         i = 2;

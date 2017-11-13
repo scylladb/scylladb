@@ -320,7 +320,7 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
                 [sstp, mutations = std::move(mutations), &expected, expected_size, count, stop] () mutable {
-                    return mutations.read().then([&expected, expected_size, count, stop] (streamed_mutation_opt mutation) mutable {
+                    return mutations().then([&expected, expected_size, count, stop] (streamed_mutation_opt mutation) mutable {
                         if (mutation) {
                             BOOST_REQUIRE(*count < expected_size);
                             BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mutation->key().explode());
@@ -422,7 +422,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
         auto mr = sst->read_rows(s);
-        auto sm = mr.read().get0();
+        auto sm = mr().get0();
         auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
         auto& rts = mut->partition().row_tombstones();
@@ -501,7 +501,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 SEASTAR_TEST_CASE(broken_ranges_collection) {
     return reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<::mutation_reader>(sstp->as_mutation_source()(s));
+        auto reader = make_lw_shared<mutation_reader>(sstp->as_mutation_source()(s));
         return repeat([s, reader] {
             return (*reader)().then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -571,7 +571,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([] (auto sm) {
+                return reader().then([] (auto sm) {
                     return mutation_from_streamed_mutation(std::move(sm));
                 }).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -636,7 +636,7 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([] (auto sm) {
+                return reader().then([] (auto sm) {
                     return mutation_from_streamed_mutation(std::move(sm));
                 }).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -715,7 +715,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
         auto s = tombstone_overlap_schema2();
         return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader.read().then([] (auto sm) {
+                return reader().then([] (auto sm) {
                     return mutation_from_streamed_mutation(std::move(sm));
                 }).then([s] (mutation_opt mut) {
                     if (!mut) {
@@ -798,7 +798,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
         auto mr = sst->read_rows(s);
-        auto sm = mr.read().get0();
+        auto sm = mr().get0();
         auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
         BOOST_REQUIRE(bool(mut));
     });

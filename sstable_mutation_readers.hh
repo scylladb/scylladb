@@ -27,7 +27,7 @@
 
 class sstable_range_wrapping_reader final : public mutation_reader::impl {
     sstables::shared_sstable _sst;
-    sstables::mutation_reader _smr;
+    mutation_reader _smr;
 public:
     sstable_range_wrapping_reader(sstables::shared_sstable sst,
             schema_ptr s,
@@ -41,7 +41,7 @@ public:
         , _smr(sst->read_range_rows(std::move(s), pr, slice, pc, std::move(resource_tracker), fwd, fwd_mr)) {
     }
     virtual future<streamed_mutation_opt> operator()() override {
-        return _smr.read();
+        return _smr();
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         return _smr.fast_forward_to(pr);

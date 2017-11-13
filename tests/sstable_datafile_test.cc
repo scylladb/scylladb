@@ -999,12 +999,12 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(schema_ptr s,
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
-static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
+static mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
     return sst->as_mutation_source()(s);
 
 }
 
-static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
+static mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
     return sst->as_mutation_source()(s, pr);
 }
 
@@ -1314,7 +1314,7 @@ static future<> check_compacted_sstables(unsigned long generation, std::vector<u
         auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<partition_key>>();
 
-        return do_with(std::move(reader), [generations, s, keys] (::mutation_reader& reader) {
+        return do_with(std::move(reader), [generations, s, keys] (mutation_reader& reader) {
             return do_for_each(*generations, [&reader, s, keys] (unsigned long generation) mutable {
                 return reader().then([generation, keys] (streamed_mutation_opt m) {
                     BOOST_REQUIRE(m);
@@ -3572,7 +3572,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 
 // Must be run in a seastar thread
 static
-shared_sstable make_sstable(sstring path, schema_ptr s, ::mutation_reader rd, sstable_writer_config cfg) {
+shared_sstable make_sstable(sstring path, schema_ptr s, mutation_reader rd, sstable_writer_config cfg) {
     auto sst = make_sstable(s, path, 1, sstables::sstable::version_types::ka, big);
     sst->write_components(std::move(rd), 1, s, cfg).get();
     sst->load().get();
@@ -3632,7 +3632,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
                 .with_range(query::clustering_range::make_singular(ck2))
                 .with_range(query::clustering_range::make_singular(ck3))
                 .build();
-            ::mutation_reader rd = ms(table.schema(), query::full_partition_range, slice);
+            mutation_reader rd = ms(table.schema(), query::full_partition_range, slice);
             streamed_mutation_opt smo = rd().get0();
             BOOST_REQUIRE(bool(smo));
             assert_that_stream(std::move(*smo)).has_monotonic_positions();
@@ -3690,7 +3690,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
             default_priority_class(),
             nullptr,
             streamed_mutation::forwarding::yes,
-            ::mutation_reader::forwarding::yes);
+            mutation_reader::forwarding::yes);
 
         // Consume first partition completely so that index is stale
         {
