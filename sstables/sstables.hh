@@ -56,6 +56,7 @@
 #include "sstables/shared_index_lists.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
+#include "flat_mutation_reader.hh"
 
 namespace seastar {
 class thread_scheduling_group;
@@ -300,6 +301,21 @@ public:
         return read_range_rows(std::move(schema), range, full_slice);
     }
 
+    // Returns a mutation_reader for given range of partitions
+    flat_mutation_reader read_range_rows_flat(
+        schema_ptr schema,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+
+    flat_mutation_reader read_range_rows_flat(schema_ptr schema, const dht::partition_range& range) {
+        auto& full_slice = schema->full_slice();
+        return read_range_rows_flat(std::move(schema), range, full_slice);
+    }
+
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
     // This function is implemented efficiently - doing buffered, sequential
@@ -314,6 +330,10 @@ public:
     mutation_reader read_rows(schema_ptr schema,
         const io_priority_class& pc = default_priority_class(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+    flat_mutation_reader read_rows_flat(schema_ptr schema,
+                              const io_priority_class& pc = default_priority_class(),
+                              streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.

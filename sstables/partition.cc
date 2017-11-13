@@ -1235,6 +1235,10 @@ mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& p
     return make_mutation_reader<sstable_mutation_reader>(shared_from_this(), schema, pc, no_resource_tracking(), fwd);
 }
 
+flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
+    return flat_mutation_reader_from_mutation_reader(schema, read_rows(schema, pc, fwd), fwd);
+}
+
 static
 future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
     auto& ranges = slice.row_ranges(s, *key.key());
@@ -1286,6 +1290,19 @@ sstable::read_range_rows(schema_ptr schema,
                          mutation_reader::forwarding fwd_mr) {
     return make_mutation_reader<sstable_mutation_reader>(
         shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr);
+}
+
+flat_mutation_reader
+sstable::read_range_rows_flat(schema_ptr schema,
+                         const dht::partition_range& range,
+                         const query::partition_slice& slice,
+                         const io_priority_class& pc,
+                         reader_resource_tracker resource_tracker,
+                         streamed_mutation::forwarding fwd,
+                         mutation_reader::forwarding fwd_mr) {
+    return flat_mutation_reader_from_mutation_reader(schema,
+                                                     read_range_rows(schema, range, slice, pc, std::move(resource_tracker), fwd, fwd_mr),
+                                                     fwd);
 }
 
 }
