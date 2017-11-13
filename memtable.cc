@@ -22,7 +22,6 @@
 #include "memtable.hh"
 #include "database.hh"
 #include "frozen_mutation.hh"
-#include "sstable_mutation_readers.hh"
 #include "stdx.hh"
 #include "partition_snapshot_reader.hh"
 
