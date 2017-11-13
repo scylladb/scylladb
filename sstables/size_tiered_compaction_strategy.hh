@@ -162,7 +162,9 @@ public:
         return compaction_strategy_type::size_tiered;
     }
 
-    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(const std::vector<sstables::shared_sstable>&);
+    // Return the most interesting bucket for a set of sstables
+    static std::vector<sstables::shared_sstable>
+    most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates);
 };
 
 inline std::vector<std::pair<sstables::shared_sstable, uint64_t>>
@@ -326,6 +328,18 @@ inline int64_t size_tiered_compaction_strategy::estimated_pending_compactions(co
         }
     }
     return n;
+}
+
+inline std::vector<sstables::shared_sstable>
+size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates) {
+    size_tiered_compaction_strategy cs;
+
+    auto buckets = cs.get_buckets(candidates);
+
+    std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
+        DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
+
+    return most_interesting;
 }
 
 }

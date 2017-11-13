@@ -43,6 +43,7 @@
 
 #include "sstables.hh"
 #include "compaction.hh"
+#include "size_tiered_compaction_strategy.hh"
 #include "range.hh"
 #include "log.hh"
 #include <boost/range/algorithm/partial_sort.hpp>
@@ -225,7 +226,7 @@ public:
             // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
-                auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
+                auto most_interesting = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0));
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
                     return sstables::compaction_descriptor(std::move(most_interesting));
@@ -419,7 +420,7 @@ private:
         } else {
             // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
-            candidates = size_tiered_most_interesting_bucket(get_level(0));
+            candidates = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0));
         }
         return { std::move(candidates), can_promote };
     }

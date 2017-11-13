@@ -245,7 +245,7 @@ public:
 
             if (bucket.size() >= size_t(min_threshold) && key >= now) {
                 // If we're in the newest bucket, we'll use STCS to prioritize sstables
-                auto stcs_interesting_bucket = size_tiered_most_interesting_bucket(bucket);
+                auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket);
 
                 // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
                 if (!stcs_interesting_bucket.empty()) {
