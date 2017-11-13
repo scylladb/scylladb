@@ -62,8 +62,7 @@ public:
     // from streamed_mutation::forwarding - the former is about skipping to
     // a different partition range, while the latter is about skipping
     // inside a large partition.
-    class forwarding_tag;
-    using forwarding = bool_class<forwarding_tag>;
+    using forwarding = flat_mutation_reader::partition_range_forwarding;
 
     class impl {
     public:

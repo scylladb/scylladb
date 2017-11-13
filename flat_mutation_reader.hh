@@ -200,6 +200,10 @@ public:
 private:
     std::unique_ptr<impl> _impl;
 public:
+    // Documented in mutation_reader::forwarding in mutation_reader.hh.
+    class partition_range_forwarding_tag;
+    using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
+
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
 
     future<mutation_fragment_opt> operator()() {
@@ -280,3 +284,5 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m);
 flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 
 flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+
