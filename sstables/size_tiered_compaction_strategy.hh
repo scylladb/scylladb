@@ -164,7 +164,7 @@ public:
 
     // Return the most interesting bucket for a set of sstables
     static std::vector<sstables::shared_sstable>
-    most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates);
+    most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold);
 };
 
 inline std::vector<std::pair<sstables::shared_sstable, uint64_t>>
@@ -331,13 +331,13 @@ inline int64_t size_tiered_compaction_strategy::estimated_pending_compactions(co
 }
 
 inline std::vector<sstables::shared_sstable>
-size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates) {
+size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold) {
     size_tiered_compaction_strategy cs;
 
     auto buckets = cs.get_buckets(candidates);
 
     std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
-        DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
+        min_threshold, max_threshold);
 
     return most_interesting;
 }

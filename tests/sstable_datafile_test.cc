@@ -1259,7 +1259,9 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
 
         if (strategy == compaction_strategy_type::size_tiered) {
             // Calling function that will return a list of sstables to compact based on size-tiered strategy.
-            auto sstables_to_compact = sstables::size_tiered_compaction_strategy::most_interesting_bucket(*sstables);
+            int min_threshold = cf->schema()->min_compaction_threshold();
+            int max_threshold = cf->schema()->max_compaction_threshold();
+            auto sstables_to_compact = sstables::size_tiered_compaction_strategy::most_interesting_bucket(*sstables, min_threshold, max_threshold);
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
             return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable,
