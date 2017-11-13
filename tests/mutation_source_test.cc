@@ -1399,6 +1399,22 @@ public:
 
         return m;
     }
+
+    std::vector<mutation> operator()(size_t n) {
+        std::vector<mutation> mutations;
+        for (size_t i = 0; i < n; i++) {
+            auto key_blob = bytes(reinterpret_cast<const int8_t*>(&i), sizeof(i));
+            auto pkey = partition_key::from_single_value(*_schema, key_blob);
+            auto dkey = dht::global_partitioner().decorate_key(*_schema, std::move(pkey));
+
+            auto m = operator()();
+            mutations.emplace_back(_schema, std::move(dkey), std::move(m.partition()));
+        }
+        boost::sort(mutations, [&] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*_schema, b.decorated_key());
+        });
+        return mutations;
+    }
 };
 
 random_mutation_generator::~random_mutation_generator() {}
@@ -1409,6 +1425,10 @@ random_mutation_generator::random_mutation_generator(generate_counters counters)
 
 mutation random_mutation_generator::operator()() {
     return (*_impl)();
+}
+
+std::vector<mutation> random_mutation_generator::operator()(size_t n) {
+    return (*_impl)(n);
 }
 
 schema_ptr random_mutation_generator::schema() const {
