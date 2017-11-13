@@ -77,7 +77,7 @@ integrity_checked_file_impl::write_dma(uint64_t pos, const void* buffer, size_t 
             auto mismatch_off = r.first - wbuf.get();
 
             sstlog.error("integrity check failed for {}, stage: after write verification, write: {} bytes to offset {}, " \
-                "reason: buffer was modified after write finished, mismatch at byte {}:\n" \
+                "reason: buffer was modified during write call, mismatch at byte {}:\n" \
                 " unmodified sample:\t{}\n" \
                 " modified sample:  \t{}",
                 _fname, len, pos, mismatch_off,
