@@ -154,6 +154,12 @@ public:
         return keys;
     }
 
+    static std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
+        return boost::copy_range<std::vector<dht::ring_position>>(keys | boost::adaptors::transformed([] (const dht::decorated_key& key) {
+            return dht::ring_position(key);
+        }));
+    }
+
     // Returns n clustering keys in their natural order
     std::vector<clustering_key> make_ckeys(int n) {
         std::vector<clustering_key> keys;
