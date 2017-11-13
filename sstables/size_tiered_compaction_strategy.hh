@@ -21,6 +21,13 @@
 
 #pragma once
 
+#include "compaction_strategy_impl.hh"
+#include "compaction.hh"
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+
 namespace sstables {
 
 class size_tiered_compaction_strategy_options {
