@@ -588,7 +588,7 @@ public:
     //    reader and a _bounded_ amount of writes which arrive later.
     //  - Does not populate the cache
     // Requires ranges to be sorted and disjoint.
-    mutation_reader make_streaming_reader(schema_ptr schema,
+    flat_mutation_reader make_streaming_reader(schema_ptr schema,
             const dht::partition_range_vector& ranges) const;
 
     mutation_source as_mutation_source() const;

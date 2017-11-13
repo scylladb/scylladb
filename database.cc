@@ -690,7 +690,7 @@ column_family::make_reader(schema_ptr s,
     return make_combined_reader(std::move(readers), fwd_mr);
 }
 
-mutation_reader
+flat_mutation_reader
 column_family::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
     auto& slice = s->full_slice();
@@ -707,7 +707,7 @@ column_family::make_streaming_reader(schema_ptr s,
         return make_combined_reader(std::move(readers), fwd_mr);
     });
 
-    return make_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 }
 
 future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, timeout_clock::time_point timeout) {

@@ -670,8 +670,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const dht::partition_range_vector& prs, repair_checksum hash_version) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     auto reader = cf.make_streaming_reader(cf.schema(), prs);
-    auto fmr = flat_mutation_reader_from_mutation_reader(cf.schema(), std::move(reader), streamed_mutation::forwarding::no);
-    return partition_checksum::compute(std::move(fmr), hash_version);
+    return partition_checksum::compute(std::move(reader), hash_version);
 }
 
 // It is counter-productive to allow a large number of range checksum

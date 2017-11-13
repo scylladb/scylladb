@@ -87,8 +87,7 @@ struct send_info {
         , dst_cpu_id(dst_cpu_id_)
         , reader([&] {
             auto& cf = db.find_column_family(cf_id);
-            return flat_mutation_reader_from_mutation_reader(cf.schema(), cf.make_streaming_reader(cf.schema(), prs),
-                                                             streamed_mutation::forwarding::no);
+            return cf.make_streaming_reader(cf.schema(), prs);
         }())
     { }
 };
