@@ -319,39 +319,6 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     });
 }
 
-SEASTAR_TEST_CASE(test_multi_range_reader) {
-        return seastar::async([] {
-            auto s = make_schema();
-
-            auto keys = generate_keys(s, 10);
-            auto ring = to_ring_positions(keys);
-
-            auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([s] (auto& key) {
-                return make_mutation_with_key(s, key);
-            }));
-
-            auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
-                return make_reader_returning_many(std::move(ms), range);
-            });
-
-            auto ranges = dht::partition_range_vector {
-                    dht::partition_range::make(ring[1], ring[2]),
-                    dht::partition_range::make_singular(ring[4]),
-                    dht::partition_range::make(ring[6], ring[8]),
-            };
-            auto fft_range = dht::partition_range::make_starting_with(ring[9]);
-
-            assert_that(make_multi_range_reader(s, std::move(source), ranges, s->full_slice()))
-                    .produces(keys[1])
-                    .produces(keys[2])
-                    .produces(keys[4])
-                    .produces(keys[6])
-                    .fast_forward_to(fft_range)
-                    .produces(keys[9])
-                    .produces_end_of_stream();
-        });
-}
-
 struct sst_factory {
     schema_ptr s;
     sstring path;
