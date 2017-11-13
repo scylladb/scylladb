@@ -50,6 +50,8 @@ using namespace apache::thrift::protocol;
 using namespace apache::thrift::async;
 using namespace ::cassandra;
 
+using namespace std::chrono_literals;
+
 class thrift_stats {
     seastar::metrics::metric_groups _metrics;
 public:
@@ -68,8 +70,10 @@ thrift_server::~thrift_server() {
 }
 
 future<> thrift_server::stop() {
+    auto f = _stop_gate.close();
+    std::for_each(_listeners.begin(), _listeners.end(), std::mem_fn(&server_socket::abort_accept));
     std::for_each(_connections_list.begin(), _connections_list.end(), std::mem_fn(&connection::shutdown));
-    return make_ready_future<>();
+    return f;
 }
 
 struct handler_deleter {
@@ -101,8 +105,27 @@ thrift_server::connection::connection(thrift_server& server, connected_socket&& 
 }
 
 thrift_server::connection::~connection() {
-    --_server._current_connections;
-    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    if (is_linked()) {
+        --_server._current_connections;
+        _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    }
+}
+
+thrift_server::connection::connection(connection&& other)
+        : _server(other._server)
+        , _fd(std::move(other._fd))
+        , _read_buf(std::move(other._read_buf))
+        , _write_buf(std::move(other._write_buf))
+        , _transport(std::move(other._transport))
+        , _input(std::move(other._input))
+        , _output(std::move(other._output))
+        , _in_proto(std::move(other._in_proto))
+        , _out_proto(std::move(other._out_proto))
+        , _processor(std::move(other._processor)) {
+    if (other.is_linked()) {
+        boost::intrusive::list<connection>::node_algorithms::init(this_ptr());
+        boost::intrusive::list<connection>::node_algorithms::swap_nodes(other.this_ptr(), this_ptr());
+    }
 }
 
 future<>
@@ -190,27 +213,60 @@ thrift_server::listen(ipv4_addr addr, bool keepalive) {
 
 void
 thrift_server::do_accepts(int which, bool keepalive) {
-    _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
-        fd.set_nodelay(true);
-        fd.set_keepalive(keepalive);
-        auto conn = new connection(*this, std::move(fd), addr);
-        conn->process().then_wrapped([this, conn] (future<> f) {
-            conn->shutdown();
-            delete conn;
-            try {
-                f.get();
-            } catch (std::exception& ex) {
-                tlogger.debug("request error {}", ex.what());
-            }
+    with_gate(_stop_gate, [&, this] {
+        return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
+            fd.set_nodelay(true);
+            fd.set_keepalive(keepalive);
+            with_gate(_stop_gate, [&, this] {
+                return do_with(connection(*this, std::move(fd), addr), [this] (auto& conn) {
+                    return conn.process().then_wrapped([this, &conn] (future<> f) {
+                        conn.shutdown();
+                        try {
+                            f.get();
+                        } catch (std::exception& ex) {
+                            tlogger.debug("request error {}", ex.what());
+                        }
+                    });
+                });
+            });
+            do_accepts(which, keepalive);
         });
-        do_accepts(which, keepalive);
-    }).then_wrapped([] (future<> f) {
-        try {
-            f.get();
-        } catch (std::exception& ex) {
-            std::cout << "accept failed: " << ex.what() << "\n";
-        }
+    }).handle_exception([this, which, keepalive] (auto ex) {
+        tlogger.debug("accept failed {}", ex);
+        maybe_retry_accept(which, keepalive, std::move(ex));
     });
+}
+
+void thrift_server::maybe_retry_accept(int which, bool keepalive, std::exception_ptr ex) {
+    auto retry = [this, which, keepalive] {
+        tlogger.debug("retrying accept after failure");
+        do_accepts(which, keepalive);
+    };
+    auto retry_with_backoff = [&] {
+        // FIXME: Consider using exponential backoff
+        sleep(1ms).then([retry = std::move(retry)] { retry(); });
+    };
+    try {
+        std::rethrow_exception(std::move(ex));
+    } catch (const std::system_error& e) {
+        switch (e.code().value()) {
+            // FIXME: Don't retry for other fatal errors
+            case EBADF:
+                break;
+            case ENFILE:
+            case EMFILE:
+            case ENOMEM:
+                retry_with_backoff();
+            default:
+                retry();
+        }
+    } catch (const std::bad_alloc&) {
+        retry_with_backoff();
+    } catch (const seastar::gate_closed_exception&) {
+        return;
+    } catch (...) {
+        retry();
+    }
 }
 
 uint64_t
