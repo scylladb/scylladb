@@ -3179,8 +3179,7 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         new_bucket = time_window_compaction_strategy::newest_bucket(buckets, 2, 32, duration_cast<seconds>(hours(1)),
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now), stcs_options);
         // incoming bucket should be accepted when it is larger than the min threshold SSTables
-        // FIXME: enable check below once twcs passes min threshold to size tiered.
-        // BOOST_REQUIRE(!new_bucket.empty());
+        BOOST_REQUIRE(!new_bucket.empty());
 
         // And 2 into the second bucket (1 hour back)
         for (api::timestamp_type i = 3; i < 5; i++) {
