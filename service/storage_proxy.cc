@@ -346,6 +346,7 @@ public:
                 _pending_endpoints += pending_for_dc;
             }
         }
+        _total_block_for += _pending_endpoints;
     }
 };
 
