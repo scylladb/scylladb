@@ -38,6 +38,8 @@
 
 #include "disk-error-handler.hh"
 #include "tests/test_services.hh"
+#include "tests/simple_schema.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -441,5 +443,43 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
 
         test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
         test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    });
+}
+
+SEASTAR_TEST_CASE(test_multi_range_reader) {
+    return seastar::async([] {
+        simple_schema s;
+
+        auto keys = s.make_pkeys(10);
+        auto ring = s.to_ring_positions(keys);
+
+        auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&s] (auto& key) {
+            return mutation(key, s.schema());
+        }));
+
+        auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
+            return make_reader_returning_many(std::move(ms), range);
+        });
+
+        auto ranges = dht::partition_range_vector {
+                dht::partition_range::make(ring[1], ring[2]),
+                dht::partition_range::make_singular(ring[4]),
+                dht::partition_range::make(ring[6], ring[8]),
+        };
+        auto fft_range = dht::partition_range::make_starting_with(ring[9]);
+
+        assert_that(make_flat_multi_range_reader(s.schema(), std::move(source), ranges, s.schema()->full_slice()))
+                .produces_partition_start(keys[1])
+                .produces_partition_end()
+                .produces_partition_start(keys[2])
+                .produces_partition_end()
+                .produces_partition_start(keys[4])
+                .produces_partition_end()
+                .produces_partition_start(keys[6])
+                .produces_partition_end()
+                .fast_forward_to(fft_range)
+                .produces_partition_start(keys[9])
+                .produces_partition_end()
+                .produces_end_of_stream();
     });
 }
