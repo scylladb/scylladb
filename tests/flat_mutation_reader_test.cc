@@ -37,6 +37,9 @@
 #include "sstable_test.hh"
 
 #include "disk-error-handler.hh"
+#include "tests/test_services.hh"
+#include "tests/simple_schema.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -292,5 +295,191 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 test(m2, m);
             }
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_fragmenting_and_freezing) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        for_each_mutation([&] (const mutation& m) {
+            std::vector<frozen_mutation> fms;
+
+            fragment_and_freeze(flat_mutation_reader_from_mutations({ mutation(m) }), [&] (auto fm, bool frag) {
+                BOOST_REQUIRE(!frag);
+                fms.emplace_back(std::move(fm));
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            }, std::numeric_limits<size_t>::max()).get0();
+
+            BOOST_REQUIRE_EQUAL(fms.size(), 1);
+
+            auto m1 = fms.back().unfreeze(m.schema());
+            BOOST_REQUIRE_EQUAL(m, m1);
+
+            fms.clear();
+
+            stdx::optional<bool> fragmented;
+            fragment_and_freeze(flat_mutation_reader_from_mutations({ mutation(m) }), [&] (auto fm, bool frag) {
+                BOOST_REQUIRE(!fragmented || *fragmented == frag);
+                *fragmented = frag;
+                fms.emplace_back(std::move(fm));
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            }, 1).get0();
+
+            auto&& rows = m.partition().non_dummy_rows();
+            auto expected_fragments = std::distance(rows.begin(), rows.end())
+                                      + m.partition().row_tombstones().size()
+                                      + !m.partition().static_row().empty();
+            BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
+            BOOST_REQUIRE(expected_fragments < 2 || *fragmented);
+
+            auto m2 = fms.back().unfreeze(m.schema());
+            fms.pop_back();
+            while (!fms.empty()) {
+                m2.partition().apply(*m.schema(), fms.back().partition(), *m.schema());
+                fms.pop_back();
+            }
+            BOOST_REQUIRE_EQUAL(m, m2);
+        });
+
+        auto test_random_streams = [] (random_mutation_generator&& gen) {
+            for (auto i = 0; i < 4; i++) {
+                auto muts = gen(4);
+                auto s = muts[0].schema();
+
+                std::vector<frozen_mutation> frozen;
+
+                // Freeze all
+                fragment_and_freeze(flat_mutation_reader_from_mutations(muts), [&] (auto fm, bool frag) {
+                    BOOST_REQUIRE(!frag);
+                    frozen.emplace_back(fm);
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                }, std::numeric_limits<size_t>::max()).get0();
+                BOOST_REQUIRE_EQUAL(muts.size(), frozen.size());
+                for (auto j = 0u; j < muts.size(); j++) {
+                    BOOST_REQUIRE_EQUAL(muts[j], frozen[j].unfreeze(s));
+                }
+
+                // Freeze first
+                frozen.clear();
+                fragment_and_freeze(flat_mutation_reader_from_mutations(muts), [&] (auto fm, bool frag) {
+                    BOOST_REQUIRE(!frag);
+                    frozen.emplace_back(fm);
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }, std::numeric_limits<size_t>::max()).get0();
+                BOOST_REQUIRE_EQUAL(frozen.size(), 1);
+                BOOST_REQUIRE_EQUAL(muts[0], frozen[0].unfreeze(s));
+
+                // Fragment and freeze all
+                frozen.clear();
+                fragment_and_freeze(flat_mutation_reader_from_mutations(muts), [&] (auto fm, bool frag) {
+                    frozen.emplace_back(fm);
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                }, 1).get0();
+                std::vector<mutation> unfrozen;
+                while (!frozen.empty()) {
+                    auto m = frozen.front().unfreeze(s);
+                    frozen.erase(frozen.begin());
+                    if (unfrozen.empty() || !unfrozen.back().decorated_key().equal(*s, m.decorated_key())) {
+                        unfrozen.emplace_back(std::move(m));
+                    } else {
+                        unfrozen.back().apply(std::move(m));
+                    }
+                }
+                BOOST_REQUIRE_EQUAL(muts, unfrozen);
+            }
+        };
+
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_partition_checksum) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto get_hash = [] (mutation m) {
+                return partition_checksum::compute(flat_mutation_reader_from_mutations({ m }, streamed_mutation::forwarding::no),
+                                                   repair_checksum::streamed).get0();
+            };
+            auto h1 = get_hash(m1);
+            auto h2 = get_hash(m2);
+            if (eq) {
+                if (h1 != h2) {
+                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                }
+            } else {
+                // We're using a strong hasher, collision should be unlikely
+                if (h1 == h2) {
+                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                }
+            }
+        });
+
+        auto test_random_streams = [] (random_mutation_generator&& gen) {
+            for (auto i = 0; i < 4; i++) {
+                auto muts = gen(4);
+                auto muts2 = muts;
+                std::vector<partition_checksum> checksum;
+                while (!muts2.empty()) {
+                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations(muts2, streamed_mutation::forwarding::no),
+                                                           repair_checksum::streamed).get0();
+                    BOOST_REQUIRE(boost::count(checksum, chk) == 0);
+                    checksum.emplace_back(chk);
+                    muts2.pop_back();
+                }
+                std::vector<partition_checksum> individually_computed_checksums(muts.size());
+                for (auto k = 0u; k < muts.size(); k++) {
+                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations({ muts[k] }, streamed_mutation::forwarding::no),
+                                                           repair_checksum::streamed).get0();
+                    for (auto j = 0u; j < (muts.size() - k); j++) {
+                        individually_computed_checksums[j].add(chk);
+                    }
+                }
+                BOOST_REQUIRE_EQUAL(checksum, individually_computed_checksums);
+            }
+        };
+
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    });
+}
+
+SEASTAR_TEST_CASE(test_multi_range_reader) {
+    return seastar::async([] {
+        simple_schema s;
+
+        auto keys = s.make_pkeys(10);
+        auto ring = s.to_ring_positions(keys);
+
+        auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&s] (auto& key) {
+            return mutation(key, s.schema());
+        }));
+
+        auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
+            return make_reader_returning_many(std::move(ms), range);
+        });
+
+        auto ranges = dht::partition_range_vector {
+                dht::partition_range::make(ring[1], ring[2]),
+                dht::partition_range::make_singular(ring[4]),
+                dht::partition_range::make(ring[6], ring[8]),
+        };
+        auto fft_range = dht::partition_range::make_starting_with(ring[9]);
+
+        assert_that(make_flat_multi_range_reader(s.schema(), std::move(source), ranges, s.schema()->full_slice()))
+                .produces_partition_start(keys[1])
+                .produces_partition_end()
+                .produces_partition_start(keys[2])
+                .produces_partition_end()
+                .produces_partition_start(keys[4])
+                .produces_partition_end()
+                .produces_partition_start(keys[6])
+                .produces_partition_end()
+                .fast_forward_to(fft_range)
+                .produces_partition_start(keys[9])
+                .produces_partition_end()
+                .produces_end_of_stream();
     });
 }

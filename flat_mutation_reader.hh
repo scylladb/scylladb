@@ -27,10 +27,13 @@
 #include "dht/i_partitioner.hh"
 #include "position_in_partition.hh"
 #include "streamed_mutation.hh"
+#include "tracing/trace_state.hh"
 
 #include <seastar/util/gcc6-concepts.hh>
 
 using seastar::future;
+
+class mutation_source;
 
 GCC6_CONCEPT(
     template<typename Consumer>
@@ -200,6 +203,10 @@ public:
 private:
     std::unique_ptr<impl> _impl;
 public:
+    // Documented in mutation_reader::forwarding in mutation_reader.hh.
+    class partition_range_forwarding_tag;
+    using partition_range_forwarding = bool_class<partition_range_forwarding_tag>;
+
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
 
     future<mutation_fragment_opt> operator()() {
@@ -262,6 +269,7 @@ public:
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
+    mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
     const schema_ptr& schema() const { return _impl->_schema; }
 };
 
@@ -278,4 +286,10 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m);
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 
-flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>&&, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+flat_mutation_reader
+make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
+                             const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
+                             tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                             flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);

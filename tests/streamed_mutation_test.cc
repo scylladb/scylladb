@@ -219,52 +219,6 @@ SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
     });
 }
 
-SEASTAR_TEST_CASE(test_fragmenting_and_freezing_streamed_mutations) {
-    return seastar::async([] {
-        storage_service_for_tests ssft;
-
-        for_each_mutation([&] (const mutation& m) {
-            std::vector<frozen_mutation> fms;
-
-            fragment_and_freeze(streamed_mutation_from_mutation(mutation(m)), [&] (auto fm, bool frag) {
-                BOOST_REQUIRE(!frag);
-                fms.emplace_back(std::move(fm));
-                return make_ready_future<>();
-            }, std::numeric_limits<size_t>::max()).get0();
-
-            BOOST_REQUIRE_EQUAL(fms.size(), 1);
-
-            auto m1 = fms.back().unfreeze(m.schema());
-            BOOST_REQUIRE_EQUAL(m, m1);
-
-            fms.clear();
-
-            stdx::optional<bool> fragmented;
-            fragment_and_freeze(streamed_mutation_from_mutation(mutation(m)), [&] (auto fm, bool frag) {
-                BOOST_REQUIRE(!fragmented || *fragmented == frag);
-                *fragmented = frag;
-                fms.emplace_back(std::move(fm));
-                return make_ready_future<>();
-            }, 1).get0();
-
-            auto&& rows = m.partition().non_dummy_rows();
-            auto expected_fragments = std::distance(rows.begin(), rows.end())
-                                      + m.partition().row_tombstones().size()
-                                      + !m.partition().static_row().empty();
-            BOOST_REQUIRE_EQUAL(fms.size(), std::max(expected_fragments, size_t(1)));
-            BOOST_REQUIRE(expected_fragments < 2 || *fragmented);
-
-            auto m2 = fms.back().unfreeze(m.schema());
-            fms.pop_back();
-            while (!fms.empty()) {
-                m2.partition().apply(*m.schema(), fms.back().partition(), *m.schema());
-                fms.pop_back();
-            }
-            BOOST_REQUIRE_EQUAL(m, m2);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_range_tombstones_stream) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")
@@ -332,33 +286,6 @@ SEASTAR_TEST_CASE(test_range_tombstones_stream) {
 
         mf = rts.get_next();
         BOOST_REQUIRE(!mf);
-    });
-}
-
-SEASTAR_TEST_CASE(test_mutation_hash) {
-    return seastar::async([] {
-        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
-            auto get_hash = [] (streamed_mutation m) {
-                md5_hasher h;
-                m.key().feed_hash(h, *m.schema());
-
-                mutation_hasher<md5_hasher> mh(*m.schema(), h);
-                consume(m, std::move(mh)).get0();
-                return h.finalize();
-            };
-            auto h1 = get_hash(streamed_mutation_from_mutation(mutation(m1)));
-            auto h2 = get_hash(streamed_mutation_from_mutation(mutation(m2)));
-            if (eq) {
-                if (h1 != h2) {
-                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
-                }
-            } else {
-                // We're using a strong hasher, collision should be unlikely
-                if (h1 == h2) {
-                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
-                }
-            }
-        });
     });
 }
 

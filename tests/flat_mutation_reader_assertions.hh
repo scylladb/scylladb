@@ -100,6 +100,11 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
+        _reader.fast_forward_to(pr);
+        return *this;
+    }
+
     flat_reader_assertions& next_partition() {
         _reader.next_partition();
         return *this;

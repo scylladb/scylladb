@@ -62,8 +62,7 @@ public:
     // from streamed_mutation::forwarding - the former is about skipping to
     // a different partition range, while the latter is about skipping
     // inside a large partition.
-    class forwarding_tag;
-    using forwarding = bool_class<forwarding_tag>;
+    using forwarding = flat_mutation_reader::partition_range_forwarding;
 
     class impl {
     public:
@@ -648,10 +647,3 @@ template<typename FlattenedConsumer, typename... Args>
 stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
     return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }
-
-// Requires ranges to be sorted and disjoint.
-mutation_reader
-make_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
-                        const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
-                        tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-                        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);

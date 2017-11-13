@@ -52,6 +52,8 @@ public:
     explicit random_mutation_generator(generate_counters);
     ~random_mutation_generator();
     mutation operator()();
+    // Generates n mutations sharing the same schema nad sorted by their decorated keys.
+    std::vector<mutation> operator()(size_t n);
     schema_ptr schema() const;
     clustering_key make_random_key();
     std::vector<query::clustering_range> make_random_ranges(unsigned n_ranges);
