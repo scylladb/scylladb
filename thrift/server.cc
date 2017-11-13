@@ -233,7 +233,7 @@ thrift_server::do_accepts(int which, bool keepalive) {
         });
     }).handle_exception([this, which, keepalive] (auto ex) {
         tlogger.debug("accept failed {}", ex);
-        maybe_retry_accept(which, keepalive, std::move(ex));
+        this->maybe_retry_accept(which, keepalive, std::move(ex));
     });
 }
 
