@@ -191,7 +191,6 @@ protected:
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
-    size_t _pending_endpoints; // how many endpoints in bootstrap state there is
     // added dead_endpoints as a memeber here as well. This to be able to carry the info across
     // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
@@ -209,11 +208,11 @@ public:
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
-              _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
+              _dead_endpoints(std::move(dead_endpoints)) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
-        _total_block_for = db::block_for(ks, _cl) + _pending_endpoints;
+        _total_block_for = db::block_for(ks, _cl) + pending_endpoints;
         ++_proxy->_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
@@ -343,10 +342,9 @@ public:
                     return snitch_ptr->get_datacenter(ep) == dc;
                 });
                 _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc);
-                _pending_endpoints += pending_for_dc;
+                _total_block_for += pending_for_dc;
             }
         }
-        _total_block_for += _pending_endpoints;
     }
 };
 
