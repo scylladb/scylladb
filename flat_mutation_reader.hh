@@ -27,10 +27,13 @@
 #include "dht/i_partitioner.hh"
 #include "position_in_partition.hh"
 #include "streamed_mutation.hh"
+#include "tracing/trace_state.hh"
 
 #include <seastar/util/gcc6-concepts.hh>
 
 using seastar::future;
+
+class mutation_source;
 
 GCC6_CONCEPT(
     template<typename Consumer>
@@ -285,4 +288,8 @@ flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 
 flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
-
+flat_mutation_reader
+make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
+                             const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
+                             tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                             flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
