@@ -722,7 +722,7 @@ public:
     // The new range must not overlap with the previous range and
     // must be after it.
     //
-    future<> fast_forward_to(position_range);
+    stdx::optional<position_in_partition_view> fast_forward_to(position_range);
 
     bool needs_skip() const {
         return (_skip_in_progress || !_in_progress)
@@ -731,7 +731,7 @@ public:
 
     // Tries to fast forward the consuming context to the next position.
     // Must be called outside consuming context.
-    future<> maybe_skip();
+    stdx::optional<position_in_partition_view> maybe_skip();
 };
 
 struct sstable_data_source : public enable_lw_shared_from_this<sstable_data_source> {
@@ -837,7 +837,7 @@ public:
             if (is_buffer_full() || is_end_of_stream()) {
                 return make_ready_future<>();
             }
-            return _ds->_consumer.maybe_skip().then([this] {
+            return advance_context(_ds->_consumer.maybe_skip()).then([this] {
                 return _ds->_context.read();
             });
         });
@@ -846,11 +846,14 @@ public:
     future<> fast_forward_to(position_range range) override {
         _end_of_stream = false;
         forward_buffer_to(range.start());
-        return _ds->_consumer.fast_forward_to(std::move(range));
+        return advance_context(_ds->_consumer.fast_forward_to(std::move(range)));
     }
-
-    future<> advance_context(position_in_partition_view pos) {
-        if (pos.is_before_all_fragments(*_schema)) {
+private:
+    future<> advance_context(stdx::optional<position_in_partition_view> pos) {
+        if (!pos) {
+            return make_ready_future<>();
+        }
+        if (pos->is_before_all_fragments(*_schema)) {
             return make_ready_future<>();
         }
         return [this] {
@@ -860,7 +863,7 @@ public:
             }
             return make_ready_future();
         }().then([this, pos] {
-            return _ds->lh_index().advance_to(pos).then([this] {
+            return _ds->lh_index().advance_to(*pos).then([this] {
                 index_reader& idx = *_ds->_lh_index;
                 return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
             });
@@ -914,7 +917,7 @@ mp_row_consumer::push_ready_fragments() {
     return proceed::yes;
 }
 
-future<> mp_row_consumer::fast_forward_to(position_range r) {
+stdx::optional<position_in_partition_view> mp_row_consumer::fast_forward_to(position_range r) {
     sstlog.trace("mp_row_consumer {}: fast_forward_to({})", this, r);
     _out_of_range = _is_mutation_end;
     _fwd_end = std::move(r).end();
@@ -926,7 +929,7 @@ future<> mp_row_consumer::fast_forward_to(position_range r) {
         _out_of_range = true;
         _ready = {};
         sstlog.trace("mp_row_consumer {}: no more ranges", this);
-        return make_ready_future<>();
+        return { };
     }
 
     auto start = _ck_ranges_walker->lower_bound();
@@ -939,35 +942,34 @@ future<> mp_row_consumer::fast_forward_to(position_range r) {
         advance_to(*_in_progress);
         if (!_skip_in_progress) {
             sstlog.trace("mp_row_consumer {}: _in_progress in range", this);
-            return make_ready_future<>();
+            return { };
         }
     }
 
     if (_out_of_range) {
         sstlog.trace("mp_row_consumer {}: _out_of_range=true", this);
-        return make_ready_future<>();
+        return { };
     }
 
     position_in_partition::less_compare less(*_schema);
     if (!less(start, _fwd_end)) {
         _out_of_range = true;
         sstlog.trace("mp_row_consumer {}: no overlap with restrictions", this);
-        return make_ready_future<>();
+        return { };
     }
 
     sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
     _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
-    return _sm->advance_context(start);
+    return start;
 }
 
-future<> mp_row_consumer::maybe_skip() {
+stdx::optional<position_in_partition_view> mp_row_consumer::maybe_skip() {
     if (!needs_skip()) {
-        return make_ready_future<>();
+        return { };
     }
     _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
-    auto pos = _ck_ranges_walker->lower_bound();
-    sstlog.trace("mp_row_consumer {}: advance_context({})", this, pos);
-    return _sm->advance_context(pos);
+    sstlog.trace("mp_row_consumer {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
+    return _ck_ranges_walker->lower_bound();
 }
 
 future<streamed_mutation_opt>
