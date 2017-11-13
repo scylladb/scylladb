@@ -56,9 +56,9 @@ namespace db {
 
 extern logging::logger cl_logger;
 
-size_t quorum_for(keyspace& ks);
+size_t quorum_for(const keyspace& ks);
 
-size_t local_quorum_for(keyspace& ks, const sstring& dc);
+size_t local_quorum_for(const keyspace& ks, const sstring& dc);
 
 size_t block_for_local_serial(keyspace& ks);
 
