@@ -225,19 +225,6 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_s
     };
 }
 
-mutation_source
-column_family::sstables_as_mutation_source() {
-    return mutation_source([this] (schema_ptr s,
-                                   const dht::partition_range& r,
-                                   const query::partition_slice& slice,
-                                   const io_priority_class& pc,
-                                   tracing::trace_state_ptr trace_state,
-                                   streamed_mutation::forwarding fwd,
-                                   mutation_reader::forwarding fwd_mr) {
-        return make_sstable_reader(std::move(s), _sstables, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    });
-}
-
 snapshot_source
 column_family::sstables_as_snapshot_source() {
     return snapshot_source([this] () {
