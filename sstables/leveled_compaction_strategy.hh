@@ -32,9 +32,11 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
     stdx::optional<std::vector<stdx::optional<dht::decorated_key>>> _last_compacted_keys;
     std::vector<int> _compaction_counter;
+    size_tiered_compaction_strategy_options _stcs_options;
 public:
     leveled_compaction_strategy(const std::map<sstring, sstring>& options)
         : compaction_strategy_impl(options)
+        , _stcs_options(options)
     {
         using namespace cql3::statements;
 
@@ -78,7 +80,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     // lists managed by the manifest may become outdated. For example, one
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
-    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, _max_sstable_size_in_mb);
+    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, _max_sstable_size_in_mb, _stcs_options);
     if (!_last_compacted_keys) {
         generate_last_compacted_keys(manifest);
     }
@@ -113,7 +115,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
 }
 
 std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
-    leveled_manifest manifest = leveled_manifest::create(cf, candidates, _max_sstable_size_in_mb);
+    leveled_manifest manifest = leveled_manifest::create(cf, candidates, _max_sstable_size_in_mb, _stcs_options);
 
     std::vector<resharding_descriptor> descriptors;
     shard_id target_shard = 0;
@@ -190,7 +192,7 @@ int64_t leveled_compaction_strategy::estimated_pending_compactions(column_family
     for (auto& entry : *cf.get_sstables()) {
         sstables.push_back(entry);
     }
-    leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb);
+    leveled_manifest manifest = leveled_manifest::create(cf, sstables, _max_sstable_size_in_mb, _stcs_options);
     return manifest.get_estimated_tasks();
 }
 
