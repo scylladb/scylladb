@@ -151,6 +151,8 @@ public:
     size_tiered_compaction_strategy() = default;
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
         compaction_strategy_impl(options), _options(options) {}
+    explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options) :
+        _options(options) {}
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
