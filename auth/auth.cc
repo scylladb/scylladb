@@ -52,6 +52,7 @@
 #include "cql3/statements/create_table_statement.hh"
 #include "db/config.hh"
 #include "delayed_tasks.hh"
+#include "permissions_cache.hh"
 #include "service/migration_manager.hh"
 #include "utils/loading_cache.hh"
 #include "utils/hash.hh"
@@ -99,61 +100,18 @@ class auth_migration_listener : public service::migration_listener {
 
 static auth_migration_listener auth_migration;
 
-namespace std {
-template <>
-struct hash<auth::data_resource> {
-    size_t operator()(const auth::data_resource & v) const {
-        return v.hash_value();
-    }
-};
+static sharded<auth::permissions_cache> perm_cache;
 
-template <>
-struct hash<auth::authenticated_user> {
-    size_t operator()(const auth::authenticated_user & v) const {
-        return utils::tuple_hash()(v.name(), v.is_anonymous());
-    }
-};
+static future<> start_permission_cache() {
+    auto& db_config = cql3::get_local_query_processor().db().local().get_config();
+
+    auth::permissions_cache_config c;
+    c.max_entries = db_config.permissions_cache_max_entries();
+    c.validity_period = std::chrono::milliseconds(db_config.permissions_validity_in_ms());
+    c.update_period = std::chrono::milliseconds(db_config.permissions_update_interval_in_ms());
+
+    return perm_cache.start(c, std::ref(auth::authorizer::get()), std::ref(alogger));
 }
-
-class auth::auth::permissions_cache {
-public:
-    typedef utils::loading_cache<std::pair<authenticated_user, data_resource>, permission_set, utils::loading_cache_reload_enabled::yes, utils::simple_entry_size<permission_set>, utils::tuple_hash> cache_type;
-    typedef typename cache_type::key_type key_type;
-
-    permissions_cache()
-                    : permissions_cache(
-                                    cql3::get_local_query_processor().db().local().get_config()) {
-    }
-
-    permissions_cache(const db::config& cfg)
-                    : _cache(cfg.permissions_cache_max_entries(), std::chrono::milliseconds(cfg.permissions_validity_in_ms()), std::chrono::milliseconds(cfg.permissions_update_interval_in_ms()), alogger,
-                        [] (const key_type& k) {
-                            alogger.debug("Refreshing permissions for {}", k.first.name());
-                            return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
-                        }) {}
-
-    future<> stop() {
-        return _cache.stop();
-    }
-
-    future<permission_set> get(::shared_ptr<authenticated_user> user, data_resource resource) {
-        return _cache.get(key_type(*user, std::move(resource)));
-    }
-
-private:
-    cache_type _cache;
-};
-
-namespace std { // for ADL, yuch
-
-std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p) {
-    os << "{user: " << p.first.name() << ", data_resource: " << p.second << "}";
-    return os;
-}
-
-}
-
-static distributed<auth::auth::permissions_cache> perm_cache;
 
 static delayed_tasks<>& get_local_delayed_tasks() {
     static thread_local delayed_tasks<> instance;
@@ -168,19 +126,18 @@ future<> auth::auth::setup() {
     auto& db = cql3::get_local_query_processor().db().local();
     auto& cfg = db.get_config();
 
-    future<> f = perm_cache.start();
-
     qualified_name authenticator_name(AUTH_PACKAGE_NAME, cfg.authenticator()),
                     authorizer_name(AUTH_PACKAGE_NAME, cfg.authorizer());
 
     if (allow_all_authenticator_name() == authenticator_name && allow_all_authorizer_name() == authorizer_name) {
-        // just create the objects
-        return f.then([authenticator_name = std::move(authenticator_name)] {
-            return authenticator::setup(authenticator_name);
-        }).then([authorizer_name = std::move(authorizer_name)] {
+        return authenticator::setup(authenticator_name).then([authorizer_name = std::move(authorizer_name)] {
             return authorizer::setup(authorizer_name);
+        }).then([] {
+            return start_permission_cache();
         });
     }
+
+    future<> f = make_ready_future<>();
 
     if (!db.has_keyspace(AUTH_KS)) {
         std::map<sstring, sstring> opts;
@@ -198,6 +155,8 @@ future<> auth::auth::setup() {
         return authenticator::setup(authenticator_name);
     }).then([authorizer_name = std::move(authorizer_name)] {
         return authorizer::setup(authorizer_name);
+    }).then([] {
+        return start_permission_cache();
     }).then([] {
         service::get_local_migration_manager().register_listener(&auth_migration); // again, only one shard...
         // instead of once-timer, just schedule this later
