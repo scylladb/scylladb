@@ -27,6 +27,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/util/defer.hh>
 
 
 #include "seastarx.hh"
@@ -207,6 +208,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
         std::vector<int> ivec(num_loaders);
         load_count = 0;
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, test_logger);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
@@ -219,7 +221,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
         // "loader" must be called exactly once
         BOOST_REQUIRE_EQUAL(load_count, 1);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
-        loading_cache.stop().get();
     });
 }
 
@@ -229,6 +230,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
         std::vector<int> ivec(num_loaders);
         load_count = 0;
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, test_logger);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
@@ -240,7 +242,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
 
         BOOST_REQUIRE_EQUAL(load_count, num_loaders);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), num_loaders);
-        loading_cache.stop().get();
     });
 }
 
@@ -248,6 +249,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
     return seastar::async([] {
         using namespace std::chrono;
         utils::loading_cache<int, sstring> loading_cache(num_loaders, 20ms, test_logger);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
@@ -263,7 +265,6 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
             [] { return sleep(40ms); }
         ).get();
         BOOST_REQUIRE(loading_cache.find(0) == loading_cache.end());
-        loading_cache.stop().get();
     });
 }
 
@@ -272,11 +273,11 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_reloading) {
         using namespace std::chrono;
         load_count = 0;
         utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(num_loaders, 100ms, 20ms, test_logger, loader);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
         prepare().get();
         loading_cache.get_ptr(0, loader).discard_result().get();
         sleep(60ms).get();
         BOOST_REQUIRE_MESSAGE(load_count >= 2, format("load_count is {}", load_count));
-        loading_cache.stop().get();
     });
 }
 
@@ -285,6 +286,7 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
         using namespace std::chrono;
         load_count = 0;
         utils::loading_cache<int, sstring> loading_cache(1, 1s, test_logger);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
@@ -294,7 +296,6 @@ SEASTAR_TEST_CASE(test_loading_cache_max_size_eviction) {
 
         BOOST_REQUIRE_EQUAL(load_count, num_loaders);
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
-        loading_cache.stop().get();
     });
 }
 
@@ -303,6 +304,7 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
         using namespace std::chrono;
         load_count = 0;
         utils::loading_cache<int, sstring, utils::loading_cache_reload_enabled::yes> loading_cache(1, 100ms, 10ms, test_logger, loader);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
 
@@ -316,6 +318,5 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
         ).get();
 
         BOOST_REQUIRE_EQUAL(loading_cache.size(), 1);
-        loading_cache.stop().get();
     });
 }

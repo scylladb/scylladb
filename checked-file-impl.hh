@@ -130,21 +130,10 @@ inline file make_checked_file(const io_error_handler& error_handler, file f)
 future<file>
 inline open_checked_file_dma(const io_error_handler& error_handler,
                              sstring name, open_flags flags,
-                             file_open_options options)
+                             file_open_options options = {})
 {
     return do_io_check(error_handler, [&] {
         return open_file_dma(name, flags, options).then([&] (file f) {
-            return make_ready_future<file>(make_checked_file(error_handler, f));
-        });
-    });
-}
-
-future<file>
-inline open_checked_file_dma(const io_error_handler& error_handler,
-                             sstring name, open_flags flags)
-{
-    return do_io_check(error_handler, [&] {
-        return open_file_dma(name, flags).then([&] (file f) {
             return make_ready_future<file>(make_checked_file(error_handler, f));
         });
     });
