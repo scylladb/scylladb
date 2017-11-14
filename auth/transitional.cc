@@ -69,8 +69,8 @@ class transitional_authenticator : public authenticator {
 public:
     static const sstring PASSWORD_AUTHENTICATOR_NAME;
 
-    transitional_authenticator()
-        : transitional_authenticator(std::make_unique<password_authenticator>())
+    transitional_authenticator(cql3::query_processor& qp)
+        : transitional_authenticator(std::make_unique<password_authenticator>(qp))
     {}
     transitional_authenticator(std::unique_ptr<authenticator> a)
         : _authenticator(std::move(a))
@@ -153,8 +153,8 @@ public:
 class transitional_authorizer : public authorizer {
     std::unique_ptr<authorizer> _authorizer;
 public:
-    transitional_authorizer()
-        : transitional_authorizer(std::make_unique<default_authorizer>())
+    transitional_authorizer(cql3::query_processor& qp)
+        : transitional_authorizer(std::make_unique<default_authorizer>(qp))
     {}
     transitional_authorizer(std::unique_ptr<authorizer> a)
         : _authorizer(std::move(a))
@@ -210,8 +210,8 @@ public:
 //
 
 static const class_registrator<auth::authenticator,
-                auth::transitional_authenticator> transitional_authenticator_reg(
+                auth::transitional_authenticator, cql3::query_processor&> transitional_authenticator_reg(
                 "com.scylladb.auth.TransitionalAuthenticator");
 
-static const class_registrator<auth::authorizer, auth::transitional_authorizer> transitional_authorizer_reg(
+static const class_registrator<auth::authorizer, auth::transitional_authorizer, cql3::query_processor&> transitional_authorizer_reg(
                 "com.scylladb.auth.TransitionalAuthorizer");

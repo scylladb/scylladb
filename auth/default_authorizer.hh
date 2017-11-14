@@ -42,14 +42,17 @@
 #pragma once
 
 #include "authorizer.hh"
+#include "cql3/query_processor.hh"
 
 namespace auth {
 
 const sstring& default_authorizer_name();
 
 class default_authorizer : public authorizer {
+    cql3::query_processor& _qp;
+
 public:
-    default_authorizer();
+    default_authorizer(cql3::query_processor&);
     ~default_authorizer();
 
     future<> start() override;

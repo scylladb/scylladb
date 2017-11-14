@@ -44,6 +44,7 @@
 #include "common.hh"
 #include "default_authorizer.hh"
 #include "auth.hh"
+#include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
@@ -57,7 +58,7 @@ const sstring& auth::allow_all_authorizer_name() {
  * We thus store a single instance globally, since it should be safe/ok.
  */
 static std::unique_ptr<auth::authorizer> global_authorizer;
-using authorizer_registry = class_registry<auth::authorizer>;
+using authorizer_registry = class_registry<auth::authorizer, cql3::query_processor&>;
 
 future<>
 auth::authorizer::setup(const sstring& type) {
@@ -103,7 +104,7 @@ auth::authorizer::setup(const sstring& type) {
         global_authorizer = std::make_unique<allow_all_authorizer>();
         return make_ready_future();
     } else {
-        auto a = authorizer_registry::create(type);
+        auto a = authorizer_registry::create(type, cql3::get_local_query_processor());
         auto f = a->start();
         return f.then([a = std::move(a)]() mutable {
             global_authorizer = std::move(a);

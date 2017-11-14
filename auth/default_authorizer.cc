@@ -69,11 +69,13 @@ static const sstring PERMISSIONS_CF = "permissions";
 static logging::logger alogger("default_authorizer");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<auth::authorizer, auth::default_authorizer> password_auth_reg(
+static const class_registrator<auth::authorizer, auth::default_authorizer, cql3::query_processor&> password_auth_reg(
                 "org.apache.cassandra.auth.CassandraAuthorizer");
 
-auth::default_authorizer::default_authorizer() {
+auth::default_authorizer::default_authorizer(cql3::query_processor& qp)
+        : _qp(qp) {
 }
+
 auth::default_authorizer::~default_authorizer() {
 }
 
@@ -105,10 +107,9 @@ future<auth::permission_set> auth::default_authorizer::authorize(
          * TOOD: could create actual data type for permission (translating string<->perm),
          * but this seems overkill right now. We still must store strings so...
          */
-        auto& qp = cql3::get_local_query_processor();
         auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?"
                         , PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
-        return qp.process(query, db::consistency_level::LOCAL_ONE, {user->name(), resource.name() })
+        return _qp.process(query, db::consistency_level::LOCAL_ONE, {user->name(), resource.name() })
                         .then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
             try {
                 auto res = f.get0();
@@ -131,11 +132,10 @@ future<> auth::default_authorizer::modify(
                 ::shared_ptr<authenticated_user> performer, permission_set set,
                 data_resource resource, sstring user, sstring op) {
     // TODO: why does this not check super user?
-    auto& qp = cql3::get_local_query_processor();
     auto query = sprint("UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
                     meta::AUTH_KS, PERMISSIONS_CF, PERMISSIONS_NAME,
                     PERMISSIONS_NAME, op, USER_NAME, RESOURCE_NAME);
-    return qp.process(query, db::consistency_level::ONE, {
+    return _qp.process(query, db::consistency_level::ONE, {
                     permissions::to_strings(set), user, resource.name() }).discard_result();
 }
 
@@ -161,7 +161,6 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
         }
 
         auto query = sprint("SELECT %s, %s, %s FROM %s.%s", USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF);
-        auto& qp = cql3::get_local_query_processor();
 
         // Oh, look, it is a case where it does not pay off to have
         // parameters to process in an initializer list.
@@ -169,15 +168,15 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
 
         if (resource && user) {
             query += sprint(" WHERE %s = ? AND %s = ?", USER_NAME, RESOURCE_NAME);
-            f = qp.process(query, db::consistency_level::ONE, {*user, resource->name()});
+            f = _qp.process(query, db::consistency_level::ONE, {*user, resource->name()});
         } else if (resource) {
             query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
-            f = qp.process(query, db::consistency_level::ONE, {resource->name()});
+            f = _qp.process(query, db::consistency_level::ONE, {resource->name()});
         } else if (user) {
             query += sprint(" WHERE %s = ?", USER_NAME);
-            f = qp.process(query, db::consistency_level::ONE, {*user});
+            f = _qp.process(query, db::consistency_level::ONE, {*user});
         } else {
-            f = qp.process(query, db::consistency_level::ONE, {});
+            f = _qp.process(query, db::consistency_level::ONE, {});
         }
 
         return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
@@ -199,10 +198,9 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
 }
 
 future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
-    auto& qp = cql3::get_local_query_processor();
     auto query = sprint("DELETE FROM %s.%s WHERE %s = ?", meta::AUTH_KS,
                     PERMISSIONS_CF, USER_NAME);
-    return qp.process(query, db::consistency_level::ONE, { dropped_user }).discard_result().handle_exception(
+    return _qp.process(query, db::consistency_level::ONE, { dropped_user }).discard_result().handle_exception(
                     [dropped_user](auto ep) {
                         try {
                             std::rethrow_exception(ep);
@@ -213,17 +211,16 @@ future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
 }
 
 future<> auth::default_authorizer::revoke_all(data_resource resource) {
-    auto& qp = cql3::get_local_query_processor();
     auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
                     USER_NAME, meta::AUTH_KS, PERMISSIONS_CF, RESOURCE_NAME);
-    return qp.process(query, db::consistency_level::LOCAL_ONE, { resource.name() })
-                    .then_wrapped([resource, &qp](future<::shared_ptr<cql3::untyped_result_set>> f) {
+    return _qp.process(query, db::consistency_level::LOCAL_ONE, { resource.name() })
+                    .then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
-            return parallel_for_each(res->begin(), res->end(), [&qp, res, resource](const cql3::untyped_result_set::row& r) {
+            return parallel_for_each(res->begin(), res->end(), [this, res, resource](const cql3::untyped_result_set::row& r) {
                 auto query = sprint("DELETE FROM %s.%s WHERE %s = ? AND %s = ?"
                                 , meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
-                return qp.process(query, db::consistency_level::LOCAL_ONE, { r.get_as<sstring>(USER_NAME), resource.name() })
+                return _qp.process(query, db::consistency_level::LOCAL_ONE, { r.get_as<sstring>(USER_NAME), resource.name() })
                                 .discard_result().handle_exception([resource](auto ep) {
                     try {
                         std::rethrow_exception(ep);

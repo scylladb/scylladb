@@ -42,14 +42,17 @@
 #pragma once
 
 #include "authenticator.hh"
+#include "cql3/query_processor.hh"
 
 namespace auth {
 
 const sstring& password_authenticator_name();
 
 class password_authenticator : public authenticator {
+    cql3::query_processor& _qp;
+
 public:
-    password_authenticator();
+    password_authenticator(cql3::query_processor&);
     ~password_authenticator();
 
     future<> start() override;

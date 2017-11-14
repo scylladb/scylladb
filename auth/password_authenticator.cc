@@ -50,7 +50,6 @@
 #include "common.hh"
 #include "password_authenticator.hh"
 #include "authenticated_user.hh"
-#include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "utils/class_registrator.hh"
@@ -70,14 +69,15 @@ static const sstring CREDENTIALS_CF = "credentials";
 static logging::logger plogger("password_authenticator");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<auth::authenticator, auth::password_authenticator> password_auth_reg(
+static const class_registrator<auth::authenticator, auth::password_authenticator, cql3::query_processor&> password_auth_reg(
                 "org.apache.cassandra.auth.PasswordAuthenticator");
 
 auth::password_authenticator::~password_authenticator()
 {}
 
-auth::password_authenticator::password_authenticator()
-{}
+auth::password_authenticator::password_authenticator(cql3::query_processor& qp)
+    : _qp(qp) {
+}
 
 // TODO: blowfish
 // Origin uses Java bcrypt library, i.e. blowfish salt
@@ -165,10 +165,10 @@ future<> auth::password_authenticator::start() {
 
     return auth::setup_table(CREDENTIALS_CF, create_table).then([this] {
         // instead of once-timer, just schedule this later
-        auth::schedule_when_up([] {
-            return auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([](bool exists) {
+        auth::schedule_when_up([this] {
+            return auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([this](bool exists) {
                 if (!exists) {
-                    cql3::get_local_query_processor().process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
+                    _qp.process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
                                                     meta::AUTH_KS,
                                                     CREDENTIALS_CF,
                                                     USER_NAME, SALTED_HASH
@@ -227,8 +227,7 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
     return futurize_apply([this, username, password] {
-        auto& qp = cql3::get_local_query_processor();
-        return qp.process(sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
+        return _qp.process(sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
                                         meta::AUTH_KS, CREDENTIALS_CF, USER_NAME),
                         consistency_for_user(username), {username}, true);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
@@ -254,8 +253,7 @@ future<> auth::password_authenticator::create(sstring username,
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
                         meta::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
-        auto& qp = cql3::get_local_query_processor();
-        return qp.process(query, consistency_for_user(username), { username, hashpw(password) }).discard_result();
+        return _qp.process(query, consistency_for_user(username), { username, hashpw(password) }).discard_result();
     } catch (std::out_of_range&) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
     }
@@ -267,8 +265,7 @@ future<> auth::password_authenticator::alter(sstring username,
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
                         meta::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
-        auto& qp = cql3::get_local_query_processor();
-        return qp.process(query, consistency_for_user(username), { hashpw(password), username }).discard_result();
+        return _qp.process(query, consistency_for_user(username), { hashpw(password), username }).discard_result();
     } catch (std::out_of_range&) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
     }
@@ -278,8 +275,7 @@ future<> auth::password_authenticator::drop(sstring username) {
     try {
         auto query = sprint("DELETE FROM %s.%s WHERE %s = ?",
                         meta::AUTH_KS, CREDENTIALS_CF, USER_NAME);
-        auto& qp = cql3::get_local_query_processor();
-        return qp.process(query, consistency_for_user(username), { username }).discard_result();
+        return _qp.process(query, consistency_for_user(username), { username }).discard_result();
     } catch (std::out_of_range&) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
     }

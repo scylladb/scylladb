@@ -44,6 +44,7 @@
 #include "common.hh"
 #include "password_authenticator.hh"
 #include "auth.hh"
+#include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
@@ -77,7 +78,7 @@ sstring auth::authenticator::option_to_string(option opt) {
  */
 static std::unique_ptr<auth::authenticator> global_authenticator;
 
-using authenticator_registry = class_registry<auth::authenticator>;
+using authenticator_registry = class_registry<auth::authenticator, cql3::query_processor&>;
 
 future<>
 auth::authenticator::setup(const sstring& type) {
@@ -125,7 +126,7 @@ auth::authenticator::setup(const sstring& type) {
         global_authenticator = std::make_unique<allow_all_authenticator>();
         return make_ready_future();
     } else {
-        auto a = authenticator_registry::create(type);
+        auto a = authenticator_registry::create(type, cql3::get_local_query_processor());
         auto f = a->start();
         return f.then([a = std::move(a)]() mutable {
             global_authenticator = std::move(a);
