@@ -56,7 +56,7 @@ public:
 
     future<> stop() override;
 
-    const sstring& class_name() const override;
+    const sstring& qualified_java_name() const override;
     bool require_authentication() const override;
     option_set supported_options() const override;
     option_set alterable_options() const override;

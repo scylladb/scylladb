@@ -70,6 +70,9 @@ auth::authorizer::setup(const sstring& type) {
             future<> stop() override {
                 return make_ready_future<>();
             }
+            const sstring& qualified_java_name() const override {
+                return allow_all_authorizer_name();
+            }
             future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {
                 return make_ready_future<permission_set>(permissions::ALL);
             }

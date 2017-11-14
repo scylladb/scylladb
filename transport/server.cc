@@ -750,7 +750,7 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, b
     }
     auto& a = auth::authenticator::get();
     if (a.require_authentication()) {
-        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.class_name(), client_state.get_trace_state()), client_state));
+        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.qualified_java_name(), client_state.get_trace_state()), client_state));
     }
     return make_ready_future<response_type>(std::make_pair(make_ready(stream, client_state.get_trace_state()), client_state));
 }

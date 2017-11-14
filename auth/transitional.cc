@@ -59,6 +59,11 @@ static const sstring& transitional_authenticator_name() {
     return name;
 }
 
+static const sstring& transitional_authorizer_name() {
+    static const sstring name = PACKAGE_NAME + "TransitionalAuthorizer";
+    return name;
+}
+
 class transitional_authenticator : public authenticator {
     std::unique_ptr<authenticator> _authenticator;
 public:
@@ -76,7 +81,7 @@ public:
     future<> stop() override {
         return _authenticator->stop();
     }
-    const sstring& class_name() const override {
+    const sstring& qualified_java_name() const override {
         return transitional_authenticator_name();
     }
     bool require_authentication() const override {
@@ -161,6 +166,9 @@ public:
     }
     future<> stop() override {
         return _authorizer->stop();
+    }
+    const sstring& qualified_java_name() const override {
+        return transitional_authorizer_name();
     }
     future<permission_set> authorize(::shared_ptr<authenticated_user> user, data_resource resource) const override {
         return user->is_super().then([](bool s) {

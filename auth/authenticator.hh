@@ -107,7 +107,7 @@ public:
 
     virtual future<> stop() = 0;
 
-    virtual const sstring& class_name() const = 0;
+    virtual const sstring& qualified_java_name() const = 0;
 
     /**
      * Whether or not the authenticator requires explicit login.

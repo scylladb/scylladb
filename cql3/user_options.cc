@@ -55,7 +55,7 @@ void cql3::user_options::validate() const {
         if (!a.supported_options().contains(o)) {
             throw exceptions::invalid_request_exception(
                             sprint("%s doesn't support %s option",
-                                            a.class_name(),
+                                            a.qualified_java_name(),
                                             a.option_to_string(o)));
         }
     }

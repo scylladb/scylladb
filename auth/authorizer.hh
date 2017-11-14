@@ -79,6 +79,8 @@ public:
 
     virtual future<> stop() = 0;
 
+    virtual const sstring& qualified_java_name() const = 0;
+
     /**
      * The primary Authorizer method. Returns a set of permissions of a user on a resource.
      *

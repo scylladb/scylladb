@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_data_resource) {
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env&) {
         BOOST_REQUIRE_EQUAL(auth::authenticator::get().require_authentication(), false);
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().class_name(), auth::allow_all_authenticator_name());
+        BOOST_REQUIRE_EQUAL(auth::authenticator::get().qualified_java_name(), auth::allow_all_authenticator_name());
         return make_ready_future();
     });
 }
@@ -86,7 +86,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
 
     return do_with_cql_env([](cql_test_env&) {
         BOOST_REQUIRE_EQUAL(auth::authenticator::get().require_authentication(), true);
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().class_name(), auth::password_authenticator_name());
+        BOOST_REQUIRE_EQUAL(auth::authenticator::get().qualified_java_name(), auth::password_authenticator_name());
         return make_ready_future();
     }, cfg);
 }

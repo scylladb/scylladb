@@ -90,7 +90,7 @@ auth::authenticator::setup(const sstring& type) {
             future<> stop() override {
                 return make_ready_future<>();
             }
-            const sstring& class_name() const override {
+            const sstring& qualified_java_name() const override {
                 return allow_all_authenticator_name();
             }
             bool require_authentication() const override {

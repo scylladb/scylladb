@@ -193,7 +193,7 @@ db::consistency_level auth::password_authenticator::consistency_for_user(const s
     return db::consistency_level::LOCAL_ONE;
 }
 
-const sstring& auth::password_authenticator::class_name() const {
+const sstring& auth::password_authenticator::qualified_java_name() const {
     return password_authenticator_name();
 }
 

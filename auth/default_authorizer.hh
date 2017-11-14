@@ -56,6 +56,10 @@ public:
 
     future<> stop() override;
 
+    const sstring& qualified_java_name() const override {
+        return default_authorizer_name();
+    }
+
     future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override;
 
     future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
