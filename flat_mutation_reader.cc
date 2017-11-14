@@ -43,6 +43,112 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     _buffer_size = boost::accumulate(_buffer | boost::adaptors::transformed(std::mem_fn(&mutation_fragment::memory_usage)), size_t(0));
 }
 
+flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutation_reader::impl& original) {
+    // FIXME: #1413 Full partitions get accumulated in memory.
+
+    class partition_reversing_mutation_reader final : public flat_mutation_reader::impl {
+        flat_mutation_reader::impl* _source;
+        range_tombstone_list _range_tombstones;
+        std::stack<mutation_fragment> _mutation_fragments;
+        mutation_fragment_opt _partition_end;
+    private:
+        stop_iteration emit_partition() {
+            auto emit_range_tombstone = [&] {
+                auto it = std::prev(_range_tombstones.tombstones().end());
+                auto& rt = *it;
+                _range_tombstones.tombstones().erase(it);
+                auto rt_owner = alloc_strategy_unique_ptr<range_tombstone>(&rt);
+                push_mutation_fragment(mutation_fragment(std::move(rt)));
+            };
+            position_in_partition::less_compare cmp(*_source->_schema);
+            while (!_mutation_fragments.empty() && !is_buffer_full()) {
+                auto& mf = _mutation_fragments.top();
+                if (!_range_tombstones.empty() && !cmp(_range_tombstones.tombstones().rbegin()->end_position(), mf.position())) {
+                    emit_range_tombstone();
+                } else {
+                    push_mutation_fragment(std::move(mf));
+                    _mutation_fragments.pop();
+                }
+            }
+            while (!_range_tombstones.empty() && !is_buffer_full()) {
+                emit_range_tombstone();
+            }
+            if (is_buffer_full()) {
+                return stop_iteration::yes;
+            }
+            push_mutation_fragment(*std::exchange(_partition_end, stdx::nullopt));
+            return stop_iteration::no;
+        }
+        future<stop_iteration> consume_partition_from_source() {
+            if (_source->is_buffer_empty()) {
+                if (_source->is_end_of_stream()) {
+                    _end_of_stream = true;
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return _source->fill_buffer().then([] { return stop_iteration::no; });
+            }
+            while (!_source->is_buffer_empty() && !is_buffer_full()) {
+                auto mf = _source->pop_mutation_fragment();
+                if (mf.is_partition_start() || mf.is_static_row()) {
+                    push_mutation_fragment(std::move(mf));
+                } else if (mf.is_end_of_partition()) {
+                    _partition_end = std::move(mf);
+                    if (emit_partition()) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                } else if (mf.is_range_tombstone()) {
+                    _range_tombstones.apply(*_source->_schema, std::move(mf.as_range_tombstone()));
+                } else {
+                    _mutation_fragments.emplace(std::move(mf));
+                }
+            }
+            return make_ready_future<stop_iteration>(is_buffer_full());
+        }
+    public:
+        explicit partition_reversing_mutation_reader(flat_mutation_reader::impl& mr)
+            : flat_mutation_reader::impl(mr._schema)
+            , _source(&mr)
+            , _range_tombstones(*mr._schema)
+        { }
+
+        virtual future<> fill_buffer() override {
+            return repeat([&] {
+                if (_partition_end) {
+                    // We have consumed full partition from source, now it is
+                    // time to emit it.
+                    auto stop = emit_partition();
+                    if (stop) {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                }
+                return consume_partition_from_source();
+            });
+        }
+
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty() && !is_end_of_stream()) {
+                while (!_mutation_fragments.empty()) {
+                    _mutation_fragments.pop();
+                }
+                _range_tombstones.clear();
+                _partition_end = stdx::nullopt;
+                _source->next_partition();
+            }
+        }
+
+        virtual future<> fast_forward_to(const dht::partition_range&) override {
+            throw std::bad_function_call();
+        }
+
+        virtual future<> fast_forward_to(position_range) override {
+            throw std::bad_function_call();
+        }
+    };
+
+    return make_flat_mutation_reader<partition_reversing_mutation_reader>(original);
+}
+
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mutation_reader&& legacy_reader, streamed_mutation::forwarding fwd) {
     class converting_reader final : public flat_mutation_reader::impl {
         mutation_reader _legacy_reader;
