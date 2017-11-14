@@ -823,63 +823,6 @@ public:
     future<> fast_forward_to(const dht::partition_range&);
 };
 
-class sstable_streamed_mutation : public streamed_mutation::impl {
-    friend class mp_row_consumer;
-    lw_shared_ptr<sstable_data_source> _ds;
-    tombstone _t;
-    position_in_partition::less_compare _cmp;
-    position_in_partition::equal_compare _eq;
-public:
-    sstable_streamed_mutation(schema_ptr s, dht::decorated_key dk, tombstone t, lw_shared_ptr<sstable_data_source> ds)
-        : streamed_mutation::impl(s, std::move(dk), t)
-        , _ds(std::move(ds))
-        , _t(t)
-        , _cmp(*s)
-        , _eq(*s)
-    { }
-
-    sstable_streamed_mutation(sstable_streamed_mutation&&) = delete;
-
-    virtual future<> fill_buffer() final override {
-        return do_until([this] { return !is_buffer_empty() || is_end_of_stream(); }, [this] {
-            _ds->_consumer.push_ready_fragments();
-            if (is_buffer_full() || is_end_of_stream()) {
-                return make_ready_future<>();
-            }
-            return advance_context(_ds->_consumer.maybe_skip()).then([this] {
-                return _ds->_context.read();
-            });
-        });
-    }
-
-    future<> fast_forward_to(position_range range) override {
-        _end_of_stream = false;
-        forward_buffer_to(range.start());
-        return advance_context(_ds->_consumer.fast_forward_to(std::move(range)));
-    }
-private:
-    future<> advance_context(stdx::optional<position_in_partition_view> pos) {
-        if (!pos) {
-            return make_ready_future<>();
-        }
-        if (pos->is_before_all_fragments(*_schema)) {
-            return make_ready_future<>();
-        }
-        return [this] {
-            if (!_ds->_index_in_current_partition) {
-                _ds->_index_in_current_partition = true;
-                return _ds->lh_index().advance_to(_key);
-            }
-            return make_ready_future();
-        }().then([this, pos] {
-            return _ds->lh_index().advance_to(*pos).then([this] {
-                index_reader& idx = *_ds->_lh_index;
-                return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
-            });
-        });
-    }
-};
-
 future<streamed_mutation_opt>
 sstables::sstable::read_row(schema_ptr schema,
                             const sstables::key& key,
