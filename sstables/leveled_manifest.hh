@@ -43,6 +43,7 @@
 
 #include "sstables.hh"
 #include "compaction.hh"
+#include "size_tiered_compaction_strategy.hh"
 #include "range.hh"
 #include "log.hh"
 #include <boost/range/algorithm/partial_sort.hpp>
@@ -51,9 +52,7 @@ class leveled_manifest {
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
-#if 0
-    private final SizeTieredCompactionStrategyOptions options;
-#endif
+    const sstables::size_tiered_compaction_strategy_options& _stcs_options;
 
     struct candidates_info {
         std::vector<sstables::shared_sstable> candidates;
@@ -81,9 +80,10 @@ public:
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
 private:
-    leveled_manifest(column_family& cfs, int max_sstable_size_in_MB)
+    leveled_manifest(column_family& cfs, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
         : _schema(cfs.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
+        , _stcs_options(stcs_options)
     {
         // allocate enough generations for a PB of data, with a 1-MB sstable size.  (Note that if maxSSTableSize is
         // updated, we will still have sstables of the older, potentially smaller size.  So don't make this
@@ -91,8 +91,9 @@ private:
         _generations.resize(MAX_LEVELS);
     }
 public:
-    static leveled_manifest create(column_family& cfs, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb) {
-        leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
+    static leveled_manifest create(column_family& cf, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
+            const sstables::size_tiered_compaction_strategy_options& stcs_options) {
+        leveled_manifest manifest = leveled_manifest(cf, max_sstable_size_in_mb, stcs_options);
 
         // ensure all SSTables are in the manifest
         // FIXME: there can be tens of thousands of sstables. we can avoid this potentially expensive procedure if
@@ -225,7 +226,8 @@ public:
             // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
-                auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
+                auto most_interesting = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
+                    _schema->min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
                     return sstables::compaction_descriptor(std::move(most_interesting));
@@ -419,7 +421,8 @@ private:
         } else {
             // do STCS in L0 when max_sstable_size is high compared to size of new sstables, so we'll
             // avoid quadratic behavior until L0 is worth promoting.
-            candidates = size_tiered_most_interesting_bucket(get_level(0));
+            candidates = sstables::size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
+                _schema->min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
         }
         return { std::move(candidates), can_promote };
     }

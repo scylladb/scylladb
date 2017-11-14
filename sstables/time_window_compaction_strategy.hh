@@ -43,6 +43,7 @@
 
 #include "compaction_strategy_impl.hh"
 #include "compaction.hh"
+#include "size_tiered_compaction_strategy.hh"
 #include "timestamp.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm/partial_sort.hpp>
@@ -119,9 +120,10 @@ class time_window_compaction_strategy : public compaction_strategy_impl {
     int64_t _estimated_remaining_tasks = 0;
     db_clock::time_point _last_expired_check;
     timestamp_type _highest_window_seen;
+    size_tiered_compaction_strategy_options _stcs_options;
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options)
-        : compaction_strategy_impl(options), _options(options)
+        : compaction_strategy_impl(options), _options(options), _stcs_options(options)
     {
         if (!options.count(TOMBSTONE_COMPACTION_INTERVAL_OPTION) && !options.count(TOMBSTONE_THRESHOLD_OPTION)) {
             _disable_tombstone_compaction = true;
@@ -194,7 +196,7 @@ private:
         update_estimated_compaction_by_tasks(p.first, cf.schema()->min_compaction_threshold());
 
         return newest_bucket(std::move(p.first), cf.schema()->min_compaction_threshold(), cf.schema()->max_compaction_threshold(),
-            _options.sstable_window_size, _highest_window_seen);
+            _options.sstable_window_size, _highest_window_seen, _stcs_options);
     }
 public:
     // Find the lowest timestamp for window of given size
@@ -232,7 +234,7 @@ public:
 
     static std::vector<shared_sstable>
     newest_bucket(std::map<timestamp_type, std::vector<shared_sstable>> buckets, int min_threshold, int max_threshold,
-            std::chrono::seconds sstable_window_size, timestamp_type now) {
+            std::chrono::seconds sstable_window_size, timestamp_type now, size_tiered_compaction_strategy_options& stcs_options) {
         // If the current bucket has at least minThreshold SSTables, choose that one.
         // For any other bucket, at least 2 SSTables is enough.
         // In any case, limit to maxThreshold SSTables.
@@ -245,7 +247,7 @@ public:
 
             if (bucket.size() >= size_t(min_threshold) && key >= now) {
                 // If we're in the newest bucket, we'll use STCS to prioritize sstables
-                auto stcs_interesting_bucket = size_tiered_most_interesting_bucket(bucket);
+                auto stcs_interesting_bucket = size_tiered_compaction_strategy::most_interesting_bucket(bucket, min_threshold, max_threshold, stcs_options);
 
                 // If the tables in the current bucket aren't eligible in the STCS strategy, we'll skip it and look for other buckets
                 if (!stcs_interesting_bucket.empty()) {

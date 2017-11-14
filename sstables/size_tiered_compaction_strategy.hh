@@ -21,6 +21,13 @@
 
 #pragma once
 
+#include "compaction_strategy_impl.hh"
+#include "compaction.hh"
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+
 namespace sstables {
 
 class size_tiered_compaction_strategy_options {
@@ -144,6 +151,8 @@ public:
     size_tiered_compaction_strategy() = default;
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
         compaction_strategy_impl(options), _options(options) {}
+    explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options) :
+        _options(options) {}
 
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
@@ -153,10 +162,13 @@ public:
         return compaction_strategy_type::size_tiered;
     }
 
-    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(const std::vector<sstables::shared_sstable>&);
+    // Return the most interesting bucket for a set of sstables
+    static std::vector<sstables::shared_sstable>
+    most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates, int min_threshold, int max_threshold,
+        size_tiered_compaction_strategy_options options = {});
 };
 
-std::vector<std::pair<sstables::shared_sstable, uint64_t>>
+inline std::vector<std::pair<sstables::shared_sstable, uint64_t>>
 size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) const {
 
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
@@ -172,7 +184,7 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vect
     return sstable_length_pairs;
 }
 
-std::vector<std::vector<sstables::shared_sstable>>
+inline std::vector<std::vector<sstables::shared_sstable>>
 size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables) const {
     // sstables sorted by size of its data file.
     auto sorted_sstables = create_sstable_and_length_pairs(sstables);
@@ -227,7 +239,7 @@ size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_
     return bucket_list;
 }
 
-std::vector<sstables::shared_sstable>
+inline std::vector<sstables::shared_sstable>
 size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets,
         unsigned min_threshold, unsigned max_threshold)
 {
@@ -262,7 +274,8 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return hottest;
 }
 
-compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
+inline compaction_descriptor
+size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = cfs.schema()->min_compaction_threshold();
     int max_threshold = cfs.schema()->max_compaction_threshold();
@@ -299,7 +312,7 @@ compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compacti
     return sstables::compaction_descriptor();
 }
 
-int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
+inline int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_family& cf) const {
     int min_threshold = cf.schema()->min_compaction_threshold();
     int max_threshold = cf.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
@@ -316,6 +329,19 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(column_fa
         }
     }
     return n;
+}
+
+inline std::vector<sstables::shared_sstable>
+size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstables::shared_sstable>& candidates,
+        int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options) {
+    size_tiered_compaction_strategy cs(options);
+
+    auto buckets = cs.get_buckets(candidates);
+
+    std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
+        min_threshold, max_threshold);
+
+    return most_interesting;
 }
 
 }
