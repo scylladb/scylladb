@@ -34,14 +34,14 @@ class partition_snapshot_row_weakref final {
 public:
     partition_snapshot_row_weakref() = default;
     // Makes this object point to a row pointed to by given partition_snapshot_row_cursor.
-    explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&) noexcept;
+    explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&);
     explicit partition_snapshot_row_weakref(std::nullptr_t) {}
     partition_snapshot_row_weakref(partition_snapshot& snp, mutation_partition::rows_type::iterator it)
         : _it(it)
         , _change_mark(snp.get_change_mark())
         , _pos(it->position())
     { }
-    partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&) noexcept;
+    partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&);
     partition_snapshot_row_weakref& operator=(std::nullptr_t) noexcept {
         _change_mark = {};
         return *this;
@@ -89,6 +89,7 @@ public:
 // back to validity by calling maybe_refresh(), or advance_to().
 //
 // Insertion of row entries after cursor's position invalidates the cursor.
+// Exceptions thrown from mutators invalidate the cursor.
 //
 class partition_snapshot_row_cursor final {
     friend class partition_snapshot_row_weakref;
@@ -122,6 +123,7 @@ class partition_snapshot_row_cursor final {
         position_in_partition::equal_compare eq(_schema);
         do {
             boost::range::pop_heap(_heap, heap_less);
+            memory::on_alloc_point();
             _current_row.push_back(_heap.back());
             _heap.pop_back();
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
@@ -201,7 +203,9 @@ public:
     // May be called when cursor is not valid.
     // The cursor is valid after the call.
     // Must be called under reclaim lock.
+    // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
+        memory::on_alloc_point();
         rows_entry::compare less(_schema);
         position_in_version::less_compare heap_less(_schema);
         _heap.clear();
@@ -228,7 +232,9 @@ public:
     // Advances the cursor to the next row.
     // If there is no next row, returns false and the cursor is no longer pointing at a row.
     // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
     bool next() {
+        memory::on_alloc_point();
         position_in_version::less_compare heap_less(_schema);
         assert(iterators_valid());
         for (auto&& curr : _current_row) {
@@ -322,15 +328,16 @@ bool partition_snapshot_row_cursor::is_in_latest_version() const {
 }
 
 inline
-partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c) noexcept
+partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_snapshot_row_cursor& c)
     : _it(c._current_row[0].it)
     , _change_mark(c._change_mark)
     , _pos(c._position)
 { }
 
 inline
-partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const partition_snapshot_row_cursor& c) noexcept {
+partition_snapshot_row_weakref& partition_snapshot_row_weakref::operator=(const partition_snapshot_row_cursor& c) {
+    auto tmp = partition_snapshot_row_weakref(c);
     this->~partition_snapshot_row_weakref();
-    new (this) partition_snapshot_row_weakref(c);
+    new (this) partition_snapshot_row_weakref(std::move(tmp));
     return *this;
 }

@@ -22,6 +22,8 @@
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/sleep.hh>
+#include <seastar/util/backtrace.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -42,6 +44,8 @@ thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::chrono_literals;
+
+static seastar::logger test_log("test");
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1965,70 +1969,160 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
     });
 }
 
-// Makes sure that the reader is inside the first partition from the range
-streamed_mutation read_first_partition(row_cache& cache, dht::partition_range& pr, size_t read_ahead = 0) {
-    auto rd = cache.make_reader(cache.schema(), pr);
-    auto smo = rd().get0();
-    BOOST_REQUIRE(smo);
-    streamed_mutation& sm = *smo;
-    if (read_ahead) {
-        sm.set_max_buffer_size(read_ahead);
-    }
-    return std::move(sm);
+SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+        memtable_snapshot_source underlying(s);
+
+        auto mut = make_fully_continuous(gen());
+        underlying.apply(mut);
+
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+        auto&& injector = memory::local_failure_injector();
+
+        auto run_queries = [&] {
+            auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
+            auto&& ranges = slice.row_ranges(*s, mut.key());
+            uint64_t i = 0;
+            while (true) {
+                try {
+                    injector.fail_after(i++);
+                    auto rd = cache.make_reader(s, query::full_partition_range, slice);
+                    auto smo = rd().get0();
+                    BOOST_REQUIRE(smo);
+                    auto got = mutation_from_streamed_mutation(*smo).get0();
+                    smo = rd().get0();
+                    BOOST_REQUIRE(!smo);
+                    injector.cancel();
+
+                    assert_that(got).is_equal_to(mut, ranges);
+                    assert_that(cache.make_reader(s, query::full_partition_range, slice))
+                        .produces(mut, ranges);
+
+                    if (!injector.failed()) {
+                        break;
+                    }
+                } catch (const std::bad_alloc&) {
+                    // expected
+                }
+            }
+        };
+
+        auto run_query = [&] {
+            auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
+            auto&& ranges = slice.row_ranges(*s, mut.key());
+            injector.fail_after(0);
+            assert_that(cache.make_reader(s, query::full_partition_range, slice))
+                .produces(mut, ranges);
+            injector.cancel();
+        };
+
+        run_queries();
+
+        injector.run_with_callback([&] {
+            if (tracker.region().reclaiming_enabled()) {
+                tracker.region().full_compaction();
+            }
+            injector.fail_after(0);
+        }, run_query);
+
+        injector.run_with_callback([&] {
+            if (tracker.region().reclaiming_enabled()) {
+                cache.evict();
+            }
+        }, run_queries);
+    });
 }
 
-SEASTAR_TEST_CASE(test_partition_isolation_across_update_of_unrelated_partitions) {
+SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to_read_from_cache) {
     return seastar::async([] {
         simple_schema s;
         cache_tracker tracker;
         memtable_snapshot_source underlying(s.schema());
 
-        auto pkeys = s.make_pkeys(3);
-        auto pr_k0 = dht::partition_range::make_singular(pkeys[0]);
-        auto pr_k1 = dht::partition_range::make_singular(pkeys[1]);
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
 
+        mutation mut(pk, s.schema());
+        s.add_row(mut, s.make_ckey(6), "v");
+        auto rt = s.make_range_tombstone(s.make_ckey_range(3, 4));
+        mut.partition().apply_row_tombstone(*s.schema(), rt);
+        underlying.apply(mut);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto&& injector = memory::local_failure_injector();
+
+        auto slice = partition_slice_builder(*s.schema())
+            .with_range(s.make_ckey_range(0, 1))
+            .with_range(s.make_ckey_range(3, 6))
+            .build();
+
+        uint64_t i = 0;
+        while (true) {
+            try {
+                cache.evict();
+                populate_range(cache, pr, s.make_ckey_range(6, 10));
+
+                injector.fail_after(i++);
+                auto rd = cache.make_reader(s.schema(), pr, slice);
+                auto smo = rd().get0();
+                BOOST_REQUIRE(smo);
+                auto got = mutation_from_streamed_mutation(*smo).get0();
+                smo = rd().get0();
+                BOOST_REQUIRE(!smo);
+                injector.cancel();
+
+                assert_that(got).is_equal_to(mut);
+
+                if (!injector.failed()) {
+                    break;
+                }
+            } catch (const std::bad_alloc&) {
+                // expected
+            }
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pkeys = s.make_pkeys(7);
         std::vector<mutation> muts;
+
         for (auto&& pk : pkeys) {
             mutation mut(pk, s.schema());
             s.add_row(mut, s.make_ckey(1), "v");
             muts.push_back(mut);
+            underlying.apply(mut);
         }
 
-        underlying.apply(muts[1]);
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        {
-            row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+        auto&& injector = memory::local_failure_injector();
 
-            populate_range(cache, pr_k1);
-            auto rd1_v1 = assert_that_stream(read_first_partition(cache, pr_k1));
+        uint64_t i = 0;
+        do {
+            try {
+                cache.evict();
+                populate_range(cache, dht::partition_range::make_singular(pkeys[1]));
+                populate_range(cache, dht::partition_range::make({pkeys[3]}, {pkeys[5]}));
 
-            // this shouldn't touch pkeys[1]
-            apply(cache, underlying, muts[0]);
-
-            auto rd0_v2 = assert_that_stream(read_first_partition(cache, pr_k0));
-            auto rd1_v2 = assert_that_stream(read_first_partition(cache, pr_k1));
-
-            std::vector<mutation> muts_v3;
-            for (auto&& pk : pkeys) {
-                mutation mut(pk, s.schema());
-                s.add_row(mut, s.make_ckey(1), "v2");
-                muts_v3.push_back(mut);
+                injector.fail_after(i++);
+                assert_that(cache.make_reader(s.schema()))
+                    .produces(muts)
+                    .produces_end_of_stream();
+                injector.cancel();
+            } catch (const std::bad_alloc&) {
+                // expected
             }
-
-            apply(cache, underlying, muts_v3[0]);
-            apply(cache, underlying, muts_v3[1]);
-
-            auto rd0_v3 = assert_that_stream(read_first_partition(cache, pr_k0));
-            auto rd1_v3 = assert_that_stream(read_first_partition(cache, pr_k1));
-
-            rd0_v2.produces(muts[0]).produces_end_of_stream();
-            rd0_v3.produces(muts_v3[0]).produces_end_of_stream();
-            rd1_v1.produces(muts[1]).produces_end_of_stream();
-            rd1_v2.produces(muts[1]).produces_end_of_stream();
-            rd1_v3.produces(muts_v3[1]).produces_end_of_stream();
-        }
-
-        BOOST_REQUIRE_EQUAL(0, tracker.region().occupancy().used_space());
+        } while (injector.failed());
     });
 }
 

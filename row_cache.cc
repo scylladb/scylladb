@@ -37,11 +37,14 @@
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
 
+namespace cache {
+
+logging::logger clogger("cache");
+
+}
+
 using namespace std::chrono_literals;
 using namespace cache;
-
-
-static logging::logger clogger("cache");
 
 thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
 
@@ -247,26 +250,37 @@ public:
         , _last_reclaim_count(std::numeric_limits<uint64_t>::max())
     { }
 
-    // Ensures that cache entry reference is valid.
-    // The cursor will point at the first entry with position >= the current position.
-    // Returns true if and only if the position of the cursor changed.
-    // Strong exception guarantees.
-    bool refresh() {
-        auto reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
-        if (reclaim_count == _last_reclaim_count) {
-            return true;
-        }
+    // Returns true iff the cursor is valid
+    bool valid() const {
+        return _cache.get().get_cache_tracker().allocator().invalidate_counter() == _last_reclaim_count;
+    }
 
+    // Repositions the cursor to the first entry with position >= pos.
+    // Returns true iff the position of the cursor is equal to pos.
+    // Can be called on invalid cursor, in which case it brings it back to validity.
+    // Strong exception guarantees.
+    bool advance_to(dht::ring_position_view pos) {
         auto cmp = cache_entry::compare(_cache.get()._schema);
-        if (cmp(_end_pos, _start_pos)) { // next() may have moved _start_pos past the _end_pos.
-            _end_pos = _start_pos;
+        if (cmp(_end_pos, pos)) { // next() may have moved _start_pos past the _end_pos.
+            _end_pos = pos;
         }
         _end = _cache.get()._partitions.lower_bound(_end_pos, cmp);
-        _it = _cache.get()._partitions.lower_bound(_start_pos, cmp);
-        auto same = !cmp(_start_pos, _it->position());
+        _it = _cache.get()._partitions.lower_bound(pos, cmp);
+        auto same = !cmp(pos, _it->position());
         set_position(*_it);
-        _last_reclaim_count = reclaim_count;
+        _last_reclaim_count = _cache.get().get_cache_tracker().allocator().invalidate_counter();
         return same;
+    }
+
+    // Ensures that cache entry reference is valid.
+    // The cursor will point at the first entry with position >= the current position.
+    // Returns true if and only if the position of the cursor did not change.
+    // Strong exception guarantees.
+    bool refresh() {
+        if (valid()) {
+            return true;
+        }
+        return advance_to(_start_pos);
     }
 
     // Positions the cursor at the next entry.
@@ -511,10 +525,18 @@ private:
         return ce.read(_cache, *_read_context);
     }
 
+    static dht::ring_position_view as_ring_position_view(const stdx::optional<dht::partition_range::bound>& lower_bound) {
+        return lower_bound ? dht::ring_position_view(lower_bound->value(), dht::ring_position_view::after_key(!lower_bound->is_inclusive()))
+                           : dht::ring_position_view::min();
+    }
+
     streamed_mutation_opt do_read_from_primary() {
         return _cache._read_section(_cache._tracker.region(), [this] {
             return with_linearized_managed_bytes([&] () -> streamed_mutation_opt {
-                auto not_moved = _primary.refresh();
+                bool not_moved = true;
+                if (!_primary.valid()) {
+                    not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
+                }
 
                 if (_advance_primary && not_moved) {
                     _primary.next();
@@ -535,14 +557,14 @@ private:
                 } else {
                     if (_primary.in_range()) {
                         cache_entry& e = _primary.entry();
-                        _secondary_range = dht::partition_range(_lower_bound ? std::move(_lower_bound) : _pr->start(),
+                        _secondary_range = dht::partition_range(_lower_bound,
                             dht::partition_range::bound{e.key(), false});
                         _lower_bound = dht::partition_range::bound{e.key(), true};
                         _secondary_in_progress = true;
                         return stdx::nullopt;
                     } else {
                         dht::ring_position_comparator cmp(*_read_context->schema());
-                        auto range = _pr->trim_front(std::move(_lower_bound), cmp);
+                        auto range = _pr->trim_front(stdx::optional<dht::partition_range::bound>(_lower_bound), cmp);
                         if (!range) {
                             return stdx::nullopt;
                         }
@@ -585,6 +607,7 @@ public:
         , _read_context(std::move(context))
         , _primary(cache, range)
         , _secondary_reader(cache, *_read_context)
+        , _lower_bound(range.start())
     { }
 
     future<streamed_mutation_opt> operator()() {
@@ -600,7 +623,7 @@ public:
         _advance_primary = false;
         _pr = &pr;
         _primary = partition_range_cursor{_cache, pr};
-        _lower_bound = {};
+        _lower_bound = pr.start();
         return make_ready_future<>();
     }
 };
@@ -1049,7 +1072,12 @@ streamed_mutation cache_entry::read(row_cache& rc, read_context& reader) {
 streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
         streamed_mutation&& sm, row_cache::phase_type phase) {
     reader.enter_partition(std::move(sm), phase);
-    return do_read(rc, reader);
+    try {
+        return do_read(rc, reader);
+    } catch (...) {
+        sm = std::move(reader.get_streamed_mutation());
+        throw;
+    }
 }
 
 // Assumes reader is in the corresponding partition

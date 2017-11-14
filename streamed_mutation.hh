@@ -585,6 +585,12 @@ public:
             _buffer_size += _buffer.back().memory_usage();
         }
     public:
+        // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
+        void reserve_one() {
+            if (_buffer.capacity() == _buffer.size()) {
+                _buffer.reserve(_buffer.size() * 2 + 1);
+            }
+        }
         explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
             : _schema(std::move(s)), _key(std::move(dk)), _partition_tombstone(pt)
         { }

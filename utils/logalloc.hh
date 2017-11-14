@@ -643,6 +643,9 @@ public:
     // memory reserves are increased with region lock off allowing for memory
     // reclamation to take place in the region.
     //
+    // References in the region are invalidated when allocating section is re-entered
+    // on allocation failure.
+    //
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
@@ -658,6 +661,7 @@ public:
                     logalloc::reclaim_lock _(r);
                     return func();
                 } catch (const std::bad_alloc&) {
+                    r.allocator().invalidate_references();
                     on_alloc_failure();
                 }
             }

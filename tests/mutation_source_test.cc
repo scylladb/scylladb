@@ -1177,7 +1177,7 @@ public:
         std::random_device rd;
         // In case of errors, replace the seed with a fixed value to get a deterministic run.
         auto seed = rd();
-        BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
+        std::cout << "Random seed: " << seed << "\n";
         _gen = std::mt19937(seed);
 
         _schema = make_schema();
