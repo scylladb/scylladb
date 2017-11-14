@@ -61,7 +61,6 @@
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
-#include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
@@ -391,9 +390,7 @@ class incremental_reader_selector : public reader_selector {
 
     mutation_reader create_reader(sstables::shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
-        // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-        mutation_reader reader =
-            make_mutation_reader<sstable_range_wrapping_reader>(sst, _s, *_pr, _slice, _pc, _resource_tracker, _fwd, _fwd_mr);
+        mutation_reader reader = sst->read_range_rows(_s, *_pr, _slice, _pc, _resource_tracker, _fwd, _fwd_mr);
         if (sst->is_shared()) {
             reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
         }

@@ -36,7 +36,6 @@
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
-#include "sstable_mutation_readers.hh"
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
@@ -425,18 +424,17 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         for (auto table : tables) {
             sstables->insert(table);
 
-            sstable_mutation_readers.emplace_back(make_mutation_reader<sstable_range_wrapping_reader>(
-                    table,
+            sstable_mutation_readers.emplace_back(table->read_range_rows(
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
-                    ::mutation_reader::forwarding::yes));
+                    mutation_reader::forwarding::yes));
         }
 
-        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), ::mutation_reader::forwarding::yes);
+        auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), mutation_reader::forwarding::yes);
 
         auto incremental_reader = make_range_sstable_reader(
                 s.schema(),
@@ -447,7 +445,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
                 no_resource_tracking(),
                 nullptr,
                 streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::yes);
+                mutation_reader::forwarding::yes);
 
         // merge c[0] with d[1]
         i = 2;
@@ -522,8 +520,7 @@ class tracking_reader : public mutation_reader::impl {
     std::size_t _ff_count{0};
 public:
     tracking_reader(semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
-        : _reader(make_mutation_reader<sstable_range_wrapping_reader>(
-                        std::move(sst),
+        : _reader(sst->read_range_rows(
                         schema,
                         query::full_partition_range,
                         schema->full_slice(),

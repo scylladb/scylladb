@@ -1098,7 +1098,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstri
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto reader = sstp->read_range_rows(s, query::full_partition_range, ps);
         int nrows = 0;
-        auto smopt = reader.read().get0();
+        auto smopt = reader().get0();
         while (smopt) {
             auto mfopt = (*smopt)().get0();
             while (mfopt) {
@@ -1107,7 +1107,7 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstri
                 }
                 mfopt = (*smopt)().get0();
             }
-            smopt = reader.read().get0();
+            smopt = reader().get0();
         }
         return nrows;
     });

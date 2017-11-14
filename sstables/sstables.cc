@@ -2295,7 +2295,7 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 }
 
 future<> sstable::write_components(
-        ::mutation_reader mr,
+        mutation_reader mr,
         uint64_t estimated_partitions,
         schema_ptr schema,
         const sstable_writer_config& cfg,
@@ -2998,21 +2998,7 @@ future<> init_metrics() {
   });
 }
 
-struct range_reader_adaptor final : public ::mutation_reader::impl {
-    sstables::shared_sstable _sst;
-    sstables::mutation_reader _rd;
-public:
-    range_reader_adaptor(sstables::shared_sstable sst, sstables::mutation_reader rd)
-        : _sst(std::move(sst)), _rd(std::move(rd)) {}
-    virtual future<streamed_mutation_opt> operator()() override {
-        return _rd.read();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        return _rd.fast_forward_to(pr);
-    }
-};
-
-struct single_partition_reader_adaptor final : public ::mutation_reader::impl {
+struct single_partition_reader_adaptor final : public mutation_reader::impl {
     sstables::shared_sstable _sst;
     schema_ptr _s;
     dht::ring_position_view _key;
@@ -3043,7 +3029,7 @@ mutation_source sstable::as_mutation_source() {
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr,
             streamed_mutation::forwarding fwd,
-            ::mutation_reader::forwarding fwd_mr) mutable {
+            mutation_reader::forwarding fwd_mr) mutable {
         // CAVEAT: if as_mutation_source() is called on a single partition
         // we want to optimize and read exactly this partition. As a
         // consequence, fast_forward_to() will *NOT* work on the result,
@@ -3052,7 +3038,7 @@ mutation_source sstable::as_mutation_source() {
             const dht::ring_position& pos = range.start()->value();
             return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
         } else {
-            return make_mutation_reader<range_reader_adaptor>(sst, sst->read_range_rows(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr));
+            return sst->read_range_rows(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
         }
     });
 }
