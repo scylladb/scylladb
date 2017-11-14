@@ -41,6 +41,7 @@
 
 #include "authenticator.hh"
 #include "authenticated_user.hh"
+#include "common.hh"
 #include "password_authenticator.hh"
 #include "auth.hh"
 #include "db/config.hh"
@@ -50,7 +51,7 @@ const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
 
 const sstring& auth::allow_all_authenticator_name() {
-    static const sstring name = auth::AUTH_PACKAGE_NAME + "AllowAllAuthenticator";
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthenticator";
     return name;
 }
 

@@ -41,13 +41,14 @@
 
 #include "authorizer.hh"
 #include "authenticated_user.hh"
+#include "common.hh"
 #include "default_authorizer.hh"
 #include "auth.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 const sstring& auth::allow_all_authorizer_name() {
-    static const sstring name = auth::auth::AUTH_PACKAGE_NAME + "AllowAllAuthorizer";
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthorizer";
     return name;
 }
 

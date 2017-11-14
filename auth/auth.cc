@@ -48,6 +48,7 @@
 #include "auth.hh"
 #include "authenticator.hh"
 #include "authorizer.hh"
+#include "common.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -59,11 +60,6 @@
 #include "service/migration_manager.hh"
 #include "utils/loading_cache.hh"
 #include "utils/hash.hh"
-
-const sstring auth::auth::DEFAULT_SUPERUSER_NAME("cassandra");
-const sstring auth::auth::AUTH_KS("system_auth");
-const sstring auth::auth::USERS_CF("users");
-const sstring auth::auth::AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 static const sstring USER_NAME("name");
 static const sstring SUPER("super");
@@ -129,8 +125,8 @@ future<> auth::auth::setup() {
     auto& db = cql3::get_local_query_processor().db().local();
     auto& cfg = db.get_config();
 
-    qualified_name authenticator_name(AUTH_PACKAGE_NAME, cfg.authenticator()),
-                    authorizer_name(AUTH_PACKAGE_NAME, cfg.authorizer());
+    qualified_name authenticator_name(meta::AUTH_PACKAGE_NAME, cfg.authenticator()),
+                    authorizer_name(meta::AUTH_PACKAGE_NAME, cfg.authorizer());
 
     if (allow_all_authenticator_name() == authenticator_name && allow_all_authorizer_name() == authorizer_name) {
         return authenticator::setup(authenticator_name).then([authorizer_name = std::move(authorizer_name)] {
@@ -142,17 +138,17 @@ future<> auth::auth::setup() {
 
     future<> f = make_ready_future<>();
 
-    if (!db.has_keyspace(AUTH_KS)) {
+    if (!db.has_keyspace(meta::AUTH_KS)) {
         std::map<sstring, sstring> opts;
         opts["replication_factor"] = "1";
-        auto ksm = keyspace_metadata::new_keyspace(AUTH_KS, "org.apache.cassandra.locator.SimpleStrategy", opts, true);
+        auto ksm = keyspace_metadata::new_keyspace(meta::AUTH_KS, "org.apache.cassandra.locator.SimpleStrategy", opts, true);
         // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments. See issue #2129.
         f = service::get_local_migration_manager().announce_new_keyspace(ksm, api::min_timestamp, false);
     }
 
     return f.then([] {
-        return setup_table(USERS_CF, sprint("CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY(%s)) WITH gc_grace_seconds=%d",
-                                        AUTH_KS, USERS_CF, USER_NAME, SUPER, USER_NAME,
+        return setup_table(meta::USERS_CF, sprint("CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY(%s)) WITH gc_grace_seconds=%d",
+                                              meta::AUTH_KS, meta::USERS_CF, USER_NAME, SUPER, USER_NAME,
                                         90 * 24 * 60 * 60)); // 3 months.
     }).then([authenticator_name = std::move(authenticator_name)] {
         return authenticator::setup(authenticator_name);
@@ -165,12 +161,12 @@ future<> auth::auth::setup() {
         // instead of once-timer, just schedule this later
         schedule_when_up([] {
             // setup default super user
-            return has_existing_users(USERS_CF, DEFAULT_SUPERUSER_NAME, USER_NAME).then([](bool exists) {
+            return has_existing_users(meta::USERS_CF, meta::DEFAULT_SUPERUSER_NAME, USER_NAME).then([](bool exists) {
                 if (!exists) {
                     auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
-                                    AUTH_KS, USERS_CF, USER_NAME, SUPER);
-                    cql3::get_local_query_processor().process(query, db::consistency_level::ONE, {DEFAULT_SUPERUSER_NAME, true}).then([](auto) {
-                        alogger.info("Created default superuser '{}'", DEFAULT_SUPERUSER_NAME);
+                                    meta::AUTH_KS, meta::USERS_CF, USER_NAME, SUPER);
+                    cql3::get_local_query_processor().process(query, db::consistency_level::ONE, {meta::DEFAULT_SUPERUSER_NAME, true}).then([](auto) {
+                        alogger.info("Created default superuser '{}'", meta::DEFAULT_SUPERUSER_NAME);
                     }).handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);
@@ -200,7 +196,7 @@ future<auth::permission_set> auth::auth::get_permissions(::shared_ptr<authentica
 }
 
 static db::consistency_level consistency_for_user(const sstring& username) {
-    if (username == auth::auth::DEFAULT_SUPERUSER_NAME) {
+    if (username == auth::meta::DEFAULT_SUPERUSER_NAME) {
         return db::consistency_level::QUORUM;
     }
     return db::consistency_level::LOCAL_ONE;
@@ -214,7 +210,7 @@ static future<::shared_ptr<cql3::untyped_result_set>> select_user(const sstring&
     // that a map lookup string->statement is not gonna kill us much.
     return cql3::get_local_query_processor().process(
                     sprint("SELECT * FROM %s.%s WHERE %s = ?",
-                                    auth::auth::AUTH_KS, auth::auth::USERS_CF,
+                                    auth::meta::AUTH_KS, auth::meta::USERS_CF,
                                     USER_NAME), consistency_for_user(username),
                     { username }, true);
 }
@@ -235,13 +231,13 @@ future<bool> auth::auth::is_super_user(const sstring& username) {
 
 future<> auth::auth::insert_user(const sstring& username, bool is_super) {
     return cql3::get_local_query_processor().process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
-                    AUTH_KS, USERS_CF, USER_NAME, SUPER),
+                    meta::AUTH_KS, meta::USERS_CF, USER_NAME, SUPER),
                     consistency_for_user(username), { username, is_super }).discard_result();
 }
 
 future<> auth::auth::delete_user(const sstring& username) {
     return cql3::get_local_query_processor().process(sprint("DELETE FROM %s.%s WHERE %s = ?",
-                    AUTH_KS, USERS_CF, USER_NAME),
+                    meta::AUTH_KS, meta::USERS_CF, USER_NAME),
                     consistency_for_user(username), { username }).discard_result();
 }
 
@@ -249,13 +245,13 @@ future<> auth::auth::setup_table(const sstring& name, const sstring& cql) {
     auto& qp = cql3::get_local_query_processor();
     auto& db = qp.db().local();
 
-    if (db.has_schema(AUTH_KS, name)) {
+    if (db.has_schema(meta::AUTH_KS, name)) {
         return make_ready_future();
     }
 
     ::shared_ptr<cql3::statements::raw::cf_statement> parsed = static_pointer_cast<
                     cql3::statements::raw::cf_statement>(cql3::query_processor::parse_statement(cql));
-    parsed->prepare_keyspace(AUTH_KS);
+    parsed->prepare_keyspace(meta::AUTH_KS);
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed->prepare(db, qp.get_cql_stats())->statement);
@@ -268,8 +264,8 @@ future<> auth::auth::setup_table(const sstring& name, const sstring& cql) {
 }
 
 future<bool> auth::auth::has_existing_users(const sstring& cfname, const sstring& def_user_name, const sstring& name_column) {
-    auto default_user_query = sprint("SELECT * FROM %s.%s WHERE %s = ?", AUTH_KS, cfname, name_column);
-    auto all_users_query = sprint("SELECT * FROM %s.%s LIMIT 1", AUTH_KS, cfname);
+    auto default_user_query = sprint("SELECT * FROM %s.%s WHERE %s = ?", meta::AUTH_KS, cfname, name_column);
+    auto all_users_query = sprint("SELECT * FROM %s.%s LIMIT 1", meta::AUTH_KS, cfname);
 
     return cql3::get_local_query_processor().process(default_user_query, db::consistency_level::ONE, { def_user_name }).then([=](::shared_ptr<cql3::untyped_result_set> res) {
         if (!res->empty()) {

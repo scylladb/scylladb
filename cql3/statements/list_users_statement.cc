@@ -42,7 +42,7 @@
 #include "list_users_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
-#include "auth/auth.hh"
+#include "auth/common.hh"
 
 void cql3::statements::list_users_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
 }
@@ -57,7 +57,7 @@ cql3::statements::list_users_statement::execute(distributed<service::storage_pro
     auto is = std::make_unique<service::query_state>(service::client_state::for_internal_calls());
     auto io = std::make_unique<query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{});
     auto f = get_local_query_processor().process(
-                    sprint("SELECT * FROM %s.%s", auth::auth::AUTH_KS,
-                                    auth::auth::USERS_CF), *is, *io);
+                    sprint("SELECT * FROM %s.%s", auth::meta::AUTH_KS,
+                                    auth::meta::USERS_CF), *is, *io);
     return f.finally([is = std::move(is), io = std::move(io)] {});
 }

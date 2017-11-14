@@ -47,6 +47,7 @@
 #include <seastar/core/reactor.hh>
 
 #include "auth.hh"
+#include "common.hh"
 #include "default_authorizer.hh"
 #include "authenticated_user.hh"
 #include "permission.hh"
@@ -56,7 +57,7 @@
 #include "log.hh"
 
 const sstring& auth::default_authorizer_name() {
-    static const sstring name = auth::auth::AUTH_PACKAGE_NAME + "CassandraAuthorizer";
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "CassandraAuthorizer";
     return name;
 }
 
@@ -82,7 +83,7 @@ future<> auth::default_authorizer::init() {
                     "%s text,"
                     "%s set<text>,"
                     "PRIMARY KEY(%s, %s)"
-                    ") WITH gc_grace_seconds=%d", auth::auth::AUTH_KS,
+                    ") WITH gc_grace_seconds=%d", meta::AUTH_KS,
                     PERMISSIONS_CF, USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME,
                     USER_NAME, RESOURCE_NAME, 90 * 24 * 60 * 60); // 3 months.
 
@@ -103,7 +104,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
          */
         auto& qp = cql3::get_local_query_processor();
         auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?"
-                        , PERMISSIONS_NAME, auth::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
+                        , PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
         return qp.process(query, db::consistency_level::LOCAL_ONE, {user->name(), resource.name() })
                         .then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
             try {
@@ -129,7 +130,7 @@ future<> auth::default_authorizer::modify(
     // TODO: why does this not check super user?
     auto& qp = cql3::get_local_query_processor();
     auto query = sprint("UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
-                    auth::AUTH_KS, PERMISSIONS_CF, PERMISSIONS_NAME,
+                    meta::AUTH_KS, PERMISSIONS_CF, PERMISSIONS_NAME,
                     PERMISSIONS_NAME, op, USER_NAME, RESOURCE_NAME);
     return qp.process(query, db::consistency_level::ONE, {
                     permissions::to_strings(set), user, resource.name() }).discard_result();
@@ -156,7 +157,7 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
             throw exceptions::unauthorized_exception(sprint("You are not authorized to view %s's permissions", user ? *user : "everyone"));
         }
 
-        auto query = sprint("SELECT %s, %s, %s FROM %s.%s", USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME, auth::AUTH_KS, PERMISSIONS_CF);
+        auto query = sprint("SELECT %s, %s, %s FROM %s.%s", USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF);
         auto& qp = cql3::get_local_query_processor();
 
         // Oh, look, it is a case where it does not pay off to have
@@ -196,7 +197,7 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
 
 future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
     auto& qp = cql3::get_local_query_processor();
-    auto query = sprint("DELETE FROM %s.%s WHERE %s = ?", auth::AUTH_KS,
+    auto query = sprint("DELETE FROM %s.%s WHERE %s = ?", meta::AUTH_KS,
                     PERMISSIONS_CF, USER_NAME);
     return qp.process(query, db::consistency_level::ONE, { dropped_user }).discard_result().handle_exception(
                     [dropped_user](auto ep) {
@@ -211,14 +212,14 @@ future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
 future<> auth::default_authorizer::revoke_all(data_resource resource) {
     auto& qp = cql3::get_local_query_processor();
     auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
-                    USER_NAME, auth::AUTH_KS, PERMISSIONS_CF, RESOURCE_NAME);
+                    USER_NAME, meta::AUTH_KS, PERMISSIONS_CF, RESOURCE_NAME);
     return qp.process(query, db::consistency_level::LOCAL_ONE, { resource.name() })
                     .then_wrapped([resource, &qp](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
             return parallel_for_each(res->begin(), res->end(), [&qp, res, resource](const cql3::untyped_result_set::row& r) {
                 auto query = sprint("DELETE FROM %s.%s WHERE %s = ? AND %s = ?"
-                                , auth::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
+                                , meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
                 return qp.process(query, db::consistency_level::LOCAL_ONE, { r.get_as<sstring>(USER_NAME), resource.name() })
                                 .discard_result().handle_exception([resource](auto ep) {
                     try {
@@ -238,7 +239,7 @@ future<> auth::default_authorizer::revoke_all(data_resource resource) {
 
 
 const auth::resource_ids& auth::default_authorizer::protected_resources() {
-    static const resource_ids ids({ data_resource(auth::AUTH_KS, PERMISSIONS_CF) });
+    static const resource_ids ids({ data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return ids;
 }
 

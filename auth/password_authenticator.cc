@@ -47,6 +47,7 @@
 #include <seastar/core/reactor.hh>
 
 #include "auth.hh"
+#include "common.hh"
 #include "password_authenticator.hh"
 #include "authenticated_user.hh"
 #include "cql3/query_processor.hh"
@@ -55,15 +56,15 @@
 #include "utils/class_registrator.hh"
 
 const sstring& auth::password_authenticator_name() {
-    static const sstring name = auth::AUTH_PACKAGE_NAME + "PasswordAuthenticator";
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "PasswordAuthenticator";
     return name;
 }
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
 static const sstring USER_NAME = "username";
-static const sstring DEFAULT_USER_NAME = auth::auth::DEFAULT_SUPERUSER_NAME;
-static const sstring DEFAULT_USER_PASSWORD = auth::auth::DEFAULT_SUPERUSER_NAME;
+static const sstring DEFAULT_USER_NAME = auth::meta::DEFAULT_SUPERUSER_NAME;
+static const sstring DEFAULT_USER_PASSWORD = auth::meta::DEFAULT_SUPERUSER_NAME;
 static const sstring CREDENTIALS_CF = "credentials";
 
 static logging::logger plogger("password_authenticator");
@@ -158,7 +159,7 @@ future<> auth::password_authenticator::init() {
                                     "options map<text,text>,"// for future extensions
                                     "PRIMARY KEY(%s)"
                                     ") WITH gc_grace_seconds=%d",
-                    auth::auth::AUTH_KS,
+                    meta::AUTH_KS,
                     CREDENTIALS_CF, USER_NAME, SALTED_HASH, USER_NAME,
                     90 * 24 * 60 * 60); // 3 months.
 
@@ -168,7 +169,7 @@ future<> auth::password_authenticator::init() {
             return auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([](bool exists) {
                 if (!exists) {
                     cql3::get_local_query_processor().process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
-                                                    auth::AUTH_KS,
+                                                    meta::AUTH_KS,
                                                     CREDENTIALS_CF,
                                                     USER_NAME, SALTED_HASH
                                     ),
@@ -224,7 +225,7 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
     return futurize_apply([this, username, password] {
         auto& qp = cql3::get_local_query_processor();
         return qp.process(sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
-                                        auth::AUTH_KS, CREDENTIALS_CF, USER_NAME),
+                                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME),
                         consistency_for_user(username), {username}, true);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
@@ -248,7 +249,7 @@ future<> auth::password_authenticator::create(sstring username,
     try {
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
-                        auth::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
+                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
         auto& qp = cql3::get_local_query_processor();
         return qp.process(query, consistency_for_user(username), { username, hashpw(password) }).discard_result();
     } catch (std::out_of_range&) {
@@ -261,7 +262,7 @@ future<> auth::password_authenticator::alter(sstring username,
     try {
         auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
         auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
-                        auth::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
+                        meta::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
         auto& qp = cql3::get_local_query_processor();
         return qp.process(query, consistency_for_user(username), { hashpw(password), username }).discard_result();
     } catch (std::out_of_range&) {
@@ -272,7 +273,7 @@ future<> auth::password_authenticator::alter(sstring username,
 future<> auth::password_authenticator::drop(sstring username) {
     try {
         auto query = sprint("DELETE FROM %s.%s WHERE %s = ?",
-                        auth::AUTH_KS, CREDENTIALS_CF, USER_NAME);
+                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME);
         auto& qp = cql3::get_local_query_processor();
         return qp.process(query, consistency_for_user(username), { username }).discard_result();
     } catch (std::out_of_range&) {
@@ -281,7 +282,7 @@ future<> auth::password_authenticator::drop(sstring username) {
 }
 
 const auth::resource_ids& auth::password_authenticator::protected_resources() const {
-    static const resource_ids ids({ data_resource(auth::AUTH_KS, CREDENTIALS_CF) });
+    static const resource_ids ids({ data_resource(meta::AUTH_KS, CREDENTIALS_CF) });
     return ids;
 }
 

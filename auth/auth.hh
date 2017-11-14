@@ -57,11 +57,6 @@ class auth {
 public:
     class permissions_cache;
 
-    static const sstring DEFAULT_SUPERUSER_NAME;
-    static const sstring AUTH_KS;
-    static const sstring USERS_CF;
-    static const sstring AUTH_PACKAGE_NAME;
-
     static future<permission_set> get_permissions(::shared_ptr<authenticated_user>, data_resource);
 
     /**
