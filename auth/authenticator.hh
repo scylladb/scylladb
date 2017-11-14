@@ -65,11 +65,12 @@ namespace auth {
 
 class authenticated_user;
 
+const sstring& allow_all_authenticator_name();
+
 class authenticator {
 public:
     static const sstring USERNAME_KEY;
     static const sstring PASSWORD_KEY;
-    static const sstring ALLOW_ALL_AUTHENTICATOR_NAME;
 
     /**
      * Supported CREATE USER/ALTER USER options.

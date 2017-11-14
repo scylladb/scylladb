@@ -48,7 +48,11 @@
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
-const sstring auth::authenticator::ALLOW_ALL_AUTHENTICATOR_NAME(auth::AUTH_PACKAGE_NAME + "AllowAllAuthenticator");
+
+const sstring& auth::allow_all_authenticator_name() {
+    static const sstring name = auth::AUTH_PACKAGE_NAME + "AllowAllAuthenticator";
+    return name;
+}
 
 auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
     if (strcasecmp(name.c_str(), "password") == 0) {
@@ -76,11 +80,11 @@ using authenticator_registry = class_registry<auth::authenticator>;
 
 future<>
 auth::authenticator::setup(const sstring& type) {
-    if (type == ALLOW_ALL_AUTHENTICATOR_NAME) {
+    if (type == allow_all_authenticator_name()) {
         class allow_all_authenticator : public authenticator {
         public:
             const sstring& class_name() const override {
-                return ALLOW_ALL_AUTHENTICATOR_NAME;
+                return allow_all_authenticator_name();
             }
             bool require_authentication() const override {
                 return false;

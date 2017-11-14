@@ -69,10 +69,10 @@ struct permission_details {
 
 using std::experimental::optional;
 
+const sstring& allow_all_authorizer_name();
+
 class authorizer {
 public:
-    static const sstring ALLOW_ALL_AUTHORIZER_NAME;
-
     virtual ~authorizer() {}
 
     virtual future<> init() {

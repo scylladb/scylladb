@@ -54,7 +54,10 @@
 #include "log.hh"
 #include "utils/class_registrator.hh"
 
-const sstring auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME(auth::AUTH_PACKAGE_NAME + "PasswordAuthenticator");
+const sstring& auth::password_authenticator_name() {
+    static const sstring name = auth::AUTH_PACKAGE_NAME + "PasswordAuthenticator";
+    return name;
+}
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
@@ -65,8 +68,9 @@ static const sstring CREDENTIALS_CF = "credentials";
 
 static logging::logger plogger("password_authenticator");
 
+// To ensure correct initialization order, we unfortunately need to use a string literal.
 static const class_registrator<auth::authenticator, auth::password_authenticator> password_auth_reg(
-                auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+                "org.apache.cassandra.auth.PasswordAuthenticator");
 
 auth::password_authenticator::~password_authenticator()
 {}
@@ -185,7 +189,7 @@ db::consistency_level auth::password_authenticator::consistency_for_user(const s
 }
 
 const sstring& auth::password_authenticator::class_name() const {
-    return PASSWORD_AUTHENTICATOR_NAME;
+    return password_authenticator_name();
 }
 
 bool auth::password_authenticator::require_authentication() const {

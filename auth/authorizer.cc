@@ -46,7 +46,10 @@
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
-const sstring auth::authorizer::ALLOW_ALL_AUTHORIZER_NAME(auth::AUTH_PACKAGE_NAME + "AllowAllAuthorizer");
+const sstring& auth::allow_all_authorizer_name() {
+    static const sstring name = auth::auth::AUTH_PACKAGE_NAME + "AllowAllAuthorizer";
+    return name;
+}
 
 /**
  * Authenticator is assumed to be a fully state-less immutable object (note all the const).
@@ -57,7 +60,7 @@ using authorizer_registry = class_registry<auth::authorizer>;
 
 future<>
 auth::authorizer::setup(const sstring& type) {
-    if (type == ALLOW_ALL_AUTHORIZER_NAME) {
+    if (type == allow_all_authorizer_name()) {
         class allow_all_authorizer : public authorizer {
         public:
             future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {

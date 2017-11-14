@@ -173,7 +173,7 @@ future<> auth::auth::setup() {
     qualified_name authenticator_name(AUTH_PACKAGE_NAME, cfg.authenticator()),
                     authorizer_name(AUTH_PACKAGE_NAME, cfg.authorizer());
 
-    if (authenticator::ALLOW_ALL_AUTHENTICATOR_NAME == authenticator_name && authorizer::ALLOW_ALL_AUTHORIZER_NAME == authorizer_name) {
+    if (allow_all_authenticator_name() == authenticator_name && allow_all_authorizer_name() == authorizer_name) {
         // just create the objects
         return f.then([authenticator_name = std::move(authenticator_name)] {
             return authenticator::setup(authenticator_name);

@@ -53,8 +53,11 @@
 namespace auth {
 
 static const sstring PACKAGE_NAME("com.scylladb.auth.");
-static const sstring TRANSITIONAL_AUTHENTICATOR_NAME(PACKAGE_NAME + "TransitionalAuthenticator");
-static const sstring TRANSITIONAL_AUTHORIZER_NAME(PACKAGE_NAME + "TransitionalAuthorizer");
+
+static const sstring& transitional_authenticator_name() {
+    static const sstring name = PACKAGE_NAME + "TransitionalAuthenticator";
+    return name;
+}
 
 class transitional_authenticator : public authenticator {
     std::unique_ptr<authenticator> _authenticator;
@@ -71,7 +74,7 @@ public:
         return _authenticator->init();
     }
     const sstring& class_name() const override {
-        return TRANSITIONAL_AUTHENTICATOR_NAME;
+        return transitional_authenticator_name();
     }
     bool require_authentication() const override {
         return true;
@@ -188,9 +191,13 @@ public:
 
 }
 
+//
+// To ensure correct initialization order, we unfortunately need to use string literals.
+//
+
 static const class_registrator<auth::authenticator,
                 auth::transitional_authenticator> transitional_authenticator_reg(
-                auth::TRANSITIONAL_AUTHENTICATOR_NAME);
+                "com.scylladb.auth.TransitionalAuthenticator");
 
 static const class_registrator<auth::authorizer, auth::transitional_authorizer> transitional_authorizer_reg(
-                auth::TRANSITIONAL_AUTHORIZER_NAME);
+                "com.scylladb.auth.TransitionalAuthorizer");

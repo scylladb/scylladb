@@ -45,10 +45,10 @@
 
 namespace auth {
 
+const sstring& password_authenticator_name();
+
 class password_authenticator : public authenticator {
 public:
-    static const sstring PASSWORD_AUTHENTICATOR_NAME;
-
     password_authenticator();
     ~password_authenticator();
 

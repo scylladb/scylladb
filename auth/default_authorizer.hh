@@ -45,10 +45,10 @@
 
 namespace auth {
 
+const sstring& default_authorizer_name();
+
 class default_authorizer : public authorizer {
 public:
-    static const sstring DEFAULT_AUTHORIZER_NAME;
-
     default_authorizer();
     ~default_authorizer();
 
