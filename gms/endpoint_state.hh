@@ -161,12 +161,16 @@ public:
         return _is_alive;
     }
 
+    void set_alive(bool alive) {
+        _is_alive = alive;
+    }
+
     void mark_alive() {
-        _is_alive = true;
+        set_alive(true);
     }
 
     void mark_dead() {
-        _is_alive = false;
+        set_alive(false);
     }
 
     bool is_shutdown() const {
