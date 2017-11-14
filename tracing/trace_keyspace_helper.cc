@@ -64,7 +64,7 @@ struct trace_keyspace_backend_sesssion_state final : public backend_session_stat
 
 trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
-            , _dummy_query_state(service::client_state(service::client_state::external_tag{}))
+            , _dummy_query_state(service::client_state(service::client_state::internal_tag{}))
             , _sessions(KEYSPACE_NAME, SESSIONS,
                         sprint("CREATE TABLE IF NOT EXISTS %s.%s ("
                                   "session_id uuid,"
