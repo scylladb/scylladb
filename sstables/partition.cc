@@ -942,6 +942,16 @@ sstables::deletion_time promoted_index_view::get_deletion_time() const {
     return del_time;
 }
 
+static
+future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
+    auto& ranges = slice.row_ranges(s, *key.key());
+    if (ranges.empty()) {
+        return ix.advance_past(position_in_partition_view::for_static_row());
+    } else {
+        return ix.advance_past(position_in_partition_view::for_range_end(ranges[ranges.size() - 1]));
+    }
+}
+
 class sstable_mutation_reader : public flat_mutation_reader::impl {
 private:
     lw_shared_ptr<sstable_data_source> _ds;
@@ -1204,16 +1214,6 @@ mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& p
 
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
     return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd);
-}
-
-static
-future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
-    auto& ranges = slice.row_ranges(s, *key.key());
-    if (ranges.empty()) {
-        return ix.advance_past(position_in_partition_view::for_static_row());
-    } else {
-        return ix.advance_past(position_in_partition_view::for_range_end(ranges[ranges.size() - 1]));
-    }
 }
 
 future<streamed_mutation_opt>
