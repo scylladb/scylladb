@@ -659,6 +659,8 @@ public:
 
     static utils::hashed_key make_hashed_key(const schema& s, const partition_key& key);
 
+    filter_tracker& get_filter_tracker() { return _filter_tracker; }
+
     uint64_t filter_get_false_positive() {
         return _filter_tracker.false_positive;
     }
