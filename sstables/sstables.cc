@@ -2998,30 +2998,6 @@ future<> init_metrics() {
   });
 }
 
-struct single_partition_reader_adaptor final : public mutation_reader::impl {
-    sstables::shared_sstable _sst;
-    schema_ptr _s;
-    dht::ring_position_view _key;
-    const query::partition_slice& _slice;
-    const io_priority_class& _pc;
-    streamed_mutation::forwarding _fwd;
-public:
-    single_partition_reader_adaptor(sstables::shared_sstable sst, schema_ptr s, dht::ring_position_view key,
-        const query::partition_slice& slice, const io_priority_class& pc, streamed_mutation::forwarding fwd)
-        : _sst(sst), _s(s), _key(key), _slice(slice), _pc(pc), _fwd(fwd)
-    { }
-    virtual future<streamed_mutation_opt> operator()() override {
-        if (!_sst) {
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-        }
-        auto sst = std::move(_sst);
-        return sst->read_row(_s, _key, _slice, _pc, no_resource_tracking(), _fwd);
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        throw std::bad_function_call();
-    }
-};
-
 mutation_source sstable::as_mutation_source() {
     return mutation_source([sst = shared_from_this()] (schema_ptr s,
             const dht::partition_range& range,
