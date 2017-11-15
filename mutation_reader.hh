@@ -97,6 +97,143 @@ public:
     future<> fast_forward_to(const dht::partition_range& pr) { return _impl->fast_forward_to(pr); }
 };
 
+GCC6_CONCEPT(
+    template<typename Producer>
+    concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
+        // The returned fragments are expected to have the same
+        // position_in_partition. Iterators and references are expected
+        // to be valid until the next call to operator()().
+        { p() } -> future<boost::iterator_range<std::vector<mutation_fragment>::iterator>>;
+        // These have the same semantics as their
+        // flat_mutation_reader counterparts.
+        { p.next_partition() };
+        { p.fast_forward_to(part_range) } -> future<>;
+        { p.fast_forward_to(pos_range) } -> future<>;
+    };
+)
+
+/**
+ * Merge mutation-fragments produced by producer.
+ *
+ * Merge a non-decreasing stream of mutation-fragments into strictly
+ * increasing stream. The merger is stateful, it's intended to be kept
+ * around *at least* for merging an entire partition. That is, creating
+ * a new instance for each batch of fragments will produce incorrect
+ * results.
+ *
+ * Call operator() to get the next mutation fragment. operator() will
+ * consume fragments from the producer using operator().
+ * Any fast-forwarding has to be communicated to the merger object using
+ * fast_forward_to() and next_partition(), as appropriate.
+ */
+template<class Producer>
+GCC6_CONCEPT(
+    requires FragmentProducer<Producer>
+)
+class mutation_fragment_merger {
+    using iterator = std::vector<mutation_fragment>::iterator;
+
+    const schema_ptr _schema;
+    Producer _producer;
+    range_tombstone_stream _deferred_tombstones;
+    iterator _it;
+    iterator _end;
+    bool _end_of_stream = false;
+
+    void apply(mutation_fragment& to, mutation_fragment&& frag) {
+        if (to.is_range_tombstone()) {
+            if (auto remainder = to.as_mutable_range_tombstone().apply(*_schema, std::move(frag).as_range_tombstone())) {
+                _deferred_tombstones.apply(std::move(*remainder));
+            }
+        } else {
+            to.apply(*_schema, std::move(frag));
+        }
+    }
+
+    future<> fetch() {
+        if (!empty()) {
+            return make_ready_future<>();
+        }
+
+        return _producer().then([this] (boost::iterator_range<iterator> fragments) {
+            _it = fragments.begin();
+            _end = fragments.end();
+            if (empty()) {
+                _end_of_stream = true;
+            }
+        });
+    }
+
+    bool empty() const {
+        return _it == _end;
+    }
+
+    const mutation_fragment& top() const {
+        return *_it;
+    }
+
+    mutation_fragment pop() {
+        return std::move(*_it++);
+    }
+
+public:
+    mutation_fragment_merger(schema_ptr schema, Producer&& producer)
+        : _schema(std::move(schema))
+        , _producer(std::move(producer))
+        , _deferred_tombstones(*_schema) {
+    }
+
+    future<mutation_fragment_opt> operator()() {
+        if (_end_of_stream) {
+            return make_ready_future<mutation_fragment_opt>(_deferred_tombstones.get_next());
+        }
+
+        return fetch().then([this] () -> mutation_fragment_opt {
+            if (empty()) {
+                return _deferred_tombstones.get_next();
+            }
+
+            auto current = [&] {
+                if (auto rt = _deferred_tombstones.get_next(top())) {
+                    return std::move(*rt);
+                }
+                return pop();
+            }();
+
+            const auto equal = position_in_partition::equal_compare(*_schema);
+
+            // Position of current is always either < or == than those
+            // of the batch. In the former case there is nothing further
+            // to do.
+            if (empty() || !equal(current.position(), top().position())) {
+                return current;
+            }
+            while (!empty()) {
+                apply(current, pop());
+            }
+            return current;
+        });
+    }
+
+    void next_partition() {
+        _deferred_tombstones.reset();
+        _end_of_stream = false;
+        _producer.next_partition();
+    }
+
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        _deferred_tombstones.reset();
+        _end_of_stream = false;
+        return _producer.fast_forward_to(pr);
+    }
+
+    future<> fast_forward_to(position_range pr) {
+        _deferred_tombstones.forward_to(pr.start());
+        _end_of_stream = false;
+        return _producer.fast_forward_to(std::move(pr));
+    }
+};
+
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
 template <typename Impl, typename... Args>
 inline
