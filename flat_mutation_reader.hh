@@ -87,7 +87,7 @@ public:
             _buffer.erase(_buffer.begin(), _buffer.end());
             _buffer_size = 0;
         }
-        void forward_buffer_to(schema_ptr& s, const position_in_partition& pos);
+        void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
     public:
         impl(schema_ptr s) : _schema(std::move(s)) { }

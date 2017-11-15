@@ -26,9 +26,9 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 
-void flat_mutation_reader::impl::forward_buffer_to(schema_ptr& schema, const position_in_partition& pos) {
-    _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos, &schema] (mutation_fragment& f) {
-        return !f.relevant_for_range_assuming_after(*schema, pos);
+void flat_mutation_reader::impl::forward_buffer_to(const position_in_partition& pos) {
+    _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos] (mutation_fragment& f) {
+        return !f.relevant_for_range_assuming_after(*_schema, pos);
     }), _buffer.end());
 
     _buffer_size = boost::accumulate(_buffer | boost::adaptors::transformed(std::mem_fn(&mutation_fragment::memory_usage)), size_t(0));
@@ -114,7 +114,7 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
             return _legacy_reader.fast_forward_to(pr);
         };
         virtual future<> fast_forward_to(position_range cr) override {
-            forward_buffer_to(_schema, cr.start());
+            forward_buffer_to(cr.start());
             _end_of_stream = false;
             if (_sm) {
                 return _sm->fast_forward_to(std::move(cr));
@@ -174,7 +174,7 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
         virtual future<> fast_forward_to(position_range pr) override {
             _current = std::move(pr);
             _end_of_stream = false;
-            forward_buffer_to(_schema, _current.start());
+            forward_buffer_to(_current.start());
             return make_ready_future<>();
         }
         virtual void next_partition() override {
