@@ -547,35 +547,6 @@ future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation&
     return make_ready_future<stop_iteration>(c.consume_end_of_partition());
 }
 
-template<typename Consumer>
-GCC6_CONCEPT(
-    requires FlattenedConsumer<Consumer>()
-)
-auto consume_flattened(mutation_reader mr, Consumer&& c, bool reverse_mutations = false)
-{
-    return do_with(std::move(mr), std::move(c), stdx::optional<streamed_mutation>(), [reverse_mutations] (auto& mr, auto& c, auto& sm) {
-        return repeat([&, reverse_mutations] {
-            return mr().then([&, reverse_mutations] (auto smopt) {
-                if (!smopt) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                if (!reverse_mutations) {
-                    sm.emplace(std::move(*smopt));
-                } else {
-                    sm.emplace(reverse_streamed_mutation(std::move(*smopt)));
-                }
-                c.consume_new_partition(sm->decorated_key());
-                if (sm->partition_tombstone()) {
-                    c.consume(sm->partition_tombstone());
-                }
-                return do_consume_streamed_mutation_flattened(*sm, c);
-            });
-        }).then([&] {
-            return c.consume_end_of_stream();
-        });
-    });
-}
-
 /*
 template<typename T>
 concept bool StreamedMutationFilter() {
