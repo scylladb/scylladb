@@ -30,7 +30,6 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "auth/authenticated_user.hh"
-#include "auth/authorizer.hh"
 #include "auth/data_resource.hh"
 #include "auth/permission.hh"
 #include "log.hh"
@@ -59,9 +58,17 @@ inline std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenti
 
 }
 
+namespace db {
+class config;
+}
+
 namespace auth {
 
+class service;
+
 struct permissions_cache_config final {
+    static permissions_cache_config from_db_config(const db::config&);
+
     std::size_t max_entries;
     std::chrono::milliseconds validity_period;
     std::chrono::milliseconds update_period;
@@ -80,7 +87,7 @@ class permissions_cache final {
     cache_type _cache;
 
 public:
-    explicit permissions_cache(const permissions_cache_config&, authorizer&, logging::logger&);
+    explicit permissions_cache(const permissions_cache_config&, service&, logging::logger&);
 
     future<> start() {
         return make_ready_future<>();

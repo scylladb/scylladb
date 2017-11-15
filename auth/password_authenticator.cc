@@ -46,12 +46,12 @@
 
 #include <seastar/core/reactor.hh>
 
-#include "auth.hh"
 #include "common.hh"
 #include "password_authenticator.hh"
 #include "authenticated_user.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
+#include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 
 const sstring& auth::password_authenticator_name() {
@@ -69,14 +69,18 @@ static const sstring CREDENTIALS_CF = "credentials";
 static logging::logger plogger("password_authenticator");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<auth::authenticator, auth::password_authenticator, cql3::query_processor&> password_auth_reg(
-                "org.apache.cassandra.auth.PasswordAuthenticator");
+static const class_registrator<
+        auth::authenticator,
+        auth::password_authenticator,
+        cql3::query_processor&,
+        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 auth::password_authenticator::~password_authenticator()
 {}
 
-auth::password_authenticator::password_authenticator(cql3::query_processor& qp)
-    : _qp(qp) {
+auth::password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
+    : _qp(qp)
+    , _migration_manager(mm) {
 }
 
 // TODO: blowfish
@@ -150,33 +154,42 @@ static sstring hashpw(const sstring& pass) {
 }
 
 future<> auth::password_authenticator::start() {
-    gensalt(); // do this once to determine usable hashing
+    return auth::once_among_shards([this] {
+        gensalt(); // do this once to determine usable hashing
 
-    sstring create_table = sprint(
-                    "CREATE TABLE %s.%s ("
-                                    "%s text,"
-                                    "%s text," // salt + hash + number of rounds
-                                    "options map<text,text>,"// for future extensions
-                                    "PRIMARY KEY(%s)"
-                                    ") WITH gc_grace_seconds=%d",
-                    meta::AUTH_KS,
-                    CREDENTIALS_CF, USER_NAME, SALTED_HASH, USER_NAME,
-                    90 * 24 * 60 * 60); // 3 months.
+        static const sstring create_table = sprint(
+                "CREATE TABLE %s.%s ("
+                "%s text,"
+                "%s text," // salt + hash + number of rounds
+                "options map<text,text>,"// for future extensions
+                "PRIMARY KEY(%s)"
+                ") WITH gc_grace_seconds=%d",
+                meta::AUTH_KS,
+                CREDENTIALS_CF, USER_NAME, SALTED_HASH, USER_NAME,
+                90 * 24 * 60 * 60); // 3 months.
 
-    return auth::setup_table(CREDENTIALS_CF, create_table).then([this] {
-        // instead of once-timer, just schedule this later
-        auth::schedule_when_up([this] {
-            return auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([this](bool exists) {
-                if (!exists) {
-                    _qp.process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
-                                                    meta::AUTH_KS,
-                                                    CREDENTIALS_CF,
-                                                    USER_NAME, SALTED_HASH
-                                    ),
-                                    db::consistency_level::ONE, {DEFAULT_USER_NAME, hashpw(DEFAULT_USER_PASSWORD)}).then([](auto) {
-                                        plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
-                                    });
-                }
+        return auth::create_metadata_table_if_missing(
+                CREDENTIALS_CF,
+                _qp,
+                create_table,
+                _migration_manager).then([this] {
+            auth::delay_until_system_ready(_delayed, [this] {
+                return has_existing_users().then([this](bool existing) {
+                    if (!existing) {
+                        return _qp.process(
+                                sprint(
+                                        "INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
+                                        meta::AUTH_KS,
+                                        CREDENTIALS_CF,
+                                        USER_NAME, SALTED_HASH),
+                                db::consistency_level::ONE,
+                                { DEFAULT_USER_NAME, hashpw(DEFAULT_USER_PASSWORD) }).then([](auto) {
+                            plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
+                        });
+                    }
+
+                    return make_ready_future<>();
+                });
             });
         });
     });
@@ -288,8 +301,10 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
 
 ::shared_ptr<auth::authenticator::sasl_challenge> auth::password_authenticator::new_sasl_challenge() const {
     class plain_text_password_challenge: public sasl_challenge {
+        const password_authenticator& _self;
+
     public:
-        plain_text_password_challenge()
+        plain_text_password_challenge(const password_authenticator& self) : _self(self)
         {}
 
         /**
@@ -344,11 +359,58 @@ const auth::resource_ids& auth::password_authenticator::protected_resources() co
             return _complete;
         }
         future<::shared_ptr<authenticated_user>> get_authenticated_user() const override {
-            return authenticator::get().authenticate(_credentials);
+            return _self.authenticate(_credentials);
         }
     private:
         credentials_map _credentials;
         bool _complete = false;
     };
-    return ::make_shared<plain_text_password_challenge>();
+    return ::make_shared<plain_text_password_challenge>(*this);
+}
+
+
+//
+// Similar in structure to `auth::service::has_existing_users()`, but trying to generalize the pattern breaks all kinds
+// of module boundaries and leaks implementation details.
+//
+future<bool> auth::password_authenticator::has_existing_users() const {
+    static const sstring default_user_query = sprint(
+            "SELECT * FROM %s.%s WHERE %s = ?",
+            meta::AUTH_KS,
+            CREDENTIALS_CF,
+            USER_NAME);
+
+    static const sstring all_users_query = sprint(
+            "SELECT * FROM %s.%s LIMIT 1",
+            meta::AUTH_KS,
+            CREDENTIALS_CF);
+
+    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
+    // can potentially avoid doing a range query with a high consistency level.
+
+    return _qp.process(
+            default_user_query,
+            db::consistency_level::ONE,
+            { meta::DEFAULT_SUPERUSER_NAME },
+            true).then([this](auto results) {
+        if (!results->empty()) {
+            return make_ready_future<bool>(true);
+        }
+
+        return _qp.process(
+                default_user_query,
+                db::consistency_level::QUORUM,
+                { meta::DEFAULT_SUPERUSER_NAME },
+                true).then([this](auto results) {
+            if (!results->empty()) {
+                return make_ready_future<bool>(true);
+            }
+
+            return _qp.process(
+                    all_users_query,
+                    db::consistency_level::QUORUM).then([](auto results) {
+                return make_ready_future<bool>(!results->empty());
+            });
+        });
+    });
 }

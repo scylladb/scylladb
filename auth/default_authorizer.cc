@@ -46,7 +46,6 @@
 
 #include <seastar/core/reactor.hh>
 
-#include "auth.hh"
 #include "common.hh"
 #include "default_authorizer.hh"
 #include "authenticated_user.hh"
@@ -69,18 +68,22 @@ static const sstring PERMISSIONS_CF = "permissions";
 static logging::logger alogger("default_authorizer");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
-static const class_registrator<auth::authorizer, auth::default_authorizer, cql3::query_processor&> password_auth_reg(
-                "org.apache.cassandra.auth.CassandraAuthorizer");
+static const class_registrator<
+        auth::authorizer,
+        auth::default_authorizer,
+        cql3::query_processor&,
+        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
-auth::default_authorizer::default_authorizer(cql3::query_processor& qp)
-        : _qp(qp) {
+auth::default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
+        : _qp(qp)
+        , _migration_manager(mm) {
 }
 
 auth::default_authorizer::~default_authorizer() {
 }
 
 future<> auth::default_authorizer::start() {
-    sstring create_table = sprint("CREATE TABLE %s.%s ("
+    static const sstring create_table = sprint("CREATE TABLE %s.%s ("
                     "%s text,"
                     "%s text,"
                     "%s set<text>,"
@@ -89,7 +92,13 @@ future<> auth::default_authorizer::start() {
                     PERMISSIONS_CF, USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME,
                     USER_NAME, RESOURCE_NAME, 90 * 24 * 60 * 60); // 3 months.
 
-    return auth::setup_table(PERMISSIONS_CF, create_table);
+    return auth::once_among_shards([this] {
+        return auth::create_metadata_table_if_missing(
+                PERMISSIONS_CF,
+                _qp,
+                create_table,
+                _migration_manager);
+    });
 }
 
 future<> auth::default_authorizer::stop() {
@@ -97,8 +106,8 @@ future<> auth::default_authorizer::stop() {
 }
 
 future<auth::permission_set> auth::default_authorizer::authorize(
-                ::shared_ptr<authenticated_user> user, data_resource resource) const {
-    return user->is_super().then([this, user, resource = std::move(resource)](bool is_super) {
+                service& ser, ::shared_ptr<authenticated_user> user, data_resource resource) const {
+    return auth::is_super_user(ser, *user).then([this, user, resource = std::move(resource)](bool is_super) {
         if (is_super) {
             return make_ready_future<permission_set>(permissions::ALL);
         }
@@ -153,9 +162,9 @@ future<> auth::default_authorizer::revoke(
 }
 
 future<std::vector<auth::permission_details>> auth::default_authorizer::list(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
+                service& ser, ::shared_ptr<authenticated_user> performer, permission_set set,
                 optional<data_resource> resource, optional<sstring> user) const {
-    return performer->is_super().then([this, performer, set = std::move(set), resource = std::move(resource), user = std::move(user)](bool is_super) {
+    return auth::is_super_user(ser, *performer).then([this, performer, set = std::move(set), resource = std::move(resource), user = std::move(user)](bool is_super) {
         if (!is_super && (!user || performer->name() != *user)) {
             throw exceptions::unauthorized_exception(sprint("You are not authorized to view %s's permissions", user ? *user : "everyone"));
         }

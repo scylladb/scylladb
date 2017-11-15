@@ -49,8 +49,7 @@ void cql3::user_options::put(const sstring& name, const sstring& value) {
     _options[auth::authenticator::string_to_option(name)] = value;
 }
 
-void cql3::user_options::validate() const {
-    auto& a = auth::authenticator::get();
+void cql3::user_options::validate(const auth::authenticator& a) const {
     for (auto o : _options | boost::adaptors::map_keys) {
         if (!a.supported_options().contains(o)) {
             throw exceptions::invalid_request_exception(

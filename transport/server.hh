@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "auth/service.hh"
 #include "core/reactor.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
@@ -118,8 +119,9 @@ private:
     uint64_t _unpaged_queries = 0;
     uint64_t _requests_serving = 0;
     cql_load_balance _lb;
+    auth::service& _auth_service;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb);
+    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();

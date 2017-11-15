@@ -46,11 +46,12 @@
 #include "password_authenticator.hh"
 #include "default_authorizer.hh"
 #include "permission.hh"
-#include "auth.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
+
+class service;
 
 static const sstring PACKAGE_NAME("com.scylladb.auth.");
 
@@ -69,8 +70,8 @@ class transitional_authenticator : public authenticator {
 public:
     static const sstring PASSWORD_AUTHENTICATOR_NAME;
 
-    transitional_authenticator(cql3::query_processor& qp)
-        : transitional_authenticator(std::make_unique<password_authenticator>(qp))
+    transitional_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
+            : transitional_authenticator(std::make_unique<password_authenticator>(qp, mm))
     {}
     transitional_authenticator(std::unique_ptr<authenticator> a)
         : _authenticator(std::move(a))
@@ -153,8 +154,8 @@ public:
 class transitional_authorizer : public authorizer {
     std::unique_ptr<authorizer> _authorizer;
 public:
-    transitional_authorizer(cql3::query_processor& qp)
-        : transitional_authorizer(std::make_unique<default_authorizer>(qp))
+    transitional_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
+        : transitional_authorizer(std::make_unique<default_authorizer>(qp, mm))
     {}
     transitional_authorizer(std::unique_ptr<authorizer> a)
         : _authorizer(std::move(a))
@@ -170,8 +171,8 @@ public:
     const sstring& qualified_java_name() const override {
         return transitional_authorizer_name();
     }
-    future<permission_set> authorize(::shared_ptr<authenticated_user> user, data_resource resource) const override {
-        return user->is_super().then([](bool s) {
+    future<permission_set> authorize(service& ser, ::shared_ptr<authenticated_user> user, data_resource resource) const override {
+        return is_super_user(ser, *user).then([](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<permission::CREATE,
                                             permission::ALTER, permission::DROP,
@@ -186,8 +187,8 @@ public:
     future<> revoke(::shared_ptr<authenticated_user> user, permission_set ps, data_resource r, sstring s) override {
         return _authorizer->revoke(std::move(user), std::move(ps), std::move(r), std::move(s));
     }
-    future<std::vector<permission_details>> list(::shared_ptr<authenticated_user> user, permission_set ps, optional<data_resource> r, optional<sstring> s) const override {
-        return _authorizer->list(std::move(user), std::move(ps), std::move(r), std::move(s));
+    future<std::vector<permission_details>> list(service& ser, ::shared_ptr<authenticated_user> user, permission_set ps, optional<data_resource> r, optional<sstring> s) const override {
+        return _authorizer->list(ser, std::move(user), std::move(ps), std::move(r), std::move(s));
     }
     future<> revoke_all(sstring s) override {
         return _authorizer->revoke_all(std::move(s));
@@ -209,9 +210,14 @@ public:
 // To ensure correct initialization order, we unfortunately need to use string literals.
 //
 
-static const class_registrator<auth::authenticator,
-                auth::transitional_authenticator, cql3::query_processor&> transitional_authenticator_reg(
-                "com.scylladb.auth.TransitionalAuthenticator");
+static const class_registrator<
+        auth::authenticator,
+        auth::transitional_authenticator,
+        cql3::query_processor&,
+        ::service::migration_manager&> transitional_authenticator_reg("com.scylladb.auth.TransitionalAuthenticator");
 
-static const class_registrator<auth::authorizer, auth::transitional_authorizer, cql3::query_processor&> transitional_authorizer_reg(
-                "com.scylladb.auth.TransitionalAuthorizer");
+static const class_registrator<
+        auth::authorizer,
+        auth::transitional_authorizer,
+        cql3::query_processor&,
+        ::service::migration_manager&> transitional_authorizer_reg("com.scylladb.auth.TransitionalAuthorizer");

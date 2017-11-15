@@ -24,17 +24,19 @@
 
 #include <seastar/core/distributed.hh>
 #include <seastar/core/thread.hh>
+#include "auth/service.hh"
 #include "service/storage_service.hh"
 #include "message/messaging_service.hh"
 
 class storage_service_for_tests {
     distributed<database> _db;
+    sharded<auth::service> _auth_service;
 public:
     storage_service_for_tests() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
-        service::get_storage_service().start(std::ref(_db)).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();

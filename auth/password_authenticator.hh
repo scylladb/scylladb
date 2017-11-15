@@ -43,6 +43,11 @@
 
 #include "authenticator.hh"
 #include "cql3/query_processor.hh"
+#include "delayed_tasks.hh"
+
+namespace service {
+class migration_manager;
+}
 
 namespace auth {
 
@@ -51,8 +56,12 @@ const sstring& password_authenticator_name();
 class password_authenticator : public authenticator {
     cql3::query_processor& _qp;
 
+    ::service::migration_manager& _migration_manager;
+
+    delayed_tasks<> _delayed{};
+
 public:
-    password_authenticator(cql3::query_processor&);
+    password_authenticator(cql3::query_processor&, ::service::migration_manager&);
     ~password_authenticator();
 
     future<> start() override;
@@ -72,6 +81,9 @@ public:
 
 
     static db::consistency_level consistency_for_user(const sstring& username);
+
+private:
+    future<bool> has_existing_users() const;
 };
 
 }

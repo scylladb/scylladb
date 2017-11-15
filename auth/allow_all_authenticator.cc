@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2017 ScyllaDB
  */
 
 /*
@@ -19,16 +19,23 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef APPS_SEASTAR_THRIFT_HANDLER_HH_
-#define APPS_SEASTAR_THRIFT_HANDLER_HH_
+#include "auth/allow_all_authenticator.hh"
 
-#include "Cassandra.h"
-#include "auth/service.hh"
-#include "database.hh"
-#include "core/distributed.hh"
-#include "cql3/query_processor.hh"
-#include <memory>
+#include "service/migration_manager.hh"
+#include "utils/class_registrator.hh"
 
-std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&);
+namespace auth {
 
-#endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */
+const sstring& allow_all_authenticator_name() {
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthenticator";
+    return name;
+}
+
+// To ensure correct initialization order, we unfortunately need to use a string literal.
+static const class_registrator<
+        authenticator,
+        allow_all_authenticator,
+        cql3::query_processor&,
+        ::service::migration_manager&> registration("org.apache.cassandra.auth.AllowAllAuthenticator");
+
+}

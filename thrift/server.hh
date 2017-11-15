@@ -62,6 +62,10 @@ class TMemoryBuffer;
 
 }}}
 
+namespace auth {
+class service;
+}
+
 class thrift_server {
     class connection : public boost::intrusive::list_base_hook<> {
         struct fake_transport;
@@ -100,7 +104,7 @@ private:
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&);
     ~thrift_server();
     future<> listen(ipv4_addr addr, bool keepalive);
     future<> stop();

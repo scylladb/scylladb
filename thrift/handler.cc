@@ -198,10 +198,10 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service)
         : _db(db)
         , _query_processor(qp)
-        , _query_state(service::client_state::for_external_thrift_calls())
+        , _query_state(service::client_state::for_external_thrift_calls(auth_service))
     { }
 
     const sstring& current_keyspace() const {
@@ -215,7 +215,8 @@ public:
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         with_cob(std::move(cob), std::move(exn_cob), [&] {
             auth::authenticator::credentials_map creds(auth_request.credentials.begin(), auth_request.credentials.end());
-            return auth::authenticator::get().authenticate(creds).then([this] (auto user) {
+            auto& auth_service = *_query_state.get_client_state().get_auth_service();
+            return auth_service.underlying_authenticator().authenticate(creds).then([this] (auto user) {
                 _query_state.get_client_state().set_login(std::move(user));
             });
         });
@@ -1902,13 +1903,15 @@ private:
 class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
+    auth::service& _auth_service;
 public:
     explicit handler_factory(distributed<database>& db,
-                             distributed<cql3::query_processor>& qp)
-        : _db(db), _query_processor(qp) {}
+                             distributed<cql3::query_processor>& qp,
+                             auth::service& auth_service)
+        : _db(db), _query_processor(qp), _auth_service(auth_service) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor);
+        return new thrift_handler(_db, _query_processor, _auth_service);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -1916,6 +1919,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp) {
-    return std::make_unique<handler_factory>(db, qp);
+create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service) {
+    return std::make_unique<handler_factory>(db, qp, auth_service);
 }

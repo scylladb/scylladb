@@ -42,8 +42,8 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "alter_user_statement.hh"
-#include "auth/auth.hh"
 #include "auth/authenticator.hh"
+#include "auth/service.hh"
 
 cql3::statements::alter_user_statement::alter_user_statement(sstring username, ::shared_ptr<user_options> opts, std::experimental::optional<bool> superuser)
     : _username(std::move(username))
@@ -52,7 +52,7 @@ cql3::statements::alter_user_statement::alter_user_statement(sstring username, :
 {}
 
 void cql3::statements::alter_user_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
-    _opts->validate();
+    _opts->validate(state.get_auth_service()->underlying_authenticator());
 
     if (!_superuser && _opts->empty()) {
         throw exceptions::invalid_request_exception("ALTER USER can't be empty");
@@ -73,7 +73,10 @@ future<> cql3::statements::alter_user_statement::check_access(const service::cli
         // my disgust.
         throw exceptions::unauthorized_exception("You aren't allowed to alter your own superuser status");
     }
-    return user->is_super().then([this, user](bool is_super) {
+
+    const auto& auth_service = *state.get_auth_service();
+
+    return auth::is_super_user(auth_service, *user).then([this, user, &auth_service](bool is_super) {
         if (_superuser && !is_super) {
             throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status");
         }
@@ -84,7 +87,7 @@ future<> cql3::statements::alter_user_statement::check_access(const service::cli
 
         if (!is_super) {
             for (auto o : _opts->options() | boost::adaptors::map_keys) {
-                if (!auth::authenticator::get().alterable_options().contains(o)) {
+                if (!auth_service.underlying_authenticator().alterable_options().contains(o)) {
                     throw exceptions::unauthorized_exception(sprint("You aren't allowed to alter {} option", o));
                 }
             }
@@ -94,14 +97,17 @@ future<> cql3::statements::alter_user_statement::check_access(const service::cli
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::alter_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    return auth::auth::is_existing_user(_username).then([this](bool exists) {
+    auto& client_state = state.get_client_state();
+    auto& auth_service = *client_state.get_auth_service();
+
+    return auth_service.is_existing_user(_username).then([this, &auth_service](bool exists) {
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
-        auto f = _opts->options().empty() ? make_ready_future() : auth::authenticator::get().alter(_username, _opts->options());
+        auto f = _opts->options().empty() ? make_ready_future() : auth_service.underlying_authenticator().alter(_username, _opts->options());
         if (_superuser) {
-            f = f.then([this] {
-                return auth::auth::insert_user(_username, *_superuser);
+            f = f.then([this, &auth_service] {
+                return auth_service.insert_user(_username, *_superuser);
             });
         }
         return f.then([] { return  make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(); });

@@ -65,8 +65,6 @@ namespace auth {
 
 class authenticated_user;
 
-const sstring& allow_all_authenticator_name();
-
 class authenticator {
 public:
     static const sstring USERNAME_KEY;
@@ -86,19 +84,6 @@ public:
     using option_set = enum_set<super_enum<option, option::PASSWORD>>;
     using option_map = std::unordered_map<option, boost::any, enum_hash<option>>;
     using credentials_map = std::unordered_map<sstring, sstring>;
-
-    /**
-     * Setup is called once upon system startup to initialize the IAuthenticator.
-     *
-     * For example, use this method to create any required keyspaces/column families.
-     * Note: Only call from main thread.
-     */
-    static future<> setup(const sstring& type);
-
-    /**
-     * Returns the system authenticator. Must have called setup before calling this.
-     */
-    static authenticator& get();
 
     virtual ~authenticator()
     {}

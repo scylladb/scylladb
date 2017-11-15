@@ -43,18 +43,12 @@
 #include "authenticated_user.hh"
 #include "common.hh"
 #include "password_authenticator.hh"
-#include "auth.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
-
-const sstring& auth::allow_all_authenticator_name() {
-    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthenticator";
-    return name;
-}
 
 auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
     if (strcasecmp(name.c_str(), "password") == 0) {
@@ -70,71 +64,4 @@ sstring auth::authenticator::option_to_string(option opt) {
     default:
         throw std::invalid_argument(sprint("Unknown option {}", opt));
     }
-}
-
-/**
- * Authenticator is assumed to be a fully state-less immutable object (note all the const).
- * We thus store a single instance globally, since it should be safe/ok.
- */
-static std::unique_ptr<auth::authenticator> global_authenticator;
-
-using authenticator_registry = class_registry<auth::authenticator, cql3::query_processor&>;
-
-future<>
-auth::authenticator::setup(const sstring& type) {
-    if (type == allow_all_authenticator_name()) {
-        class allow_all_authenticator : public authenticator {
-        public:
-            future<> start() override {
-                return make_ready_future<>();
-            }
-            future<> stop() override {
-                return make_ready_future<>();
-            }
-            const sstring& qualified_java_name() const override {
-                return allow_all_authenticator_name();
-            }
-            bool require_authentication() const override {
-                return false;
-            }
-            option_set supported_options() const override {
-                return option_set();
-            }
-            option_set alterable_options() const override {
-                return option_set();
-            }
-            future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
-                return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
-            }
-            future<> create(sstring username, const option_map& options) override {
-                return make_ready_future();
-            }
-            future<> alter(sstring username, const option_map& options) override {
-                return make_ready_future();
-            }
-            future<> drop(sstring username) override {
-                return make_ready_future();
-            }
-            const resource_ids& protected_resources() const override {
-                static const resource_ids ids;
-                return ids;
-            }
-            ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
-                throw std::runtime_error("Should not reach");
-            }
-        };
-        global_authenticator = std::make_unique<allow_all_authenticator>();
-        return make_ready_future();
-    } else {
-        auto a = authenticator_registry::create(type, cql3::get_local_query_processor());
-        auto f = a->start();
-        return f.then([a = std::move(a)]() mutable {
-            global_authenticator = std::move(a);
-        });
-    }
-}
-
-auth::authenticator& auth::authenticator::get() {
-    assert(global_authenticator);
-    return *global_authenticator;
 }

@@ -65,7 +65,6 @@
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
-#include "auth/auth.hh"
 #include <seastar/net/tls.hh>
 #include <seastar/net/dns.hh>
 #include "utils/exceptions.hh"
@@ -100,8 +99,9 @@ int get_generation_number() {
     return generation_number;
 }
 
-storage_service::storage_service(distributed<database>& db)
+storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service)
         : _db(db)
+        , _auth_service(auth_service)
         , _replicate_action([this] { return do_replicate_to_all_cores(); }) {
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
@@ -521,7 +521,15 @@ void storage_service::join_token_ring(int delay) {
             slogger.error("{}", err);
             throw std::runtime_error(err);
         }
-        auth::auth::setup().get();
+
+        _auth_service.start(
+                auth::permissions_cache_config::from_db_config(_db.local().get_config()),
+                std::ref(cql3::get_query_processor()),
+                std::ref(service::get_migration_manager()),
+                auth::service_config::from_db_config(_db.local().get_config())).get();
+
+        _auth_service.invoke_on_all(&auth::service::start).get();
+
         supervisor::notify("starting tracing");
         tracing::tracing::start_tracing().get();
     } else {
@@ -546,7 +554,14 @@ future<> storage_service::join_ring() {
                     slogger.error("{}", err);
                     throw std::runtime_error(err);
                 }
-                auth::auth::setup().get();
+
+                ss._auth_service.start(
+                        auth::permissions_cache_config::from_db_config(ss._db.local().get_config()),
+                        std::ref(cql3::get_query_processor()),
+                        std::ref(service::get_migration_manager()),
+                        auth::service_config::from_db_config(ss._db.local().get_config())).get();
+
+               ss._auth_service.invoke_on_all(&auth::service::start).get();
             }
         });
     });
@@ -1178,7 +1193,7 @@ future<> storage_service::stop_transport() {
             ss.do_stop_stream_manager().get();
             slogger.info("Stop transport: shutdown stream_manager done");
 
-            auth::auth::shutdown().get();
+            ss._auth_service.stop().get();
             slogger.info("Stop transport: auth shutdown");
 
             slogger.info("Stop transport: done");
@@ -1918,7 +1933,7 @@ future<> storage_service::start_rpc_server() {
         auto addr = cfg.rpc_address();
         auto keepalive = cfg.rpc_keepalive();
         return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive] (seastar::net::inet_address ip) {
-            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor())).then([tserver, port, addr, ip, keepalive] {
+            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service)).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
                 //    return tserver->stop();
@@ -1969,8 +1984,8 @@ future<> storage_service::start_native_transport() {
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
         cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
-        return seastar::net::dns::resolve_name(addr).then([cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
-            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
+        return seastar::net::dns::resolve_name(addr).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
+                return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb, std::ref(ss._auth_service)).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
                 //    return cserver->stop();

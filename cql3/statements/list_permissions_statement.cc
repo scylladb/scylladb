@@ -44,7 +44,6 @@
 
 #include "list_permissions_statement.hh"
 #include "auth/authorizer.hh"
-#include "auth/auth.hh"
 #include "auth/common.hh"
 #include "cql3/result_set.hh"
 #include "transport/messages/result_message.hh"
@@ -65,7 +64,7 @@ void cql3::statements::list_permissions_statement::validate(distributed<service:
 future<> cql3::statements::list_permissions_statement::check_access(const service::client_state& state) {
     auto f = make_ready_future();
     if (_username) {
-        f = auth::auth::is_existing_user(*_username).then([this](bool exists) {
+        f = state.get_auth_service()->is_existing_user(*_username).then([this](bool exists) {
             if (!exists) {
                 throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", *_username));
             }
@@ -105,7 +104,8 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
     }
 
     return map_reduce(resources, [&state, this](opt_resource r) {
-        return auth::authorizer::get().list(state.get_client_state().user(), _permissions, std::move(r), _username);
+        auto& auth_service = *state.get_client_state().get_auth_service();
+        return auth_service.underlying_authorizer().list(auth_service, state.get_client_state().user(), _permissions, std::move(r), _username);
     }, std::vector<auth::permission_details>(), [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {
         details.insert(details.end(), pd.begin(), pd.end());
         return std::move(details);
