@@ -871,107 +871,6 @@ private:
     }
 };
 
-row_consumer::proceed
-mp_row_consumer::push_ready_fragments_with_ready_set() {
-    // We're merging two streams here, one is _range_tombstones
-    // and the other is the main fragment stream represented by
-    // _ready and _out_of_range (which means end of stream).
-
-    while (!_sm->is_buffer_full()) {
-        auto mfo = _range_tombstones.get_next(*_ready);
-        if (mfo) {
-            _sm->push_mutation_fragment(std::move(*mfo));
-        } else {
-            _sm->push_mutation_fragment(std::move(*_ready));
-            _ready = {};
-            return proceed(!_sm->is_buffer_full());
-        }
-    }
-    return proceed::no;
-}
-
-row_consumer::proceed
-mp_row_consumer::push_ready_fragments_out_of_range() {
-    // Emit all range tombstones relevant to the current forwarding range first.
-    while (!_sm->is_buffer_full()) {
-        auto mfo = _range_tombstones.get_next(_fwd_end);
-        if (!mfo) {
-            _sm->_end_of_stream = true;
-            break;
-        }
-        _sm->push_mutation_fragment(std::move(*mfo));
-    }
-    return proceed::no;
-}
-
-row_consumer::proceed
-mp_row_consumer::push_ready_fragments() {
-    if (_ready) {
-       return push_ready_fragments_with_ready_set();
-    }
-
-    if (_out_of_range) {
-        return push_ready_fragments_out_of_range();
-    }
-
-    return proceed::yes;
-}
-
-stdx::optional<position_in_partition_view> mp_row_consumer::fast_forward_to(position_range r) {
-    sstlog.trace("mp_row_consumer {}: fast_forward_to({})", this, r);
-    _out_of_range = _is_mutation_end;
-    _fwd_end = std::move(r).end();
-
-    _range_tombstones.forward_to(r.start());
-
-    _ck_ranges_walker->trim_front(std::move(r).start());
-    if (_ck_ranges_walker->out_of_range()) {
-        _out_of_range = true;
-        _ready = {};
-        sstlog.trace("mp_row_consumer {}: no more ranges", this);
-        return { };
-    }
-
-    auto start = _ck_ranges_walker->lower_bound();
-
-    if (_ready && !_ready->relevant_for_range(*_schema, start)) {
-        _ready = {};
-    }
-
-    if (_in_progress) {
-        advance_to(*_in_progress);
-        if (!_skip_in_progress) {
-            sstlog.trace("mp_row_consumer {}: _in_progress in range", this);
-            return { };
-        }
-    }
-
-    if (_out_of_range) {
-        sstlog.trace("mp_row_consumer {}: _out_of_range=true", this);
-        return { };
-    }
-
-    position_in_partition::less_compare less(*_schema);
-    if (!less(start, _fwd_end)) {
-        _out_of_range = true;
-        sstlog.trace("mp_row_consumer {}: no overlap with restrictions", this);
-        return { };
-    }
-
-    sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
-    _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
-    return start;
-}
-
-stdx::optional<position_in_partition_view> mp_row_consumer::maybe_skip() {
-    if (!needs_skip()) {
-        return { };
-    }
-    _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
-    sstlog.trace("mp_row_consumer {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
-    return _ck_ranges_walker->lower_bound();
-}
-
 future<streamed_mutation_opt>
 sstables::sstable::read_row(schema_ptr schema,
                             const sstables::key& key,
@@ -1381,6 +1280,107 @@ sstable::read_range_rows_flat(schema_ptr schema,
                          mutation_reader::forwarding fwd_mr) {
     return make_flat_mutation_reader<sstable_mutation_reader>(
         shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr);
+}
+
+row_consumer::proceed
+mp_row_consumer::push_ready_fragments_with_ready_set() {
+    // We're merging two streams here, one is _range_tombstones
+    // and the other is the main fragment stream represented by
+    // _ready and _out_of_range (which means end of stream).
+
+    while (!_sm->is_buffer_full()) {
+        auto mfo = _range_tombstones.get_next(*_ready);
+        if (mfo) {
+            _sm->push_mutation_fragment(std::move(*mfo));
+        } else {
+            _sm->push_mutation_fragment(std::move(*_ready));
+            _ready = {};
+            return proceed(!_sm->is_buffer_full());
+        }
+    }
+    return proceed::no;
+}
+
+row_consumer::proceed
+mp_row_consumer::push_ready_fragments_out_of_range() {
+    // Emit all range tombstones relevant to the current forwarding range first.
+    while (!_sm->is_buffer_full()) {
+        auto mfo = _range_tombstones.get_next(_fwd_end);
+        if (!mfo) {
+            _sm->_end_of_stream = true;
+            break;
+        }
+        _sm->push_mutation_fragment(std::move(*mfo));
+    }
+    return proceed::no;
+}
+
+row_consumer::proceed
+mp_row_consumer::push_ready_fragments() {
+    if (_ready) {
+        return push_ready_fragments_with_ready_set();
+    }
+
+    if (_out_of_range) {
+        return push_ready_fragments_out_of_range();
+    }
+
+    return proceed::yes;
+}
+
+stdx::optional<position_in_partition_view> mp_row_consumer::fast_forward_to(position_range r) {
+    sstlog.trace("mp_row_consumer {}: fast_forward_to({})", this, r);
+    _out_of_range = _is_mutation_end;
+    _fwd_end = std::move(r).end();
+
+    _range_tombstones.forward_to(r.start());
+
+    _ck_ranges_walker->trim_front(std::move(r).start());
+    if (_ck_ranges_walker->out_of_range()) {
+        _out_of_range = true;
+        _ready = {};
+        sstlog.trace("mp_row_consumer {}: no more ranges", this);
+        return { };
+    }
+
+    auto start = _ck_ranges_walker->lower_bound();
+
+    if (_ready && !_ready->relevant_for_range(*_schema, start)) {
+        _ready = {};
+    }
+
+    if (_in_progress) {
+        advance_to(*_in_progress);
+        if (!_skip_in_progress) {
+            sstlog.trace("mp_row_consumer {}: _in_progress in range", this);
+            return { };
+        }
+    }
+
+    if (_out_of_range) {
+        sstlog.trace("mp_row_consumer {}: _out_of_range=true", this);
+        return { };
+    }
+
+    position_in_partition::less_compare less(*_schema);
+    if (!less(start, _fwd_end)) {
+        _out_of_range = true;
+        sstlog.trace("mp_row_consumer {}: no overlap with restrictions", this);
+        return { };
+    }
+
+    sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
+    _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
+    return start;
+}
+
+stdx::optional<position_in_partition_view> mp_row_consumer::maybe_skip() {
+    if (!needs_skip()) {
+        return { };
+    }
+    _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
+    sstlog.trace("mp_row_consumer {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
+    return _ck_ranges_walker->lower_bound();
 }
 
 }
