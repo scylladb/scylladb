@@ -3035,10 +3035,9 @@ mutation_source sstable::as_mutation_source() {
         // consequence, fast_forward_to() will *NOT* work on the result,
         // regardless of what the fwd_mr parameter says.
         if (range.is_singular() && range.start()->value().has_key()) {
-            const dht::ring_position& pos = range.start()->value();
-            return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
+            return sst->read_row_flat(s, range.start()->value(), slice, pc, no_resource_tracking(), fwd);
         } else {
-            return sst->read_range_rows(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
+            return sst->read_range_rows_flat(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
         }
     });
 }
