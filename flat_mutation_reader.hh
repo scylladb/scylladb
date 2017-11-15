@@ -197,6 +197,9 @@ public:
             });
         }
 
+        /*
+         * fast_forward_to is forbidden on flat_mutation_reader created for a single partition.
+         */
         virtual future<> fast_forward_to(const dht::partition_range&) = 0;
         virtual future<> fast_forward_to(position_range) = 0;
     };
