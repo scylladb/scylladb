@@ -34,8 +34,16 @@
 #include "utils/data_input.hh"
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
+#include "../dht/i_partitioner.hh"
 
 namespace sstables {
+
+struct partition_header {
+    dht::decorated_key key;
+    tombstone tomb;
+    partition_header(dht::decorated_key dk, tombstone t) : key(std::move(dk)), tomb(t) { }
+};
+using partition_header_opt = stdx::optional<partition_header>;
 
 static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     auto b = std::move(vec.back());
@@ -805,13 +813,13 @@ struct sstable_data_source : public enable_lw_shared_from_this<sstable_data_sour
     }
 private:
     future<> advance_to_next_partition();
-    future<streamed_mutation_opt> read_from_index();
-    future<streamed_mutation_opt> read_from_datafile();
+    future<partition_header_opt> read_from_index();
+    future<partition_header_opt> read_from_datafile();
 public:
     // Assumes that we're currently positioned at partition boundary.
-    future<streamed_mutation_opt> read_partition();
+    future<partition_header_opt> read_partition();
     // Can be called from any position.
-    future<streamed_mutation_opt> read_next_partition();
+    future<partition_header_opt> read_next_partition();
     future<> fast_forward_to(const dht::partition_range&);
 };
 
@@ -1055,7 +1063,7 @@ private:
             });
         });
     }
-    future<streamed_mutation_opt> operator()() {
+    future<partition_header_opt> operator()() {
         if (_ds) {
             return _ds->read_next_partition();
         }
@@ -1064,17 +1072,17 @@ private:
             // again in the future.
             _ds = std::move(ds);
             return _ds ? _ds->read_partition()
-                       : make_ready_future<streamed_mutation_opt>();
+                       : make_ready_future<partition_header_opt>();
         });
     }
 
     future<> get_next_partition() {
-        return operator()().then([this] (auto&& sm) {
-            if (bool(sm)) {
-                _current_partition_key = sm->decorated_key();
+        return operator()().then([this] (auto&& ph) {
+            if (bool(ph)) {
+                _current_partition_key = ph->key;
                 _partition_finished = false;
                 this->push_mutation_fragment(
-                    mutation_fragment(partition_start(std::move(sm->decorated_key()), sm->partition_tombstone())));
+                    mutation_fragment(partition_start(std::move(ph->key), ph->tomb)));
             } else {
                 _end_of_stream = true;
             }
@@ -1210,22 +1218,22 @@ future<> sstable_data_source::advance_to_next_partition() {
     });
 }
 
-future<streamed_mutation_opt> sstable_data_source::read_next_partition() {
+future<partition_header_opt> sstable_data_source::read_next_partition() {
     sstlog.trace("reader {}: read next partition", this);
     if (!_read_enabled) {
         sstlog.trace("reader {}: eof", this);
-        return make_ready_future<streamed_mutation_opt>();
+        return make_ready_future<partition_header_opt>();
     }
     return advance_to_next_partition().then([this] {
         return read_partition();
     });
 }
 
-future<streamed_mutation_opt> sstable_data_source::read_partition() {
+future<partition_header_opt> sstable_data_source::read_partition() {
     sstlog.trace("reader {}: reading partition", this);
 
     if (!_read_enabled) {
-        return make_ready_future<streamed_mutation_opt>();
+        return make_ready_future<partition_header_opt>();
     }
 
     if (!_consumer.is_mutation_end()) {
@@ -1242,7 +1250,7 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
     if (_index_in_current_partition) {
         if (_context.eof()) {
             sstlog.trace("reader {}: eof", this);
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
+            return make_ready_future<partition_header_opt>();
         }
         if (_lh_index->partition_data_ready()) {
             return read_from_index();
@@ -1258,7 +1266,7 @@ future<streamed_mutation_opt> sstable_data_source::read_partition() {
     return read_from_datafile();
 }
 
-future<streamed_mutation_opt> sstable_data_source::read_from_index() {
+future<partition_header_opt> sstable_data_source::read_from_index() {
     sstlog.trace("reader {}: read from index", this);
     auto tomb = _lh_index->partition_tombstone();
     if (!tomb) {
@@ -1267,23 +1275,21 @@ future<streamed_mutation_opt> sstable_data_source::read_from_index() {
     }
     auto pk = _lh_index->partition_key().to_partition_key(*_schema);
     _key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
-    auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, tombstone(*tomb), shared_from_this());
     _consumer.setup_for_partition(_key->key());
-    return make_ready_future<streamed_mutation_opt>(std::move(sm));
+    return make_ready_future<partition_header_opt>(partition_header(*_key, tombstone(*tomb)));
 }
 
-future<streamed_mutation_opt> sstable_data_source::read_from_datafile() {
+future<partition_header_opt> sstable_data_source::read_from_datafile() {
     sstlog.trace("reader {}: read from data file", this);
     return _context.read().then([this] {
         auto& consumer = _consumer;
         auto mut = consumer.get_mutation();
         if (!mut) {
             sstlog.trace("reader {}: eof", this);
-            return make_ready_future<streamed_mutation_opt>();
+            return make_ready_future<partition_header_opt>();
         }
         _key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
-        auto sm = make_streamed_mutation<sstable_streamed_mutation>(_schema, *_key, mut->tomb, shared_from_this());
-        return make_ready_future<streamed_mutation_opt>(std::move(sm));
+        return make_ready_future<partition_header_opt>(partition_header(*_key, mut->tomb));
     });
 }
 
