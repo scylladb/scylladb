@@ -44,6 +44,7 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
 }
 
 class sstable_streamed_mutation;
+class sstable_mutation_reader;
 
 class mp_row_consumer : public row_consumer {
 public:
@@ -52,6 +53,7 @@ public:
         tombstone tomb;
     };
 private:
+    sstable_mutation_reader* _reader;
     schema_ptr _schema;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
@@ -302,23 +304,26 @@ private:
 public:
     mutation_opt mut;
 
-    mp_row_consumer(const schema_ptr schema,
+    mp_row_consumer(sstable_mutation_reader* reader,
+                    const schema_ptr schema,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
                     streamed_mutation::forwarding fwd)
             : row_consumer(std::move(resource_tracker), pc)
+            , _reader(reader)
             , _schema(schema)
             , _slice(slice)
             , _fwd(fwd)
             , _range_tombstones(*_schema)
     { }
 
-    mp_row_consumer(const schema_ptr schema,
+    mp_row_consumer(sstable_mutation_reader* reader,
+                    const schema_ptr schema,
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
                     streamed_mutation::forwarding fwd)
-            : mp_row_consumer(schema, schema->full_slice(), pc, std::move(resource_tracker), fwd) { }
+            : mp_row_consumer(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -965,7 +970,7 @@ public:
          streamed_mutation::forwarding fwd)
         : impl(std::move(schema))
         , _get_data_source([this, sst = std::move(sst), &pc, resource_tracker = std::move(resource_tracker)] {
-            auto consumer = mp_row_consumer(_schema, _schema->full_slice(), pc, std::move(resource_tracker), _fwd);
+            auto consumer = mp_row_consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), _fwd);
             auto ds = make_lw_shared<sstable_data_source>(_schema, std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         })
@@ -986,7 +991,7 @@ public:
             return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
                 sstable::disk_read_range drr{lh_index->data_file_position(),
                                              rh_index->data_file_position()};
-                auto consumer = mp_row_consumer(_schema, slice, pc, std::move(resource_tracker), _fwd);
+                auto consumer = mp_row_consumer(this, _schema, slice, pc, std::move(resource_tracker), _fwd);
                 auto ds = make_lw_shared<sstable_data_source>(_schema, std::move(sst), std::move(consumer), drr, (fwd_mr ? sst->data_size() : drr.end), std::move(lh_index), std::move(rh_index));
                 ds->_index_in_current_partition = true;
                 ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
@@ -1237,7 +1242,8 @@ sstables::sstable::read_row(schema_ptr schema,
         auto rh_index = std::make_unique<index_reader>(*lh_index);
         auto f = advance_to_upper_bound(*rh_index, *_schema, slice, key);
         return f.then([this, &slice, &pc, resource_tracker = std::move(resource_tracker), fwd, lh_index = std::move(lh_index), rh_index = std::move(rh_index), s = std::move(s)] () mutable {
-            auto consumer = mp_row_consumer(s, slice, pc, std::move(resource_tracker), fwd);
+            // This method will be using sstable_mutation_reader and then mp_row_consumer will get a proper pointer to sstable_mutation_reader
+            auto consumer = mp_row_consumer(nullptr, s, slice, pc, std::move(resource_tracker), fwd);
             auto ds = make_lw_shared<sstable_data_source>(sstable_data_source::single_partition_tag(), std::move(s),
                 shared_from_this(), std::move(consumer), std::move(lh_index), std::move(rh_index));
             ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
