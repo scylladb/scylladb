@@ -144,6 +144,8 @@ public:
         // When consumer returns stop_iteration::yes from methods other than consume_end_of_partition then the read
         // of the current partition is ended, consume_end_of_partition is called and if it returns stop_iteration::no
         // then the read moves to the next partition.
+        // Reference to the decorated key that is passed to consume_new_partition() remains valid until after
+        // the call to consume_end_of_partition().
         //
         // This method is useful because most of current consumers use this semantic.
         //
@@ -152,6 +154,7 @@ public:
         auto consume(Consumer consumer) {
             struct consumer_adapter {
                 flat_mutation_reader::impl& _reader;
+                stdx::optional<dht::decorated_key> _decorated_key;
                 Consumer _consumer;
                 consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
                     : _reader(reader)
@@ -170,7 +173,8 @@ public:
                     return handle_result(_consumer.consume(std::move(rt)));
                 }
                 stop_iteration consume(partition_start&& ps) {
-                    _consumer.consume_new_partition(ps.key());
+                    _decorated_key.emplace(std::move(ps.key()));
+                    _consumer.consume_new_partition(*_decorated_key);
                     if (ps.partition_tombstone()) {
                         _consumer.consume(ps.partition_tombstone());
                     }
