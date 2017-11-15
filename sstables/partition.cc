@@ -949,17 +949,6 @@ private:
     streamed_mutation_opt _sm;
     streamed_mutation::forwarding _fwd;
 public:
-    sstable_mutation_reader(shared_sstable sst, schema_ptr schema, sstable::disk_read_range toread, uint64_t last_end,
-         const io_priority_class &pc,
-         reader_resource_tracker resource_tracker,
-         streamed_mutation::forwarding fwd)
-        : impl(std::move(schema))
-        , _get_data_source([this, sst = std::move(sst), toread, last_end, &pc, resource_tracker = std::move(resource_tracker)] {
-            auto consumer = mp_row_consumer(_schema, _schema->full_slice(), pc, std::move(resource_tracker), _fwd);
-            auto ds = make_lw_shared<sstable_data_source>(_schema, std::move(sst), std::move(consumer), std::move(toread), last_end);
-            return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
-        })
-        , _fwd(fwd) { }
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc,
          reader_resource_tracker resource_tracker,
