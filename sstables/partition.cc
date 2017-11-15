@@ -1001,7 +1001,7 @@ private:
         });
     }
 
-    future<> get_next_sm() {
+    future<> get_next_partition() {
         return operator()().then([this] (auto&& sm) {
             if (bool(sm)) {
                 _sm = std::move(sm);
@@ -1013,7 +1013,7 @@ private:
         });
     }
 
-    void on_sm_finished() {
+    void on_partition_finished() {
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
@@ -1039,11 +1039,11 @@ public:
     virtual future<> fill_buffer() override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             if (!_sm) {
-                return get_next_sm();
+                return get_next_partition();
             } else {
                 if (_sm->is_buffer_empty()) {
                     if (_sm->is_end_of_stream()) {
-                        on_sm_finished();
+                        on_partition_finished();
                         return make_ready_future<>();
                     }
                     return _sm->fill_buffer();
@@ -1052,7 +1052,7 @@ public:
                         this->push_mutation_fragment(_sm->pop_mutation_fragment());
                     }
                     if (_sm->is_end_of_stream() && _sm->is_buffer_empty()) {
-                        on_sm_finished();
+                        on_partition_finished();
                     }
                     return make_ready_future<>();
                 }
