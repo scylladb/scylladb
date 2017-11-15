@@ -838,6 +838,18 @@ sstables::sstable::read_row(schema_ptr schema,
                 });
 }
 
+flat_mutation_reader
+sstables::sstable::read_row_flat(schema_ptr schema,
+                                 const sstables::key& key,
+                                 const query::partition_slice& slice,
+                                 const io_priority_class& pc,
+                                 reader_resource_tracker resource_tracker,
+                                 streamed_mutation::forwarding fwd)
+{
+    auto dk = dht::global_partitioner().decorate_key(*schema, key.to_partition_key(*schema));
+    return this->read_row_flat(schema, std::move(dk), slice, pc, std::move(resource_tracker), fwd);
+}
+
 static inline void ensure_len(bytes_view v, size_t len) {
     if (v.size() < len) {
         throw malformed_sstable_exception(sprint("Expected {} bytes, but remaining is {}", len, v.size()));
@@ -1253,7 +1265,18 @@ sstables::sstable::read_row(schema_ptr schema,
     streamed_mutation::forwarding fwd)
 {
     return streamed_mutation_from_flat_mutation_reader(
-        make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no));
+        read_row_flat(std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd));
+}
+
+flat_mutation_reader
+sstables::sstable::read_row_flat(schema_ptr schema,
+                                 dht::ring_position_view key,
+                                 const query::partition_slice& slice,
+                                 const io_priority_class& pc,
+                                 reader_resource_tracker resource_tracker,
+                                 streamed_mutation::forwarding fwd)
+{
+    return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no);
 }
 
 mutation_reader
