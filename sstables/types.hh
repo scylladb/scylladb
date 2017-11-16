@@ -160,6 +160,14 @@ public:
         , _promoted_index_bytes(o._promoted_index_bytes.get(), o._promoted_index_bytes.size())
     { }
 
+    index_entry(index_entry&&) = default;
+
+    index_entry& operator=(const index_entry& x) {
+        return operator=(index_entry(x));
+    }
+
+    index_entry& operator=(index_entry&&) = default;
+
     promoted_index* get_promoted_index(const schema& s) {
         if (!_promoted_index) {
             auto v = get_promoted_index_view();
