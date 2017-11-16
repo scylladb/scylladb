@@ -61,19 +61,20 @@ namespace bpo = boost::program_options;
 
 int main(int ac, char ** av) {
     distributed<database> db;
+    sharded<auth::service> auth_service;
     app_template app;
     app.add_options()
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
-    return app.run_deprecated(ac, av, [&db, &app] {
+    return app.run_deprecated(ac, av, [&auth_service, &db, &app] {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         utils::fb_utilities::set_broadcast_address(listen);
         utils::fb_utilities::set_broadcast_rpc_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
-        locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&db] {
-            return service::init_storage_service(db);
+        locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&auth_service, &db] {
+            return service::init_storage_service(db, auth_service);
         }).then([vv, listen, config] {
             return netw::get_messaging_service().start(listen);
         }).then([config] {

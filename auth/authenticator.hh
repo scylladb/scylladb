@@ -69,7 +69,6 @@ class authenticator {
 public:
     static const sstring USERNAME_KEY;
     static const sstring PASSWORD_KEY;
-    static const sstring ALLOW_ALL_AUTHENTICATOR_NAME;
 
     /**
      * Supported CREATE USER/ALTER USER options.
@@ -86,27 +85,14 @@ public:
     using option_map = std::unordered_map<option, boost::any, enum_hash<option>>;
     using credentials_map = std::unordered_map<sstring, sstring>;
 
-    /**
-     * Setup is called once upon system startup to initialize the IAuthenticator.
-     *
-     * For example, use this method to create any required keyspaces/column families.
-     * Note: Only call from main thread.
-     */
-    static future<> setup(const sstring& type);
-
-    /**
-     * Returns the system authenticator. Must have called setup before calling this.
-     */
-    static authenticator& get();
-
     virtual ~authenticator()
     {}
 
-    virtual future<> init() {
-        return make_ready_future();
-    }
+    virtual future<> start() = 0;
 
-    virtual const sstring& class_name() const = 0;
+    virtual future<> stop() = 0;
+
+    virtual const sstring& qualified_java_name() const = 0;
 
     /**
      * Whether or not the authenticator requires explicit login.

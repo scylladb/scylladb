@@ -39,6 +39,7 @@
 
 #pragma once
 
+#include "auth/service.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
@@ -113,6 +114,7 @@ private:
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
     distributed<database>& _db;
+    sharded<auth::service>& _auth_service;
     int _update_jobs{0};
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
@@ -129,7 +131,7 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
 public:
-    storage_service(distributed<database>& db);
+    storage_service(distributed<database>& db, sharded<auth::service>&);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -2243,8 +2245,8 @@ public:
     }
 };
 
-inline future<> init_storage_service(distributed<database>& db) {
-    return service::get_storage_service().start(std::ref(db));
+inline future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service));
 }
 
 inline future<> deinit_storage_service() {

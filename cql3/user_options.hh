@@ -42,6 +42,10 @@
 
 #include "auth/authenticator.hh"
 
+namespace auth {
+class authenticator;
+}
+
 namespace cql3 {
 
 class user_options {
@@ -56,7 +60,7 @@ public:
     const auth::authenticator::option_map& options() const {
         return _options;
     }
-    void validate() const;
+    void validate(const auth::authenticator&) const;
 };
 
 }

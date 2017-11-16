@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include "auth/service.hh"
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
 #include "timestamp.hh"
@@ -99,6 +100,8 @@ private:
     // Address of a client
     socket_address _remote_address;
 
+    // Only populated for external client state.
+    auth::service* _auth_service{nullptr};
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -122,11 +125,12 @@ public:
         return _trace_state_ptr;
     }
 
-    client_state(external_tag, const socket_address& remote_address = socket_address(), bool thrift = false)
+    client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _is_internal(false)
             , _is_thrift(thrift)
-            , _remote_address(remote_address) {
-        if (!auth::authenticator::get().require_authentication()) {
+            , _remote_address(remote_address)
+            , _auth_service(&auth_service) {
+        if (!auth_service.underlying_authenticator().require_authentication()) {
             _user = ::make_shared<auth::authenticated_user>();
         }
     }
@@ -136,6 +140,16 @@ public:
     }
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true), _is_thrift(false) {}
+
+    // `nullptr` for internal instances.
+    auth::service* get_auth_service() {
+        return _auth_service;
+    }
+
+    // See above.
+    const auth::service* get_auth_service() const {
+        return _auth_service;
+    }
 
     void merge(const client_state& other);
 
@@ -155,13 +169,15 @@ public:
     }
 
     /**
+     * The `auth::service` should be non-`nullptr` for native protocol users.
+     *
      * @return a ClientState object for external clients (thrift/native protocol users).
      */
-    static client_state for_external_calls() {
-        return client_state(external_tag());
+    static client_state for_external_calls(auth::service& ser) {
+        return client_state(external_tag(), ser);
     }
-    static client_state for_external_thrift_calls() {
-        return client_state(external_tag(), socket_address(), true);
+    static client_state for_external_thrift_calls(auth::service& ser) {
+        return client_state(external_tag(), ser, socket_address(), true);
     }
 
     /**
@@ -288,3 +304,4 @@ public:
 };
 
 }
+

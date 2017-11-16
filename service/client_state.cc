@@ -40,9 +40,9 @@
  */
 
 #include "client_state.hh"
-#include "auth/auth.hh"
 #include "auth/authorizer.hh"
 #include "auth/authenticator.hh"
+#include "auth/common.hh"
 #include "exceptions/exceptions.hh"
 #include "validation.hh"
 #include "db/system_keyspace.hh"
@@ -61,7 +61,7 @@ future<> service::client_state::check_user_exists() {
         return make_ready_future();
     }
 
-    return auth::auth::is_existing_user(_user->name()).then([user = _user](bool exists) mutable {
+    return _auth_service->is_existing_user(_user->name()).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             sprint("User %s doesn't exist - create it with CREATE USER query first",
@@ -138,7 +138,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
 
         // we want to allow altering AUTH_KS and TRACING_KS.
-        for (auto& n : { auth::auth::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
+        for (auto& n : { auth::meta::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
             if (name == n && p == auth::permission::DROP) {
                 throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
             }
@@ -160,8 +160,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         return make_ready_future();
     }
     if (auth::permissions::ALTERATIONS.contains(p)) {
-        for (auto& s : { auth::authorizer::get().protected_resources(),
-                        auth::authenticator::get().protected_resources() }) {
+        for (auto& s : { _auth_service->underlying_authorizer().protected_resources(),
+                        _auth_service->underlying_authorizer().protected_resources() }) {
             if (s.count(resource)) {
                 throw exceptions::unauthorized_exception(
                                 sprint("%s schema is protected",
@@ -174,12 +174,16 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
 }
 
 future<bool> service::client_state::check_has_permission(auth::permission p, auth::data_resource resource) const {
+    if (_is_internal) {
+        return make_ready_future<bool>(true);
+    }
+
     std::experimental::optional<auth::data_resource> parent;
     if (resource.has_parent()) {
         parent = resource.get_parent();
     }
 
-    return auth::auth::get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
+    return _auth_service->get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
         if (set.contains(p)) {
             return make_ready_future<bool>(true);
         }

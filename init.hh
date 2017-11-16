@@ -23,6 +23,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
+#include "auth/service.hh"
 #include "db/config.hh"
 #include "database.hh"
 #include "log.hh"
@@ -31,7 +32,7 @@ extern logging::logger startlog;
 
 class bad_configuration_error : public std::exception {};
 
-void init_storage_service(distributed<database>& db);
+void init_storage_service(distributed<database>& db, sharded<auth::service>&);
 void init_ms_fd_gossiper(sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port

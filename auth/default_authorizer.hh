@@ -41,26 +41,40 @@
 
 #pragma once
 
+#include <functional>
+
 #include "authorizer.hh"
+#include "cql3/query_processor.hh"
+#include "service/migration_manager.hh"
 
 namespace auth {
 
-class default_authorizer : public authorizer {
-public:
-    static const sstring DEFAULT_AUTHORIZER_NAME;
+const sstring& default_authorizer_name();
 
-    default_authorizer();
+class default_authorizer : public authorizer {
+    cql3::query_processor& _qp;
+
+    ::service::migration_manager& _migration_manager;
+
+public:
+    default_authorizer(cql3::query_processor&, ::service::migration_manager&);
     ~default_authorizer();
 
-    future<> init() override;
+    future<> start() override;
 
-    future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override;
+    future<> stop() override;
+
+    const sstring& qualified_java_name() const override {
+        return default_authorizer_name();
+    }
+
+    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, data_resource) const override;
 
     future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
 
     future<> revoke(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
 
-    future<std::vector<permission_details>> list(::shared_ptr<authenticated_user>, permission_set, optional<data_resource>, optional<sstring>) const override;
+    future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user>, permission_set, optional<data_resource>, optional<sstring>) const override;
 
     future<> revoke_all(sstring) override;
 

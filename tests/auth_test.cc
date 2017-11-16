@@ -34,10 +34,11 @@
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
-#include "auth/auth.hh"
+#include "auth/allow_all_authenticator.hh"
 #include "auth/data_resource.hh"
 #include "auth/authenticator.hh"
 #include "auth/password_authenticator.hh"
+#include "auth/service.hh"
 #include "auth/authenticated_user.hh"
 
 #include "db/config.hh"
@@ -73,55 +74,59 @@ SEASTAR_TEST_CASE(test_data_resource) {
 }
 
 SEASTAR_TEST_CASE(test_default_authenticator) {
-    return do_with_cql_env([](cql_test_env&) {
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().require_authentication(), false);
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().class_name(), auth::authenticator::ALLOW_ALL_AUTHENTICATOR_NAME);
+    return do_with_cql_env([](cql_test_env& env) {
+        auto& a = env.local_auth_service().underlying_authenticator();
+        BOOST_REQUIRE_EQUAL(a.require_authentication(), false);
+        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::allow_all_authenticator_name());
         return make_ready_future();
     });
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
     db::config cfg;
-    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+    cfg.authenticator(auth::password_authenticator_name());
 
-    return do_with_cql_env([](cql_test_env&) {
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().require_authentication(), true);
-        BOOST_REQUIRE_EQUAL(auth::authenticator::get().class_name(), auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+    return do_with_cql_env([](cql_test_env& env) {
+        auto& a = env.local_auth_service().underlying_authenticator();
+        BOOST_REQUIRE_EQUAL(a.require_authentication(), true);
+        BOOST_REQUIRE_EQUAL(a.qualified_java_name(), auth::password_authenticator_name());
         return make_ready_future();
     }, cfg);
 }
 
 SEASTAR_TEST_CASE(test_auth_users) {
     db::config cfg;
-    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+    cfg.authenticator(auth::password_authenticator_name());
 
-    return do_with_cql_env([](cql_test_env&) {
-        return seastar::async([] {
+    return do_with_cql_env([](cql_test_env& env) {
+        return seastar::async([&env] {
+            auto& auth = env.local_auth_service();
+
             sstring username("fisk");
-            auth::auth::insert_user(username, false).get();
-            BOOST_REQUIRE_EQUAL(auth::auth::is_existing_user(username).get0(), true);
-            BOOST_REQUIRE_EQUAL(auth::auth::is_super_user(username).get0(), false);
+            auth.insert_user(username, false).get();
+            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), true);
+            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), false);
 
-            auth::auth::insert_user(username, true).get();
-            BOOST_REQUIRE_EQUAL(auth::auth::is_existing_user(username).get0(), true);
-            BOOST_REQUIRE_EQUAL(auth::auth::is_super_user(username).get0(), true);
+            auth.insert_user(username, true).get();
+            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), true);
+            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), true);
 
-            auth::auth::delete_user(username).get();
-            BOOST_REQUIRE_EQUAL(auth::auth::is_existing_user(username).get0(), false);
-            BOOST_REQUIRE_EQUAL(auth::auth::is_super_user(username).get0(), false);
+            auth.delete_user(username).get();
+            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), false);
+            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), false);
         });
     }, cfg);
 }
 
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
-    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+    cfg.authenticator(auth::password_authenticator_name());
 
     /**
      * Not using seastar::async due to apparent ASan bug.
      * Enjoy the slightly less readable code.
      */
-    return do_with_cql_env([](cql_test_env&) {
+    return do_with_cql_env([](cql_test_env& env) {
         sstring username("fisk");
         sstring password("notter");
 
@@ -132,25 +137,26 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         auto USERNAME_KEY = authenticator::USERNAME_KEY;
         auto PASSWORD_KEY = authenticator::PASSWORD_KEY;
 
+        auto& a = env.local_auth_service().underlying_authenticator();
 
         // check non-existing user
-        return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
+        return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([&a](future<user_ptr>&& f) {
             try {
                 f.get();
                 BOOST_FAIL("should not reach");
             } catch (exceptions::authentication_exception&) {
                 // ok
             }
-        }).then([=] {
-            return authenticator::get().create(username, { { option::PASSWORD, password} }).then([=] {
-                return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
+        }).then([=, &a] {
+            return a.create(username, { { option::PASSWORD, password} }).then([=, &a] {
+                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
                     BOOST_REQUIRE_EQUAL(user->name(), username);
                     BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
                 });
             });
-        }).then([=] {
+        }).then([=, &a] {
             // check wrong password
-            return authenticator::get().authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<user_ptr>&& f) {
+            return a.authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<user_ptr>&& f) {
                 try {
                     f.get();
                     BOOST_FAIL("should not reach");
@@ -158,9 +164,9 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                     // ok
                 }
             });
-        }).then([=] {
+        }).then([=, &a] {
             // sasl
-            auto sasl = authenticator::get().new_sasl_challenge();
+            auto sasl = a.new_sasl_challenge();
 
             BOOST_REQUIRE_EQUAL(sasl->is_complete(), false);
 
@@ -178,10 +184,10 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 BOOST_REQUIRE_EQUAL(user->name(), username);
                 BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
             });
-        }).then([=] {
+        }).then([=, &a] {
             // check deleted user
-            return authenticator::get().drop(username).then([=] {
-                return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
+            return a.drop(username).then([=, &a] {
+                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
                     try {
                         f.get();
                         BOOST_FAIL("should not reach");
@@ -197,7 +203,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
 
 SEASTAR_TEST_CASE(test_cassandra_hash) {
     db::config cfg;
-    cfg.authenticator(auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME);
+    cfg.authenticator(auth::password_authenticator_name());
 
     return do_with_cql_env([](cql_test_env& env) {
         /**
@@ -215,8 +221,8 @@ SEASTAR_TEST_CASE(test_cassandra_hash) {
         auto f = env.local_qp().process("INSERT into system_auth.credentials (username, salted_hash) values (?, ?)", db::consistency_level::ONE,
                         { username, salted_hash }).discard_result();
 
-        return f.then([=] {
-            auto& a = auth::authenticator::get();
+        return f.then([=, &env] {
+            auto& a = env.local_auth_service().underlying_authenticator();
 
             auto USERNAME_KEY = auth::authenticator::USERNAME_KEY;
             auto PASSWORD_KEY = auth::authenticator::PASSWORD_KEY;

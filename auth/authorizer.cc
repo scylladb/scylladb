@@ -41,25 +41,39 @@
 
 #include "authorizer.hh"
 #include "authenticated_user.hh"
+#include "common.hh"
 #include "default_authorizer.hh"
 #include "auth.hh"
+#include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
-const sstring auth::authorizer::ALLOW_ALL_AUTHORIZER_NAME(auth::AUTH_PACKAGE_NAME + "AllowAllAuthorizer");
+const sstring& auth::allow_all_authorizer_name() {
+    static const sstring name = meta::AUTH_PACKAGE_NAME + "AllowAllAuthorizer";
+    return name;
+}
 
 /**
  * Authenticator is assumed to be a fully state-less immutable object (note all the const).
  * We thus store a single instance globally, since it should be safe/ok.
  */
 static std::unique_ptr<auth::authorizer> global_authorizer;
-using authorizer_registry = class_registry<auth::authorizer>;
+using authorizer_registry = class_registry<auth::authorizer, cql3::query_processor&>;
 
 future<>
 auth::authorizer::setup(const sstring& type) {
-    if (type == ALLOW_ALL_AUTHORIZER_NAME) {
+    if (type == allow_all_authorizer_name()) {
         class allow_all_authorizer : public authorizer {
         public:
+            future<> start() override {
+                return make_ready_future<>();
+            }
+            future<> stop() override {
+                return make_ready_future<>();
+            }
+            const sstring& qualified_java_name() const override {
+                return allow_all_authorizer_name();
+            }
             future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {
                 return make_ready_future<permission_set>(permissions::ALL);
             }
@@ -90,8 +104,8 @@ auth::authorizer::setup(const sstring& type) {
         global_authorizer = std::make_unique<allow_all_authorizer>();
         return make_ready_future();
     } else {
-        auto a = authorizer_registry::create(type);
-        auto f = a->init();
+        auto a = authorizer_registry::create(type, cql3::get_local_query_processor());
+        auto f = a->start();
         return f.then([a = std::move(a)]() mutable {
             global_authorizer = std::move(a);
         });

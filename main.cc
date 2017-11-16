@@ -436,8 +436,9 @@ int main(int ac, char** av) {
             api::set_server_init(ctx).get();
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
+            static sharded<auth::service> auth_service;
             supervisor::notify("initializing storage service");
-            init_storage_service(db);
+            init_storage_service(db, auth_service);
             supervisor::notify("starting per-shard database core");
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();

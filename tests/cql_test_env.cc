@@ -43,7 +43,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
-#include "auth/auth.hh"
+#include "auth/service.hh"
 
 namespace sstables {
 
@@ -82,13 +82,14 @@ public:
     static std::atomic<bool> active;
 private:
     ::shared_ptr<distributed<database>> _db;
+    ::shared_ptr<sharded<auth::service>> _auth_service;
     lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
         service::client_state client_state;
 
-        core_local_state()
-            : client_state(service::client_state::for_external_calls())
+        core_local_state(auth::service& auth_service)
+            : client_state(service::client_state::for_external_calls(auth_service))
         {
             client_state.set_login(::make_shared<auth::authenticated_user>("cassandra"));
         }
@@ -106,7 +107,7 @@ private:
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
-    single_node_cql_env(::shared_ptr<distributed<database>> db) : _db(db)
+    single_node_cql_env(::shared_ptr<distributed<database>> db, ::shared_ptr<sharded<auth::service>> auth_service) : _db(db), _auth_service(std::move(auth_service))
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -241,8 +242,12 @@ public:
         return cql3::get_query_processor();
     }
 
+    auth::service& local_auth_service() override {
+        return _auth_service->local();
+    }
+
     future<> start() {
-        return _core_local.start();
+        return _core_local.start(std::ref(*_auth_service));
     }
 
     future<> stop() {
@@ -292,8 +297,10 @@ public:
             ms.start(listen, std::move(7000)).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
+            auto auth_service = ::make_shared<sharded<auth::service>>();
+
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db)).get();
+            ss.start(std::ref(*db), std::ref(*auth_service)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             db->start(std::move(*cfg)).get();
@@ -347,12 +354,12 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             service::get_local_storage_service().init_server().get();
-            auto deinit_storage_service_server = defer([] {
+            auto deinit_storage_service_server = defer([auth_service] {
                 gms::stop_gossiping().get();
-                auth::auth::shutdown().get();
+                auth_service->stop().get();
             });
 
-            single_node_cql_env env(db);
+            single_node_cql_env env(db, auth_service);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 

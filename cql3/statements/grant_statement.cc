@@ -44,7 +44,10 @@
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::grant_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    return auth::authorizer::get().grant(state.get_client_state().user(), _permissions, _resource, _username).then([] {
+    auto& client_state = state.get_client_state();
+    auto& auth_service = *client_state.get_auth_service();
+
+    return auth_service.underlying_authorizer().grant(client_state.user(), _permissions, _resource, _username).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
     });
 }

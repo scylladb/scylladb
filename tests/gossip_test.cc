@@ -40,9 +40,10 @@ thread_local disk_error_signal_type general_disk_error;
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
+        sharded<auth::service> auth_service;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
-        service::get_storage_service().start(std::ref(db)).get();
+        service::get_storage_service().start(std::ref(db), std::ref(auth_service)).get();
         db.start().get();
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
         gms::get_failure_detector().start().get();

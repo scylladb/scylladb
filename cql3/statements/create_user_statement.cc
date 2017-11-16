@@ -40,8 +40,8 @@
  */
 
 #include "create_user_statement.hh"
-#include "auth/auth.hh"
 #include "auth/authenticator.hh"
+#include "auth/service.hh"
 
 cql3::statements::create_user_statement::create_user_statement(sstring username, ::shared_ptr<user_options> opts, bool superuser, bool if_not_exists)
     : _username(std::move(username))
@@ -55,7 +55,7 @@ void cql3::statements::create_user_statement::validate(distributed<service::stor
         throw exceptions::invalid_request_exception("Username can't be an empty string");
     }
 
-    _opts->validate();
+    _opts->validate(state.get_auth_service()->underlying_authenticator());
 
     // validate login here before checkAccess to avoid leaking user existence to anonymous users.
     state.ensure_not_anonymous();
@@ -66,19 +66,22 @@ void cql3::statements::create_user_statement::validate(distributed<service::stor
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::create_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    return state.get_client_state().user()->is_super().then([this](bool is_super) {
+    auto& client_state = state.get_client_state();
+    auto& auth_service = *client_state.get_auth_service();
+
+    return auth::is_super_user(auth_service, *client_state.user()).then([this, &auth_service](bool is_super) {
         if (!is_super) {
             throw exceptions::unauthorized_exception("Only superusers are allowed to perform CREATE USER queries");
         }
-        return auth::auth::is_existing_user(_username).then([this](bool exists) {
+        return auth_service.is_existing_user(_username).then([this, &auth_service](bool exists) {
             if (exists && !_if_not_exists) {
                 throw exceptions::invalid_request_exception(sprint("User %s already exists", _username));
             }
             if (exists && _if_not_exists) {
                 make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
             }
-            return auth::authenticator::get().create(_username, _opts->options()).then([this] {
-                return auth::auth::insert_user(_username, _superuser).then([] {
+            return auth_service.underlying_authenticator().create(_username, _opts->options()).then([this, &auth_service] {
+                return auth_service.insert_user(_username, _superuser).then([] {
                     return  make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
                 });
             });

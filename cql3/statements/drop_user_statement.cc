@@ -42,9 +42,9 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "drop_user_statement.hh"
-#include "auth/auth.hh"
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
+#include "auth/service.hh"
 
 cql3::statements::drop_user_statement::drop_user_statement(sstring username, bool if_exists)
     : _username(std::move(username))
@@ -65,12 +65,15 @@ void cql3::statements::drop_user_statement::validate(distributed<service::storag
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::drop_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    return state.get_client_state().user()->is_super().then([this](bool is_super) {
+    auto& client_state = state.get_client_state();
+    auto& auth_service = *client_state.get_auth_service();
+
+    return auth::is_super_user(auth_service, *client_state.user()).then([this, &auth_service](bool is_super) {
         if (!is_super) {
             throw exceptions::unauthorized_exception("Only superusers are allowed to perform DROP USER queries");
         }
 
-        return auth::auth::is_existing_user(_username).then([this](bool exists) {
+        return auth_service.is_existing_user(_username).then([this, &auth_service](bool exists) {
             if (!_if_exists && !exists) {
                 throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
             }
@@ -79,9 +82,9 @@ cql3::statements::drop_user_statement::execute(distributed<service::storage_prox
             }
 
             // clean up permissions after the dropped user.
-            return auth::authorizer::get().revoke_all(_username).then([this] {
-                return auth::auth::delete_user(_username).then([this] {
-                    return auth::authenticator::get().drop(_username);
+            return auth_service.underlying_authorizer().revoke_all(_username).then([this, &auth_service] {
+                return auth_service.delete_user(_username).then([this, &auth_service] {
+                    return auth_service.underlying_authenticator().drop(_username);
                 });
             }).then([] {
                 return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();

@@ -59,9 +59,10 @@ public:
 };
 
 thrift_server::thrift_server(distributed<database>& db,
-                             distributed<cql3::query_processor>& qp)
+                             distributed<cql3::query_processor>& qp,
+                             auth::service& auth_service)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory(db, qp).release())
+        , _handler_factory(create_handler_factory(db, qp, auth_service).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory)) {
 }

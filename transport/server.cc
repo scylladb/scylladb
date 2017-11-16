@@ -260,13 +260,14 @@ private:
     }
 };
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
+cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
     : _proxy(proxy)
     , _query_processor(qp)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
     , _notifier(std::make_unique<event_notifier>())
     , _lb(lb)
+    , _auth_service(auth_service)
 {
     namespace sm = seastar::metrics;
 
@@ -557,7 +558,7 @@ cql_server::connection::connection(cql_server& server, ipv4_addr server_addr, co
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::external_tag{}, addr)
+    , _client_state(service::client_state::external_tag{}, server._auth_service, addr)
 {
     ++_server._total_connections;
     ++_server._current_connections;
@@ -748,9 +749,9 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, b
              throw exceptions::protocol_exception(sprint("Unknown compression algorithm: %s", compression));
          }
     }
-    auto& a = auth::authenticator::get();
+    auto& a = client_state.get_auth_service()->underlying_authenticator();
     if (a.require_authentication()) {
-        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.class_name(), client_state.get_trace_state()), client_state));
+        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.qualified_java_name(), client_state.get_trace_state()), client_state));
     }
     return make_ready_future<response_type>(std::make_pair(make_ready(stream, client_state.get_trace_state()), client_state));
 }
@@ -758,7 +759,7 @@ future<response_type> cql_server::connection::process_startup(uint16_t stream, b
 future<response_type> cql_server::connection::process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     if (_sasl_challenge == nullptr) {
-        _sasl_challenge = auth::authenticator::get().new_sasl_challenge();
+        _sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
     }
 
     auto challenge = _sasl_challenge->evaluate_response(buf);

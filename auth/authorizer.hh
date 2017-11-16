@@ -55,6 +55,8 @@
 
 namespace auth {
 
+class service;
+
 class authenticated_user;
 
 struct permission_details {
@@ -71,13 +73,13 @@ using std::experimental::optional;
 
 class authorizer {
 public:
-    static const sstring ALLOW_ALL_AUTHORIZER_NAME;
-
     virtual ~authorizer() {}
 
-    virtual future<> init() {
-        return make_ready_future();
-    }
+    virtual future<> start() = 0;
+
+    virtual future<> stop() = 0;
+
+    virtual const sstring& qualified_java_name() const = 0;
 
     /**
      * The primary Authorizer method. Returns a set of permissions of a user on a resource.
@@ -86,7 +88,7 @@ public:
      * @param resource Resource for which the authorization is being requested. @see DataResource.
      * @return Set of permissions of the user on the resource. Should never return empty. Use permission.NONE instead.
      */
-    virtual future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const = 0;
+    virtual future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, data_resource) const = 0;
 
     /**
      * Grants a set of permissions on a resource to a user.
@@ -130,7 +132,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<std::vector<permission_details>> list(::shared_ptr<authenticated_user> performer, permission_set, optional<data_resource>, optional<sstring>) const = 0;
+    virtual future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user> performer, permission_set, optional<data_resource>, optional<sstring>) const = 0;
 
     /**
      * This method is called before deleting a user with DROP USER query so that a new user with the same
@@ -160,18 +162,6 @@ public:
      * @throws ConfigurationException when there is a configuration error.
      */
     virtual future<> validate_configuration() const = 0;
-
-    /**
-     * Setup is called once upon system startup to initialize the IAuthorizer.
-     *
-     * For example, use this method to create any required keyspaces/column families.
-     */
-    static future<> setup(const sstring& type);
-
-    /**
-     * Returns the system authorizer. Must have called setup before calling this.
-     */
-    static authorizer& get();
 };
 
 }

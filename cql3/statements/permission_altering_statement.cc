@@ -41,11 +41,11 @@
 
 #include <seastar/core/thread.hh>
 
+#include "auth/service.hh"
 #include "permission_altering_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
-#include "auth/auth.hh"
 
 cql3::statements::permission_altering_statement::permission_altering_statement(
                 auth::permission_set permissions, auth::data_resource resource,
@@ -60,7 +60,7 @@ void cql3::statements::permission_altering_statement::validate(distributed<servi
 }
 
 future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) {
-    return auth::auth::is_existing_user(_username).then([this, &state](bool exists) {
+    return state.get_auth_service()->is_existing_user(_username).then([this, &state](bool exists) {
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
