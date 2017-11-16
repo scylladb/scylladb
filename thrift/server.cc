@@ -214,6 +214,9 @@ thrift_server::listen(ipv4_addr addr, bool keepalive) {
 
 void
 thrift_server::do_accepts(int which, bool keepalive) {
+    if (_stop_gate.is_closed()) {
+        return;
+    }
     with_gate(_stop_gate, [&, this] {
         return _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) {
             fd.set_nodelay(true);
@@ -231,10 +234,10 @@ thrift_server::do_accepts(int which, bool keepalive) {
                 });
             });
             do_accepts(which, keepalive);
+        }).handle_exception([this, which, keepalive] (auto ex) {
+            tlogger.debug("accept failed {}", ex);
+            this->maybe_retry_accept(which, keepalive, std::move(ex));
         });
-    }).handle_exception([this, which, keepalive] (auto ex) {
-        tlogger.debug("accept failed {}", ex);
-        this->maybe_retry_accept(which, keepalive, std::move(ex));
     });
 }
 
