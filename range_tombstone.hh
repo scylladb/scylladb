@@ -176,15 +176,6 @@ public:
     size_t memory_usage() const {
         return sizeof(range_tombstone) + external_memory_usage();
     }
-
-    // Flips start and end bound so that range tombstone can be used in reversed
-    // streams.
-    void flip() {
-        std::swap(start, end);
-        std::swap(start_kind, end_kind);
-        start_kind = flip_bound_kind(start_kind);
-        end_kind = flip_bound_kind(end_kind);
-    }
 private:
     void move_assign(range_tombstone&& rt) {
         start = std::move(rt.start);
@@ -202,11 +193,12 @@ private:
     }
 };
 
-// This is a helper intended for accumulating tombstones from a streamed
-// mutation and determining what is the tombstone for a given clustering row.
+// The accumulator expects the incoming range tombstones and clustered rows to
+// follow the ordering used by the mutation readers.
 //
-// After apply(rt) or tombstone_for_row(ck) are called there are followng
-// restrictions for subsequent calls:
+// Unless the accumulator is in the reverse mode, after apply(rt) or
+// tombstone_for_row(ck) are called there are followng restrictions for
+// subsequent calls:
 //  - apply(rt1) can be invoked only if rt.start_bound() < rt1.start_bound()
 //    and ck < rt1.start_bound()
 //  - tombstone_for_row(ck1) can be invoked only if rt.start_bound() < ck1
@@ -214,6 +206,15 @@ private:
 //
 // In other words position in partition of the mutation fragments passed to the
 // accumulator must be increasing.
+//
+// If the accumulator was created with the reversed flag set it expects the
+// stream of the range tombstone to come from a reverse partitions and follow
+// the ordering that they use. In particular, the restrictions from non-reversed
+// mode change to:
+//  - apply(rt1) can be invoked only if rt.end_bound() > rt1.end_bound() and
+//    ck > rt1.end_bound()
+//  - tombstone_for_row(ck1) can be invoked only if rt.end_bound() > ck1 and
+//    ck > ck1.
 class range_tombstone_accumulator {
     bound_view::compare _cmp;
     tombstone _partition_tombstone;
