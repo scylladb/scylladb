@@ -1753,10 +1753,6 @@ void sstable::write_range_tombstone(file_writer& out,
         std::vector<bytes_view> suffix,
         const tombstone t,
         column_mask mask) {
-    if (!t) {
-        return;
-    }
-
     write_column_name(out, start, suffix, start_marker);
     write(out, mask);
     write_column_name(out, end, suffix, end_marker);
@@ -1768,7 +1764,9 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
     auto mview = t->deserialize_mutation_form(collection);
     const bytes& column_name = cdef.name();
-    write_range_tombstone(out, clustering_key, clustering_key, { bytes_view(column_name) }, mview.tomb);
+    if (mview.tomb) {
+        write_range_tombstone(out, clustering_key, clustering_key, {bytes_view(column_name)}, mview.tomb);
+    }
     for (auto& cp: mview.cells) {
         maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
         write_column_name(out, clustering_key, { column_name, cp.first });
