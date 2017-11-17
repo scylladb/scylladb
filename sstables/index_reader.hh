@@ -514,6 +514,7 @@ public:
         }
         if (_current_index_idx + 1 < _current_list->size()) {
             ++_current_index_idx;
+            _current_pi_idx = 0;
             _data_file_position = (*_current_list)[_current_index_idx].position();
             _element = indexable_element::partition;
             return make_ready_future<>();
