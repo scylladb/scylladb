@@ -664,8 +664,9 @@ private:
     void write_range_tombstone(file_writer& out, const composite& start, const composite& end, std::vector<bytes_view> suffix, const tombstone t) {
         write_range_tombstone(out, start, composite::eoc::start, end, composite::eoc::end, std::move(suffix), std::move(t));
     }
+    void index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker);
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
-    void write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t);
+    void maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row);
     void write_deletion_time(file_writer& out, const tombstone t);
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);

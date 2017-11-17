@@ -1723,10 +1723,22 @@ void sstable::write_deletion_time(file_writer& out, const tombstone t) {
     write(out, deletion_time, timestamp);
 }
 
-void sstable::write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t) {
+void sstable::index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker) {
+    maybe_flush_pi_block(out, key, {}, marker);
+    // Remember the range tombstone so when we need to open a new promoted
+    // index block, we can figure out which ranges are still open and need
+    // to be repeated in the data file. Note that apply() also drops ranges
+    // already closed by rt.start, so the accumulator doesn't grow boundless.
+    _pi_write.tombstone_accumulator->apply(std::move(rt));
+}
+
+void sstable::maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row) {
+    auto t = clustered_row.tomb();
     if (!t) {
         return;
     }
+    auto rt = range_tombstone(clustered_row.key(), bound_kind::incl_start, clustered_row.key(), bound_kind::incl_end, t.tomb());
+    index_tombstone(out, key, std::move(rt), composite::eoc::none);
     write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.regular());
     if (t.is_shadowable()) {
         write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.shadowable().tomb(), column_mask::shadowable);
@@ -1770,21 +1782,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
     maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
-
-    // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
-    if (clustered_row.tomb()) {
-        maybe_flush_pi_block(out, clustering_key, {});
-        write_row_tombstone(out, clustering_key, clustered_row.tomb());
-        // Because we currently may break a partition to promoted-index blocks
-        // in the middle of a clustered row, we also need to track the current
-        // row's tombstone - not just range tombstones - which may effect the
-        // beginning of a new block.
-        // TODO: consider starting a new block only between rows, so the
-        // following code can be dropped:
-        _pi_write.tombstone_accumulator->apply(range_tombstone(
-                clustered_row.key(), bound_kind::incl_start,
-                clustered_row.key(), bound_kind::incl_end, clustered_row.tomb().tomb()));
-    }
+    maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
     if (schema.clustering_key_size()) {
         column_name_helper::min_max_components(schema, _collector.min_column_names(), _collector.max_column_names(),
