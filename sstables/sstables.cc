@@ -1777,7 +1777,6 @@ void sstable::write_range_tombstone(file_writer& out,
 }
 
 void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
-
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
     auto mview = t->deserialize_mutation_form(collection);
     const bytes& column_name = cdef.name();
@@ -1786,7 +1785,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
     }
     for (auto& cp: mview.cells) {
         maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
-        write_column_name(out, clustering_key, { column_name, cp.first });
+        write_column_name(out, *_schema, clustering_key, { column_name, cp.first });
         write_cell(out, cp.second, cdef);
     }
 }
