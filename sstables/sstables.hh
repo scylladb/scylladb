@@ -66,6 +66,8 @@ namespace sstables {
 
 extern logging::logger sstlog;
 
+class data_consume_rows_context;
+
 // data_consume_context is an object returned by sstable::data_consume_rows()
 // which allows knowing when the consumer stops reading, and starting it again
 // (e.g., when the consumer wants to stop after every sstable row).
@@ -81,11 +83,17 @@ extern logging::logger sstlog;
 // and the time the returned future is completed, the object lives on.
 // Moreover, the sstable object used for the sstable::data_consume_rows()
 // call which created this data_consume_context, must also be kept alive.
+//
+// data_consume_rows() and data_consume_rows_at_once() both can read just a
+// single row or many rows. The difference is that data_consume_rows_at_once()
+// is optimized to reading one or few rows (reading it all into memory), while
+// data_consume_rows() uses a read buffer, so not all the rows need to fit
+// memory in the same time (they are delivered to the consumer one by one).
 class data_consume_context {
-    class impl;
-    std::unique_ptr<impl> _pimpl;
+    shared_sstable _sst;
+    std::unique_ptr<data_consume_rows_context> _ctx;
     // This object can only be constructed by sstable::data_consume_rows()
-    data_consume_context(std::unique_ptr<impl>);
+    data_consume_context(shared_sstable,row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen);
     friend class sstable;
 public:
     future<> read();
