@@ -1727,17 +1727,9 @@ void sstable::write_row_tombstone(file_writer& out, const composite& key, const 
     if (!t) {
         return;
     }
-
-    auto write_tombstone = [&] (tombstone t, column_mask mask) {
-        write_column_name(out, key, {}, composite::eoc::start);
-        write(out, mask);
-        write_column_name(out, key, {}, composite::eoc::end);
-        write_deletion_time(out, t);
-    };
-
-    write_tombstone(t.regular(), column_mask::range_tombstone);
+    write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.regular());
     if (t.is_shadowable()) {
-        write_tombstone(t.shadowable().tomb(), column_mask::shadowable);
+        write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.shadowable().tomb(), column_mask::shadowable);
     }
 }
 
@@ -1747,13 +1739,13 @@ void sstable::write_range_tombstone(file_writer& out,
         const composite& end,
         composite::eoc end_marker,
         std::vector<bytes_view> suffix,
-        const tombstone t) {
+        const tombstone t,
+        column_mask mask) {
     if (!t) {
         return;
     }
 
     write_column_name(out, start, suffix, start_marker);
-    column_mask mask = column_mask::range_tombstone;
     write(out, mask);
     write_column_name(out, end, suffix, end_marker);
     write_deletion_time(out, t);
