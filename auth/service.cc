@@ -151,16 +151,8 @@ service::service(
                       create_object<authenticator>(sc.authenticator_java_name, qp, mm)) {
 }
 
-bool service::should_create_metadata() const {
-    const bool null_authorizer = _authorizer->qualified_java_name() == allow_all_authorizer_name();
-    const bool null_authenticator = _authenticator->qualified_java_name() == allow_all_authenticator_name();
-    return !null_authorizer || !null_authenticator;
-}
-
-future<> service::create_metadata_if_missing() {
+future<> service::create_keyspace_if_missing() const {
     auto& db = _qp.db().local();
-
-    auto f = make_ready_future<>();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
         std::map<sstring, sstring> opts{{"replication_factor", "1"}};
@@ -173,28 +165,36 @@ future<> service::create_metadata_if_missing() {
 
         // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments.
         // See issue #2129.
-        f = _migration_manager.announce_new_keyspace(ksm, api::min_timestamp, false);
+        return _migration_manager.announce_new_keyspace(ksm, api::min_timestamp, false);
     }
 
-    return f.then([this] {
-        // 3 months.
-        static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
+    return make_ready_future<>();
+}
 
-        static const sstring users_table_query = sprint(
-                "CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY (%s)) WITH gc_grace_seconds=%s",
-                meta::AUTH_KS,
-                meta::USERS_CF,
-                meta::user_name_col_name,
-                meta::superuser_col_name,
-                meta::user_name_col_name,
-                gc_grace_seconds);
+bool service::should_create_metadata() const {
+    const bool null_authorizer = _authorizer->qualified_java_name() == allow_all_authorizer_name();
+    const bool null_authenticator = _authenticator->qualified_java_name() == allow_all_authenticator_name();
+    return !null_authorizer || !null_authenticator;
+}
 
-        return create_metadata_table_if_missing(
-                meta::USERS_CF,
-                _qp,
-                users_table_query,
-                _migration_manager);
-    }).then([this] {
+future<> service::create_metadata_if_missing() {
+    // 3 months.
+    static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
+
+    static const sstring users_table_query = sprint(
+            "CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY (%s)) WITH gc_grace_seconds=%s",
+            meta::AUTH_KS,
+            meta::USERS_CF,
+            meta::user_name_col_name,
+            meta::superuser_col_name,
+            meta::user_name_col_name,
+            gc_grace_seconds);
+
+    return create_metadata_table_if_missing(
+            meta::USERS_CF,
+            _qp,
+            users_table_query,
+            _migration_manager).then([this] {
         delay_until_system_ready(_delayed, [this] {
             return has_existing_users().then([this](bool existing) {
                 if (!existing) {
@@ -233,11 +233,13 @@ future<> service::create_metadata_if_missing() {
 
 future<> service::start() {
     return once_among_shards([this] {
-        if (should_create_metadata()) {
-            return create_metadata_if_missing();
-        }
+        return create_keyspace_if_missing().then([this] {
+            if (should_create_metadata()) {
+                return create_metadata_if_missing();
+            }
 
-        return make_ready_future<>();
+            return make_ready_future<>();
+        });
     }).then([this] {
         return when_all_succeed(_authorizer->start(), _authenticator->start());
     }).then([this] {

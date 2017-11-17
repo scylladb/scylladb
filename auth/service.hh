@@ -122,6 +122,8 @@ public:
 private:
     future<bool> has_existing_users() const;
 
+    future<> create_keyspace_if_missing() const;
+
     bool should_create_metadata() const;
 
     future<> create_metadata_if_missing();
