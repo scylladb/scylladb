@@ -2116,17 +2116,13 @@ stop_iteration components_writer::consume(clustering_row&& cr) {
 
 stop_iteration components_writer::consume(range_tombstone&& rt) {
     ensure_tombstone_is_written();
-    // Remember the range tombstone so when we need to open a new promoted
-    // index block, we can figure out which ranges are still open and need
-    // to be repeated in the data file. Note that apply() also drops ranges
-    // already closed by rt.start, so the accumulator doesn't grow boundless.
-    _sst._pi_write.tombstone_accumulator->apply(rt);
-    auto start = composite::from_clustering_element(_schema, std::move(rt.start));
+    auto start = composite::from_clustering_element(_schema, rt.start);
     auto start_marker = bound_kind_to_start_marker(rt.start_kind);
-    auto end = composite::from_clustering_element(_schema, std::move(rt.end));
+    auto end = composite::from_clustering_element(_schema, rt.end);
     auto end_marker = bound_kind_to_end_marker(rt.end_kind);
-    _sst.maybe_flush_pi_block(_out, start, {}, start_marker);
-    _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, rt.tomb);
+    auto tomb = rt.tomb;
+    _sst.index_tombstone(_out, start, std::move(rt), start_marker);
+    _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, tomb);
     return stop_iteration::no;
 }
 
