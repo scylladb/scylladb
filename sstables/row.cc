@@ -403,6 +403,10 @@ data_consume_context& data_consume_context::operator=(data_consume_context&& o) 
 data_consume_context::data_consume_context(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
     : _sst(std::move(sst)), _ctx(new data_consume_rows_context(consumer, std::move(input), start, maxlen))
 { }
+data_consume_context::data_consume_context() = default;
+data_consume_context::operator bool() const noexcept {
+    return bool(_ctx);
+}
 future<> data_consume_context::read() {
     return _ctx->consume_input(*_ctx);
 }

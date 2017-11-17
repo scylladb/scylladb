@@ -43,6 +43,7 @@
 #include "schema.hh"
 #include "mutation.hh"
 #include "utils/i_filter.hh"
+#include "utils/optimized_optional.hh"
 #include "core/stream.hh"
 #include "writer.hh"
 #include "metadata_collector.hh"
@@ -95,6 +96,9 @@ class data_consume_context {
     // This object can only be constructed by sstable::data_consume_rows()
     data_consume_context(shared_sstable,row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen);
     friend class sstable;
+    data_consume_context();
+    explicit operator bool() const noexcept;
+    friend class optimized_optional<data_consume_context>;
 public:
     future<> read();
     future<> fast_forward_to(uint64_t begin, uint64_t end);
@@ -107,6 +111,8 @@ public:
     data_consume_context(data_consume_context&&) noexcept;
     data_consume_context& operator=(data_consume_context&&) noexcept;
 };
+
+using data_consume_context_opt = optimized_optional<data_consume_context>;
 
 class key;
 class sstable_writer;
