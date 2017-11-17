@@ -655,7 +655,7 @@ private:
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     // NOTE: functions used to generate sstable components.
-    void write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key);
+    void maybe_write_row_marker(file_writer& out, const schema& schema, const row_marker& marker, const composite& clustering_key);
     void write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row);
     void write_static_row(file_writer& out, const schema& schema, const row& static_row);
     void write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef);

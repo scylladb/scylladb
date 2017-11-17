@@ -1681,12 +1681,12 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
     }
 }
 
-void sstable::write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key) {
-    if (marker.is_missing()) {
+void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, const row_marker& marker, const composite& clustering_key) {
+    if (!schema.is_compound() || schema.is_dense() || marker.is_missing()) {
         return;
     }
-
     // Write row mark cell to the beginning of clustered row.
+    maybe_flush_pi_block(out, clustering_key, { bytes_view() });
     write_column_name(out, clustering_key, { bytes_view() });
     uint64_t timestamp = marker.timestamp();
     uint32_t value_length = 0;
@@ -1777,10 +1777,8 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
 void sstable::write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
-    if (schema.is_compound() && !schema.is_dense()) {
-        maybe_flush_pi_block(out, clustering_key, { bytes_view() });
-        write_row_marker(out, clustered_row.marker(), clustering_key);
-    }
+    maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
+
     // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
     if (clustered_row.tomb()) {
         maybe_flush_pi_block(out, clustering_key, {});
