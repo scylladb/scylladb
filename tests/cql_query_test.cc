@@ -2304,6 +2304,38 @@ SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
     });
 }
 
+SEASTAR_TEST_CASE(test_query_with_range_tombstones) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE test (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
+
+            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 0, 0);").get();
+            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 2, 2);").get();
+            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 4, 4);").get();
+            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 5, 5);").get();
+            e.execute_cql("INSERT INTO test (pk, ck, v) VALUES (0, 6, 6);").get();
+
+            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck >= 1 AND ck <= 3;").get();
+            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 4 AND ck <= 8;").get();
+            e.execute_cql("DELETE FROM test WHERE pk = 0 AND ck > 0 AND ck <= 1;").get();
+
+            assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0 ORDER BY ck DESC;").get0())
+                .is_rows()
+                .with_rows({
+                    { int32_type->decompose(4) },
+                    { int32_type->decompose(0) },
+                });
+
+            assert_that(e.execute_cql("SELECT v FROM test WHERE pk = 0;").get0())
+                .is_rows()
+                .with_rows({
+                   { int32_type->decompose(0) },
+                   { int32_type->decompose(4) },
+                });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_alter_table_validation) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table tatv (p1 int, c1 int, c2 int, r1 int, r2 set<int>, PRIMARY KEY (p1, c1, c2));").discard_result().then_wrapped([&e] (auto f) {

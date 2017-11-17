@@ -149,9 +149,6 @@ stop_iteration streamed_mutation_freezer::consume(clustering_row&& cr) {
 }
 
 stop_iteration streamed_mutation_freezer::consume(range_tombstone&& rt) {
-    if (_reversed) {
-        rt.flip();
-    }
     _rts.apply(_schema, std::move(rt));
     return stop_iteration::no;
 }

@@ -602,10 +602,17 @@ void range_tombstone_stream::reset() {
     _list.clear();
 }
 
+// Returns a reversed streamed mutation.
+// 1. Static row is still emitted first.
+// 2. Range tombstones are ordered by their end position.
+// 3. Clustered rows and range tombstones are emitted in descending order.
+// Because of 2 and 3 the guarantee that a range tombstone is emitted before
+// any mutation fragment affected by it still holds.
 streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
     class reversing_steamed_mutation final : public streamed_mutation::impl {
         streamed_mutation_opt _source;
         mutation_fragment_opt _static_row;
+        range_tombstone_list _range_tombstones;
         std::stack<mutation_fragment> _mutation_fragments;
     private:
         future<> consume_source() {
@@ -615,10 +622,9 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
                         return stop_iteration::yes;
                     } else if (mf->is_static_row()) {
                         _static_row = std::move(mf);
+                    } else if (mf->is_range_tombstone()) {
+                        _range_tombstones.apply(*_schema, std::move(mf->as_range_tombstone()));
                     } else {
-                        if (mf->is_range_tombstone()) {
-                            mf->as_mutable_range_tombstone().flip();
-                        }
                         _mutation_fragments.emplace(std::move(*mf));
                     }
                     return stop_iteration::no;
@@ -631,6 +637,7 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
         explicit reversing_steamed_mutation(streamed_mutation sm)
             : streamed_mutation::impl(sm.schema(), sm.decorated_key(), sm.partition_tombstone())
             , _source(std::move(sm))
+            , _range_tombstones(*_source->schema())
         { }
 
         virtual future<> fill_buffer() override {
@@ -641,12 +648,27 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
                 push_mutation_fragment(std::move(*_static_row));
                 _static_row = { };
             }
+            auto emit_range_tombstone = [&] {
+                auto it = std::prev(_range_tombstones.tombstones().end());
+                auto& rt = *it;
+                _range_tombstones.tombstones().erase(it);
+                push_mutation_fragment(mutation_fragment(std::move(rt)));
+                current_deleter<range_tombstone>()(&rt);
+            };
+            position_in_partition::less_compare cmp(*_schema);
             while (!is_end_of_stream() && !is_buffer_full()) {
-                if (_mutation_fragments.empty()) {
-                    _end_of_stream = true;
+                if (!_mutation_fragments.empty()) {
+                    auto& mf = _mutation_fragments.top();
+                    if (!_range_tombstones.empty() && !cmp(_range_tombstones.tombstones().rbegin()->end_position(), mf.position())) {
+                        emit_range_tombstone();
+                    } else {
+                        push_mutation_fragment(std::move(mf));
+                        _mutation_fragments.pop();
+                    }
+                } else if (!_range_tombstones.empty()) {
+                    emit_range_tombstone();
                 } else {
-                    push_mutation_fragment(std::move(_mutation_fragments.top()));
-                    _mutation_fragments.pop();
+                    _end_of_stream = true;
                 }
             }
             return make_ready_future<>();

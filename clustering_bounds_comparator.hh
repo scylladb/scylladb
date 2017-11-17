@@ -42,17 +42,6 @@ std::ostream& operator<<(std::ostream& out, const bound_kind k);
 bound_kind invert_kind(bound_kind k);
 int32_t weight(bound_kind k);
 
-static inline bound_kind flip_bound_kind(bound_kind bk)
-{
-    switch (bk) {
-    case bound_kind::excl_end: return bound_kind::excl_start;
-    case bound_kind::incl_end: return bound_kind::incl_start;
-    case bound_kind::excl_start: return bound_kind::excl_end;
-    case bound_kind::incl_start: return bound_kind::incl_end;
-    }
-    abort();
-}
-
 class bound_view {
 public:
     const static thread_local clustering_key empty_prefix;
