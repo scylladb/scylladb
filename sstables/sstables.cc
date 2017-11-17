@@ -1822,6 +1822,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
 }
 
 void sstable::write_static_row(file_writer& out, const schema& schema, const row& static_row) {
+    assert(schema.is_compound());
     static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = schema.static_column_at(id);
         if (!column_definition.is_atomic()) {
@@ -1831,15 +1832,9 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         }
         assert(column_definition.is_static());
         const auto& column_name = column_definition.name();
-        if (schema.is_compound()) {
-            auto sp = composite::static_prefix(schema);
-            maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
-            write_column_name(out, sp, { bytes_view(column_name) });
-        } else {
-            assert(!schema.is_dense());
-            maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
-            write_column_name(out, bytes_view(column_name));
-        }
+        auto sp = composite::static_prefix(schema);
+        maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
+        write_column_name(out, sp, { bytes_view(column_name) });
         atomic_cell_view cell = c.as_atomic_cell();
         write_cell(out, cell, column_definition);
     });
