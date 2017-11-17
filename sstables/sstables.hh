@@ -659,8 +659,6 @@ private:
     void write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row);
     void write_static_row(file_writer& out, const schema& schema, const row& static_row);
     void write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef);
-    void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none);
-    void write_column_name(file_writer& out, bytes_view column_names);
     void write_range_tombstone(file_writer& out, const composite& start, composite::eoc start_marker, const composite& end, composite::eoc end_marker, std::vector<bytes_view> suffix, const tombstone t);
     void write_range_tombstone(file_writer& out, const composite& start, const composite& end, std::vector<bytes_view> suffix, const tombstone t) {
         write_range_tombstone(out, start, composite::eoc::start, end, composite::eoc::end, std::move(suffix), std::move(t));
