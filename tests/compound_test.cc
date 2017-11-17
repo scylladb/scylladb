@@ -291,7 +291,7 @@ BOOST_AUTO_TEST_CASE(test_composite_serialize_value) {
 
 BOOST_AUTO_TEST_CASE(test_composite_from_exploded) {
     using components = std::vector<composite::component>;
-    BOOST_REQUIRE_EQUAL(composite::from_exploded({bytes_view(bytes({'e', 'l', '1'}))}, composite::eoc::start).components(),
+    BOOST_REQUIRE_EQUAL(composite::from_exploded({bytes_view(bytes({'e', 'l', '1'}))}, true, composite::eoc::start).components(),
                         components({std::make_pair(bytes("el1"), composite::eoc::start)}));
 }
 

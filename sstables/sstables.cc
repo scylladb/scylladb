@@ -1473,7 +1473,7 @@ public:
 template<typename Writer>
 static void write_compound_non_dense_column_name(Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
     // was defined in the schema, for example.
-    auto c = composite::from_exploded(column_names, marker);
+    auto c = composite::from_exploded(column_names, true, marker);
     auto ck_bview = bytes_view(clustering_key);
 
     // The marker is not a component, so if the last component is empty (IOW,
@@ -1514,18 +1514,12 @@ static void write_column_name(file_writer& out, bytes_view column_names) {
 
 template<typename Writer>
 static void write_column_name(Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    if (s.is_compound()) {
-        if (s.is_dense()) {
-            write_column_name(out, bytes_view(clustering_element));
-        } else {
-            return write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
-        }
+    if (s.is_dense()) {
+        write_column_name(out, bytes_view(clustering_element));
+    } else if (s.is_compound()) {
+        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
     } else {
-        if (s.is_dense()) {
-            write_column_name(out, clustering_element.begin()->first);
-        } else {
-            write_column_name(out, column_names[0]);
-        }
+        write_column_name(out, column_names[0]);
     }
 }
 
