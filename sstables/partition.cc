@@ -38,13 +38,6 @@
 
 namespace sstables {
 
-struct partition_header {
-    dht::decorated_key key;
-    tombstone tomb;
-    partition_header(dht::decorated_key dk, tombstone t) : key(std::move(dk)), tomb(t) { }
-};
-using partition_header_opt = stdx::optional<partition_header>;
-
 static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     auto b = std::move(vec.back());
     vec.pop_back();
@@ -969,7 +962,7 @@ private:
             return _context->skip_to(_lh_index->element_kind(), _lh_index->data_file_position());
         });
     }
-    future<partition_header_opt> read_from_index() {
+    future<> read_from_index() {
         sstlog.trace("reader {}: read from index", this);
         auto tomb = _lh_index->partition_tombstone();
         if (!tomb) {
@@ -977,35 +970,36 @@ private:
             return read_from_datafile();
         }
         auto pk = _lh_index->partition_key().to_partition_key(*_schema);
-        _current_partition_key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
-        _consumer.setup_for_partition(_current_partition_key->key());
-        return make_ready_future<partition_header_opt>(partition_header(*_current_partition_key, tombstone(*tomb)));
+        auto key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+        _consumer.setup_for_partition(key.key());
+        on_next_partition(std::move(key), tombstone(*tomb));
+        return make_ready_future<>();
     }
-    future<partition_header_opt> read_from_datafile() {
+    future<> read_from_datafile() {
         sstlog.trace("reader {}: read from data file", this);
         return _context->read().then([this] {
             auto& consumer = _consumer;
             auto mut = consumer.get_mutation();
             if (!mut) {
                 sstlog.trace("reader {}: eof", this);
-                return make_ready_future<partition_header_opt>();
+                return make_ready_future<>();
             }
-            _current_partition_key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
-            return make_ready_future<partition_header_opt>(partition_header(*_current_partition_key, mut->tomb));
+            on_next_partition(dht::global_partitioner().decorate_key(*_schema, std::move(mut->key)), mut->tomb);
+            return make_ready_future<>();
         });
     }
     // Assumes that we're currently positioned at partition boundary.
-    future<partition_header_opt> read_partition() {
+    future<> read_partition() {
         sstlog.trace("reader {}: reading partition", this);
 
         if (!_read_enabled) {
-            return make_ready_future<partition_header_opt>();
+            return make_ready_future<>();
         }
 
         if (!_consumer.is_mutation_end()) {
             if (_single_partition_read) {
                 _read_enabled = false;
-                return make_ready_future<partition_header_opt>();
+                return make_ready_future<>();
             }
             // FIXME: give more details from _context
             throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
@@ -1020,7 +1014,7 @@ private:
         if (_index_in_current_partition) {
             if (_context->eof()) {
                 sstlog.trace("reader {}: eof", this);
-                return make_ready_future<partition_header_opt>();
+                return make_ready_future<>();
             }
             if (_lh_index->partition_data_ready()) {
                 return read_from_index();
@@ -1036,11 +1030,14 @@ private:
         return read_from_datafile();
     }
     // Can be called from any position.
-    future<partition_header_opt> read_next_partition() {
+    future<> read_next_partition() {
         sstlog.trace("reader {}: read next partition", this);
+        // If next partition exists then on_next_partition will be called
+        // and _end_of_stream will be set to false again.
+        _end_of_stream = true;
         if (!_read_enabled) {
             sstlog.trace("reader {}: eof", this);
-            return make_ready_future<partition_header_opt>();
+            return make_ready_future<>();
         }
         return advance_to_next_partition().then([this] {
             return read_partition();
@@ -1067,16 +1064,12 @@ private:
             });
         });
     }
-    future<> get_next_partition() {
-        return read_next_partition().then([this] (auto&& ph) {
-            if (bool(ph)) {
-                _partition_finished = false;
-                this->push_mutation_fragment(
-                    mutation_fragment(partition_start(std::move(ph->key), ph->tomb)));
-            } else {
-                _end_of_stream = true;
-            }
-        });
+    void on_next_partition(dht::decorated_key key, tombstone tomb) {
+        _partition_finished = false;
+        _end_of_stream = false;
+        _current_partition_key = std::move(key);
+        push_mutation_fragment(
+            mutation_fragment(partition_start(*_current_partition_key, tomb)));
     }
     bool is_initialized() const {
         return bool(_context);
@@ -1140,7 +1133,7 @@ public:
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             if (_partition_finished) {
-                return get_next_partition();
+                return read_next_partition();
             } else {
                 return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this] {
                     _consumer.push_ready_fragments();
