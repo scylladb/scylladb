@@ -922,7 +922,7 @@ class sstable_mutation_reader : public flat_mutation_reader::impl {
     std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
     streamed_mutation::forwarding _fwd;
     stdx::optional<dht::decorated_key> _current_partition_key;
-    bool _partition_finished = false;
+    bool _partition_finished = true;
 public:
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
          const io_priority_class &pc,
@@ -1046,19 +1046,19 @@ private:
 
 public:
     void on_end_of_stream() {
-        _partition_finished = true;
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
             this->push_mutation_fragment(mutation_fragment(partition_end()));
             _current_partition_key = {};
+            _partition_finished = true;
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (_ds) {
             clear_buffer();
             _current_partition_key = { };
-            _partition_finished = false;
+            _partition_finished = true;
             _end_of_stream = false;
             return _ds->fast_forward_to(pr);
         }
@@ -1075,12 +1075,12 @@ public:
     }
     virtual future<> fill_buffer() override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            if (!_current_partition_key) {
+            if (_partition_finished) {
                 return get_next_partition();
             } else {
-                return do_until([this] { return is_buffer_full() || _partition_finished; }, [this] {
+                return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this] {
                     _ds->_consumer.push_ready_fragments();
-                    if (is_buffer_full() || _partition_finished) {
+                    if (is_buffer_full() || _partition_finished || _end_of_stream) {
                         return make_ready_future<>();
                     }
                     return advance_context(_ds->_consumer.maybe_skip()).then([this] {
@@ -1095,11 +1095,13 @@ public:
             if (_fwd == streamed_mutation::forwarding::yes) {
                 clear_buffer();
                 _current_partition_key = {};
+                _partition_finished = true;
                 _end_of_stream = false;
             } else {
                 clear_buffer_to_next_partition();
-                if (_current_partition_key && is_buffer_empty()) {
+                if (!_partition_finished && is_buffer_empty()) {
                     _current_partition_key = {};
+                    _partition_finished = true;
                 }
             }
         }
@@ -1107,13 +1109,11 @@ public:
     }
     virtual future<> fast_forward_to(position_range cr) override {
         forward_buffer_to(cr.start());
-        if (_current_partition_key) {
+        if (!_partition_finished) {
             _end_of_stream = false;
-            _partition_finished = false;
             return advance_context(_ds->_consumer.fast_forward_to(std::move(cr)));
         } else {
             _end_of_stream = true;
-            _partition_finished = true;
             return make_ready_future<>();
         }
     }
