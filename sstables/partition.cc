@@ -918,8 +918,17 @@ future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::
 
 class sstable_mutation_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer;
-    lw_shared_ptr<sstable_data_source> _ds;
-    std::function<future<lw_shared_ptr<sstable_data_source>> ()> _get_data_source;
+    shared_sstable _sst;
+    mp_row_consumer _consumer;
+    bool _index_in_current_partition = false; // Whether _lh_index is in current partition
+    bool _will_likely_slice = false;
+    bool _read_enabled = true;
+    data_consume_context_opt _context;
+    std::unique_ptr<index_reader> _lh_index; // For lower bound
+    std::unique_ptr<index_reader> _rh_index; // For upper bound
+    // We avoid unnecessary lookup for single partition reads thanks to this flag
+    bool _single_partition_read = false;
+    std::function<future<> ()> _initialize;
     streamed_mutation::forwarding _fwd;
     stdx::optional<dht::decorated_key> _current_partition_key;
     bool _partition_finished = true;
@@ -929,10 +938,11 @@ public:
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd)
         : impl(std::move(schema))
-        , _get_data_source([this, sst = std::move(sst), &pc, resource_tracker = std::move(resource_tracker)] {
-            auto consumer = mp_row_consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), _fwd);
-            auto ds = make_lw_shared<sstable_data_source>(_schema, std::move(sst), std::move(consumer));
-            return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
+        , _sst(std::move(sst))
+        , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd)
+        , _initialize([this] {
+            _context = _sst->data_consume_rows(_consumer);
+            return make_ready_future<>();
         })
         , _fwd(fwd) { }
     sstable_mutation_reader(shared_sstable sst,
@@ -944,18 +954,19 @@ public:
          streamed_mutation::forwarding fwd,
          mutation_reader::forwarding fwd_mr)
         : impl(std::move(schema))
-        , _get_data_source([this, pr, sst = std::move(sst), &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
-            auto lh_index = sst->get_index_reader(pc); // lh = left hand
-            auto rh_index = sst->get_index_reader(pc);
-            auto f = seastar::when_all_succeed(lh_index->advance_to_start(pr), rh_index->advance_to_end(pr));
-            return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
-                sstable::disk_read_range drr{lh_index->data_file_position(),
-                                             rh_index->data_file_position()};
-                auto consumer = mp_row_consumer(this, _schema, slice, pc, std::move(resource_tracker), _fwd);
-                auto ds = make_lw_shared<sstable_data_source>(_schema, std::move(sst), std::move(consumer), drr, (fwd_mr ? sst->data_size() : drr.end), std::move(lh_index), std::move(rh_index));
-                ds->_index_in_current_partition = true;
-                ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
-                return ds;
+        , _sst(std::move(sst))
+        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd)
+        , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
+            _lh_index = _sst->get_index_reader(pc); // lh = left hand
+            _rh_index = _sst->get_index_reader(pc);
+            auto f = seastar::when_all_succeed(_lh_index->advance_to_start(pr), _rh_index->advance_to_end(pr));
+            return f.then([this, &pc, &slice, fwd_mr] () mutable {
+                sstable::disk_read_range drr{_lh_index->data_file_position(),
+                                             _rh_index->data_file_position()};
+                auto last_end = fwd_mr ? _sst->data_size() : drr.end;
+                _context = _sst->data_consume_rows(_consumer, std::move(drr), last_end);
+                _index_in_current_partition = true;
+                _will_likely_slice = will_likely_slice(slice);
             });
         })
         , _fwd(fwd) { }
@@ -968,26 +979,26 @@ public:
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr)
         : impl(std::move(schema))
-        , _get_data_source([this, key = std::move(key), sst = std::move(sst), &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
-            auto lh_index = sst->get_index_reader(pc);
-            auto f = lh_index->advance_and_check_if_present(key);
-            return f.then([this, sst = std::move(sst), &slice, &pc, resource_tracker = std::move(resource_tracker), lh_index = std::move(lh_index), key] (bool present) mutable {
+        , _sst(std::move(sst))
+        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd)
+        , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
+            _lh_index = _sst->get_index_reader(pc);
+            auto f = _lh_index->advance_and_check_if_present(key);
+            return f.then([this, &slice, &pc, key] (bool present) mutable {
                 if (!present) {
-                    sst->get_filter_tracker().add_false_positive();
-                    return make_ready_future<lw_shared_ptr<sstable_data_source>>(lw_shared_ptr<sstable_data_source>());
+                    _sst->get_filter_tracker().add_false_positive();
+                    return make_ready_future<>();
                 }
 
-                sst->get_filter_tracker().add_true_positive();
+                _sst->get_filter_tracker().add_true_positive();
 
-                auto rh_index = std::make_unique<index_reader>(*lh_index);
-                auto f = advance_to_upper_bound(*rh_index, *_schema, slice, key);
-                return f.then([this, sst = std::move(sst), &slice, &pc, resource_tracker = std::move(resource_tracker), lh_index = std::move(lh_index), rh_index = std::move(rh_index)] () mutable {
-                    auto consumer = mp_row_consumer(this, _schema, slice, pc, std::move(resource_tracker), _fwd);
-                    auto ds = make_lw_shared<sstable_data_source>(sstable_data_source::single_partition_tag(), _schema,
-                                                                  std::move(sst), std::move(consumer), std::move(lh_index), std::move(rh_index));
-                    ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
-                    ds->_index_in_current_partition = true;
-                    return ds;
+                _rh_index = std::make_unique<index_reader>(*_lh_index);
+                auto f = advance_to_upper_bound(*_rh_index, *_schema, slice, key);
+                return f.then([this, &slice, &pc] () mutable {
+                    _context = _sst->data_consume_single_partition(_consumer,
+                            { _lh_index->data_file_position(), _rh_index->data_file_position() });
+                    _will_likely_slice = will_likely_slice(slice);
+                    _index_in_current_partition = true;
                 });
             });
         })
@@ -996,7 +1007,126 @@ public:
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     sstable_mutation_reader(sstable_mutation_reader&&) = delete;
     sstable_mutation_reader(const sstable_mutation_reader&) = delete;
+    ~sstable_mutation_reader() {
+        auto close = [] (std::unique_ptr<index_reader>& ptr) {
+            if (ptr) {
+                auto f = ptr->close();
+                f.handle_exception([index = std::move(ptr)] (auto&&) { });
+            }
+        };
+        close(_lh_index);
+        close(_rh_index);
+    }
 private:
+    static bool will_likely_slice(const query::partition_slice& slice) {
+        return (!slice.default_row_ranges().empty() && !slice.default_row_ranges()[0].is_full())
+               || slice.get_specific_ranges();
+    }
+    index_reader& lh_index() {
+        if (!_lh_index) {
+            _lh_index = _sst->get_index_reader(_consumer.io_priority());
+        }
+        return *_lh_index;
+    }
+    future<> advance_to_next_partition() {
+        sstlog.trace("reader {}: advance_to_next_partition()", this);
+        auto& consumer = _consumer;
+        if (consumer.is_mutation_end()) {
+            sstlog.trace("reader {}: already at partition boundary", this);
+            _index_in_current_partition = false;
+            return make_ready_future<>();
+        }
+        if (_single_partition_read) {
+            return make_ready_future<>();
+        }
+        return (_index_in_current_partition
+                ? _lh_index->advance_to_next_partition()
+                : lh_index().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
+            _index_in_current_partition = true;
+            if (bool(_rh_index) && _lh_index->data_file_position() > _rh_index->data_file_position()) {
+                _read_enabled = false;
+                return make_ready_future<>();
+            }
+            return _context->skip_to(_lh_index->element_kind(), _lh_index->data_file_position());
+        });
+    }
+    future<partition_header_opt> read_from_index() {
+        sstlog.trace("reader {}: read from index", this);
+        auto tomb = _lh_index->partition_tombstone();
+        if (!tomb) {
+            sstlog.trace("reader {}: no tombstone", this);
+            return read_from_datafile();
+        }
+        auto pk = _lh_index->partition_key().to_partition_key(*_schema);
+        _current_partition_key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
+        _consumer.setup_for_partition(_current_partition_key->key());
+        return make_ready_future<partition_header_opt>(partition_header(*_current_partition_key, tombstone(*tomb)));
+    }
+    future<partition_header_opt> read_from_datafile() {
+        sstlog.trace("reader {}: read from data file", this);
+        return _context->read().then([this] {
+            auto& consumer = _consumer;
+            auto mut = consumer.get_mutation();
+            if (!mut) {
+                sstlog.trace("reader {}: eof", this);
+                return make_ready_future<partition_header_opt>();
+            }
+            _current_partition_key = dht::global_partitioner().decorate_key(*_schema, std::move(mut->key));
+            return make_ready_future<partition_header_opt>(partition_header(*_current_partition_key, mut->tomb));
+        });
+    }
+    // Assumes that we're currently positioned at partition boundary.
+    future<partition_header_opt> read_partition() {
+        sstlog.trace("reader {}: reading partition", this);
+
+        if (!_read_enabled) {
+            return make_ready_future<partition_header_opt>();
+        }
+
+        if (!_consumer.is_mutation_end()) {
+            if (_single_partition_read) {
+                _read_enabled = false;
+                return make_ready_future<partition_header_opt>();
+            }
+            // FIXME: give more details from _context
+            throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
+        }
+
+        // It's better to obtain partition information from the index if we already have it.
+        // We can save on IO if the user will skip past the front of partition immediately.
+        //
+        // It is also better to pay the cost of reading the index if we know that we will
+        // need to use the index anyway soon.
+        //
+        if (_index_in_current_partition) {
+            if (_context->eof()) {
+                sstlog.trace("reader {}: eof", this);
+                return make_ready_future<partition_header_opt>();
+            }
+            if (_lh_index->partition_data_ready()) {
+                return read_from_index();
+            }
+            if (_will_likely_slice) {
+                return _lh_index->read_partition_data().then([this] {
+                    return read_from_index();
+                });
+            }
+        }
+
+        // FIXME: advance index to current partition if _will_likely_slice
+        return read_from_datafile();
+    }
+    // Can be called from any position.
+    future<partition_header_opt> read_next_partition() {
+        sstlog.trace("reader {}: read next partition", this);
+        if (!_read_enabled) {
+            sstlog.trace("reader {}: eof", this);
+            return make_ready_future<partition_header_opt>();
+        }
+        return advance_to_next_partition().then([this] {
+            return read_partition();
+        });
+    }
     future<> advance_context(stdx::optional<position_in_partition_view> pos) {
         if (!pos) {
             return make_ready_future<>();
@@ -1006,35 +1136,21 @@ private:
         }
         assert (_current_partition_key);
         return [this] {
-            if (!_ds->_index_in_current_partition) {
-                _ds->_index_in_current_partition = true;
-                return _ds->lh_index().advance_to(*_current_partition_key);
+            if (!_index_in_current_partition) {
+                _index_in_current_partition = true;
+                return lh_index().advance_to(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos] {
-            return _ds->lh_index().advance_to(*pos).then([this] {
-                index_reader& idx = *_ds->_lh_index;
-                return _ds->_context.skip_to(idx.element_kind(), idx.data_file_position());
+            return lh_index().advance_to(*pos).then([this] {
+                index_reader& idx = *_lh_index;
+                return _context->skip_to(idx.element_kind(), idx.data_file_position());
             });
         });
     }
-    future<partition_header_opt> operator()() {
-        if (_ds) {
-            return _ds->read_next_partition();
-        }
-        return (_get_data_source)().then([this] (lw_shared_ptr<sstable_data_source> ds) {
-            // We must get the sstable_data_source and backup it in case we enable read
-            // again in the future.
-            _ds = std::move(ds);
-            return _ds ? _ds->read_partition()
-                       : make_ready_future<partition_header_opt>();
-        });
-    }
-
     future<> get_next_partition() {
-        return operator()().then([this] (auto&& ph) {
+        return read_next_partition().then([this] (auto&& ph) {
             if (bool(ph)) {
-                _current_partition_key = ph->key;
                 _partition_finished = false;
                 this->push_mutation_fragment(
                     mutation_fragment(partition_start(std::move(ph->key), ph->tomb)));
@@ -1043,64 +1159,91 @@ private:
             }
         });
     }
-
+    bool is_initialized() const {
+        return bool(_context);
+    }
+    future<> ensure_initialized() {
+        if (is_initialized()) {
+            return make_ready_future<>();
+        }
+        return _initialize();
+    }
 public:
     void on_end_of_stream() {
         if (_fwd == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
             this->push_mutation_fragment(mutation_fragment(partition_end()));
-            _current_partition_key = {};
             _partition_finished = true;
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        if (_ds) {
-            clear_buffer();
-            _current_partition_key = { };
-            _partition_finished = true;
-            _end_of_stream = false;
-            return _ds->fast_forward_to(pr);
-        }
-        return (_get_data_source)().then([this, &pr] (lw_shared_ptr<sstable_data_source> ds) {
-            // We must get the sstable_data_source and backup it in case we enable read
-            // again in the future.
-            _ds = std::move(ds);
-            if (!_ds) {
+        return ensure_initialized().then([this, &pr] {
+            if (!is_initialized()) {
                 _end_of_stream = true;
                 return make_ready_future<>();
+            } else {
+                clear_buffer();
+                _partition_finished = true;
+                _end_of_stream = false;
+                assert(_lh_index);
+                assert(_rh_index);
+                auto f1 = _lh_index->advance_to_start(pr);
+                auto f2 = _rh_index->advance_to_end(pr);
+                return seastar::when_all_succeed(std::move(f1), std::move(f2)).then([this] {
+                    auto start = _lh_index->data_file_position();
+                    auto end = _rh_index->data_file_position();
+                    if (start != end) {
+                        _read_enabled = true;
+                        _index_in_current_partition = true;
+                        return _context->fast_forward_to(start, end);
+                    }
+                    _index_in_current_partition = false;
+                    _read_enabled = false;
+                    return make_ready_future<>();
+                });
             }
-            return _ds->fast_forward_to(pr);
         });
     }
     virtual future<> fill_buffer() override {
+        if (_end_of_stream) {
+            return make_ready_future<>();
+        }
+        if (!is_initialized()) {
+            return _initialize().then([this] {
+                if (!is_initialized()) {
+                    _end_of_stream = true;
+                    return make_ready_future<>();
+                } else {
+                    return fill_buffer();
+                }
+            });
+        }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             if (_partition_finished) {
                 return get_next_partition();
             } else {
                 return do_until([this] { return is_buffer_full() || _partition_finished || _end_of_stream; }, [this] {
-                    _ds->_consumer.push_ready_fragments();
+                    _consumer.push_ready_fragments();
                     if (is_buffer_full() || _partition_finished || _end_of_stream) {
                         return make_ready_future<>();
                     }
-                    return advance_context(_ds->_consumer.maybe_skip()).then([this] {
-                        return _ds->_context.read();
+                    return advance_context(_consumer.maybe_skip()).then([this] {
+                        return _context->read();
                     });
                 });
             }
         });
     }
     virtual void next_partition() override {
-        if (_ds) {
+        if (is_initialized()) {
             if (_fwd == streamed_mutation::forwarding::yes) {
                 clear_buffer();
-                _current_partition_key = {};
                 _partition_finished = true;
                 _end_of_stream = false;
             } else {
                 clear_buffer_to_next_partition();
                 if (!_partition_finished && is_buffer_empty()) {
-                    _current_partition_key = {};
                     _partition_finished = true;
                 }
             }
@@ -1111,7 +1254,7 @@ public:
         forward_buffer_to(cr.start());
         if (!_partition_finished) {
             _end_of_stream = false;
-            return advance_context(_ds->_consumer.fast_forward_to(std::move(cr)));
+            return advance_context(_consumer.fast_forward_to(std::move(cr)));
         } else {
             _end_of_stream = true;
             return make_ready_future<>();
