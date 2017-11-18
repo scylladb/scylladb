@@ -1565,7 +1565,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
     bytes_writer_for_column_name w;
-    write_column_name(w, clustering_key, column_names, marker);
+    write_column_name(w, *_schema, clustering_key, column_names, marker);
     bytes colname = std::move(w).release();
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
@@ -1814,22 +1814,9 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         }
         assert(column_definition.is_regular());
         atomic_cell_view cell = c.as_atomic_cell();
-        const bytes& column_name = column_definition.name();
-
-        if (schema.is_compound()) {
-            if (schema.is_dense()) {
-                maybe_flush_pi_block(out, composite(), { bytes_view(clustering_key) });
-            } else {
-                maybe_flush_pi_block(out, clustering_key, { bytes_view(column_name) });
-            }
-        } else {
-            if (schema.is_dense()) {
-                maybe_flush_pi_block(out, composite(), { bytes_view(clustered_row.key().get_component(schema, 0)) });
-            } else {
-                maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
-            }
-        }
-        write_column_name(out, schema, clustering_key, { bytes_view(column_name) });
+        std::vector<bytes_view> column_name = { column_definition.name() };
+        maybe_flush_pi_block(out, clustering_key, column_name);
+        write_column_name(out, schema, clustering_key, column_name);
         write_cell(out, cell, column_definition);
     });
 }
