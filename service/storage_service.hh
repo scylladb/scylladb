@@ -280,6 +280,7 @@ public:
         _digest_multipartition_read_feature.enable();
         _correct_counter_order_feature.enable();
         _schema_tables_v3.enable();
+        _correct_non_compound_range_tombstones.enable();
     }
 
     void finish_bootstrapping() {
