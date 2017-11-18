@@ -1512,6 +1512,23 @@ static void write_column_name(file_writer& out, bytes_view column_names) {
     write_column_name(w, column_names);
 }
 
+template<typename Writer>
+static void write_column_name(Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    if (s.is_compound()) {
+        if (s.is_dense()) {
+            write_column_name(out, bytes_view(clustering_element));
+        } else {
+            write_column_name(out, clustering_element, column_names, marker);
+        }
+    } else {
+        if (s.is_dense()) {
+            write_column_name(out, clustering_element.begin()->first);
+        } else {
+            write_column_name(out, column_names[0]);
+        }
+    }
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,
@@ -1803,20 +1820,17 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         if (schema.is_compound()) {
             if (schema.is_dense()) {
                 maybe_flush_pi_block(out, composite(), { bytes_view(clustering_key) });
-                write_column_name(out, bytes_view(clustering_key));
             } else {
                 maybe_flush_pi_block(out, clustering_key, { bytes_view(column_name) });
-                write_column_name(out, clustering_key, { bytes_view(column_name) });
             }
         } else {
             if (schema.is_dense()) {
                 maybe_flush_pi_block(out, composite(), { bytes_view(clustered_row.key().get_component(schema, 0)) });
-                write_column_name(out, bytes_view(clustered_row.key().get_component(schema, 0)));
             } else {
                 maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
-                write_column_name(out, bytes_view(column_name));
             }
         }
+        write_column_name(out, schema, clustering_key, { bytes_view(column_name) });
         write_cell(out, cell, column_definition);
     });
 }
