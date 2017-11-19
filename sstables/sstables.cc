@@ -1704,7 +1704,7 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
     }
     // Write row mark cell to the beginning of clustered row.
     maybe_flush_pi_block(out, clustering_key, { bytes_view() });
-    write_column_name(out, clustering_key, { bytes_view() });
+    write_column_name(out, schema, clustering_key, { bytes_view() });
     uint64_t timestamp = marker.timestamp();
     uint32_t value_length = 0;
 
