@@ -1847,7 +1847,7 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         const auto& column_name = column_definition.name();
         auto sp = composite::static_prefix(schema);
         maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
-        write_column_name(out, sp, { bytes_view(column_name) });
+        write_column_name(out, schema, sp, { bytes_view(column_name) });
         atomic_cell_view cell = c.as_atomic_cell();
         write_cell(out, cell, column_definition);
     });
