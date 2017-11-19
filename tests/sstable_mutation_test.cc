@@ -967,3 +967,51 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
     });
 }
 
+SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto dir = make_lw_shared<tmpdir>();
+        int id = 0;
+        for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
+            schema_builder builder("ks", sprint("cf%d", id++));
+            builder.with_column("p", utf8_type, column_kind::partition_key);
+            builder.with_column("c1", bytes_type, column_kind::clustering_key);
+            builder.with_column("v", int32_type);
+            auto s = builder.build(compact);
+
+            auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+            auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
+            mutation m(dk, s);
+
+            m.partition().apply_row_tombstone(*s, range_tombstone(
+                    clustering_key_prefix::from_exploded(*s, {bytes_type->decompose(data_value(to_bytes("ck1")))}),
+                    bound_kind::incl_start,
+                    clustering_key_prefix::from_exploded(*s, {bytes_type->decompose(data_value(to_bytes("ck5")))}),
+                    bound_kind::incl_end,
+                    {1, gc_clock::now()}));
+
+            auto ck = clustering_key::from_exploded(*s, {bytes_type->decompose(data_value(to_bytes("ck3")))});
+            m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+
+            auto mt = make_lw_shared<memtable>(s);
+            mt->apply(m);
+
+            auto sst = sstables::make_sstable(s,
+                                              dir->path,
+                                              1 /* generation */,
+                                              sstables::sstable::version_types::ka,
+                                              sstables::sstable::format_types::big);
+            sstable_writer_config cfg;
+            cfg.promoted_index_block_size = 1;
+            sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+            sst->load().get();
+
+            {
+                auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
+                assert_that(sst->as_mutation_source()(s, dht::partition_range::make_singular(dk), slice))
+                        .produces(m)
+                        .produces_end_of_stream();
+            }
+        }
+    });
+}
