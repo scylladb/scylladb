@@ -1471,7 +1471,7 @@ public:
 };
 
 template<typename Writer>
-static void write_column_name(Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+static void write_compound_non_dense_column_name(Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
     // was defined in the schema, for example.
     auto c = composite::from_exploded(column_names, marker);
     auto ck_bview = bytes_view(clustering_key);
@@ -1492,9 +1492,9 @@ static void write_column_name(Writer& out, const composite& clustering_key, cons
     out.write(ck_bview, c);
 }
 
-static void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+static void write_compound_non_dense_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
     auto w = file_writer_for_column_name(out);
-    write_column_name(w, clustering_key, column_names, marker);
+    write_compound_non_dense_column_name(w, clustering_key, column_names, marker);
 }
 
 template<typename Writer>
@@ -1518,7 +1518,7 @@ static void write_column_name(Writer& out, const schema& s, const composite& clu
         if (s.is_dense()) {
             write_column_name(out, bytes_view(clustering_element));
         } else {
-            write_column_name(out, clustering_element, column_names, marker);
+            return write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
         }
     } else {
         if (s.is_dense()) {
@@ -1535,7 +1535,7 @@ void sstable::write_range_tombstone_bound(file_writer& out,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
     if (!_correctly_serialize_non_compound_range_tombstones) {
-        write_column_name(out, clustering_element, column_names, marker);
+        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
     } else {
         write_column_name(out, s, clustering_element, column_names, marker);
     }
