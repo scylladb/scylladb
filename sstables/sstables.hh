@@ -567,6 +567,10 @@ private:
             const std::vector<bytes_view>& column_names,
             composite::eoc marker = composite::eoc::none);
 
+    void maybe_flush_pi_block(file_writer& out,
+            const composite& clustering_key,
+            bytes colname);
+
     schema_ptr _schema;
     sstring _dir;
     unsigned long _generation = 0;
@@ -673,6 +677,11 @@ private:
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
     void maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row);
     void write_deletion_time(file_writer& out, const tombstone t);
+
+    void index_and_write_column_name(file_writer& out,
+            const composite& clustering,
+            const std::vector<bytes_view>& column_names,
+            composite::eoc marker = composite::eoc::none);
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 
