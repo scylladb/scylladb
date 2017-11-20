@@ -1639,31 +1639,83 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
 
+future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
+    return add_local_application_state({ {std::move(state), std::move(value)} });
+}
+
+future<> gossiper::add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>> args) {
+    using in_pair_type = std::pair<application_state, utils::in<versioned_value>>;
+    using out_pair_type = std::pair<application_state, versioned_value>;
+    using vector_type = std::vector<out_pair_type>;
+
+    return add_local_application_state(boost::copy_range<vector_type>(args | boost::adaptors::transformed([](const in_pair_type& p) {
+        return out_pair_type(p.first, p.second.move());
+    })));
+}
+
+
 // Depends on:
 // - before_change callbacks
 // - on_change callbacks
-future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
-    return get_gossiper().invoke_on(0, [state, value = std::move(value)] (auto& gossiper) mutable {
-        return seastar::async([&gossiper, g = gossiper.shared_from_this(), state, value = std::move(value)] () mutable {
+// #2894. Similar to origin fix, but relies on non-interruptability to ensure we apply
+// values "in order".
+//
+// NOTE: having the values being actual versioned values here is sort of pointless, because
+// we overwrite the version to ensure the set is monotonic. However, it does not break anything,
+// and changing this tends to spread widely (see versioned_value::factory), so that can be its own
+// change later, if needed.
+// Retaining the slightly broken signature is also cosistent with origin. Hooray.
+//
+future<> gossiper::add_local_application_state(std::vector<std::pair<application_state, versioned_value>> states) {
+    if (states.empty()) {
+        return make_ready_future<>();
+    }
+    return container().invoke_on(0, [states = std::move(states)] (gossiper& gossiper) mutable {
+        return seastar::async([g = gossiper.shared_from_this(), states = std::move(states)]() mutable {
+            auto& gossiper = *g;
             inet_address ep_addr = gossiper.get_broadcast_address();
+            // for symmetry with other apply, use endpoint lock for our own address.
+            auto permit = gossiper.lock_endpoint(ep_addr).get0();
             auto es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
             if (!es) {
-                auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_state = %s, value = %s",
-                                  ep_addr, state, value);
+                auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_states = %s",
+                                  ep_addr, states);
                 logger.error("{}", err);
                 throw std::runtime_error(err);
             }
+
             endpoint_state ep_state_before = *es;
-            // Fire "before change" notifications:
-            gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
-            // Notifications may have taken some time, so preventively raise the version
-            // of the new value, otherwise it could be ignored by the remote node
-            // if another value with a newer version was received in the meantime:
-            value = storage_service_value_factory().clone_with_higher_version(value);
-            // Add to local application state and fire "on change" notifications:
+
+            for (auto& p : states) {
+                auto& state = p.first;
+                auto& value = p.second;
+                // Fire "before change" notifications:
+                // Not explicit, but apparently we allow this to defer (inside out implicit seastar::async)
+                gossiper.do_before_change_notifications(ep_addr, ep_state_before, state, value);
+            }
+
             es = gossiper.get_endpoint_state_for_endpoint_ptr(ep_addr);
-            if (es) {
+            if (!es) {
+                return;
+            }
+
+            for (auto& p : states) {
+                auto& state = p.first;
+                auto& value = p.second;
+                // Notifications may have taken some time, so preventively raise the version
+                // of the new value, otherwise it could be ignored by the remote node
+                // if another value with a newer version was received in the meantime:
+                value = storage_service_value_factory().clone_with_higher_version(value);
+                // Add to local application state
                 es->add_application_state(state, value);
+            }
+            for (auto& p : states) {
+                auto& state = p.first;
+                auto& value = p.second;
+                // fire "on change" notifications:
+                // now we might defer again, so this could be reordered. But we've
+                // ensured the whole set of values are monotonically versioned and
+                // applied to endpoint state.
                 gossiper.replicate(ep_addr, state, value).get();
                 gossiper.do_on_change_notifications(ep_addr, state, value);
             }

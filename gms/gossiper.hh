@@ -50,6 +50,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -507,6 +508,17 @@ public:
     void add_saved_endpoint(inet_address ep);
 
     future<> add_local_application_state(application_state state, versioned_value value);
+
+    /**
+     * Applies all states in set "atomically", as in guaranteed monotonic versions and
+     * inserted into endpoint state together (and assuming same grouping, overwritten together).
+     */
+    future<> add_local_application_state(std::vector<std::pair<application_state, versioned_value>>);
+
+    /**
+     * Intentionally overenginered to avoid very rare string copies.
+     */
+    future<> add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>>);
 
     // Needed by seastar::sharded
     future<> stop();
