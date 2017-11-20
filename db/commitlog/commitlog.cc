@@ -193,11 +193,11 @@ public:
     using time_point = clock_type::time_point;
     using sseg_ptr = ::shared_ptr<segment>;
 
-    using request_controller_type = basic_semaphore<timeout_exception_factory, commitlog::timeout_clock>;
-    using request_controller_units = semaphore_units<timeout_exception_factory, commitlog::timeout_clock>;
+    using request_controller_type = basic_semaphore<timeout_exception_factory, db::timeout_clock>;
+    using request_controller_units = semaphore_units<timeout_exception_factory, db::timeout_clock>;
     request_controller_type _request_controller;
 
-    stdx::optional<shared_future<with_clock<commitlog::timeout_clock>>> _segment_allocating;
+    stdx::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
 
     void account_memory_usage(size_t size) {
         _request_controller.consume(size);
@@ -208,7 +208,7 @@ public:
     }
 
     future<rp_handle>
-    allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout);
+    allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, db::timeout_clock::time_point timeout);
 
     struct stats {
         uint64_t cycle_count = 0;
@@ -265,7 +265,7 @@ public:
 
     future<> init();
     future<sseg_ptr> new_segment();
-    future<sseg_ptr> active_segment(commitlog::timeout_clock::time_point timeout);
+    future<sseg_ptr> active_segment(db::timeout_clock::time_point timeout);
     future<sseg_ptr> allocate_segment(bool active);
 
     future<> clear();
@@ -491,7 +491,7 @@ public:
     /**
      * Finalize this segment and get a new one
      */
-    future<sseg_ptr> finish_and_get_new(commitlog::timeout_clock::time_point timeout) {
+    future<sseg_ptr> finish_and_get_new(db::timeout_clock::time_point timeout) {
         _closed = true;
         sync();
         return _segment_manager->active_segment(timeout);
@@ -750,7 +750,7 @@ public:
     /**
      * Add a "mutation" to the segment.
      */
-    future<rp_handle> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
+    future<rp_handle> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, db::timeout_clock::time_point timeout) {
         if (must_sync()) {
             return with_timeout(timeout, sync()).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto s) mutable {
                 return s->allocate(id, std::move(writer), std::move(permit), timeout);
@@ -900,7 +900,7 @@ public:
 };
 
 future<db::rp_handle>
-db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
+db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, db::timeout_clock::time_point timeout) {
     auto size = writer->size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
@@ -1201,7 +1201,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     });
 }
 
-future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(commitlog::timeout_clock::time_point timeout) {
+future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment(db::timeout_clock::time_point timeout) {
     // If there is no active segment, try to allocate one using new_segment(). If we time out,
     // make sure later invocations can still pick that segment up once it's ready.
     return repeat_until_value([this, timeout] () -> future<stdx::optional<sseg_ptr>> {
@@ -1462,7 +1462,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
  * Add mutation.
  */
 future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
-        size_t size, commitlog::timeout_clock::time_point timeout, serializer_func func) {
+        size_t size, db::timeout_clock::time_point timeout, serializer_func func) {
     class serializer_func_entry_writer final : public entry_writer {
         serializer_func _func;
         size_t _size;

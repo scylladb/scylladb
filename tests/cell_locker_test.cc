@@ -71,8 +71,8 @@ static schema_ptr make_schema_disjoint_with_others()
 
 static data_value empty_value = data_value(to_bytes(""));
 
-static cell_locker::timeout_clock::time_point no_timeout {
-    cell_locker::timeout_clock::duration(std::numeric_limits<cell_locker::timeout_clock::duration::rep>::max())
+static db::timeout_clock::time_point no_timeout {
+    db::timeout_clock::duration(std::numeric_limits<db::timeout_clock::duration::rep>::max())
 };
 
 static auto make_row(const sstring& key, std::initializer_list<sstring> cells) {
@@ -238,7 +238,7 @@ SEASTAR_TEST_CASE(test_timed_out) {
 
             auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
 
-            auto timeout = cell_locker::timeout_clock::now() - std::chrono::hours(1);
+            auto timeout = db::timeout_clock::now() - std::chrono::hours(1);
             BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout).get0(),
                                 timed_out_error);
 

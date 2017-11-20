@@ -33,6 +33,7 @@
 #include "allocation_strategy.hh"
 #include <boost/heap/binomial_heap.hpp>
 #include "seastarx.hh"
+#include "db/timeout_clock.hh"
 
 namespace logalloc {
 
@@ -131,8 +132,6 @@ public:
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
-    using timeout_clock = lowres_clock;
-
     static region_group_reclaimer no_reclaimer;
 
     struct region_evictable_occupancy_ascending_less_comparator {
@@ -222,7 +221,7 @@ class region_group {
     //
     // This allows us to easily provide strong execution guarantees while keeping all re-check
     // complication in release_requests and keep the main request execution path simpler.
-    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, timeout_clock> _blocked_requests;
+    expiring_fifo<std::unique_ptr<allocating_function>, on_request_expiry, db::timeout_clock> _blocked_requests;
 
     uint64_t _blocked_requests_counter = 0;
 
@@ -310,7 +309,7 @@ public:
     //
     // When timeout is reached first, the returned future is resolved with timed_out_error exception.
     template <typename Func>
-    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, timeout_clock::time_point timeout = timeout_clock::time_point::max()) {
+    futurize_t<std::result_of_t<Func()>> run_when_memory_available(Func&& func, db::timeout_clock::time_point timeout = db::no_timeout) {
         // We disallow future-returning functions here, because otherwise memory may be available
         // when we start executing it, but no longer available in the middle of the execution.
         static_assert(!is_future<std::result_of_t<Func()>>::value, "future-returning functions are not permitted.");

@@ -81,6 +81,7 @@
 #include "backlog_controller.hh"
 #include "dirty_memory_manager.hh"
 #include "reader_resource_tracker.hh"
+#include "db/timeout_clock.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -286,8 +287,6 @@ public:
 
 class column_family : public enable_lw_shared_from_this<column_family> {
 public:
-    using timeout_clock = lowres_clock;
-
     struct config {
         sstring datadir;
         bool enable_disk_writes = true;
@@ -612,7 +611,7 @@ public:
         return _cache;
     }
 
-    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, timeout_clock::time_point timeout);
+    future<std::vector<locked_cell>> lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout);
 
     logalloc::occupancy_stats occupancy() const;
 private:
@@ -1039,8 +1038,6 @@ public:
 //   use shard_of() for data
 
 class database {
-public:
-    using timeout_clock = lowres_clock;
 private:
     ::cf_stats _cf_stats;
     static size_t max_memory_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
@@ -1096,8 +1093,8 @@ private:
     flush_io_controller _flush_io_controller;
     compaction_io_controller _compaction_io_controller;
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, timeout_clock::time_point timeout);
-    future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, timeout_clock::time_point timeout);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
+    future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
 private:
     // Unless you are an earlier boostraper or the database itself, you should
     // not be using this directly.  Go for the public create_keyspace instead.
@@ -1107,13 +1104,13 @@ private:
     void setup_metrics();
 
     friend class db_apply_executor;
-    future<> do_apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout);
-    future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, timeout_clock::time_point timeout);
-    future<> apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout);
+    future<> do_apply(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(schema_ptr, column_family&, utils::UUID, const frozen_mutation&, db::timeout_clock::time_point timeout);
+    future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
     query::result_memory_limiter _result_memory_limiter;
 
-    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, timeout_clock::time_point timeout,
+    future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
                                              tracing::trace_state_ptr trace_state);
 
     template<typename Future>
@@ -1193,9 +1190,9 @@ public:
                                                 query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state);
     // Apply the mutation atomically.
     // Throws timed_out_error when timeout is reached.
-    future<> apply(schema_ptr, const frozen_mutation&, timeout_clock::time_point timeout = timeout_clock::time_point::max());
+    future<> apply(schema_ptr, const frozen_mutation&, db::timeout_clock::time_point timeout = db::no_timeout);
     future<> apply_streaming_mutation(schema_ptr, utils::UUID plan_id, const frozen_mutation&, bool fragmented);
-    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+    future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

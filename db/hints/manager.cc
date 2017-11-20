@@ -31,6 +31,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "disk-error-handler.hh"
 #include "lister.hh"
+#include "db/timeout_clock.hh"
 
 namespace db {
 namespace hints {
@@ -121,7 +122,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
                 return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
                     commitlog_entry_writer cew(s, *fm);
-                    return log_ptr->add_entry(s->id(), cew, commitlog::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
+                    return log_ptr->add_entry(s->id(), cew, db::timeout_clock::now() + _shard_manager.hint_file_write_timeout);
                 }).then([this, tr_state] (db::rp_handle rh) {
                     rh.release();
                     ++shard_stats().written;
