@@ -1770,6 +1770,9 @@ void sstable::write_range_tombstone(file_writer& out,
         std::vector<bytes_view> suffix,
         const tombstone t,
         column_mask mask) {
+    if (!_schema->is_compound() && (start_marker == composite::eoc::end || end_marker == composite::eoc::start)) {
+        throw std::logic_error(sprint("Cannot represent marker type in range tombstone for non-compound schemas"));
+    }
     write_column_name(out, start, suffix, start_marker);
     write(out, mask);
     write_column_name(out, end, suffix, end_marker);

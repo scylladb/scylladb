@@ -106,6 +106,9 @@ delete_statement::prepare_internal(database& db, schema_ptr schema, shared_ptr<v
             || !stmt->restrictions()->get_clustering_columns_restrictions()->has_bound(bound::END)) {
         throw exceptions::invalid_request_exception("A range deletion operation needs to specify both bounds");
     }
+    if (!schema->is_compound()) {
+        throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
+    }
     return stmt;
 }
 
