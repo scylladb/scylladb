@@ -119,7 +119,8 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
             if (_sm) {
                 return _sm->fast_forward_to(std::move(cr));
             } else {
-                throw std::runtime_error("fast forward needs _sm to be set");
+                _end_of_stream = true;
+                return make_ready_future<>();
             }
         };
     };
