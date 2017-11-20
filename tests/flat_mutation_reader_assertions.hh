@@ -109,6 +109,11 @@ public:
         _reader.next_partition();
         return *this;
     }
+
+    flat_reader_assertions& fast_forward_to(position_range pr) {
+        _reader.fast_forward_to(std::move(pr));
+        return *this;
+    }
 };
 
 inline
