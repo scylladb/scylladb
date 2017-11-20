@@ -1174,10 +1174,6 @@ public:
     }
 };
 
-mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
-    return mutation_reader_from_flat_mutation_reader(read_rows_flat(std::move(schema), pc, fwd));
-}
-
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
     return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd);
 }
