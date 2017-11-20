@@ -52,7 +52,7 @@ public:
                 auto& prev = pi->entries[0];
                 for (size_t i = 1; i < pi->entries.size(); ++i) {
                     auto& cur = pi->entries[i];
-                    if (!pos_cmp(prev.end, cur.start)) {
+                    if (pos_cmp(cur.start, prev.end)) {
                         std::cout << "promoted index:\n";
                         for (auto& e : pi->entries) {
                             std::cout << "  " << e.start << "-" << e.end << ": +" << e.offset << " len=" << e.width << std::endl;
