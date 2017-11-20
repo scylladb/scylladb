@@ -1056,3 +1056,35 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto dir = make_lw_shared<tmpdir>();
+        schema_builder builder("ks", "cf");
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("v", int32_type);
+        auto s = builder.build(schema_builder::compact_storage::yes);
+
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        mutation m(dk, s);
+        for (auto&& v : { 1, 2, 3, 4 }) {
+            auto cell = atomic_cell::make_live(1, int32_type->decompose(v), { });
+            m.set_clustered_cell(clustering_key_prefix::make_empty(), *s->get_column_definition("v"), cell);
+        }
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(m);
+
+        auto sst = sstables::make_sstable(s,
+                                          dir->path,
+                                          1 /* generation */,
+                                          sstables::sstable::version_types::ka,
+                                          sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        cfg.promoted_index_block_size = 1;
+        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->load().get();
+
+        assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+    });
+}
