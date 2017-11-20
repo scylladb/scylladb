@@ -845,6 +845,41 @@ static void test_query_only_static_row(populate_fn populate) {
     }
 }
 
+void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populate) {
+    simple_schema s;
+    auto cks = s.make_ckeys(6);
+
+    auto pkey = s.make_pkey(0);
+    mutation m(pkey, s.schema());
+    s.add_row(m, cks[0], "data");
+
+    auto source = populate(s.schema(), {m});
+    assert_that(source.make_flat_mutation_reader(s.schema(),
+                query::full_partition_range,
+                s.schema()->full_slice(),
+                default_priority_class(),
+                nullptr,
+                streamed_mutation::forwarding::yes
+                ))
+        .produces_partition_start(pkey)
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[0]), position_in_partition::before_key(cks[1])))
+        .produces_row_with_key(cks[0])
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[1]), position_in_partition::before_key(cks[3])))
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[4]), position_in_partition::before_key(cks[5])))
+        .produces_end_of_stream()
+        .next_partition()
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[0]), position_in_partition::before_key(cks[1])))
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[1]), position_in_partition::before_key(cks[3])))
+        .produces_end_of_stream()
+        .fast_forward_to(position_range(position_in_partition::for_key(cks[4]), position_in_partition::before_key(cks[5])))
+        .produces_end_of_stream();
+}
+
 void run_mutation_reader_tests(populate_fn populate) {
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
@@ -911,6 +946,7 @@ void test_next_partition(populate_fn populate) {
 void run_flat_mutation_reader_tests(populate_fn populate) {
     run_conversion_to_mutation_reader_tests(populate);
     test_next_partition(populate);
+    test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
 }
 
 void run_mutation_source_tests(populate_fn populate) {
