@@ -345,7 +345,7 @@ public:
                 }
                 len = read_simple<size_type>(_v);
                 if (_v.size() < len) {
-                    throw marshal_exception();
+                    throw marshal_exception(sprint("composite iterator - not enough bytes, expected %d, got %d", len, _v.size()));
                 }
             }
             auto value = bytes_view(_v.begin(), len);

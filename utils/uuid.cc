@@ -62,7 +62,7 @@ UUID::UUID(sstring_view uuid) {
     boost::erase_all(uuid_string, "-");
     auto size = uuid_string.size() / 2;
     if (size != 16) {
-        throw marshal_exception();
+        throw marshal_exception(sprint("UUID string size mismatch: '%s'", uuid));
     }
     sstring most = sstring(uuid_string.begin(), uuid_string.begin() + size);
     sstring least = sstring(uuid_string.begin() + size, uuid_string.end());

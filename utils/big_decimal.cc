@@ -22,6 +22,7 @@
 #include "big_decimal.hh"
 #include <cassert>
 #include "marshal_exception.hh"
+#include "core/print.hh"
 
 #include <regex>
 
@@ -31,14 +32,14 @@ big_decimal::big_decimal(sstring_view text)
     static const std::regex big_decimal_re("^([\\+\\-]?)([0-9]*)(\\.([0-9]*))?([eE]([\\+\\-]?[0-9]+))?");
     std::smatch sm;
     if (!std::regex_match(str, sm, big_decimal_re)) {
-        throw marshal_exception();
+        throw marshal_exception(sprint("big_decimal contains invalid characters: '%s'", str));
     }
     bool negative = sm[1] == "-";
     auto integer = sm[2].str();
     auto fraction = sm[4].str();
     auto exponent = sm[6].str();
     if (integer.empty() && fraction.empty()) {
-        throw marshal_exception();
+        throw marshal_exception(sprint("big_decimal - both integer and fraction are empty: '%s'", str));
     }
     integer.append(fraction);
     unsigned i;
