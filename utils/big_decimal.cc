@@ -120,7 +120,11 @@ big_decimal big_decimal::div(const ::uint64_t y, const rounding_mode mode) const
     // Implementation of Division with Half to Even (aka Bankers) Rounding
     const boost::multiprecision::cpp_int sign = _unscaled_value >= 0 ? +1 : -1;
     const boost::multiprecision::cpp_int a = sign * _unscaled_value;
-    const uint64_t r = uint64_t(a % y);
+    // cpp_int uses lazy evaluation and for older versions of boost and some
+    //   versions of gcc, expression templates have problem to implicitly
+    //   convert to cpp_int, so we force the conversion explicitly before cpp_int
+    //   is converted to uint64_t.
+    const uint64_t r = boost::multiprecision::cpp_int{a % y}.convert_to<uint64_t>();
 
     boost::multiprecision::cpp_int q = a / y;
 
