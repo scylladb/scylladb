@@ -364,7 +364,8 @@ struct sharding_metadata {
 
 // Scylla-specific list of features an sstable supports.
 enum sstable_feature : uint8_t {
-    End = 0
+    NonCompoundPIEntries = 0,       // See #2993
+    End = 1
 };
 
 // Scylla-specific features enabled for a particular sstable.
