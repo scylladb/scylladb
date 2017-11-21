@@ -141,16 +141,11 @@ future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr)
     });
 }
 
-combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
-    : _reader_merger(std::move(selector), fwd_mr)
-{
+combined_mutation_reader::mutation_reader_impl::mutation_reader_impl(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
+    : _reader_merger(std::move(selector), fwd_mr) {
 }
 
-future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
-    return _reader_merger.fast_forward_to(pr);
-}
-
-future<streamed_mutation_opt> combined_mutation_reader::operator()() {
+future<streamed_mutation_opt> combined_mutation_reader::mutation_reader_impl::operator()() {
     return _reader_merger().then([this] (std::vector<streamed_mutation> mutation_batch) -> streamed_mutation_opt {
         if (mutation_batch.empty()) {
             return stdx::nullopt;
@@ -162,18 +157,84 @@ future<streamed_mutation_opt> combined_mutation_reader::operator()() {
     });
 }
 
-mutation_reader
-make_combined_reader(std::vector<mutation_reader> readers, mutation_reader::forwarding fwd_mr) {
-    return make_mutation_reader<combined_mutation_reader>(std::make_unique<list_reader_selector>(std::move(readers)), fwd_mr);
+future<> combined_mutation_reader::mutation_reader_impl::fast_forward_to(const dht::partition_range& pr) {
+    return _reader_merger.fast_forward_to(pr);
+}
+
+combined_mutation_reader::combined_mutation_reader(schema_ptr schema,
+        std::unique_ptr<reader_selector> selector,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr)
+    : flat_mutation_reader::impl(schema)
+    , _producer(flat_mutation_reader_from_mutation_reader(schema,
+           make_mutation_reader<combined_mutation_reader::mutation_reader_impl>(std::move(selector), fwd_mr),
+           fwd_sm))
+    , _fwd_sm(fwd_sm) {
+}
+
+future<> combined_mutation_reader::fill_buffer() {
+    return _producer.fill_buffer().then([this] {
+        _end_of_stream = _producer.is_end_of_stream();
+        while(!_producer.is_buffer_empty()) {
+            push_mutation_fragment(_producer.pop_mutation_fragment());
+        }
+    });
+}
+
+void combined_mutation_reader::next_partition() {
+    if (_fwd_sm == streamed_mutation::forwarding::yes) {
+        clear_buffer();
+        _end_of_stream = false;
+        _producer.next_partition();
+    } else {
+        clear_buffer_to_next_partition();
+        // If the buffer is empty at this point then all fragments in it
+        // belonged to the current partition, so either:
+        // * All (forwardable) readers are still positioned in the
+        // inside of the current partition, or
+        // * They are between the current one and the next one.
+        // Either way we need to call next_partition on them.
+        if (is_buffer_empty()) {
+            _producer.next_partition();
+        }
+    }
+}
+
+future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
+    clear_buffer();
+    _end_of_stream = false;
+    return _producer.fast_forward_to(pr);
+}
+
+future<> combined_mutation_reader::fast_forward_to(position_range pr) {
+    forward_buffer_to(pr.start());
+    _end_of_stream = false;
+    return _producer.fast_forward_to(std::move(pr));
 }
 
 mutation_reader
-make_combined_reader(mutation_reader&& a, mutation_reader&& b, mutation_reader::forwarding fwd_mr) {
+make_combined_reader(schema_ptr schema,
+        std::vector<mutation_reader> readers,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr) {
+    return mutation_reader_from_flat_mutation_reader(make_flat_mutation_reader<combined_mutation_reader>(
+                    schema,
+                    std::make_unique<list_reader_selector>(std::move(readers)),
+                    fwd_sm,
+                    fwd_mr));
+}
+
+mutation_reader
+make_combined_reader(schema_ptr schema,
+        mutation_reader&& a,
+        mutation_reader&& b,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr) {
     std::vector<mutation_reader> v;
     v.reserve(2);
     v.push_back(std::move(a));
     v.push_back(std::move(b));
-    return make_combined_reader(std::move(v), fwd_mr);
+    return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
 }
 
 class reader_returning final : public mutation_reader::impl {
@@ -487,7 +548,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         for (auto&& ms : addends) {
             rd.emplace_back(ms(s, pr, slice, pc, tr, fwd));
         }
-        return make_combined_reader(std::move(rd), mutation_reader::forwarding::yes);
+        return make_combined_reader(s, std::move(rd), fwd);
     });
 }
 
