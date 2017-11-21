@@ -50,6 +50,7 @@
 #include "cell_locking.hh"
 #include "simple_schema.hh"
 #include "memtable-sstable.hh"
+#include "tests/sstable_assertions.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -4341,5 +4342,30 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
         assert_that(sstable_reader(result[3], s))
                 .produces(mut4)
                 .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
+    // create table ks.test (pk int, ck int, v int, primary key(pk, ck)) with compact storage;
+    //
+    // Populated with:
+    //
+    // insert into ks.test (pk, ck, v) values (1, 1, 1);
+    // insert into ks.test (pk, ck, v) values (1, 2, 1);
+    // insert into ks.test (pk, ck, v) values (1, 3, 1);
+    // delete from ks.test where pk = 1 and ck = 2;
+    return seastar::async([] {
+        auto s = schema_builder("ks", "test")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build(schema_builder::compact_storage::yes);
+
+        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        {
+            assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+        }
     });
 }
