@@ -4369,3 +4369,38 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
+    // create table ks.test (pk int, ck int, v int, primary key(pk, ck)) with compact storage;
+    //
+    // Populated with:
+    //
+    // insert into ks.test (pk, ck, v) values (1, 1, 1);
+    // insert into ks.test (pk, ck, v) values (1, 2, 1);
+    // insert into ks.test (pk, ck, v) values (1, 3, 1);
+    // delete from ks.test where pk = 1 and ck = 2;
+    return seastar::async([] {
+        auto s = schema_builder("ks", "test")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build(schema_builder::compact_storage::yes);
+
+        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
+        auto dk = dht::global_partitioner().decorate_key(*s, pk);
+        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+        mutation m(dk, s);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(1511270919978349, int32_type->decompose(1), { }));
+        m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
+
+        {
+            auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
+            assert_that(sst->as_mutation_source()(s, dht::partition_range::make_singular(dk), slice))
+                    .produces(m)
+                    .produces_end_of_stream();
+        }
+    });
+}
