@@ -104,12 +104,12 @@ mutation_reader_merger::mutation_reader_merger(std::unique_ptr<reader_selector> 
 {
 }
 
-future<streamed_mutation_opt> mutation_reader_merger::operator()() {
+future<std::vector<streamed_mutation>> mutation_reader_merger::operator()() {
     if ((_current.empty() && !_next.empty()) || _selector->has_new_readers(current_position())) {
         return prepare_next().then([this] { return (*this)(); });
     }
     if (_ptables.empty()) {
-        return make_ready_future<streamed_mutation_opt>();
+        return make_ready_future<std::vector<streamed_mutation>>();
     }
 
     while (!_ptables.empty()) {
@@ -126,12 +126,7 @@ future<streamed_mutation_opt> mutation_reader_merger::operator()() {
             break;
         }
     }
-    if (_current.size() == 1) {
-        auto m = std::move(_current.back());
-        _current.pop_back();
-        return make_ready_future<streamed_mutation_opt>(std::move(m));
-    }
-    return make_ready_future<streamed_mutation_opt>(merge_mutations(std::exchange(_current, {})));
+    return make_ready_future<std::vector<streamed_mutation>>(std::exchange(_current, {}));
 }
 
 future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr) {
@@ -156,7 +151,15 @@ future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& p
 }
 
 future<streamed_mutation_opt> combined_mutation_reader::operator()() {
-    return _reader_merger();
+    return _reader_merger().then([this] (std::vector<streamed_mutation> mutation_batch) -> streamed_mutation_opt {
+        if (mutation_batch.empty()) {
+            return stdx::nullopt;
+        }
+        if (mutation_batch.size() == 1) {
+            return std::move(mutation_batch.front());
+        }
+        return merge_mutations(std::move(mutation_batch));
+    });
 }
 
 mutation_reader
