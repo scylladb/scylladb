@@ -304,7 +304,7 @@ private:
         return _exhausted ?
                         nullptr :
                         ::make_shared<const paging_state>(*_last_pkey,
-                                        _last_ckey, _max);
+                                        _last_ckey, _max, utils::UUID{});
     }
 
 private:

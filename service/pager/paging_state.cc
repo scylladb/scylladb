@@ -44,15 +44,17 @@
 #include "paging_state.hh"
 #include "core/simple-stream.hh"
 #include "idl/keys.dist.hh"
+#include "idl/uuid.dist.hh"
 #include "idl/paging_state.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/keys.dist.impl.hh"
+#include "idl/uuid.dist.impl.hh"
 #include "idl/paging_state.dist.impl.hh"
 #include "message/messaging_service.hh"
 
 service::pager::paging_state::paging_state(partition_key pk, std::experimental::optional<clustering_key> ck,
-        uint32_t rem)
-        : _partition_key(std::move(pk)), _clustering_key(std::move(ck)), _remaining(rem) {
+        uint32_t rem, utils::UUID query_uuid)
+        : _partition_key(std::move(pk)), _clustering_key(std::move(ck)), _remaining(rem), _query_uuid(query_uuid) {
 }
 
 ::shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
