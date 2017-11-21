@@ -68,6 +68,15 @@ GCC6_CONCEPT(
  */
 class flat_mutation_reader final {
 public:
+    // Causes a stream of reversed mutations to be emitted.
+    // 1. Static row is still emitted first.
+    // 2. Range tombstones are ordered by their end position.
+    // 3. Clustered rows and range tombstones are emitted in descending order.
+    // Because of 2 and 3 the guarantee that a range tombstone is emitted before
+    // any mutation fragment affected by it still holds.
+    // Ordering of partitions themselves remains unchanged.
+    using consume_reversed_partitions = seastar::bool_class<class consume_reversed_partitions_tag>;
+
     class impl {
         circular_buffer<mutation_fragment> _buffer;
         size_t _buffer_size = 0;
@@ -89,6 +98,8 @@ public:
         }
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
+    private:
+        static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
         impl(schema_ptr s) : _schema(std::move(s)) { }
         virtual ~impl() {}
@@ -144,6 +155,8 @@ public:
         // When consumer returns stop_iteration::yes from methods other than consume_end_of_partition then the read
         // of the current partition is ended, consume_end_of_partition is called and if it returns stop_iteration::no
         // then the read moves to the next partition.
+        // Reference to the decorated key that is passed to consume_new_partition() remains valid until after
+        // the call to consume_end_of_partition().
         //
         // This method is useful because most of current consumers use this semantic.
         //
@@ -152,6 +165,7 @@ public:
         auto consume(Consumer consumer) {
             struct consumer_adapter {
                 flat_mutation_reader::impl& _reader;
+                stdx::optional<dht::decorated_key> _decorated_key;
                 Consumer _consumer;
                 consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
                     : _reader(reader)
@@ -170,7 +184,8 @@ public:
                     return handle_result(_consumer.consume(std::move(rt)));
                 }
                 stop_iteration consume(partition_start&& ps) {
-                    _consumer.consume_new_partition(ps.key());
+                    _decorated_key.emplace(std::move(ps.key()));
+                    _consumer.consume_new_partition(*_decorated_key);
                     if (ps.partition_tombstone()) {
                         _consumer.consume(ps.partition_tombstone());
                     }
@@ -225,7 +240,12 @@ public:
     GCC6_CONCEPT(
         requires FlattenedConsumer<Consumer>()
     )
-    auto consume(Consumer consumer) {
+    auto consume(Consumer consumer, consume_reversed_partitions reversed = consume_reversed_partitions::no) {
+        if (reversed) {
+            return do_with(impl::reverse_partitions(*_impl), [&] (auto& reversed_partition_stream) {
+                return reversed_partition_stream._impl->consume(std::move(consumer));
+            });
+        }
         return _impl->consume(std::move(consumer));
     }
 

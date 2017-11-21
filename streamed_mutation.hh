@@ -717,7 +717,6 @@ streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_m
 
 //Requires all streamed_mutations to have the same schema.
 streamed_mutation merge_mutations(std::vector<streamed_mutation>);
-streamed_mutation reverse_streamed_mutation(streamed_mutation);
 
 streamed_mutation make_empty_streamed_mutation(schema_ptr, dht::decorated_key, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 

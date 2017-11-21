@@ -483,3 +483,131 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
                 .produces_end_of_stream();
     });
 }
+
+using reversed_partitions = seastar::bool_class<class reversed_partitions_tag>;
+using skip_after_first_fragment = seastar::bool_class<class skip_after_first_fragment_tag>;
+using skip_after_first_partition = seastar::bool_class<class skip_after_first_partition_tag>;
+
+struct flat_stream_consumer {
+    schema_ptr _schema;
+    reversed_partitions _reversed;
+    skip_after_first_fragment _skip_partition;
+    skip_after_first_partition _skip_stream;
+    std::vector<mutation> _mutations;
+    stdx::optional<position_in_partition> _previous_position;
+    bool _inside_partition = false;
+private:
+    void verify_order(position_in_partition_view pos) {
+        position_in_partition::less_compare cmp(*_schema);
+        if (!_reversed) {
+            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
+                          || cmp(*_previous_position, pos));
+        } else {
+            BOOST_REQUIRE(!_previous_position || _previous_position->is_static_row()
+                          || cmp(pos, *_previous_position));
+        }
+    }
+public:
+    flat_stream_consumer(schema_ptr s, reversed_partitions reversed,
+                         skip_after_first_fragment skip_partition = skip_after_first_fragment::no,
+                         skip_after_first_partition skip_stream = skip_after_first_partition::no)
+        : _schema(std::move(s))
+        , _reversed(reversed)
+        , _skip_partition(skip_partition)
+        , _skip_stream(skip_stream)
+    { }
+    void consume_new_partition(dht::decorated_key dk) {
+        BOOST_REQUIRE(!_inside_partition);
+        BOOST_REQUIRE(!_previous_position);
+        _mutations.emplace_back(dk, _schema);
+        _inside_partition = true;
+    }
+    void consume(tombstone pt) {
+        BOOST_REQUIRE(_inside_partition);
+        BOOST_REQUIRE(!_previous_position);
+        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        _mutations.back().partition().apply(pt);
+    }
+    stop_iteration consume(static_row&& sr) {
+        BOOST_REQUIRE(_inside_partition);
+        BOOST_REQUIRE(!_previous_position);
+        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        _previous_position.emplace(sr.position());
+        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(sr)));
+        return stop_iteration(bool(_skip_partition));
+    }
+    stop_iteration consume(clustering_row&& cr) {
+        BOOST_REQUIRE(_inside_partition);
+        verify_order(cr.position());
+        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        _previous_position.emplace(cr.position());
+        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(cr)));
+        return stop_iteration(bool(_skip_partition));
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        BOOST_REQUIRE(_inside_partition);
+        auto pos = _reversed ? rt.end_position() : rt.position();
+        verify_order(pos);
+        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        _previous_position.emplace(pos);
+        _mutations.back().partition().apply(*_schema, mutation_fragment(std::move(rt)));
+        return stop_iteration(bool(_skip_partition));
+    }
+    stop_iteration consume_end_of_partition() {
+        BOOST_REQUIRE(_inside_partition);
+        BOOST_REQUIRE_GE(_mutations.size(), 1);
+        _previous_position = stdx::nullopt;
+        _inside_partition = false;
+        return stop_iteration(bool(_skip_stream));
+    }
+    std::vector<mutation> consume_end_of_stream() {
+        BOOST_REQUIRE(!_inside_partition);
+        return std::move(_mutations);
+    }
+};
+
+void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partitions reversed) {
+    auto reversed_msg = reversed ? ", reversed partitions" : "";
+    auto reversed_flag = flat_mutation_reader::consume_reversed_partitions(bool(reversed));
+
+    BOOST_TEST_MESSAGE(sprint("Consume all%s", reversed_msg));
+    auto fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    auto muts2 = fmr.consume(flat_stream_consumer(s, reversed), reversed_flag).get0();
+    BOOST_REQUIRE_EQUAL(muts, muts2);
+
+    BOOST_TEST_MESSAGE(sprint("Consume first fragment from partition%s", reversed_msg));
+    fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    muts2 = fmr.consume(flat_stream_consumer(s, reversed, skip_after_first_fragment::yes), reversed_flag).get0();
+    BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
+    for (auto j = 0u; j < muts.size(); j++) {
+        BOOST_REQUIRE(muts[j].decorated_key().equal(*muts[j].schema(), muts2[j].decorated_key()));
+        auto& mp = muts2[j].partition();
+        BOOST_REQUIRE_LE(mp.static_row().empty() + mp.clustered_rows().calculate_size() + mp.row_tombstones().size(), 1);
+        auto m = muts[j];
+        m.apply(muts2[j]);
+        BOOST_REQUIRE_EQUAL(m, muts[j]);
+    }
+
+    BOOST_TEST_MESSAGE(sprint("Consume first partition%s", reversed_msg));
+    fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    muts2 = fmr.consume(flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
+                                             skip_after_first_partition::yes),
+                        reversed_flag).get0();
+    BOOST_REQUIRE_EQUAL(muts2.size(), 1);
+    BOOST_REQUIRE_EQUAL(muts2[0], muts[0]);
+}
+
+SEASTAR_TEST_CASE(test_consume_flat) {
+    return seastar::async([] {
+        auto test_random_streams = [&] (random_mutation_generator&& gen) {
+            for (auto i = 0; i < 4; i++) {
+                auto muts = gen(4);
+                test_flat_stream(gen.schema(), muts, reversed_partitions::no);
+                test_flat_stream(gen.schema(), muts, reversed_partitions::yes);
+            }
+        };
+
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    });
+}

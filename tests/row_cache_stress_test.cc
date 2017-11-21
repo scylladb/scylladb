@@ -124,19 +124,20 @@ struct table {
     struct reader {
         dht::partition_range pr;
         query::partition_slice slice;
-        mutation_reader rd;
+        flat_mutation_reader rd;
     };
 
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
         test_log.trace("making reader, pk={} ck={}", pr, slice);
-        auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice)});
+        auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema())});
         std::vector<mutation_reader> rd;
         if (prev_mt) {
             rd.push_back(prev_mt->make_reader(s.schema(), r->pr, r->slice));
         }
         rd.push_back(mt->make_reader(s.schema(), r->pr, r->slice));
         rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice));
-        r->rd = make_combined_reader(std::move(rd), mutation_reader::forwarding::no);
+        auto crd = make_combined_reader(std::move(rd), mutation_reader::forwarding::no);
+        r->rd = flat_mutation_reader_from_mutation_reader(s.schema(), std::move(crd), streamed_mutation::forwarding::no);
         return r;
     }
 
@@ -303,7 +304,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_single_key_reader(pk, ck_range);
-                    auto row_count = consume_flattened(std::move(rd->rd), validating_consumer(t, id)).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id)).get0();
                     if (row_count != len) {
                         throw std::runtime_error(sprint("Expected %d fragments, got %d", len, row_count));
                     }
@@ -315,7 +316,7 @@ int main(int argc, char** argv) {
                 while (!cancelled) {
                     test_log.trace("{}: starting read", id);
                     auto rd = t.make_scanning_reader();
-                    auto row_count = consume_flattened(std::move(rd->rd), validating_consumer(t, id)).get0();
+                    auto row_count = rd->rd.consume(validating_consumer(t, id)).get0();
                     if (row_count != expected_row_count) {
                         throw std::runtime_error(sprint("Expected %d fragments, got %d", expected_row_count, row_count));
                     }
