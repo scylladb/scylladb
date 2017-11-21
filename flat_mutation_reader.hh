@@ -52,6 +52,11 @@ GCC6_CONCEPT(
             obj.consume_end_of_partition();
         };
     }
+
+    template<typename T>
+    concept bool PartitionFilter = requires(T filter, const dht::decorated_key& dk) {
+        { filter(dk) } -> bool;
+    };
 )
 
 /*
@@ -145,6 +150,35 @@ public:
                 return make_ready_future<>();
             });
         }
+
+        template<typename Consumer, typename Filter>
+        GCC6_CONCEPT(
+            requires FlatMutationReaderConsumer<Consumer>() && PartitionFilter<Filter>
+        )
+        // A variant of consume_pausable() that expects to be run in
+        // a seastar::thread.
+        // Partitions for which filter(decorated_key) returns false are skipped
+        // entirely and never reach the consumer.
+        void consume_pausable_in_thread(Consumer consumer, Filter filter) {
+            while (true) {
+                if (is_buffer_empty()) {
+                    if (is_end_of_stream()) {
+                        return;
+                    }
+                    fill_buffer().get();
+                    continue;
+                }
+                auto mf = pop_mutation_fragment();
+                if (mf.is_partition_start() && !filter(mf.as_partition_start().key())) {
+                    next_partition();
+                    continue;
+                }
+                if (consumer(std::move(mf)) == stop_iteration::yes) {
+                    return;
+                }
+            }
+        };
+
     private:
         template<typename Consumer>
         struct consumer_adapter {
@@ -214,6 +248,19 @@ public:
             });
         }
 
+        template<typename Consumer, typename Filter>
+        GCC6_CONCEPT(
+            requires FlattenedConsumer<Consumer>() && PartitionFilter<Filter>
+        )
+        // A variant of consumee() that expects to be run in a seastar::thread.
+        // Partitions for which filter(decorated_key) returns false are skipped
+        // entirely and never reach the consumer.
+        auto consume_in_thread(Consumer consumer, Filter filter) {
+            auto adapter = consumer_adapter<Consumer>(*this, std::move(consumer));
+            consume_pausable_in_thread(std::ref(adapter), std::move(filter));
+            return adapter._consumer.consume_end_of_stream();
+        };
+
         /*
          * fast_forward_to is forbidden on flat_mutation_reader created for a single partition.
          */
@@ -252,6 +299,22 @@ public:
             });
         }
         return _impl->consume(std::move(consumer));
+    }
+
+    template<typename Consumer, typename Filter>
+    GCC6_CONCEPT(
+        requires FlattenedConsumer<Consumer>() && PartitionFilter<Filter>
+    )
+    auto consume_in_thread(Consumer consumer, Filter filter) {
+        return _impl->consume_in_thread(std::move(consumer), std::move(filter));
+    }
+
+    template<typename Consumer>
+    GCC6_CONCEPT(
+        requires FlattenedConsumer<Consumer>()
+    )
+    auto consume_in_thread(Consumer consumer) {
+        return consume_in_thread(std::move(consumer), [] (const dht::decorated_key&) { return true; });
     }
 
     void next_partition() { _impl->next_partition(); }
