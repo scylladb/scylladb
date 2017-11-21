@@ -831,7 +831,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
     const auto& cs = *client_state;
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query = std::move(query), &cs] () mutable {
+            return smp::submit_to(c, [this, query, &cs] () mutable {
                 return _server._query_processor.local().prepare(std::move(query), cs, false).discard_result();
             });
         } else {
