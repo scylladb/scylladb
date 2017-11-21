@@ -589,7 +589,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
             { gms::application_state::STATUS, value_factory.bootstrapping(tokens) },
         }).get();
         set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", get_ring_delay().count()), true);
-        sleep(get_ring_delay()).get();
+        gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());

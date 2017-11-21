@@ -552,10 +552,16 @@ public:
     sstring get_gossip_status(const inet_address& endpoint) const;
 public:
     future<> wait_for_gossip_to_settle();
+    future<> wait_for_range_setup();
 private:
+    future<> wait_for_gossip(std::chrono::milliseconds, stdx::optional<int32_t> = {});
+
     uint64_t _nr_run = 0;
+    uint64_t _msg_processing = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+
+    class msg_proc_guard;
 private:
     condition_variable _features_condvar;
     std::unordered_map<sstring, std::vector<feature*>> _registered_features;

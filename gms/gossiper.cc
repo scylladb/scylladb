@@ -232,6 +232,16 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     return this->ms().send_gossip_digest_ack(from, std::move(ack_msg));
 }
 
+class gossiper::msg_proc_guard {
+public:
+    msg_proc_guard(gossiper& g)
+                    : _ptr(&(++g._msg_processing), [](uint64_t * p) { if (p) { --(*p); } })
+    {}
+    msg_proc_guard(msg_proc_guard&& m) = default;
+private:
+    std::unique_ptr<uint64_t, void(*)(uint64_t*)> _ptr;
+};
+
 // Depends on
 // - failure_detector
 // - on_change callbacks, e.g., storage_service -> access db system_table
@@ -246,6 +256,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         return make_ready_future<>();
     }
 
+    msg_proc_guard mp(*this);
+
     auto g_digest_list = ack_msg.get_gossip_digest_list();
     auto& ep_state_map = ack_msg.get_endpoint_state_map();
 
@@ -256,7 +268,9 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
         f = this->apply_state_locally(std::move(ep_state_map));
     }
 
-    return f.then([id, g_digest_list = std::move(g_digest_list), this] {
+    assert(_msg_processing > 0);
+
+    return f.then([id, g_digest_list = std::move(g_digest_list), mp = std::move(mp), this] {
         if (this->is_in_shadow_round()) {
             this->finish_shadow_round();
             // don't bother doing anything else, we have what we came for
@@ -291,10 +305,13 @@ future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     if (!is_enabled()) {
         return make_ready_future<>();
     }
+
+    msg_proc_guard mp(*this);
+
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
     /* Notify the Failure Detector */
     notify_failure_detector(remote_ep_state_map);
-    return apply_state_locally(std::move(remote_ep_state_map));
+    return apply_state_locally(std::move(remote_ep_state_map)).finally([mp = std::move(mp)] {});
 }
 
 future<> gossiper::handle_echo_msg() {
@@ -1905,26 +1922,26 @@ sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
     return do_get_gossip_status(get_application_state_ptr(endpoint, application_state::STATUS));
 }
 
-future<> gossiper::wait_for_gossip_to_settle() {
-    return seastar::async([this] {
-        auto& cfg = service::get_local_storage_service().db().local().get_config();
-        auto force_after = cfg.skip_wait_for_gossip_to_settle();
-        if (force_after == 0) {
-            return;
-        }
-        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
-        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
-        static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
+future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, stdx::optional<int32_t> force_after) {
+    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
+    static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
+
+    return seastar::async([this, initial_delay, force_after] {
         int32_t total_polls = 0;
         int32_t num_okay = 0;
         int32_t ep_size = endpoint_state_map.size();
-        logger.info("Waiting for gossip to settle before accepting client requests...");
+
+        auto delay = initial_delay;
+
         sleep(GOSSIP_SETTLE_MIN_WAIT_MS).get();
         while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
-            sleep(GOSSIP_SETTLE_POLL_INTERVAL_MS).get();
+            sleep(delay).get();
+            delay = GOSSIP_SETTLE_POLL_INTERVAL_MS;
+
             int32_t current_size = endpoint_state_map.size();
             total_polls++;
-            if (current_size == ep_size) {
+            if (current_size == ep_size && _msg_processing == 0) {
                 logger.debug("Gossip looks settled");
                 num_okay++;
             } else {
@@ -1932,7 +1949,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
                 num_okay = 0;
             }
             ep_size = current_size;
-            if (force_after > 0 && total_polls > force_after) {
+            if (force_after && total_polls > *force_after) {
                 logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
                 break;
             }
@@ -1943,6 +1960,24 @@ future<> gossiper::wait_for_gossip_to_settle() {
             logger.info("No gossip backlog; proceeding");
         }
     });
+}
+
+future<> gossiper::wait_for_gossip_to_settle() {
+    static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+
+    auto& cfg = service::get_local_storage_service().db().local().get_config();
+    auto force_after = cfg.skip_wait_for_gossip_to_settle();
+    if (force_after == 0) {
+        return make_ready_future<>();
+    }
+    logger.info("Waiting for gossip to settle before accepting client requests...");
+    return wait_for_gossip(GOSSIP_SETTLE_MIN_WAIT_MS, force_after);
+}
+
+future<> gossiper::wait_for_range_setup() {
+    logger.info("Waiting for pending range setup...");
+    auto ring_delay = service::get_local_storage_service().get_ring_delay();
+    return wait_for_gossip(ring_delay);
 }
 
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
