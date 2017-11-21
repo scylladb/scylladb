@@ -120,8 +120,9 @@ public:
     }
 };
 
-// Combines multiple mutation_readers into one.
-class combined_mutation_reader : public mutation_reader::impl {
+// Merges the output of the sub-readers into a single stream of
+// streamed_mutation.
+class mutation_reader_merger {
     std::unique_ptr<reader_selector> _selector;
     std::list<mutation_reader> _all_readers;
 
@@ -146,6 +147,16 @@ private:
     future<> prepare_next();
     // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> next();
+public:
+    // The specified mutation_reader::forwarding tag must be the same for all included readers.
+    mutation_reader_merger(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr);
+    future<streamed_mutation_opt> operator()();
+    future<> fast_forward_to(const dht::partition_range& pr);
+};
+
+// Combines multiple mutation_readers into one.
+class combined_mutation_reader : public mutation_reader::impl {
+    mutation_reader_merger _reader_merger;
 public:
     // The specified mutation_reader::forwarding tag must be the same for all included readers.
     combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr);

@@ -57,7 +57,7 @@ public:
     }
 };
 
-void combined_mutation_reader::maybe_add_readers(const dht::token* const t) {
+void mutation_reader_merger::maybe_add_readers(const dht::token* const t) {
     if (!_selector->has_new_readers(t)) {
         return;
     }
@@ -65,7 +65,7 @@ void combined_mutation_reader::maybe_add_readers(const dht::token* const t) {
     add_readers(_selector->create_new_readers(t));
 }
 
-void combined_mutation_reader::add_readers(std::vector<mutation_reader> new_readers) {
+void mutation_reader_merger::add_readers(std::vector<mutation_reader> new_readers) {
     for (auto&& new_reader : new_readers) {
         _all_readers.emplace_back(std::move(new_reader));
         auto* r = &_all_readers.back();
@@ -73,7 +73,7 @@ void combined_mutation_reader::add_readers(std::vector<mutation_reader> new_read
     }
 }
 
-const dht::token* combined_mutation_reader::current_position() const {
+const dht::token* mutation_reader_merger::current_position() const {
     if (_ptables.empty()) {
         return nullptr;
     }
@@ -81,7 +81,7 @@ const dht::token* combined_mutation_reader::current_position() const {
     return &_ptables.front().m.decorated_key().token();
 }
 
-future<> combined_mutation_reader::prepare_next() {
+future<> mutation_reader_merger::prepare_next() {
     maybe_add_readers(current_position());
 
     return parallel_for_each(_next, [this] (mutation_reader* mr) {
@@ -98,7 +98,7 @@ future<> combined_mutation_reader::prepare_next() {
     });
 }
 
-future<streamed_mutation_opt> combined_mutation_reader::next() {
+future<streamed_mutation_opt> mutation_reader_merger::next() {
     if ((_current.empty() && !_next.empty()) || _selector->has_new_readers(current_position())) {
         return prepare_next().then([this] { return next(); });
     }
@@ -128,13 +128,13 @@ future<streamed_mutation_opt> combined_mutation_reader::next() {
     return make_ready_future<streamed_mutation_opt>(merge_mutations(std::exchange(_current, {})));
 }
 
-combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
+mutation_reader_merger::mutation_reader_merger(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
     : _selector(std::move(selector))
     , _fwd_mr(fwd_mr)
 {
 }
 
-future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
+future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr) {
     _ptables.clear();
     auto rs = _all_readers | boost::adaptors::transformed([] (auto& r) { return &r; });
     _next.assign(rs.begin(), rs.end());
@@ -146,8 +146,21 @@ future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& p
     });
 }
 
-future<streamed_mutation_opt> combined_mutation_reader::operator()() {
+future<streamed_mutation_opt> mutation_reader_merger::operator()() {
     return next();
+}
+
+combined_mutation_reader::combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr)
+    : _reader_merger(std::move(selector), fwd_mr)
+{
+}
+
+future<> combined_mutation_reader::fast_forward_to(const dht::partition_range& pr) {
+    return _reader_merger.fast_forward_to(pr);
+}
+
+future<streamed_mutation_opt> combined_mutation_reader::operator()() {
+    return _reader_merger();
 }
 
 mutation_reader
