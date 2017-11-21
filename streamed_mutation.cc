@@ -662,8 +662,8 @@ streamed_mutation reverse_streamed_mutation(streamed_mutation sm) {
                 auto it = std::prev(_range_tombstones.tombstones().end());
                 auto& rt = *it;
                 _range_tombstones.tombstones().erase(it);
+                auto rt_owner = alloc_strategy_unique_ptr<range_tombstone>(&rt);
                 push_mutation_fragment(mutation_fragment(std::move(rt)));
-                current_deleter<range_tombstone>()(&rt);
             };
             position_in_partition::less_compare cmp(*_schema);
             while (!is_end_of_stream() && !is_buffer_full()) {
