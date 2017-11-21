@@ -1451,7 +1451,8 @@ future<> storage_service::check_for_endpoint_collision() {
                     if (state.empty()) {
                         continue;
                     }
-                    slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
+                    auto addr = x.first;
+                    slogger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", addr, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||
                         state == sstring(versioned_value::STATUS_MOVING)) {
@@ -1462,7 +1463,7 @@ future<> storage_service::check_for_endpoint_collision() {
                             gossiper.reset_endpoint_state_map();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-                            slogger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", x.first, state, elapsed);
+                            slogger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", addr, state, elapsed);
                             sleep(std::chrono::seconds(1)).get();
                             break;
                         }
