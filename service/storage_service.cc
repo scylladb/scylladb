@@ -1950,7 +1950,6 @@ future<> storage_service::do_stop_rpc_server() {
     auto tserver = _thrift_server;
     _thrift_server = {};
     if (tserver) {
-        // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
         // Note: We must capture tserver so that it will not be freed before tserver->stop
         return tserver->stop().then([tserver] {
             slogger.info("Thrift server stopped");
