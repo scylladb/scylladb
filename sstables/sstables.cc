@@ -2194,12 +2194,13 @@ sstable::read_scylla_metadata(const io_priority_class& pc) {
 }
 
 void
-sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
+sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
@@ -2261,6 +2262,10 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
 }
 
+static sstable_enabled_features all_features() {
+    return sstable_enabled_features{(1 << sstable_feature::End) - 1};
+}
+
 void sstable_writer::consume_end_of_stream()
 {
     _components_writer->consume_end_of_stream();
@@ -2270,7 +2275,8 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_filter(_pc);
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
-    _sst.write_scylla_metadata(_pc, _shard);
+    auto features = all_features();
+    _sst.write_scylla_metadata(_pc, _shard, std::move(features));
 
     _monitor->on_write_completed();
 

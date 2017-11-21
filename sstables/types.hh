@@ -362,6 +362,26 @@ struct sharding_metadata {
     auto describe_type(Describer f) { return f(token_ranges); }
 };
 
+// Scylla-specific list of features an sstable supports.
+enum sstable_feature : uint8_t {
+    End = 0
+};
+
+// Scylla-specific features enabled for a particular sstable.
+struct sstable_enabled_features {
+    uint64_t enabled_features;
+
+    bool is_enabled(sstable_feature f) const {
+        return enabled_features & (1 << f);
+    }
+
+    void disable(sstable_feature f) {
+        enabled_features &= ~(1<< f);
+    }
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(enabled_features); }
+};
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
 // that of an uint32_t is a bit wasteful, but it simplifies the code a lot
@@ -373,15 +393,21 @@ enum class metadata_type : uint32_t {
     Stats = 2,
 };
 
-
 enum class scylla_metadata_type : uint32_t {
     Sharding = 1,
+    Features = 2,
 };
 
 struct scylla_metadata {
     disk_set_of_tagged_union<scylla_metadata_type,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>
             > data;
+
+    bool has_feature(sstable_feature f) const {
+        auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
+        return features && features->is_enabled(f);
+    }
 
     template <typename Describer>
     auto describe_type(Describer f) { return f(data); }

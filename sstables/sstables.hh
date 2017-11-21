@@ -593,7 +593,7 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc);
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard = engine().cpu_id());
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features);
 
     future<> read_filter(const io_priority_class& pc);
 
