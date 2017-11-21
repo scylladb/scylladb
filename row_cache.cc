@@ -642,32 +642,47 @@ row_cache::make_reader(schema_ptr s,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
-    auto ctx = make_lw_shared<read_context>(*this, std::move(s), range, slice, pc, trace_state, fwd, fwd_mr);
+    return mutation_reader_from_flat_mutation_reader(
+        make_flat_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+}
+
+flat_mutation_reader
+row_cache::make_flat_reader(schema_ptr s,
+                            const dht::partition_range& range,
+                            const query::partition_slice& slice,
+                            const io_priority_class& pc,
+                            tracing::trace_state_ptr trace_state,
+                            streamed_mutation::forwarding fwd,
+                            mutation_reader::forwarding fwd_mr)
+{
+    auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd, fwd_mr);
 
     if (!ctx->is_range_query()) {
         return _read_section(_tracker.region(), [&] {
-          return with_linearized_managed_bytes([&] {
-            cache_entry::compare cmp(_schema);
-            auto&& pos = ctx->range().start()->value();
-            auto i = _partitions.lower_bound(pos, cmp);
-            if (i != _partitions.end() && !cmp(pos, i->position())) {
-                cache_entry& e = *i;
-                _tracker.touch(e);
-                upgrade_entry(e);
-                on_partition_hit();
-                return make_reader_returning(e.read(*this, *ctx));
-            } else if (i->continuous()) {
-                return make_empty_reader();
-            } else {
-                on_partition_miss();
-                return make_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
-            }
-          });
+            return with_linearized_managed_bytes([&] {
+                cache_entry::compare cmp(_schema);
+                auto&& pos = ctx->range().start()->value();
+                auto i = _partitions.lower_bound(pos, cmp);
+                if (i != _partitions.end() && !cmp(pos, i->position())) {
+                    cache_entry& e = *i;
+                    _tracker.touch(e);
+                    upgrade_entry(e);
+                    on_partition_hit();
+                    return flat_mutation_reader_from_mutation_reader(std::move(s), make_reader_returning(e.read(*this, *ctx)), fwd);
+                } else if (i->continuous()) {
+                    return make_empty_flat_reader(std::move(s));
+                } else {
+                    on_partition_miss();
+                    return flat_mutation_reader_from_mutation_reader(
+                        std::move(s), make_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx)), fwd);
+                }
+            });
         });
     }
 
-    return make_scanning_reader(range, std::move(ctx));
+    return flat_mutation_reader_from_mutation_reader(std::move(s), make_scanning_reader(range, std::move(ctx)), fwd);
 }
+
 
 row_cache::~row_cache() {
     with_allocator(_tracker.allocator(), [this] {

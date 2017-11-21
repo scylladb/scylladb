@@ -36,6 +36,7 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
+#include "flat_mutation_reader.hh"
 
 namespace bi = boost::intrusive;
 
@@ -450,6 +451,19 @@ public:
     mutation_reader make_reader(schema_ptr s, const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
         return make_reader(std::move(s), range, full_slice);
+    }
+
+    flat_mutation_reader make_flat_reader(schema_ptr,
+                                          const dht::partition_range&,
+                                          const query::partition_slice&,
+                                          const io_priority_class& = default_priority_class(),
+                                          tracing::trace_state_ptr trace_state = nullptr,
+                                          streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                          mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
+    flat_mutation_reader make_flat_reader(schema_ptr s, const dht::partition_range& range = query::full_partition_range) {
+        auto& full_slice = s->full_slice();
+        return make_flat_reader(std::move(s), range, full_slice);
     }
 
     const stats& stats() const { return _stats; }
