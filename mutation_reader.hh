@@ -145,11 +145,10 @@ private:
     void maybe_add_readers(const dht::token* const t);
     void add_readers(std::vector<mutation_reader> new_readers);
     future<> prepare_next();
-    // Produces next mutation or disengaged optional if there are no more.
-    future<streamed_mutation_opt> next();
 public:
     // The specified mutation_reader::forwarding tag must be the same for all included readers.
     mutation_reader_merger(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr);
+    // Produces next mutation or disengaged optional if there are no more.
     future<streamed_mutation_opt> operator()();
     future<> fast_forward_to(const dht::partition_range& pr);
 };
