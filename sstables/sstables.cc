@@ -2279,6 +2279,7 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
     auto features = all_features();
+    features.disable(sstable_feature::NonCompoundRangeTombstones);
     _sst.write_scylla_metadata(_pc, _shard, std::move(features));
 
     _monitor->on_write_completed();
