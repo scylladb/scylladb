@@ -78,7 +78,16 @@ private:
             _max = state->get_remaining();
             _last_pkey = state->get_partition_key();
             _last_ckey = state->get_clustering_key();
+            _cmd->query_uuid = state->get_query_uuid();
+            _cmd->is_first_page = false;
+        } else {
+            // Reusing readers is currently only supported for singular queries.
+            if (_ranges.front().is_singular()) {
+                _cmd->query_uuid = utils::make_random_uuid();
+            }
+            _cmd->is_first_page = true;
         }
+        qlogger.trace("fetch_page query id {}", _cmd->query_uuid);
 
         if (_last_pkey) {
             auto dpk = dht::global_partitioner().decorate_key(*_schema, *_last_pkey);
@@ -304,7 +313,7 @@ private:
         return _exhausted ?
                         nullptr :
                         ::make_shared<const paging_state>(*_last_pkey,
-                                        _last_ckey, _max, utils::UUID{});
+                                        _last_ckey, _max, _cmd->query_uuid);
     }
 
 private:

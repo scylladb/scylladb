@@ -173,6 +173,19 @@ public:
     gc_clock::time_point timestamp;
     std::experimental::optional<tracing::trace_info> trace_info;
     uint32_t partition_limit; // The maximum number of live partitions to return.
+    // The "query_uuid" field is useful in pages queries: It tells the replica
+    // that when it finishes the read request prematurely, i.e., reached the
+    // desired number of rows per page, it should not destroy the reader object,
+    // rather it should keep it alive - at its current position - and save it
+    // under the unique key "query_uuid". Later, when we want to resume
+    // the read at exactly the same position (i.e., to request the next page)
+    // we can pass this same unique id in that query's "query_uuid" field.
+    utils::UUID query_uuid;
+    // Signal to the replica that this is the first page of a (maybe) paged
+    // read request as far the replica is concerned. Can be used by the replica
+    // to avoid doing work normally done on paged requests, e.g. attempting to
+    // reused suspended readers.
+    bool is_first_page;
     api::timestamp_type read_timestamp; // not serialized
 public:
     read_command(utils::UUID cf_id,
@@ -182,6 +195,8 @@ public:
                  gc_clock::time_point now = gc_clock::now(),
                  std::experimental::optional<tracing::trace_info> ti = std::experimental::nullopt,
                  uint32_t partition_limit = max_partitions,
+                 utils::UUID query_uuid = utils::UUID(),
+                 bool is_first_page = false,
                  api::timestamp_type rt = api::missing_timestamp)
         : cf_id(std::move(cf_id))
         , schema_version(std::move(schema_version))
@@ -190,6 +205,8 @@ public:
         , timestamp(now)
         , trace_info(std::move(ti))
         , partition_limit(partition_limit)
+        , query_uuid(query_uuid)
+        , is_first_page(is_first_page)
         , read_timestamp(rt)
     { }
 
