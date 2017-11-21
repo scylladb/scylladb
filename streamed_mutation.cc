@@ -47,8 +47,18 @@ operator<<(std::ostream& os, const partition_end& eop) {
     return os << "{partition_end}";
 }
 
+std::ostream& operator<<(std::ostream& out, partition_region r) {
+    switch (r) {
+        case partition_region::partition_start: out << "partition_start"; break;
+        case partition_region::static_row: out << "static_row"; break;
+        case partition_region::clustered: out << "clustered"; break;
+        case partition_region::partition_end: out << "partition_end"; break;
+    }
+    return out;
+}
+
 std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    out << "{position: " << pos._bound_weight << ":";
+    out << "{position: type " << pos._type << ", bound_weight " << pos._bound_weight << ", key ";
     if (pos._ck) {
         out << *pos._ck;
     } else {
