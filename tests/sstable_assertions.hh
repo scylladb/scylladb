@@ -66,6 +66,16 @@ public:
         }
         return *this;
     }
+
+    index_reader_assertions& is_empty(const schema& s) {
+        _r->read_partition_data().get();
+        while (!_r->eof()) {
+            auto* pi = _r->current_partition_entry().get_promoted_index(s);
+            BOOST_REQUIRE(pi == nullptr);
+            _r->advance_to_next_partition().get();
+        }
+        return *this;
+    }
 };
 
 inline
