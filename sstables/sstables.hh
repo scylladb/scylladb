@@ -356,7 +356,7 @@ public:
         return read_range_rows_flat(std::move(schema), range, full_slice);
     }
 
-    // read_rows() returns each of the rows in the sstable, in sequence,
+    // read_rows_flat() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
     // This function is implemented efficiently - doing buffered, sequential
     // read of the data file (no need to access the index file).
@@ -367,10 +367,6 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    mutation_reader read_rows(schema_ptr schema,
-        const io_priority_class& pc = default_priority_class(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
     flat_mutation_reader read_rows_flat(schema_ptr schema,
                               const io_priority_class& pc = default_priority_class(),
                               streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
