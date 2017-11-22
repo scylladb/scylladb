@@ -153,14 +153,12 @@ public:
     }
 
     future<double> read_sequential_partitions(int idx) {
-        return do_with(_sst[0]->read_rows(s), [this] (mutation_reader& r) {
+        return do_with(_sst[0]->read_rows_flat(s), [this] (flat_mutation_reader& r) {
             auto start = test_env::now();
             auto total = make_lw_shared<size_t>(0);
             auto done = make_lw_shared<bool>(false);
             return do_until([done] { return *done; }, [this, done, total, &r] {
-                return r().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([this, done, total] (mutation_opt m) {
+                return read_mutation_from_flat_mutation_reader(s, r).then([this, done, total] (mutation_opt m) {
                     if (!m) {
                         *done = true;
                     } else {

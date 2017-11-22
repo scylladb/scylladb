@@ -421,9 +421,8 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
                 sstables::sstable::format_types::big);
         write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
-        auto mr = sst->read_rows(s);
-        auto sm = mr().get0();
-        auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
+        auto mr = sst->read_rows_flat(s);
+        auto mut = read_mutation_from_flat_mutation_reader(s, mr).get0();
         BOOST_REQUIRE(bool(mut));
         auto& rts = mut->partition().row_tombstones();
         BOOST_REQUIRE(rts.size() == 1);
@@ -569,11 +568,9 @@ static future<sstable_ptr> ka_sst(schema_ptr schema, sstring dir, unsigned long 
 SEASTAR_TEST_CASE(tombstone_in_tombstone) {
     return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([s] (mutation_opt mut) {
+                return read_mutation_from_flat_mutation_reader(s, reader).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
@@ -634,11 +631,9 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 SEASTAR_TEST_CASE(range_tombstone_reading) {
     return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
-        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([s] (mutation_opt mut) {
+                return read_mutation_from_flat_mutation_reader(s, reader).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
@@ -713,11 +708,9 @@ static schema_ptr tombstone_overlap_schema2() {
 SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
     return ka_sst(tombstone_overlap_schema2(), "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
-        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+        return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
-                return reader().then([] (auto sm) {
-                    return mutation_from_streamed_mutation(std::move(sm));
-                }).then([s] (mutation_opt mut) {
+                return read_mutation_from_flat_mutation_reader(s, reader).then([s] (mutation_opt mut) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
@@ -797,9 +790,8 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
                                 sstables::sstable::format_types::big);
         write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
-        auto mr = sst->read_rows(s);
-        auto sm = mr().get0();
-        auto mut = mutation_from_streamed_mutation(std::move(sm)).get0();
+        auto mr = sst->read_rows_flat(s);
+        auto mut = read_mutation_from_flat_mutation_reader(s, mr).get0();
         BOOST_REQUIRE(bool(mut));
     });
 }
