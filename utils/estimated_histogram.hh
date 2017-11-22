@@ -72,6 +72,7 @@ struct estimated_histogram {
     std::vector<int64_t> buckets;
 
     int64_t _count = 0;
+    int64_t _sample_sum = 0;
 
     estimated_histogram(int bucket_count = 90) {
 
@@ -87,6 +88,7 @@ struct estimated_histogram {
         size_t pos = 0;
 
         res.sample_count = _count;
+        res.sample_sum = _sample_sum;
         for (size_t i = 0; i < res.buckets.size(); i++) {
             auto& v = res.buckets[i];
             v.upper_bound = last_bound;
@@ -97,6 +99,7 @@ struct estimated_histogram {
             }
 
             v.count = cummulative_count;
+
             last_bound <<= 1;
         }
         return res;
@@ -151,6 +154,7 @@ public:
     void clear() {
         std::fill(buckets.begin(), buckets.end(), 0);
         _count = 0;
+        _sample_sum = 0;
     }
     /**
      * Increments the count of the bucket closest to n, rounding UP.
@@ -164,6 +168,7 @@ public:
         }
         buckets.at(pos)++;
         _count++;
+        _sample_sum += n;
     }
 
     /**
@@ -184,6 +189,7 @@ public:
             pos = std::distance(bucket_offsets.begin(), low);
         }
         buckets.at(pos)+= new_count - _count;
+        _sample_sum += n * (new_count - _count);
         _count = new_count;
     }
 
