@@ -2998,30 +2998,6 @@ future<> init_metrics() {
   });
 }
 
-struct single_partition_reader_adaptor final : public mutation_reader::impl {
-    sstables::shared_sstable _sst;
-    schema_ptr _s;
-    dht::ring_position_view _key;
-    const query::partition_slice& _slice;
-    const io_priority_class& _pc;
-    streamed_mutation::forwarding _fwd;
-public:
-    single_partition_reader_adaptor(sstables::shared_sstable sst, schema_ptr s, dht::ring_position_view key,
-        const query::partition_slice& slice, const io_priority_class& pc, streamed_mutation::forwarding fwd)
-        : _sst(sst), _s(s), _key(key), _slice(slice), _pc(pc), _fwd(fwd)
-    { }
-    virtual future<streamed_mutation_opt> operator()() override {
-        if (!_sst) {
-            return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-        }
-        auto sst = std::move(_sst);
-        return sst->read_row(_s, _key, _slice, _pc, no_resource_tracking(), _fwd);
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        throw std::bad_function_call();
-    }
-};
-
 mutation_source sstable::as_mutation_source() {
     return mutation_source([sst = shared_from_this()] (schema_ptr s,
             const dht::partition_range& range,
@@ -3035,10 +3011,9 @@ mutation_source sstable::as_mutation_source() {
         // consequence, fast_forward_to() will *NOT* work on the result,
         // regardless of what the fwd_mr parameter says.
         if (range.is_singular() && range.start()->value().has_key()) {
-            const dht::ring_position& pos = range.start()->value();
-            return make_mutation_reader<single_partition_reader_adaptor>(sst, s, pos, slice, pc, fwd);
+            return sst->read_row_flat(s, range.start()->value(), slice, pc, no_resource_tracking(), fwd);
         } else {
-            return sst->read_range_rows(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
+            return sst->read_range_rows_flat(s, range, slice, pc, no_resource_tracking(), fwd, fwd_mr);
         }
     });
 }
