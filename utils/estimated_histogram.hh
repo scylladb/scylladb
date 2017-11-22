@@ -240,6 +240,8 @@ public:
         for (auto p: b.buckets) {
             buckets[i++] += p;
         }
+        _count += b._count;
+        _sample_sum += b._sample_sum;
         return *this;
     }
 
