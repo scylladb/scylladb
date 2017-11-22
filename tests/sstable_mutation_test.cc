@@ -37,6 +37,7 @@
 #include "memtable-sstable.hh"
 #include "disk-error-handler.hh"
 #include "tests/sstable_assertions.hh"
+#include "tests/test_services.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -387,6 +388,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
 
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         for (auto version : {sstables::sstable::version_types::ka, sstables::sstable::version_types::la}) {
             for (auto index_block_size : {1, 128, 64*1024}) {
                 sstable_writer_config cfg;
@@ -399,6 +401,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         auto s = make_lw_shared(schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
@@ -766,6 +769,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
@@ -798,6 +802,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
