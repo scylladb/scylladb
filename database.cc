@@ -431,7 +431,7 @@ public:
     incremental_reader_selector(incremental_reader_selector&&) = delete;
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
-    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) override {
+    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
         dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(t));
 
         const auto& position = (t ? *t : _selector_position);
@@ -456,12 +456,14 @@ public:
 
         dblog.trace("incremental_reader_selector {}: {} new sstables to consider, advancing selector to {}", this, selection.sstables.size(), _selector_position);
 
-        return boost::copy_range<std::vector<mutation_reader>>(selection.sstables
+        return boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                 | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
-                | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+                | boost::adaptors::transformed([this] (auto& sst) {
+                    return flat_mutation_reader_from_mutation_reader(_s, this->create_reader(sst), _fwd);
+                }));
     }
 
-    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         if (_pr->start()->value().token() >= _selector_position) {
