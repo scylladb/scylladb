@@ -43,6 +43,7 @@
 #include "schema.hh"
 #include "mutation.hh"
 #include "utils/i_filter.hh"
+#include "utils/optimized_optional.hh"
 #include "core/stream.hh"
 #include "writer.hh"
 #include "metadata_collector.hh"
@@ -56,6 +57,7 @@
 #include "sstables/shared_index_lists.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
+#include "flat_mutation_reader.hh"
 
 namespace seastar {
 class thread_scheduling_group;
@@ -64,6 +66,8 @@ class thread_scheduling_group;
 namespace sstables {
 
 extern logging::logger sstlog;
+
+class data_consume_rows_context;
 
 // data_consume_context is an object returned by sstable::data_consume_rows()
 // which allows knowing when the consumer stops reading, and starting it again
@@ -80,12 +84,21 @@ extern logging::logger sstlog;
 // and the time the returned future is completed, the object lives on.
 // Moreover, the sstable object used for the sstable::data_consume_rows()
 // call which created this data_consume_context, must also be kept alive.
+//
+// data_consume_rows() and data_consume_rows_at_once() both can read just a
+// single row or many rows. The difference is that data_consume_rows_at_once()
+// is optimized to reading one or few rows (reading it all into memory), while
+// data_consume_rows() uses a read buffer, so not all the rows need to fit
+// memory in the same time (they are delivered to the consumer one by one).
 class data_consume_context {
-    class impl;
-    std::unique_ptr<impl> _pimpl;
+    shared_sstable _sst;
+    std::unique_ptr<data_consume_rows_context> _ctx;
     // This object can only be constructed by sstable::data_consume_rows()
-    data_consume_context(std::unique_ptr<impl>);
+    data_consume_context(shared_sstable,row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen);
     friend class sstable;
+    data_consume_context();
+    explicit operator bool() const noexcept;
+    friend class optimized_optional<data_consume_context>;
 public:
     future<> read();
     future<> fast_forward_to(uint64_t begin, uint64_t end);
@@ -98,6 +111,8 @@ public:
     data_consume_context(data_consume_context&&) noexcept;
     data_consume_context& operator=(data_consume_context&&) noexcept;
 };
+
+using data_consume_context_opt = optimized_optional<data_consume_context>;
 
 class key;
 class sstable_writer;
@@ -285,6 +300,32 @@ public:
         return read_row(std::move(schema), key, full_slice);
     }
 
+    flat_mutation_reader read_row_flat(
+        schema_ptr schema,
+        dht::ring_position_view key,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+    flat_mutation_reader read_row_flat(schema_ptr schema, dht::ring_position_view key) {
+        auto& full_slice = schema->full_slice();
+        return read_row_flat(std::move(schema), std::move(key), full_slice);
+    }
+
+    flat_mutation_reader read_row_flat(
+        schema_ptr schema,
+        const sstables::key& key,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+    flat_mutation_reader read_row_flat(schema_ptr schema, const sstables::key& key) {
+        auto& full_slice = schema->full_slice();
+        return read_row_flat(std::move(schema), key, full_slice);
+    }
+
     // Returns a mutation_reader for given range of partitions
     mutation_reader read_range_rows(
         schema_ptr schema,
@@ -298,6 +339,21 @@ public:
     mutation_reader read_range_rows(schema_ptr schema, const dht::partition_range& range) {
         auto& full_slice = schema->full_slice();
         return read_range_rows(std::move(schema), range, full_slice);
+    }
+
+    // Returns a mutation_reader for given range of partitions
+    flat_mutation_reader read_range_rows_flat(
+        schema_ptr schema,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        reader_resource_tracker resource_tracker = no_resource_tracking(),
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+
+    flat_mutation_reader read_range_rows_flat(schema_ptr schema, const dht::partition_range& range) {
+        auto& full_slice = schema->full_slice();
+        return read_range_rows_flat(std::move(schema), range, full_slice);
     }
 
     // read_rows() returns each of the rows in the sstable, in sequence,
@@ -314,6 +370,10 @@ public:
     mutation_reader read_rows(schema_ptr schema,
         const io_priority_class& pc = default_priority_class(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+
+    flat_mutation_reader read_rows_flat(schema_ptr schema,
+                              const io_priority_class& pc = default_priority_class(),
+                              streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
     // Returns mutation_source containing all writes contained in this sstable.
     // The mutation_source shares ownership of this sstable.
@@ -638,6 +698,8 @@ public:
     }
 
     static utils::hashed_key make_hashed_key(const schema& s, const partition_key& key);
+
+    filter_tracker& get_filter_tracker() { return _filter_tracker; }
 
     uint64_t filter_get_false_positive() {
         return _filter_tracker.false_positive;
