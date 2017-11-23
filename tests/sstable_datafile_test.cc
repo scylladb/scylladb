@@ -2347,7 +2347,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return m;
         };
 
-        auto make_expiring = [&] (partition_key key, bool ttl) {
+        auto make_expiring = [&] (partition_key key, int ttl) {
             mutation m(key, s);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)),
                 gc_clock::now().time_since_epoch().count(), gc_clock::duration(ttl));
@@ -2383,6 +2383,8 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
         auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
 
+        auto ttl = 5;
+
         {
             auto mut1 = make_insert(alpha);
             auto mut2 = make_insert(beta);
@@ -2393,7 +2395,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
                     make_sstable_containing(sst_gen, {mut3})
             };
 
-            forward_jump_clocks(std::chrono::seconds(1));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact(sstables, sstables);
             BOOST_REQUIRE_EQUAL(1, result.size());
@@ -2411,7 +2413,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto sst1 = make_sstable_containing(sst_gen, {mut1});
             auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
 
-            forward_jump_clocks(std::chrono::seconds(1));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst2});
             BOOST_REQUIRE_EQUAL(1, result.size());
@@ -2430,7 +2432,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
             auto sst2 = make_sstable_containing(sst_gen, {mut4});
 
-            forward_jump_clocks(std::chrono::seconds(1));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst1});
             BOOST_REQUIRE_EQUAL(1, result.size());
@@ -2449,7 +2451,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             auto sst1 = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
             auto sst2 = make_sstable_containing(sst_gen, {mut4});
 
-            forward_jump_clocks(std::chrono::seconds(1));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst1});
             BOOST_REQUIRE_EQUAL(1, result.size());
@@ -2462,12 +2464,12 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         {
             // check that expired cell will not be purged if it will ressurect overwritten data.
             auto mut1 = make_insert(alpha);
-            auto mut2 = make_expiring(alpha, 1);
+            auto mut2 = make_expiring(alpha, ttl);
 
             auto sst1 = make_sstable_containing(sst_gen, {mut1});
             auto sst2 = make_sstable_containing(sst_gen, {mut2});
 
-            forward_jump_clocks(std::chrono::seconds(5));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst2});
             BOOST_REQUIRE_EQUAL(1, result.size());
@@ -2478,25 +2480,25 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         }
         {
             auto mut1 = make_insert(alpha);
-            auto mut2 = make_expiring(beta, 1);
+            auto mut2 = make_expiring(beta, ttl);
 
             auto sst1 = make_sstable_containing(sst_gen, {mut1});
             auto sst2 = make_sstable_containing(sst_gen, {mut2});
 
-            forward_jump_clocks(std::chrono::seconds(5));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst2});
             BOOST_REQUIRE_EQUAL(0, result.size());
         }
         {
             auto mut1 = make_insert(alpha);
-            auto mut2 = make_expiring(alpha, 1);
+            auto mut2 = make_expiring(alpha, ttl);
             auto mut3 = make_insert(beta);
 
             auto sst1 = make_sstable_containing(sst_gen, {mut1});
             auto sst2 = make_sstable_containing(sst_gen, {mut2, mut3});
 
-            forward_jump_clocks(std::chrono::seconds(5));
+            forward_jump_clocks(std::chrono::seconds(ttl));
 
             auto result = compact({sst1, sst2}, {sst1, sst2});
             BOOST_REQUIRE_EQUAL(1, result.size());
