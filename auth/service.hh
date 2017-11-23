@@ -49,9 +49,6 @@ class migration_listener;
 
 namespace auth {
 
-class authenticator;
-class authorizer;
-
 struct service_config final {
     static service_config from_db_config(const db::config&);
 
