@@ -105,6 +105,12 @@ public:
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
         future<bool> fill_buffer_from_streamed_mutation(streamed_mutation&);
+        // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
+        void reserve_one() {
+            if (_buffer.capacity() == _buffer.size()) {
+                _buffer.reserve(_buffer.size() * 2 + 1);
+            }
+        }
     private:
         static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
