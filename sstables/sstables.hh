@@ -121,6 +121,8 @@ struct sstable_open_info;
 
 class index_reader;
 
+bool supports_correct_non_compound_range_tombstones();
+
 struct sstable_writer_config {
     std::experimental::optional<size_t> promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
@@ -129,6 +131,7 @@ struct sstable_writer_config {
     stdx::optional<db::replay_position> replay_position;
     seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
     seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
+    bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
 };
 
 static constexpr inline size_t default_sstable_buffer_size() {
@@ -538,6 +541,10 @@ private:
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
 
+    //FIXME: Set by sstable_writer to influence sstable writing behavior.
+    //       Remove when doing #3012
+    bool _correctly_serialize_non_compound_range_tombstones;
+
     // _pi_write is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
     struct {
@@ -901,6 +908,7 @@ class sstable_writer {
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
     seastar::shared_ptr<write_monitor> _monitor;
+    bool _correctly_serialize_non_compound_range_tombstones;
 private:
     void prepare_file_writer();
     void finish_file_writer();
@@ -910,7 +918,8 @@ public:
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(std::move(o._monitor)) {}
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(std::move(o._monitor)),
+            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }
     stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }

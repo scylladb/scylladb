@@ -2038,6 +2038,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
+    _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -2256,6 +2257,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
     , _monitor(cfg.monitor)
+    , _correctly_serialize_non_compound_range_tombstones(cfg.correctly_serialize_non_compound_range_tombstones)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -2279,7 +2281,9 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
     auto features = all_features();
-    features.disable(sstable_feature::NonCompoundRangeTombstones);
+    if (!_correctly_serialize_non_compound_range_tombstones) {
+        features.disable(sstable_feature::NonCompoundRangeTombstones);
+    }
     _sst.write_scylla_metadata(_pc, _shard, std::move(features));
 
     _monitor->on_write_completed();
@@ -3034,6 +3038,9 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+bool supports_correct_non_compound_range_tombstones() {
+    return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
+}
 
 }
 
