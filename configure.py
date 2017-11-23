@@ -250,6 +250,7 @@ scylla_tests = [
     'tests/castas_fcts_test',
     'tests/big_decimal_test',
     'tests/aggregate_fcts_test',
+    'tests/role_manager_test',
 ]
 
 apps = [
@@ -535,6 +536,7 @@ scylla_core = (['database.cc',
                  'auth/permission.cc',
                  'auth/permissions_cache.cc',
                  'auth/service.cc',
+                 'auth/standard_role_manager.cc',
                  'auth/transitional.cc',
                  'tracing/tracing.cc',
                  'tracing/trace_keyspace_helper.cc',
