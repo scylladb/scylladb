@@ -54,6 +54,12 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
     return src(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
+flat_mutation_reader
+row_cache::create_underlying_flat_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
+    ctx.on_underlying_created();
+    return src.make_flat_mutation_reader(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
+}
+
 cache_tracker& global_cache_tracker() {
     static thread_local cache_tracker instance;
     return instance;
