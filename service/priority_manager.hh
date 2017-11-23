@@ -65,12 +65,12 @@ public:
     }
 
     priority_manager()
-        : _commitlog_priority(engine().register_one_priority_class("commitlog", 100))
-        , _mt_flush_priority(engine().register_one_priority_class("memtable_flush", 100))
-        , _stream_read_priority(engine().register_one_priority_class("streaming_read", 20))
-        , _stream_write_priority(engine().register_one_priority_class("streaming_write", 20))
-        , _sstable_query_read(engine().register_one_priority_class("query", 100))
-        , _compaction_priority(engine().register_one_priority_class("compaction", 100))
+        : _commitlog_priority(engine().register_one_priority_class("commitlog", 1000))
+        , _mt_flush_priority(engine().register_one_priority_class("memtable_flush", 1000))
+        , _stream_read_priority(engine().register_one_priority_class("streaming_read", 200))
+        , _stream_write_priority(engine().register_one_priority_class("streaming_write", 200))
+        , _sstable_query_read(engine().register_one_priority_class("query", 1000))
+        , _compaction_priority(engine().register_one_priority_class("compaction", 1000))
 
     {}
 };
