@@ -287,10 +287,15 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
         sm::make_counter("unpaged_queries", _unpaged_queries,
                         sm::description("The number of unpaged queries served.")),
 
-        sm::make_gauge("requests_blocked_memory", [this] { return _memory_available.waiters(); },
+        sm::make_gauge("requests_blocked_memory_current", [this] { return _memory_available.waiters(); },
                         sm::description(
-                            seastar::format("Holds a number of requests that are blocked due to reaching the memory quota limit ({}B). "
+                            seastar::format("Holds the number of requests that are currently blocked due to reaching the memory quota limit ({}B). "
                                             "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+        sm::make_derive("requests_blocked_memory", _requests_blocked_memory,
+                        sm::description(
+                            seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
+                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+
     });
 }
 
@@ -643,7 +648,12 @@ future<> cql_server::connection::process_request() {
                     f.length, mem_estimate, _server._max_request_size));
         }
 
-        return get_units(_server._memory_available, mem_estimate).then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
+        auto fut = get_units(_server._memory_available, mem_estimate);
+        if (_server._memory_available.waiters()) {
+            ++_server._requests_blocked_memory;
+        }
+
+        return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
           return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
 
             ++_server._requests_served;

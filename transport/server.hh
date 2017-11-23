@@ -118,6 +118,7 @@ private:
     uint64_t _requests_served = 0;
     uint64_t _unpaged_queries = 0;
     uint64_t _requests_serving = 0;
+    uint64_t _requests_blocked_memory = 0;
     cql_load_balance _lb;
     auth::service& _auth_service;
 public:
