@@ -80,6 +80,7 @@ options {
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
+#include "cql3/role_name.hh"
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
@@ -1115,12 +1116,12 @@ userTypeName returns [uninitialized<cql3::ut_name> name]
     : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
     ;
 
-#if 0
-userOrRoleName returns [RoleName name]
-    @init { $name = new RoleName(); }
-    : roleName[name] {return $name;}
+userOrRoleName returns [uninitialized<cql3::role_name> name]
+    : t=IDENT              { $name = cql3::role_name($t.text, cql3::preserve_role_case::no); }
+    | t=QUOTED_NAME        { $name = cql3::role_name($t.text, cql3::preserve_role_case::yes); }
+    | k=unreserved_keyword { $name = cql3::role_name(k, cql3::preserve_role_case::no); }
+    | QMARK {add_recognition_error("Bind variables cannot be used for role names");}
     ;
-#endif
 
 ksName[::shared_ptr<cql3::keyspace_element_name> name]
     : t=IDENT              { $name->set_keyspace($t.text, false);}
@@ -1142,15 +1143,6 @@ idxName[::shared_ptr<cql3::index_name> name]
     | k=unreserved_keyword { $name->set_index(k, false); }
     | QMARK {add_recognition_error("Bind variables cannot be used for index names");}
     ;
-
-#if 0
-roleName[RoleName name]
-    : t=IDENT              { $name.setName($t.text, false); }
-    | t=QUOTED_NAME        { $name.setName($t.text, true); }
-    | k=unreserved_keyword { $name.setName(k, false); }
-    | QMARK {addRecognitionError("Bind variables cannot be used for role names");}
-    ;
-#endif
 
 constant returns [shared_ptr<cql3::constants::literal> constant]
     @init{std::string sign;}
