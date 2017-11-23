@@ -2295,7 +2295,7 @@ sstable_writer sstable::get_writer(const schema& s, uint64_t estimated_partition
 }
 
 future<> sstable::write_components(
-        mutation_reader mr,
+        flat_mutation_reader mr,
         uint64_t estimated_partitions,
         schema_ptr schema,
         const sstable_writer_config& cfg,
@@ -2307,7 +2307,7 @@ future<> sstable::write_components(
     attr.scheduling_group = cfg.thread_scheduling_group;
     return seastar::async(std::move(attr), [this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, pc);
-        consume_flattened_in_thread(mr, wr);
+        mr.consume_in_thread(std::move(wr));
     });
 }
 

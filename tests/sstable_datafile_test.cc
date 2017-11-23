@@ -3572,18 +3572,12 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
 
 // Must be run in a seastar thread
 static
-shared_sstable make_sstable(sstring path, schema_ptr s, mutation_reader rd, sstable_writer_config cfg) {
+shared_sstable make_sstable(sstring path, flat_mutation_reader rd, sstable_writer_config cfg) {
+    auto s = rd.schema();
     auto sst = make_sstable(s, path, 1, sstables::sstable::version_types::ka, big);
     sst->write_components(std::move(rd), 1, s, cfg).get();
     sst->load().get();
     return sst;
-}
-
-// Must be run in a seastar thread
-static
-shared_sstable make_sstable(sstring path, streamed_mutation sm, sstable_writer_config cfg) {
-    auto s = sm.schema();
-    return make_sstable(path, s, make_reader_returning(std::move(sm)), cfg);
 }
 
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
@@ -3619,7 +3613,11 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 100;
-        auto sst = make_sstable(dir.path, streamed_mutation_returning(table.schema(), table.make_pkey("pk"), std::move(fragments)), cfg);
+        auto mut = mutation(table.make_pkey("key"), table.schema());
+        for (auto&& mf : fragments) {
+            mut.apply(mf);
+        }
+        auto sst = make_sstable(dir.path,  flat_mutation_reader_from_mutations({ std::move(mut) }, streamed_mutation::forwarding::no), cfg);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -3681,7 +3679,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        auto sst = make_sstable(dir.path, table.schema(), make_reader_returning_many(partitions), cfg);
+        auto sst = make_sstable(dir.path, flat_mutation_reader_from_mutations(partitions, streamed_mutation::forwarding::no), cfg);
 
         auto ms = as_mutation_source(sst);
         auto rd = ms(table.schema(),
