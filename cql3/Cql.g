@@ -63,6 +63,7 @@ options {
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
 #include "cql3/statements/list_permissions_statement.hh"
+#include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -346,6 +347,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st32=createViewStatement         { $stmt = st32; }
     | st33=alterViewStatement          { $stmt = st33; }
     | st34=dropViewStatement           { $stmt = st34; }
+    | st35=listRolesStatement          { $stmt = st35; }
     ;
 
 /*
@@ -1078,6 +1080,20 @@ userOption[::shared_ptr<cql3::user_options> opts]
     : k=K_PASSWORD v=STRING_LITERAL { opts->put($k.text, $v.text); }
     ;
 
+/**
+ * LIST ROLES [OF <rolename>] [NORECURSIVE]
+ */
+listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
+    @init {
+        bool recursive = true;
+        std::experimental::optional<cql3::role_name> grantee;
+    }
+    : K_LIST K_ROLES
+        (K_OF g=userOrRoleName { grantee = std::move(g); })?
+        (K_NORECURSIVE { recursive = false; })?
+        { $stmt = ::make_shared<list_roles_statement>(grantee, recursive); }
+    ;
+
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
@@ -1526,6 +1542,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_ALL
         | K_USER
         | K_USERS
+        | K_ROLES
         | K_SUPERUSER
         | K_NOSUPERUSER
         | K_PASSWORD
@@ -1623,6 +1640,7 @@ K_NORECURSIVE: N O R E C U R S I V E;
 
 K_USER:        U S E R;
 K_USERS:       U S E R S;
+K_ROLES:       R O L E S;
 K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
 K_PASSWORD:    P A S S W O R D;
