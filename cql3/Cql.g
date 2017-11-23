@@ -64,6 +64,7 @@ options {
 #include "cql3/statements/revoke_statement.hh"
 #include "cql3/statements/list_permissions_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
+#include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -348,6 +349,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st33=alterViewStatement          { $stmt = st33; }
     | st34=dropViewStatement           { $stmt = st34; }
     | st35=listRolesStatement          { $stmt = st35; }
+    | st36=grantRoleStatement          { $stmt = st36; }
     ;
 
 /*
@@ -991,6 +993,14 @@ revokeStatement returns [::shared_ptr<revoke_statement> stmt]
       K_FROM
           username
       { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
+    ;
+
+/**
+ * GRANT <rolename> to <grantee>
+ */
+grantRoleStatement returns [::shared_ptr<grant_role_statement> stmt]
+    : K_GRANT role=userOrRoleName K_TO grantee=userOrRoleName
+      { $stmt = ::make_shared<grant_role_statement>(std::move(role), std::move(grantee));  }
     ;
 
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
