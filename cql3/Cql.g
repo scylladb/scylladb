@@ -63,6 +63,7 @@ options {
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
 #include "cql3/statements/list_permissions_statement.hh"
+#include "cql3/statements/alter_role_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
@@ -357,6 +358,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st37=revokeRoleStatement         { $stmt = st37; }
     | st38=dropRoleStatement           { $stmt = st38; }
     | st39=createRoleStatement         { $stmt = st39; }
+    | st40=alterRoleStatement          { $stmt = st40; }
     ;
 
 /*
@@ -1120,6 +1122,22 @@ createRoleStatement returns [::shared_ptr<create_role_statement> stmt]
       (K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; })?
       (K_LOGIN { opts.can_login = true; } | K_NOLOGIN { opts.can_login = false; })?
       { $stmt = ::make_shared<create_role_statement>(name, std::move(opts), if_not_exists); }
+    ;
+
+/**
+ * ALTER ROLE <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ */
+alterRoleStatement returns [::shared_ptr<alter_role_statement> stmt]
+    @init {
+        cql3::role_options opts;
+    }
+    : K_ALTER K_ROLE name=userOrRoleName
+      (K_WITH roleAuthenticationOptions[opts])?
+      (K_SUPERUSER { opts.is_superuser = true; }
+        | K_NOSUPERUSER { opts.is_superuser = false; })?
+      (K_LOGIN { opts.can_login = true; }
+        | K_NOLOGIN { opts.can_login = false; })?
+      { $stmt = ::make_shared<alter_role_statement>(name, std::move(opts)); }
     ;
 
 /**

@@ -45,6 +45,7 @@
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/alter_role_statement.hh"
 #include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
@@ -100,6 +101,69 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
                 throw exceptions::invalid_request_exception(e.what());
             }
 
+            return void_result_message();
+        });
+    });
+}
+
+//
+// `alter_role_statement`
+//
+
+future<> alter_role_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
+
+    return async([this, &state] {
+        auto& as = *state.get_auth_service();
+        auto& rm = as.underlying_role_manager();
+
+        const auto& user = *state.user();
+        const bool user_is_superuser = auth::is_super_user(as, user).get0();
+
+        // TODO(jhaberku): Check the roles from the role cache of the authenticated user, once this is available.
+        if (user_is_superuser) {
+            const auto roles = rm.query_granted(user.name(), auth::recursive_role_query::yes).get0();
+            const bool granted_to_user = roles.count(_role) != 0;
+
+            if (granted_to_user) {
+                throw exceptions::unauthorized_exception(
+                        "You are not allowed to alter the superuser status of yourself or of a role granted to you.");
+            }
+        }
+
+        if (_options.is_superuser && !user_is_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
+        }
+
+        if (!user_is_superuser && (user.name() != _role)) {
+            throw exceptions::unauthorized_exception("You are not allowed to alter this role.");
+        }
+
+        if (!user_is_superuser) {
+            // TODO(jhaberku) Once we switch to roles, this is where we would query the authenticator for the set of
+            // alterable options it supports (throwing errors as necessary).
+        }
+    });
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+alter_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
+    unimplemented::warn(unimplemented::cause::ROLES);
+
+    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
+
+    auth::role_config_update update;
+    update.is_superuser = _options.is_superuser;
+    update.can_login = _options.can_login;
+
+    return do_with(std::move(update), [this, &state](const auth::role_config_update& update) {
+        auto& cs = state.get_client_state();
+        auto& as = *cs.get_auth_service();
+
+        return as.underlying_role_manager().alter(*cs.user(), _role, update).then([] {
+            return void_result_message();
+        }).handle_exception_type([](const auth::roles_argument_exception& e) {
+            throw exceptions::invalid_request_exception(e.what());
             return void_result_message();
         });
     });
