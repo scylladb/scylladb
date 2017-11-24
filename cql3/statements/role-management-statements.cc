@@ -45,6 +45,7 @@
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/drop_role_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
@@ -59,6 +60,45 @@ namespace statements {
 
 static future<::shared_ptr<cql_transport::messages::result_message>> void_result_message() {
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(nullptr);
+}
+
+//
+// `drop_role_statement`
+//
+
+void drop_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
+    if (state.user()->name() == _role) {
+        throw request_validations::invalid_request("Cannot DROP primary role for current login.");
+    }
+}
+
+future<> drop_role_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
+
+    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
+        if (!super) {
+            throw exceptions::unauthorized_exception("Only superusers are allowed to perform DROP ROLE queries.");
+        }
+    });
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+drop_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
+    unimplemented::warn(unimplemented::cause::ROLES);
+
+    auto& cs = state.get_client_state();
+    auto& as = *cs.get_auth_service();
+    auto& rm = as.underlying_role_manager();
+
+    return rm.drop(*cs.user(), _role).then([] {
+        return void_result_message();
+    }).handle_exception_type([this](const auth::nonexistant_role& e) {
+        if (!_if_exists) {
+            throw exceptions::invalid_request_exception(e.what());
+        }
+
+        return void_result_message();
+    });
 }
 
 //

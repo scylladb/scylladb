@@ -66,6 +66,7 @@ options {
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
+#include "cql3/statements/drop_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -352,6 +353,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st35=listRolesStatement          { $stmt = st35; }
     | st36=grantRoleStatement          { $stmt = st36; }
     | st37=revokeRoleStatement         { $stmt = st37; }
+    | st38=dropRoleStatement           { $stmt = st38; }
     ;
 
 /*
@@ -1101,6 +1103,17 @@ userOption[::shared_ptr<cql3::user_options> opts]
     ;
 
 /**
+ * DROP ROLE [IF EXISTS] <rolename>
+ */
+dropRoleStatement returns [::shared_ptr<drop_role_statement> stmt]
+    @init {
+        bool if_exists = false;
+    }
+    : K_DROP K_ROLE (K_IF K_EXISTS { if_exists = true; })? name=userOrRoleName
+      { $stmt = ::make_shared<drop_role_statement>(name, if_exists); }
+    ;
+
+/**
  * LIST ROLES [OF <rolename>] [NORECURSIVE]
  */
 listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
@@ -1562,6 +1575,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_ALL
         | K_USER
         | K_USERS
+        | K_ROLE
         | K_ROLES
         | K_SUPERUSER
         | K_NOSUPERUSER
@@ -1660,6 +1674,7 @@ K_NORECURSIVE: N O R E C U R S I V E;
 
 K_USER:        U S E R;
 K_USERS:       U S E R S;
+K_ROLE:        R O L E;
 K_ROLES:       R O L E S;
 K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
