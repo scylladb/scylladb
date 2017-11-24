@@ -97,6 +97,9 @@ private:
     // _range_tombstones holds only tombstones which are relevant for current ranges.
     range_tombstone_stream _range_tombstones;
     bool _first_row_encountered = false;
+
+    // See #2986
+    bool _treat_non_compound_rt_as_compound;
 public:
     struct column {
         bool is_static;
@@ -305,21 +308,24 @@ public:
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
-                    streamed_mutation::forwarding fwd)
+                    streamed_mutation::forwarding fwd,
+                    const shared_sstable& sst)
             : row_consumer(std::move(resource_tracker), pc)
             , _reader(reader)
             , _schema(schema)
             , _slice(slice)
             , _fwd(fwd)
             , _range_tombstones(*_schema)
+            , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
     mp_row_consumer(sstable_mutation_reader* reader,
                     const schema_ptr schema,
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
-                    streamed_mutation::forwarding fwd)
-            : mp_row_consumer(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd) { }
+                    streamed_mutation::forwarding fwd,
+                    const shared_sstable& sst)
+            : mp_row_consumer(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -623,7 +629,8 @@ public:
             return proceed::yes;
         }
 
-        auto start = composite_view(column::fix_static_name(*_schema, start_col)).explode();
+        auto compound = _schema->is_compound() || _treat_non_compound_rt_as_compound;
+        auto start = composite_view(column::fix_static_name(*_schema, start_col), compound).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
         // do not have extra data.
@@ -632,9 +639,9 @@ public:
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
             auto start_ck = clustering_key_prefix::from_exploded_view(start);
-            auto start_kind = start_marker_to_bound_kind(start_col);
-            auto end = clustering_key_prefix::from_exploded_view(composite_view(column::fix_static_name(*_schema, end_col)).explode());
-            auto end_kind = end_marker_to_bound_kind(end_col);
+            auto start_kind = compound ? start_marker_to_bound_kind(start_col) : bound_kind::incl_start;
+            auto end = clustering_key_prefix::from_exploded_view(composite_view(column::fix_static_name(*_schema, end_col), compound).explode());
+            auto end_kind = compound ? end_marker_to_bound_kind(end_col) : bound_kind::incl_end;
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_in_progress) {
@@ -851,7 +858,7 @@ public:
          streamed_mutation::forwarding fwd)
         : impl(std::move(schema))
         , _sst(std::move(sst))
-        , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd)
+        , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
             _context = _sst->data_consume_rows(_consumer);
             return make_ready_future<>();
@@ -867,7 +874,7 @@ public:
          mutation_reader::forwarding fwd_mr)
         : impl(std::move(schema))
         , _sst(std::move(sst))
-        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd)
+        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
             _lh_index = _sst->get_index_reader(pc); // lh = left hand
             _rh_index = _sst->get_index_reader(pc);
@@ -892,7 +899,7 @@ public:
                             mutation_reader::forwarding fwd_mr)
         : impl(std::move(schema))
         , _sst(std::move(sst))
-        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd)
+        , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
             _lh_index = _sst->get_index_reader(pc);
             auto f = _lh_index->advance_and_check_if_present(key);

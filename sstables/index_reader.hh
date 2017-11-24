@@ -24,6 +24,7 @@
 #include "consumer.hh"
 #include "downsampling.hh"
 #include "sstables/shared_index_lists.hh"
+#include <seastar/util/bool_class.hh>
 
 namespace sstables {
 
@@ -44,12 +45,16 @@ public:
     }
 };
 
+// See #2993
+class trust_promoted_index_tag;
+using trust_promoted_index = bool_class<trust_promoted_index_tag>;
+
 // IndexConsumer is a concept that implements:
 //
 // bool should_continue();
 // void consume_entry(index_entry&& ie, uintt64_t offset);
 template <class IndexConsumer>
-class index_consume_entry_context: public data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>> {
+class index_consume_entry_context : public data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>> {
     using proceed = data_consumer::proceed;
     using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
 private:
@@ -68,6 +73,8 @@ private:
 
     temporary_buffer<char> _key;
     temporary_buffer<char> _promoted;
+
+    trust_promoted_index _trust_pi;
 
 public:
     void verify_end_state() {
@@ -111,6 +118,9 @@ public:
             }
         case state::CONSUME_ENTRY: {
             auto len = (_key.size() + _promoted.size() + 14);
+            if (_trust_pi == trust_promoted_index::no) {
+                _promoted = temporary_buffer<char>();
+            }
             _consumer.consume_entry(index_entry(std::move(_key), this->_u64, std::move(_promoted)), _entry_offset);
             _entry_offset += len;
             _state = state::START;
@@ -122,10 +132,10 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(IndexConsumer& consumer,
+    index_consume_entry_context(IndexConsumer& consumer, trust_promoted_index trust_pi,
             input_stream<char>&& input, uint64_t start, uint64_t maxlen)
         : continuous_data_consumer(std::move(input), start, maxlen)
-        , _consumer(consumer), _entry_offset(start)
+        , _consumer(consumer), _entry_offset(start), _trust_pi(trust_pi)
     {}
 
     void reset(uint64_t offset) {
@@ -190,7 +200,9 @@ class index_reader {
 
         reader(shared_sstable sst, const io_priority_class& pc, uint64_t begin, uint64_t end, uint64_t quantity)
             : _consumer(quantity)
-            , _context(_consumer, create_file_input_stream(sst, pc, begin, end), begin, end - begin)
+            , _context(_consumer,
+                       trust_promoted_index(sst->has_correct_promoted_index_entries()),
+                       create_file_input_stream(sst, pc, begin, end), begin, end - begin)
         { }
     };
 

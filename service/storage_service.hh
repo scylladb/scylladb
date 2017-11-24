@@ -269,6 +269,7 @@ private:
     gms::feature _digest_multipartition_read_feature;
     gms::feature _correct_counter_order_feature;
     gms::feature _schema_tables_v3;
+    gms::feature _correct_non_compound_range_tombstones;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -279,6 +280,7 @@ public:
         _digest_multipartition_read_feature.enable();
         _correct_counter_order_feature.enable();
         _schema_tables_v3.enable();
+        _correct_non_compound_range_tombstones.enable();
     }
 
     void finish_bootstrapping() {
@@ -2242,6 +2244,10 @@ public:
 
     const gms::feature& cluster_supports_schema_tables_v3() const {
         return _schema_tables_v3;
+    }
+
+    bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
+        return bool(_correct_non_compound_range_tombstones);
     }
 };
 
