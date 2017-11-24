@@ -378,7 +378,7 @@ public:
     // The mutation_source shares ownership of this sstable.
     mutation_source as_mutation_source();
 
-    future<> write_components(mutation_reader mr,
+    future<> write_components(flat_mutation_reader mr,
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,

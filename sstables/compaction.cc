@@ -205,7 +205,7 @@ public:
         return attr;
     }
 private:
-    ::mutation_reader setup() {
+    flat_mutation_reader setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
         auto schema = _cf.schema();
         sstring formatted_msg = "[";
@@ -237,7 +237,7 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return ::make_range_sstable_reader(_cf.schema(),
+        return flat_mutation_reader_from_mutation_reader(_cf.schema(), ::make_range_sstable_reader(_cf.schema(),
                 ssts,
                 query::full_partition_range,
                 _cf.schema()->full_slice(),
@@ -245,7 +245,7 @@ private:
                 no_resource_tracking(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no);
+                ::mutation_reader::forwarding::no), ::streamed_mutation::forwarding::no);
     }
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
@@ -284,8 +284,8 @@ private:
         };
     }
 
-    virtual std::function<bool(const streamed_mutation& sm)> filter_func() const {
-        return [] (const streamed_mutation& sm) {
+    virtual std::function<bool(const dht::decorated_key&)> filter_func() const {
+        return [] (const dht::decorated_key&) {
             return true;
         };
     }
@@ -368,9 +368,9 @@ public:
         };
     }
 
-    virtual std::function<bool(const streamed_mutation& sm)> filter_func() const override {
-        return [] (const streamed_mutation& sm) {
-            return dht::shard_of(sm.decorated_key().token()) == engine().cpu_id();
+    virtual std::function<bool(const dht::decorated_key&)> filter_func() const override {
+        return [] (const dht::decorated_key& dk){
+            return dht::shard_of(dk.token()) == engine().cpu_id();
         };
     }
 
@@ -415,15 +415,15 @@ public:
         clogger.info("Cleaned {}", formatted_msg);
     }
 
-    std::function<bool(const streamed_mutation& sm)> filter_func() const override {
+    std::function<bool(const dht::decorated_key&)> filter_func() const override {
         dht::token_range_vector owned_ranges = service::get_local_storage_service().get_local_ranges(_cf.schema()->ks_name());
 
-        return [this, owned_ranges = std::move(owned_ranges)] (const streamed_mutation& sm) {
-            if (dht::shard_of(sm.decorated_key().token()) != engine().cpu_id()) {
+        return [this, owned_ranges = std::move(owned_ranges)] (const dht::decorated_key& dk) {
+            if (dht::shard_of(dk.token()) != engine().cpu_id()) {
                 return false;
             }
 
-            if (!belongs_to_current_node(sm.decorated_key().token(), owned_ranges)) {
+            if (!belongs_to_current_node(dk.token(), owned_ranges)) {
                 return false;
             }
             return true;
@@ -498,7 +498,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c) {
 
         auto start_time = db_clock::now();
         try {
-            consume_flattened_in_thread(reader, cfc, c->filter_func());
+            reader.consume_in_thread(std::move(cfc), c->filter_func());
         } catch (...) {
             delete_sstables_for_interrupted_compaction(c->_info->new_sstables, c->_info->ks, c->_info->cf);
             c = nullptr; // make sure writers are stopped while running in thread context

@@ -487,6 +487,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
 using reversed_partitions = seastar::bool_class<class reversed_partitions_tag>;
 using skip_after_first_fragment = seastar::bool_class<class skip_after_first_fragment_tag>;
 using skip_after_first_partition = seastar::bool_class<class skip_after_first_partition_tag>;
+using in_thread = seastar::bool_class<class in_thread_tag>;
 
 struct flat_stream_consumer {
     schema_ptr _schema;
@@ -566,18 +567,27 @@ public:
     }
 };
 
-void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partitions reversed) {
+void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partitions reversed, in_thread thread) {
     auto reversed_msg = reversed ? ", reversed partitions" : "";
-    auto reversed_flag = flat_mutation_reader::consume_reversed_partitions(bool(reversed));
+
+    auto consume_fn = [&] (flat_mutation_reader& fmr, flat_stream_consumer fsc) {
+        if (thread) {
+            assert(bool(!reversed));
+            return fmr.consume_in_thread(std::move(fsc));
+        } else {
+            auto reversed_flag = flat_mutation_reader::consume_reversed_partitions(bool(reversed));
+            return fmr.consume(std::move(fsc), reversed_flag).get0();
+        }
+    };
 
     BOOST_TEST_MESSAGE(sprint("Consume all%s", reversed_msg));
     auto fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
-    auto muts2 = fmr.consume(flat_stream_consumer(s, reversed), reversed_flag).get0();
+    auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
 
     BOOST_TEST_MESSAGE(sprint("Consume first fragment from partition%s", reversed_msg));
     fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
-    muts2 = fmr.consume(flat_stream_consumer(s, reversed, skip_after_first_fragment::yes), reversed_flag).get0();
+    muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
     for (auto j = 0u; j < muts.size(); j++) {
         BOOST_REQUIRE(muts[j].decorated_key().equal(*muts[j].schema(), muts2[j].decorated_key()));
@@ -590,11 +600,28 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
     BOOST_TEST_MESSAGE(sprint("Consume first partition%s", reversed_msg));
     fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
-    muts2 = fmr.consume(flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
-                                             skip_after_first_partition::yes),
-                        reversed_flag).get0();
+    muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
+                                             skip_after_first_partition::yes));
     BOOST_REQUIRE_EQUAL(muts2.size(), 1);
     BOOST_REQUIRE_EQUAL(muts2[0], muts[0]);
+
+    if (thread) {
+        auto filter = [&] (const dht::decorated_key& dk) {
+            for (auto j = 0; j < muts.size(); j += 2) {
+                if (dk.equal(*s, muts[j].decorated_key())) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        BOOST_TEST_MESSAGE("Consume all, filtered");
+        fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+        muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter));
+        BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
+        for (auto j = 1; j < muts.size(); j += 2) {
+            BOOST_REQUIRE_EQUAL(muts[j], muts2[j / 2]);
+        }
+    }
 }
 
 SEASTAR_TEST_CASE(test_consume_flat) {
@@ -602,8 +629,9 @@ SEASTAR_TEST_CASE(test_consume_flat) {
         auto test_random_streams = [&] (random_mutation_generator&& gen) {
             for (auto i = 0; i < 4; i++) {
                 auto muts = gen(4);
-                test_flat_stream(gen.schema(), muts, reversed_partitions::no);
-                test_flat_stream(gen.schema(), muts, reversed_partitions::yes);
+                test_flat_stream(gen.schema(), muts, reversed_partitions::no, in_thread::no);
+                test_flat_stream(gen.schema(), muts, reversed_partitions::yes, in_thread::no);
+                test_flat_stream(gen.schema(), muts, reversed_partitions::no, in_thread::yes);
             }
         };
 
