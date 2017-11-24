@@ -52,7 +52,7 @@ public:
                 auto& prev = pi->entries[0];
                 for (size_t i = 1; i < pi->entries.size(); ++i) {
                     auto& cur = pi->entries[i];
-                    if (!pos_cmp(prev.end, cur.start)) {
+                    if (pos_cmp(cur.start, prev.end)) {
                         std::cout << "promoted index:\n";
                         for (auto& e : pi->entries) {
                             std::cout << "  " << e.start << "-" << e.end << ": +" << e.offset << " len=" << e.width << std::endl;
@@ -62,6 +62,16 @@ public:
                     cur = prev;
                 }
             }
+            _r->advance_to_next_partition().get();
+        }
+        return *this;
+    }
+
+    index_reader_assertions& is_empty(const schema& s) {
+        _r->read_partition_data().get();
+        while (!_r->eof()) {
+            auto* pi = _r->current_partition_entry().get_promoted_index(s);
+            BOOST_REQUIRE(pi == nullptr);
             _r->advance_to_next_partition().get();
         }
         return *this;

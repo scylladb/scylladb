@@ -1432,6 +1432,109 @@ static composite::eoc bound_kind_to_end_marker(bound_kind end_kind) {
          : composite::eoc::end;
 }
 
+class bytes_writer_for_column_name {
+    bytes _buf;
+    bytes::iterator _pos;
+public:
+    void prepare(size_t size) {
+        _buf = bytes(bytes::initialized_later(), size);
+        _pos = _buf.begin();
+    }
+
+    template<typename... Args>
+    void write(Args&&... args) {
+        auto write_one = [this] (bytes_view data) {
+            _pos = std::copy(data.begin(), data.end(), _pos);
+        };
+        auto ignore = { (write_one(bytes_view(args)), 0)... };
+        (void)ignore;
+    }
+
+    bytes&& release() && {
+        return std::move(_buf);
+    }
+};
+
+class file_writer_for_column_name {
+    file_writer& _fw;
+public:
+    file_writer_for_column_name(file_writer& fw) : _fw(fw) { }
+
+    void prepare(uint16_t size) {
+        sstables::write(_fw, size);
+    }
+
+    template<typename... Args>
+    void write(Args&&... args) {
+        sstables::write(_fw, std::forward<Args>(args)...);
+    }
+};
+
+template<typename Writer>
+static void write_compound_non_dense_column_name(Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    // was defined in the schema, for example.
+    auto c = composite::from_exploded(column_names, true, marker);
+    auto ck_bview = bytes_view(clustering_key);
+
+    // The marker is not a component, so if the last component is empty (IOW,
+    // only serializes to the marker), then we just replace the key's last byte
+    // with the marker. If the component however it is not empty, then the
+    // marker should be in the end of it, and we just join them together as we
+    // do for any normal component
+    if (c.size() == 1) {
+        ck_bview.remove_suffix(1);
+    }
+    size_t sz = ck_bview.size() + c.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    out.prepare(uint16_t(sz));
+    out.write(ck_bview, c);
+}
+
+static void write_compound_non_dense_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    auto w = file_writer_for_column_name(out);
+    write_compound_non_dense_column_name(w, clustering_key, column_names, marker);
+}
+
+template<typename Writer>
+static void write_column_name(Writer& out, bytes_view column_names) {
+    size_t sz = column_names.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    out.prepare(uint16_t(sz));
+    out.write(column_names);
+}
+
+static void write_column_name(file_writer& out, bytes_view column_names) {
+    auto w = file_writer_for_column_name(out);
+    write_column_name(w, column_names);
+}
+
+template<typename Writer>
+static void write_column_name(Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    if (s.is_dense()) {
+        write_column_name(out, bytes_view(clustering_element));
+    } else if (s.is_compound()) {
+        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
+    } else {
+        write_column_name(out, column_names[0]);
+    }
+}
+
+void sstable::write_range_tombstone_bound(file_writer& out,
+        const schema& s,
+        const composite& clustering_element,
+        const std::vector<bytes_view>& column_names,
+        composite::eoc marker) {
+    if (!_correctly_serialize_non_compound_range_tombstones) {
+        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
+    } else {
+        write_column_name(out, s, clustering_element, column_names, marker);
+    }
+}
+
 static void output_promoted_index_entry(bytes_ostream& promoted_index,
         const bytes& first_col,
         const bytes& last_col,
@@ -1448,29 +1551,6 @@ static void output_promoted_index_entry(bytes_ostream& promoted_index,
     promoted_index.write(q, 8);
     write_be(q, uint64_t(width));
     promoted_index.write(q, 8);
-}
-
-// FIXME: use this in write_column_name() instead of repeating the code
-static bytes serialize_colname(const composite& clustering_key,
-        const std::vector<bytes_view>& column_names, composite::eoc marker) {
-    auto c = composite::from_exploded(column_names, marker);
-    auto ck_bview = bytes_view(clustering_key);
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    bytes colname(bytes::initialized_later(), sz);
-    std::copy(ck_bview.begin(), ck_bview.end(), colname.begin());
-    std::copy(c.get_bytes().begin(), c.get_bytes().end(), colname.begin() + ck_bview.size());
-    return colname;
 }
 
 // Call maybe_flush_pi_block() before writing the given sstable atom to the
@@ -1490,7 +1570,18 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         const composite& clustering_key,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
-    bytes colname = serialize_colname(clustering_key, column_names, marker);
+    if (!_schema->clustering_key_size()) {
+        return;
+    }
+    bytes_writer_for_column_name w;
+    write_column_name(w, *_schema, clustering_key, column_names, marker);
+    maybe_flush_pi_block(out, clustering_key, std::move(w).release());
+}
+
+// Overload can only be called if the schema has clustering keys.
+void sstable::maybe_flush_pi_block(file_writer& out,
+        const composite& clustering_key,
+        bytes colname) {
     if (_pi_write.block_first_colname.empty()) {
         // This is the first column in the partition, or first column since we
         // closed a promoted-index block. Remember its name and position -
@@ -1515,17 +1606,15 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         // block includes them), but we set block_next_start_offset after - so
         // even if we wrote a lot of open tombstones, we still get a full
         // block size of new data.
-        if (!clustering_key.empty()) {
-            auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
-                    clustering_key_prefix::from_range(clustering_key.values()));
-            for (const auto& rt : rts) {
-                auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
-                auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
-                write_range_tombstone(out,
-                        start, bound_kind_to_start_marker(rt.start_kind),
-                        end, bound_kind_to_end_marker(rt.end_kind),
-                        {}, rt.tomb);
-            }
+        auto& rts = _pi_write.tombstone_accumulator->range_tombstones_for_row(
+                clustering_key_prefix::from_range(clustering_key.values()));
+        for (const auto& rt : rts) {
+            auto start = composite::from_clustering_element(*_pi_write.schemap, rt.start);
+            auto end = composite::from_clustering_element(*_pi_write.schemap, rt.end);
+            write_range_tombstone(out,
+                    start, bound_kind_to_start_marker(rt.start_kind),
+                    end, bound_kind_to_end_marker(rt.end_kind),
+                    {}, rt.tomb);
         }
         _pi_write.block_next_start_offset = out.offset() + _pi_write.desired_block_size;
         _pi_write.block_first_colname = colname;
@@ -1536,37 +1625,6 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         _pi_write.block_last_colname = std::move(colname);
     }
 }
-
-void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker) {
-    // was defined in the schema, for example.
-    auto c = composite::from_exploded(column_names, marker);
-    auto ck_bview = bytes_view(clustering_key);
-
-    // The marker is not a component, so if the last component is empty (IOW,
-    // only serializes to the marker), then we just replace the key's last byte
-    // with the marker. If the component however it is not empty, then the
-    // marker should be in the end of it, and we just join them together as we
-    // do for any normal component
-    if (c.size() == 1) {
-        ck_bview.remove_suffix(1);
-    }
-    size_t sz = ck_bview.size() + c.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    uint16_t sz16 = sz;
-    write(out, sz16, ck_bview, c);
-}
-
-void sstable::write_column_name(file_writer& out, bytes_view column_names) {
-    size_t sz = column_names.size();
-    if (sz > std::numeric_limits<uint16_t>::max()) {
-        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
-    }
-    uint16_t sz16 = sz;
-    write(out, sz16, column_names);
-}
-
 
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
     c_stats.update_min_timestamp(timestamp);
@@ -1653,13 +1711,12 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
     }
 }
 
-void sstable::write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key) {
-    if (marker.is_missing()) {
+void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, const row_marker& marker, const composite& clustering_key) {
+    if (!schema.is_compound() || schema.is_dense() || marker.is_missing()) {
         return;
     }
-
     // Write row mark cell to the beginning of clustered row.
-    write_column_name(out, clustering_key, { bytes_view() });
+    index_and_write_column_name(out, clustering_key, { bytes_view() });
     uint64_t timestamp = marker.timestamp();
     uint32_t value_length = 0;
 
@@ -1695,21 +1752,25 @@ void sstable::write_deletion_time(file_writer& out, const tombstone t) {
     write(out, deletion_time, timestamp);
 }
 
-void sstable::write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t) {
+void sstable::index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker) {
+    maybe_flush_pi_block(out, key, {}, marker);
+    // Remember the range tombstone so when we need to open a new promoted
+    // index block, we can figure out which ranges are still open and need
+    // to be repeated in the data file. Note that apply() also drops ranges
+    // already closed by rt.start, so the accumulator doesn't grow boundless.
+    _pi_write.tombstone_accumulator->apply(std::move(rt));
+}
+
+void sstable::maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row) {
+    auto t = clustered_row.tomb();
     if (!t) {
         return;
     }
-
-    auto write_tombstone = [&] (tombstone t, column_mask mask) {
-        write_column_name(out, key, {}, composite::eoc::start);
-        write(out, mask);
-        write_column_name(out, key, {}, composite::eoc::end);
-        write_deletion_time(out, t);
-    };
-
-    write_tombstone(t.regular(), column_mask::range_tombstone);
+    auto rt = range_tombstone(clustered_row.key(), bound_kind::incl_start, clustered_row.key(), bound_kind::incl_end, t.tomb());
+    index_tombstone(out, key, std::move(rt), composite::eoc::none);
+    write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.regular());
     if (t.is_shadowable()) {
-        write_tombstone(t.shadowable().tomb(), column_mask::shadowable);
+        write_range_tombstone(out, key, composite::eoc::start, key, composite::eoc::end, {}, t.shadowable().tomb(), column_mask::shadowable);
     }
 }
 
@@ -1719,27 +1780,26 @@ void sstable::write_range_tombstone(file_writer& out,
         const composite& end,
         composite::eoc end_marker,
         std::vector<bytes_view> suffix,
-        const tombstone t) {
-    if (!t) {
-        return;
+        const tombstone t,
+        column_mask mask) {
+    if (!_schema->is_compound() && (start_marker == composite::eoc::end || end_marker == composite::eoc::start)) {
+        throw std::logic_error(sprint("Cannot represent marker type in range tombstone for non-compound schemas"));
     }
-
-    write_column_name(out, start, suffix, start_marker);
-    column_mask mask = column_mask::range_tombstone;
+    write_range_tombstone_bound(out, *_schema, start, suffix, start_marker);
     write(out, mask);
-    write_column_name(out, end, suffix, end_marker);
+    write_range_tombstone_bound(out, *_schema, end, suffix, end_marker);
     write_deletion_time(out, t);
 }
 
 void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
-
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
     auto mview = t->deserialize_mutation_form(collection);
     const bytes& column_name = cdef.name();
-    write_range_tombstone(out, clustering_key, clustering_key, { bytes_view(column_name) }, mview.tomb);
+    if (mview.tomb) {
+        write_range_tombstone(out, clustering_key, composite::eoc::start, clustering_key, composite::eoc::end, { column_name }, mview.tomb);
+    }
     for (auto& cp: mview.cells) {
-        maybe_flush_pi_block(out, clustering_key, { column_name, cp.first });
-        write_column_name(out, clustering_key, { column_name, cp.first });
+        index_and_write_column_name(out, clustering_key, { column_name, cp.first });
         write_cell(out, cp.second, cdef);
     }
 }
@@ -1749,24 +1809,8 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
 void sstable::write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
-    if (schema.is_compound() && !schema.is_dense()) {
-        maybe_flush_pi_block(out, clustering_key, { bytes_view() });
-        write_row_marker(out, clustered_row.marker(), clustering_key);
-    }
-    // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
-    if (clustered_row.tomb()) {
-        maybe_flush_pi_block(out, clustering_key, {});
-        write_row_tombstone(out, clustering_key, clustered_row.tomb());
-        // Because we currently may break a partition to promoted-index blocks
-        // in the middle of a clustered row, we also need to track the current
-        // row's tombstone - not just range tombstones - which may effect the
-        // beginning of a new block.
-        // TODO: consider starting a new block only between rows, so the
-        // following code can be dropped:
-        _pi_write.tombstone_accumulator->apply(range_tombstone(
-                clustered_row.key(), bound_kind::incl_start,
-                clustered_row.key(), bound_kind::incl_end, clustered_row.tomb().tomb()));
-    }
+    maybe_write_row_marker(out, schema, clustered_row.marker(), clustering_key);
+    maybe_write_row_tombstone(out, clustering_key, clustered_row);
 
     if (schema.clustering_key_size()) {
         column_name_helper::min_max_components(schema, _collector.min_column_names(), _collector.max_column_names(),
@@ -1784,30 +1828,14 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         }
         assert(column_definition.is_regular());
         atomic_cell_view cell = c.as_atomic_cell();
-        const bytes& column_name = column_definition.name();
-
-        if (schema.is_compound()) {
-            if (schema.is_dense()) {
-                maybe_flush_pi_block(out, composite(), { bytes_view(clustering_key) });
-                write_column_name(out, bytes_view(clustering_key));
-            } else {
-                maybe_flush_pi_block(out, clustering_key, { bytes_view(column_name) });
-                write_column_name(out, clustering_key, { bytes_view(column_name) });
-            }
-        } else {
-            if (schema.is_dense()) {
-                maybe_flush_pi_block(out, composite(), { bytes_view(clustered_row.key().get_component(schema, 0)) });
-                write_column_name(out, bytes_view(clustered_row.key().get_component(schema, 0)));
-            } else {
-                maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
-                write_column_name(out, bytes_view(column_name));
-            }
-        }
+        std::vector<bytes_view> column_name = { column_definition.name() };
+        index_and_write_column_name(out, clustering_key, column_name);
         write_cell(out, cell, column_definition);
     });
 }
 
 void sstable::write_static_row(file_writer& out, const schema& schema, const row& static_row) {
+    assert(schema.is_compound());
     static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
         auto&& column_definition = schema.static_column_at(id);
         if (!column_definition.is_atomic()) {
@@ -1817,18 +1845,26 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         }
         assert(column_definition.is_static());
         const auto& column_name = column_definition.name();
-        if (schema.is_compound()) {
-            auto sp = composite::static_prefix(schema);
-            maybe_flush_pi_block(out, sp, { bytes_view(column_name) });
-            write_column_name(out, sp, { bytes_view(column_name) });
-        } else {
-            assert(!schema.is_dense());
-            maybe_flush_pi_block(out, composite(), { bytes_view(column_name) });
-            write_column_name(out, bytes_view(column_name));
-        }
+        auto sp = composite::static_prefix(schema);
+        index_and_write_column_name(out, sp, { bytes_view(column_name) });
         atomic_cell_view cell = c.as_atomic_cell();
         write_cell(out, cell, column_definition);
     });
+}
+
+void sstable::index_and_write_column_name(file_writer& out,
+         const composite& clustering_element,
+         const std::vector<bytes_view>& column_names,
+         composite::eoc marker) {
+    if (_schema->clustering_key_size()) {
+        bytes_writer_for_column_name w;
+        write_column_name(w, *_schema, clustering_element, column_names, marker);
+        auto&& colname = std::move(w).release();
+        maybe_flush_pi_block(out, clustering_element, colname);
+        write_column_name(out, colname);
+    } else {
+        write_column_name(out, *_schema, clustering_element, column_names, marker);
+    }
 }
 
 static void write_index_header(file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
@@ -2026,6 +2062,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
+    _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -2100,17 +2137,13 @@ stop_iteration components_writer::consume(clustering_row&& cr) {
 
 stop_iteration components_writer::consume(range_tombstone&& rt) {
     ensure_tombstone_is_written();
-    // Remember the range tombstone so when we need to open a new promoted
-    // index block, we can figure out which ranges are still open and need
-    // to be repeated in the data file. Note that apply() also drops ranges
-    // already closed by rt.start, so the accumulator doesn't grow boundless.
-    _sst._pi_write.tombstone_accumulator->apply(rt);
-    auto start = composite::from_clustering_element(_schema, std::move(rt.start));
+    auto start = composite::from_clustering_element(_schema, rt.start);
     auto start_marker = bound_kind_to_start_marker(rt.start_kind);
-    auto end = composite::from_clustering_element(_schema, std::move(rt.end));
+    auto end = composite::from_clustering_element(_schema, rt.end);
     auto end_marker = bound_kind_to_end_marker(rt.end_kind);
-    _sst.maybe_flush_pi_block(_out, start, {}, start_marker);
-    _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, rt.tomb);
+    auto tomb = rt.tomb;
+    _sst.index_tombstone(_out, start, std::move(rt), start_marker);
+    _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, tomb);
     return stop_iteration::no;
 }
 
@@ -2189,12 +2222,13 @@ sstable::read_scylla_metadata(const io_priority_class& pc) {
 }
 
 void
-sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard) {
+sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
@@ -2247,6 +2281,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
     , _monitor(cfg.monitor)
+    , _correctly_serialize_non_compound_range_tombstones(cfg.correctly_serialize_non_compound_range_tombstones)
 {
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
@@ -2254,6 +2289,10 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
     prepare_file_writer();
     _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
+}
+
+static sstable_enabled_features all_features() {
+    return sstable_enabled_features{(1 << sstable_feature::End) - 1};
 }
 
 void sstable_writer::consume_end_of_stream()
@@ -2265,7 +2304,11 @@ void sstable_writer::consume_end_of_stream()
     _sst.write_filter(_pc);
     _sst.write_statistics(_pc);
     _sst.write_compression(_pc);
-    _sst.write_scylla_metadata(_pc, _shard);
+    auto features = all_features();
+    if (!_correctly_serialize_non_compound_range_tombstones) {
+        features.disable(sstable_feature::NonCompoundRangeTombstones);
+    }
+    _sst.write_scylla_metadata(_pc, _shard, std::move(features));
 
     _monitor->on_write_completed();
 
@@ -2356,7 +2399,8 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 auto stream = make_file_input_stream(index_file, 0, index_size, std::move(options));
                 return do_with(summary_generator(_components->summary, data_size),
                         [this, &pc, stream = std::move(stream), index_size] (summary_generator& s) mutable {
-                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), 0, index_size);
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
+                            s, trust_promoted_index::yes, std::move(stream), 0, index_size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
@@ -3018,6 +3062,9 @@ mutation_source sstable::as_mutation_source() {
     });
 }
 
+bool supports_correct_non_compound_range_tombstones() {
+    return service::get_local_storage_service().cluster_supports_reading_correctly_serialized_range_tombstones();
+}
 
 }
 

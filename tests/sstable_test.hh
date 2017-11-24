@@ -30,6 +30,7 @@
 #include "schema_builder.hh"
 #include "core/thread.hh"
 #include "sstables/index_reader.hh"
+#include "tests/test_services.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -621,12 +622,12 @@ public:
     }
 
     static future<> do_with_test_directory(std::function<future<> ()>&& fut, sstring p = path()) {
-        return test_setup::create_empty_test_dir(p).then([fut = std::move(fut), p] () mutable {
-            return fut();
-        }).finally([p] {
-            return test_setup::empty_test_dir(p).then([p] {
-                return engine().remove_file(p);
-            });
+        return seastar::async([p, fut = std::move(fut)] {
+            storage_service_for_tests ssft;
+            test_setup::create_empty_test_dir(p).get();
+            fut().get();
+            test_setup::empty_test_dir(p).get();
+            engine().remove_file(p).get();
         });
     }
 };

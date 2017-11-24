@@ -445,17 +445,16 @@ public:
         return _is_compound;
     }
 
-    // The following factory functions assume this composite is a compound value.
     template <typename ClusteringElement>
     static composite from_clustering_element(const schema& s, const ClusteringElement& ce) {
-        return serialize_value(ce.components(s));
+        return serialize_value(ce.components(s), s.is_compound());
     }
 
-    static composite from_exploded(const std::vector<bytes_view>& v, eoc marker = eoc::none) {
+    static composite from_exploded(const std::vector<bytes_view>& v, bool is_compound, eoc marker = eoc::none) {
         if (v.size() == 0) {
-            return composite(bytes(size_t(1), bytes::value_type(marker)));
+            return composite(bytes(size_t(1), bytes::value_type(marker)), is_compound);
         }
-        return serialize_value(v, true, marker);
+        return serialize_value(v, is_compound, marker);
     }
 
     static composite static_prefix(const schema& s) {

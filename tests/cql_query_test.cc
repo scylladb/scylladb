@@ -753,6 +753,40 @@ SEASTAR_TEST_CASE(test_range_deletion_scenarios) {
     });
 }
 
+SEASTAR_TEST_CASE(test_range_deletion_scenarios_with_compact_storage) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, v text, primary key (p, c)) with compact storage;").get();
+        for (auto i = 0; i < 10; ++i) {
+            e.execute_cql(sprint("insert into cf (p, c, v) values (1, %d, 'abc');", i)).get();
+        }
+
+        try {
+            e.execute_cql("delete from cf where p = 1 and c <= 3").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+        try {
+            e.execute_cql("delete from cf where p = 1 and c >= 0").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+        try {
+            e.execute_cql("delete from cf where p = 1 and c > 0 and c <= 3").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+        try {
+            e.execute_cql("delete from cf where p = 1 and c >= 0 and c < 3").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+        try {
+            e.execute_cql("delete from cf where p = 1 and c > 0 and c < 3").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+        try {
+            e.execute_cql("delete from cf where p = 1 and c >= 0 and c <= 3").get();
+            BOOST_FAIL("should've thrown");
+        } catch (...) { }
+    });
+}
+
 SEASTAR_TEST_CASE(test_map_insert_update) {
     return do_with_cql_env([] (auto& e) {
         auto make_my_map_type = [] { return map_type_impl::get_instance(int32_type, int32_type, true); };
