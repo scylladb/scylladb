@@ -52,6 +52,11 @@ GCC6_CONCEPT(
             obj.consume_end_of_partition();
         };
     }
+
+    template<typename T>
+    concept bool PartitionFilter = requires(T filter, const dht::decorated_key& dk) {
+        { filter(dk) } -> bool;
+    };
 )
 
 /*
@@ -146,6 +151,79 @@ public:
             });
         }
 
+        template<typename Consumer, typename Filter>
+        GCC6_CONCEPT(
+            requires FlatMutationReaderConsumer<Consumer>() && PartitionFilter<Filter>
+        )
+        // A variant of consume_pausable() that expects to be run in
+        // a seastar::thread.
+        // Partitions for which filter(decorated_key) returns false are skipped
+        // entirely and never reach the consumer.
+        void consume_pausable_in_thread(Consumer consumer, Filter filter) {
+            while (true) {
+                if (is_buffer_empty()) {
+                    if (is_end_of_stream()) {
+                        return;
+                    }
+                    fill_buffer().get();
+                    continue;
+                }
+                auto mf = pop_mutation_fragment();
+                if (mf.is_partition_start() && !filter(mf.as_partition_start().key())) {
+                    next_partition();
+                    continue;
+                }
+                if (consumer(std::move(mf)) == stop_iteration::yes) {
+                    return;
+                }
+            }
+        };
+
+    private:
+        template<typename Consumer>
+        struct consumer_adapter {
+            flat_mutation_reader::impl& _reader;
+            stdx::optional<dht::decorated_key> _decorated_key;
+            Consumer _consumer;
+            consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
+                    : _reader(reader)
+                      , _consumer(std::move(c))
+            { }
+            stop_iteration operator()(mutation_fragment&& mf) {
+                return std::move(mf).consume(*this);
+            }
+            stop_iteration consume(static_row&& sr) {
+                return handle_result(_consumer.consume(std::move(sr)));
+            }
+            stop_iteration consume(clustering_row&& cr) {
+                return handle_result(_consumer.consume(std::move(cr)));
+            }
+            stop_iteration consume(range_tombstone&& rt) {
+                return handle_result(_consumer.consume(std::move(rt)));
+            }
+            stop_iteration consume(partition_start&& ps) {
+                _decorated_key.emplace(std::move(ps.key()));
+                _consumer.consume_new_partition(*_decorated_key);
+                if (ps.partition_tombstone()) {
+                    _consumer.consume(ps.partition_tombstone());
+                }
+                return stop_iteration::no;
+            }
+            stop_iteration consume(partition_end&& pe) {
+                return _consumer.consume_end_of_partition();
+            }
+        private:
+            stop_iteration handle_result(stop_iteration si) {
+                if (si) {
+                    if (_consumer.consume_end_of_partition()) {
+                        return stop_iteration::yes;
+                    }
+                    _reader.next_partition();
+                }
+                return stop_iteration::no;
+            }
+        };
+    public:
         template<typename Consumer>
         GCC6_CONCEPT(
             requires FlattenedConsumer<Consumer>()
@@ -163,54 +241,25 @@ public:
         //
         // This method returns whatever is returned from Consumer::consume_end_of_stream().S
         auto consume(Consumer consumer) {
-            struct consumer_adapter {
-                flat_mutation_reader::impl& _reader;
-                stdx::optional<dht::decorated_key> _decorated_key;
-                Consumer _consumer;
-                consumer_adapter(flat_mutation_reader::impl& reader, Consumer c)
-                    : _reader(reader)
-                    , _consumer(std::move(c))
-                { }
-                stop_iteration operator()(mutation_fragment&& mf) {
-                    return std::move(mf).consume(*this);
-                }
-                stop_iteration consume(static_row&& sr) {
-                    return handle_result(_consumer.consume(std::move(sr)));
-                }
-                stop_iteration consume(clustering_row&& cr) {
-                    return handle_result(_consumer.consume(std::move(cr)));
-                }
-                stop_iteration consume(range_tombstone&& rt) {
-                    return handle_result(_consumer.consume(std::move(rt)));
-                }
-                stop_iteration consume(partition_start&& ps) {
-                    _decorated_key.emplace(std::move(ps.key()));
-                    _consumer.consume_new_partition(*_decorated_key);
-                    if (ps.partition_tombstone()) {
-                        _consumer.consume(ps.partition_tombstone());
-                    }
-                    return stop_iteration::no;
-                }
-                stop_iteration consume(partition_end&& pe) {
-                    return _consumer.consume_end_of_partition();
-                }
-            private:
-                stop_iteration handle_result(stop_iteration si) {
-                    if (si) {
-                        if (_consumer.consume_end_of_partition()) {
-                            return stop_iteration::yes;
-                        }
-                        _reader.next_partition();
-                    }
-                    return stop_iteration::no;
-                }
-            };
-            return do_with(consumer_adapter(*this, std::move(consumer)), [this] (consumer_adapter& adapter) {
+            return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this] (consumer_adapter<Consumer>& adapter) {
                 return consume_pausable(std::ref(adapter)).then([this, &adapter] {
                     return adapter._consumer.consume_end_of_stream();
                 });
             });
         }
+
+        template<typename Consumer, typename Filter>
+        GCC6_CONCEPT(
+            requires FlattenedConsumer<Consumer>() && PartitionFilter<Filter>
+        )
+        // A variant of consumee() that expects to be run in a seastar::thread.
+        // Partitions for which filter(decorated_key) returns false are skipped
+        // entirely and never reach the consumer.
+        auto consume_in_thread(Consumer consumer, Filter filter) {
+            auto adapter = consumer_adapter<Consumer>(*this, std::move(consumer));
+            consume_pausable_in_thread(std::ref(adapter), std::move(filter));
+            return adapter._consumer.consume_end_of_stream();
+        };
 
         /*
          * fast_forward_to is forbidden on flat_mutation_reader created for a single partition.
@@ -250,6 +299,22 @@ public:
             });
         }
         return _impl->consume(std::move(consumer));
+    }
+
+    template<typename Consumer, typename Filter>
+    GCC6_CONCEPT(
+        requires FlattenedConsumer<Consumer>() && PartitionFilter<Filter>
+    )
+    auto consume_in_thread(Consumer consumer, Filter filter) {
+        return _impl->consume_in_thread(std::move(consumer), std::move(filter));
+    }
+
+    template<typename Consumer>
+    GCC6_CONCEPT(
+        requires FlattenedConsumer<Consumer>()
+    )
+    auto consume_in_thread(Consumer consumer) {
+        return consume_in_thread(std::move(consumer), [] (const dht::decorated_key&) { return true; });
     }
 
     void next_partition() { _impl->next_partition(); }

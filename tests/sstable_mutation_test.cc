@@ -379,7 +379,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
             mt->apply(m);
         }
 
-        sst->write_components(mt->make_reader(s), partitions.size(), s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), partitions.size(), s, cfg).get();
         sst->load().get();
 
         return as_mutation_source(sst);
@@ -845,7 +845,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
         assert_that(sst->get_index_reader(default_priority_class())).has_monotonic_positions(*s);
     });
