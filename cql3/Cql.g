@@ -67,6 +67,7 @@ options {
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
+#include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -85,6 +86,7 @@ options {
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
 #include "cql3/role_name.hh"
+#include "cql3/role_options.hh"
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
@@ -354,6 +356,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st36=grantRoleStatement          { $stmt = st36; }
     | st37=revokeRoleStatement         { $stmt = st37; }
     | st38=dropRoleStatement           { $stmt = st38; }
+    | st39=createRoleStatement         { $stmt = st39; }
     ;
 
 /*
@@ -1103,6 +1106,23 @@ userOption[::shared_ptr<cql3::user_options> opts]
     ;
 
 /**
+ * CREATE ROLE [IF NOT EXISTS] <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ */
+createRoleStatement returns [::shared_ptr<create_role_statement> stmt]
+    @init {
+        cql3::role_options opts;
+        opts.is_superuser = false;
+        opts.can_login = false;
+        bool if_not_exists = false;
+    }
+    : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
+      (K_WITH roleAuthenticationOptions[opts])?
+      (K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; })?
+      (K_LOGIN { opts.can_login = true; } | K_NOLOGIN { opts.can_login = false; })?
+      { $stmt = ::make_shared<create_role_statement>(name, std::move(opts), if_not_exists); }
+    ;
+
+/**
  * DROP ROLE [IF EXISTS] <rolename>
  */
 dropRoleStatement returns [::shared_ptr<drop_role_statement> stmt]
@@ -1125,6 +1145,15 @@ listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
         (K_OF g=userOrRoleName { grantee = std::move(g); })?
         (K_NORECURSIVE { recursive = false; })?
         { $stmt = ::make_shared<list_roles_statement>(grantee, recursive); }
+    ;
+
+roleAuthenticationOptions[cql3::role_options& opts]
+    : roleAuthenticationOption[opts] (K_AND roleAuthenticationOption[opts])*
+    ;
+
+roleAuthenticationOption[cql3::role_options& opts]
+    : K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; }
+    | K_OPTIONS m=mapLiteral { opts.options = convert_property_map(m); }
     ;
 
 /** DEFINITIONS **/
@@ -1579,6 +1608,9 @@ basic_unreserved_keyword returns [sstring str]
         | K_ROLES
         | K_SUPERUSER
         | K_NOSUPERUSER
+        | K_LOGIN
+        | K_NOLOGIN
+        | K_OPTIONS
         | K_PASSWORD
         | K_EXISTS
         | K_CUSTOM
@@ -1679,6 +1711,9 @@ K_ROLES:       R O L E S;
 K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
 K_PASSWORD:    P A S S W O R D;
+K_LOGIN:       L O G I N;
+K_NOLOGIN:     N O L O G I N;
+K_OPTIONS:     O P T I O N S;
 
 K_CLUSTERING:  C L U S T E R I N G;
 K_ASCII:       A S C I I;

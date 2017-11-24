@@ -45,6 +45,7 @@
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
@@ -60,6 +61,48 @@ namespace statements {
 
 static future<::shared_ptr<cql_transport::messages::result_message>> void_result_message() {
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(nullptr);
+}
+
+//
+// `create_role_statement`
+//
+
+future<> create_role_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
+
+    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
+        if (!super) {
+            throw exceptions::unauthorized_exception("Only superusers are allowed to perform CREATE ROLE queries.");
+        }
+    });
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+create_role_statement::execute(distributed<service::storage_proxy>&,
+                               service::query_state& state,
+                               const query_options&) {
+    unimplemented::warn(unimplemented::cause::ROLES);
+
+    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
+
+    auth::role_config config;
+    config.is_superuser = *_options.is_superuser;
+    config.can_login = *_options.can_login;
+
+    return do_with(std::move(config), [this, &state](const auth::role_config& config) {
+        auto& cs = state.get_client_state();
+        auto& as = *cs.get_auth_service();
+
+        return as.underlying_role_manager().create(*cs.user(), _role, config).then([] {
+            return void_result_message();
+        }).handle_exception_type([this](const auth::role_already_exists& e) {
+            if (!_if_not_exists) {
+                throw exceptions::invalid_request_exception(e.what());
+            }
+
+            return void_result_message();
+        });
+    });
 }
 
 //
