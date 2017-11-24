@@ -874,6 +874,38 @@ SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
+    auto do_test = [](auto&& gen) {
+        failure_injecting_allocation_strategy alloc(standard_allocator());
+        with_allocator(alloc, [&] {
+            auto target = gen();
+            auto second = gen();
+
+            auto expected = target + second;
+
+            size_t fail_offset = 0;
+            while (true) {
+                mutation m = target;
+                mutation_partition m2 = second.partition();
+                alloc.fail_after(fail_offset++);
+                try {
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
+                    alloc.stop_failing();
+                    break;
+                } catch (const std::bad_alloc&) {
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
+                }
+                assert_that(m).is_equal_to(expected)
+                    .has_same_continuity(expected);
+            }
+        });
+    };
+
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
