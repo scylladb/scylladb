@@ -194,6 +194,9 @@ private:
     //
     template<typename Func, typename Rollback>
     void for_each_cell(Func&&, Rollback&&);
+
+    template<typename Func>
+    void consume_with(Func&&);
 public:
     // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
     // noexcept if Func doesn't throw.

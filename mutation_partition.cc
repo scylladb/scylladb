@@ -1108,6 +1108,28 @@ void row::for_each_cell(Func&& func, Rollback&& rollback) {
     }
 }
 
+template<typename Func>
+void row::consume_with(Func&& func) {
+    if (_type == storage_type::vector) {
+        unsigned i = 0;
+        for (; i < _storage.vector.v.size(); i++) {
+            if (_storage.vector.present.test(i)) {
+                func(i, _storage.vector.v[i]);
+                _storage.vector.present.reset(i);
+                --_size;
+            }
+        }
+    } else {
+        auto del = current_deleter<cell_entry>();
+        auto i = _storage.set.begin();
+        while (i != _storage.set.end()) {
+            func(i->id(), i->cell());
+            i = _storage.set.erase_and_dispose(i, del);
+            --_size;
+        }
+    }
+}
+
 void
 row::apply_reversibly(const column_definition& column, atomic_cell_or_collection& value) {
     static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
