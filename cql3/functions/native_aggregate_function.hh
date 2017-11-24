@@ -64,23 +64,5 @@ public:
     }
 };
 
-template <class Aggregate>
-class native_aggregate_function_using : public native_aggregate_function {
-public:
-    native_aggregate_function_using(sstring name, data_type type)
-            : native_aggregate_function(std::move(name), type, {}) {
-    }
-    virtual std::unique_ptr<aggregate> new_aggregate() override {
-        return std::make_unique<Aggregate>();
-    }
-};
-
-template <class Aggregate>
-shared_ptr<native_aggregate_function>
-make_native_aggregate_function_using(sstring name, data_type type) {
-    return ::make_shared<native_aggregate_function_using<Aggregate>>(name, type);
-}
-
-
 }
 }

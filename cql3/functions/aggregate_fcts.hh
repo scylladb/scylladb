@@ -67,6 +67,19 @@ public:
     }
 };
 
+static const sstring COUNT_ROWS_FUNCTION_NAME = "countRows";
+
+class count_rows_function final : public native_aggregate_function {
+public:
+    count_rows_function() : native_aggregate_function(COUNT_ROWS_FUNCTION_NAME, long_type, {}) {}
+    virtual std::unique_ptr<aggregate> new_aggregate() override {
+        return std::make_unique<impl_count_function>();
+    }
+    virtual sstring column_name(const std::vector<sstring>& column_names) override {
+        return "count";
+    }
+};
+
     /**
      * The function used to count the number of rows of a result set. This function is called when COUNT(*) or COUNT(1)
      * is specified.
@@ -74,7 +87,7 @@ public:
 inline
 shared_ptr<aggregate_function>
 make_count_rows_function() {
-    return make_native_aggregate_function_using<impl_count_function>("countRows", long_type);
+    return make_shared<count_rows_function>();
 }
 
 template <typename Type>

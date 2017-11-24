@@ -196,13 +196,12 @@ SEASTAR_TEST_CASE(test_aggregate_count) {
             auto msg = e.execute_cql("SELECT count(c) FROM test").get0();
             assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(2))}});
         }
-        // FIXME: Scylla doesn't support more occurences of count() function in select statement
-        //        if count(*) is used, see issue #2218:
-        //   SELELCT count(*), count(a) ...
-        // auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(*) FROM test").get0();
-        // assert_that(msg).is_rows().with_size(2).with_row({{long_type->decompose(int64_t(3))},
-        //                                                  {long_type->decompose(int64_t(1))},
-        //                                                  {long_type->decompose(int64_t(2))},
-        //                                                  {long_type->decompose(int64_t(3))}});
+        {
+            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(*) FROM test").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))},
+                                                              {long_type->decompose(int64_t(1))},
+                                                              {long_type->decompose(int64_t(2))},
+                                                              {long_type->decompose(int64_t(3))}});
+        }
     });
 }

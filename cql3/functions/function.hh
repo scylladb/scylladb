@@ -81,6 +81,15 @@ public:
     virtual void print(std::ostream& os) const = 0;
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual bool has_reference_to(function& f) = 0;
+
+    /**
+     * Returns the name of the function to use within a ResultSet.
+     *
+     * @param column_names the names of the columns used to call the function
+     * @return the name of the function to use within a ResultSet
+     */
+    virtual sstring column_name(const std::vector<sstring>& column_names) = 0;
+
     friend class function_call;
     friend std::ostream& operator<<(std::ostream& os, const function& f);
 };

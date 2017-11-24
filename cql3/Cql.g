@@ -369,7 +369,6 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
     }
     : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
                  sclause=selectClause
-               | sclause=selectCountClause
                )
       K_FROM cf=columnFamilyName
       ( K_WHERE wclause=whereClause )?
@@ -396,6 +395,7 @@ selector returns [shared_ptr<raw_selector> s]
 unaliasedSelector returns [shared_ptr<selectable::raw> s]
     @init { shared_ptr<selectable::raw> tmp; }
     :  ( c=cident                                  { tmp = c; }
+       | K_COUNT '(' countArgument ')'             { tmp = selectable::with_function::raw::make_count_rows_function(); }
        | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
@@ -410,16 +410,6 @@ selectionFunctionArgs returns [std::vector<shared_ptr<selectable::raw>> a]
     | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
           ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
       ')'
-    ;
-
-selectCountClause returns [std::vector<shared_ptr<raw_selector>> expr]
-    @init{ auto alias = make_shared<cql3::column_identifier>("count", false); }
-    : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? {
-        auto&& with_fn = ::make_shared<cql3::selection::selectable::with_function::raw>(
-     	    cql3::functions::function_name::native_function("countRows"),
-     	        std::vector<shared_ptr<cql3::selection::selectable::raw>>()); 
-     	$expr.push_back(make_shared<cql3::selection::raw_selector>(with_fn, alias));
-     }
     ;
 
 countArgument

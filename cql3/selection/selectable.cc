@@ -26,6 +26,7 @@
 #include "selector_factories.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/castas_fcts.hh"
+#include "cql3/functions/aggregate_fcts.hh"
 #include "abstract_function_selector.hh"
 #include "writetime_or_ttl_selector.hh"
 
@@ -102,6 +103,13 @@ selectable::with_function::raw::prepare(schema_ptr s) {
 bool
 selectable::with_function::raw::processes_selection() const {
     return true;
+}
+
+shared_ptr<selectable::with_function::raw>
+selectable::with_function::raw::make_count_rows_function() {
+    return ::make_shared<cql3::selection::selectable::with_function::raw>(
+            cql3::functions::function_name::native_function(cql3::functions::aggregate_fcts::COUNT_ROWS_FUNCTION_NAME),
+                    std::vector<shared_ptr<cql3::selection::selectable::raw>>());
 }
 
 shared_ptr<selector::factory>

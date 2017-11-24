@@ -110,8 +110,10 @@ public:
         }
         virtual shared_ptr<selectable> prepare(schema_ptr s) override;
         virtual bool processes_selection() const override;
+        static ::shared_ptr<selectable::with_function::raw> make_count_rows_function();
     };
 };
+
 
 class selectable::with_cast : public selectable {
     ::shared_ptr<selectable> _arg;

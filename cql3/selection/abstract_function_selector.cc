@@ -69,7 +69,7 @@ abstract_function_selector::new_factory(shared_ptr<functions::function> fun, sha
         }
 
         virtual sstring column_name() override {
-            return sprint("%s(%s)", _fun->name(), join(", ", _factories->get_column_names()));
+            return _fun->column_name(_factories->get_column_names());
         }
 
         virtual data_type get_return_type() override {
