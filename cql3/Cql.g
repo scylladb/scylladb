@@ -65,6 +65,7 @@ options {
 #include "cql3/statements/list_permissions_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
+#include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -350,6 +351,7 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st34=dropViewStatement           { $stmt = st34; }
     | st35=listRolesStatement          { $stmt = st35; }
     | st36=grantRoleStatement          { $stmt = st36; }
+    | st37=revokeRoleStatement         { $stmt = st37; }
     ;
 
 /*
@@ -1001,6 +1003,14 @@ revokeStatement returns [::shared_ptr<revoke_statement> stmt]
 grantRoleStatement returns [::shared_ptr<grant_role_statement> stmt]
     : K_GRANT role=userOrRoleName K_TO grantee=userOrRoleName
       { $stmt = ::make_shared<grant_role_statement>(std::move(role), std::move(grantee));  }
+    ;
+
+/**
+ * REVOKE <rolename> FROM <revokee>
+ */
+revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
+    : K_REVOKE role=userOrRoleName K_FROM revokee=userOrRoleName
+      { $stmt = ::make_shared<revoke_role_statement>(std::move(role), std::move(revokee)); }
     ;
 
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]

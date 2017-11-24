@@ -47,6 +47,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/list_roles_statement.hh"
+#include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/request_validations.hh"
 #include "exceptions/exceptions.hh"
 #include "transport/messages/result_message.hh"
@@ -184,6 +185,40 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
     auto& as = *cs.get_auth_service();
 
     return as.underlying_role_manager().grant(*cs.user(), _grantee, _role).then([] {
+        return void_result_message();
+    }).handle_exception_type([](const auth::roles_argument_exception& e) {
+        throw exceptions::invalid_request_exception(e.what());
+        return void_result_message();
+    });
+}
+
+//
+// `revoke_role_statement`
+//
+
+future<> revoke_role_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
+
+    return async([this, &state] {
+        const auto& as = *state.get_auth_service();
+
+        if (!auth::is_super_user(as, *state.user()).get0()) {
+            throw exceptions::unauthorized_exception("Only superusers are allowed to REVOKE roles.");
+        }
+    });
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>>
+revoke_role_statement::execute(
+        distributed<service::storage_proxy>&,
+        service::query_state& state,
+        const query_options&) {
+    unimplemented::warn(unimplemented::cause::ROLES);
+
+    auto& cs = state.get_client_state();
+    auto& rm = cs.get_auth_service()->underlying_role_manager();
+
+    return rm.revoke(*cs.user(), _revokee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
