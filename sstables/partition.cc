@@ -97,6 +97,9 @@ private:
     // _range_tombstones holds only tombstones which are relevant for current ranges.
     range_tombstone_stream _range_tombstones;
     bool _first_row_encountered = false;
+
+    // See #2986
+    bool _treat_non_compound_rt_as_compound;
 public:
     void set_streamed_mutation(sstable_streamed_mutation* sm) {
         _sm = sm;
@@ -306,18 +309,21 @@ public:
     mp_row_consumer(const schema_ptr schema,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
+                    streamed_mutation::forwarding fwd,
+                    const shared_sstable& sst)
             : _schema(schema)
             , _pc(pc)
             , _slice(slice)
             , _fwd(fwd)
             , _range_tombstones(*_schema)
+            , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
     mp_row_consumer(const schema_ptr schema,
                     const io_priority_class& pc,
-                    streamed_mutation::forwarding fwd)
-            : mp_row_consumer(schema, query::full_slice, pc, fwd) { }
+                    streamed_mutation::forwarding fwd,
+                    const shared_sstable& sst)
+            : mp_row_consumer(schema, query::full_slice, pc, fwd, sst) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -621,7 +627,8 @@ public:
             return proceed::yes;
         }
 
-        auto start = composite_view(column::fix_static_name(*_schema, start_col)).explode();
+        auto compound = _schema->is_compound() || _treat_non_compound_rt_as_compound;
+        auto start = composite_view(column::fix_static_name(*_schema, start_col), compound).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
         // do not have extra data.
@@ -630,9 +637,9 @@ public:
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
             auto start_ck = clustering_key_prefix::from_exploded_view(start);
-            auto start_kind = start_marker_to_bound_kind(start_col);
-            auto end = clustering_key_prefix::from_exploded_view(composite_view(column::fix_static_name(*_schema, end_col)).explode());
-            auto end_kind = end_marker_to_bound_kind(end_col);
+            auto start_kind = compound ? start_marker_to_bound_kind(start_col) : bound_kind::incl_start;
+            auto end = clustering_key_prefix::from_exploded_view(composite_view(column::fix_static_name(*_schema, end_col), compound).explode());
+            auto end_kind = compound ? end_marker_to_bound_kind(end_col) : bound_kind::incl_end;
             if (range_tombstone::is_single_clustering_row_tombstone(*_schema, start_ck, start_kind, end, end_kind)) {
                 auto ret = flush_if_needed(std::move(start_ck));
                 if (!_skip_in_progress) {
@@ -1050,7 +1057,7 @@ public:
          const io_priority_class &pc,
          streamed_mutation::forwarding fwd)
         : _get_data_source([this, sst = std::move(sst), s = std::move(schema), toread, last_end, &pc, fwd] {
-            auto consumer = mp_row_consumer(s, query::full_slice, pc, fwd);
+            auto consumer = mp_row_consumer(s, query::full_slice, pc, fwd, sst);
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), std::move(toread), last_end);
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
@@ -1058,7 +1065,7 @@ public:
          const io_priority_class &pc,
          streamed_mutation::forwarding fwd)
         : _get_data_source([this, sst = std::move(sst), s = std::move(schema), &pc, fwd] {
-            auto consumer = mp_row_consumer(s, query::full_slice, pc, fwd);
+            auto consumer = mp_row_consumer(s, query::full_slice, pc, fwd, sst);
             auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer));
             return make_ready_future<lw_shared_ptr<sstable_data_source>>(std::move(ds));
         }) { }
@@ -1076,7 +1083,7 @@ public:
             return f.then([this, lh_index = std::move(lh_index), rh_index = std::move(rh_index), sst = std::move(sst), s = std::move(s), &pc, &slice, fwd, fwd_mr] () mutable {
                 sstable::disk_read_range drr{lh_index->data_file_position(),
                                              rh_index->data_file_position()};
-                auto consumer = mp_row_consumer(s, slice, pc, fwd);
+                auto consumer = mp_row_consumer(s, slice, pc, fwd, sst);
                 auto ds = make_lw_shared<sstable_data_source>(std::move(s), std::move(sst), std::move(consumer), drr, (fwd_mr ? sst->data_size() : drr.end), std::move(lh_index), std::move(rh_index));
                 ds->_index_in_current_partition = true;
                 ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);
@@ -1271,7 +1278,7 @@ sstables::sstable::read_row(schema_ptr schema,
         auto rh_index = std::make_unique<index_reader>(*lh_index);
         auto f = advance_to_upper_bound(*rh_index, *_schema, slice, key);
         return f.then([this, &slice, &pc, fwd, lh_index = std::move(lh_index), rh_index = std::move(rh_index), s = std::move(s)] () mutable {
-            auto consumer = mp_row_consumer(s, slice, pc, fwd);
+            auto consumer = mp_row_consumer(s, slice, pc, fwd, shared_from_this());
             auto ds = make_lw_shared<sstable_data_source>(sstable_data_source::single_partition_tag(), std::move(s),
                 shared_from_this(), std::move(consumer), std::move(lh_index), std::move(rh_index));
             ds->_will_likely_slice = sstable_data_source::will_likely_slice(slice);

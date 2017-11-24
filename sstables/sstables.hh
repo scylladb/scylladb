@@ -130,6 +130,8 @@ struct sstable_open_info;
 
 class index_reader;
 
+bool supports_correct_non_compound_range_tombstones();
+
 struct sstable_writer_config {
     std::experimental::optional<size_t> promoted_index_block_size;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
@@ -137,6 +139,7 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     stdx::optional<db::replay_position> replay_position;
     seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
+    bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
 };
 
 class sstable : public enable_lw_shared_from_this<sstable> {
@@ -479,6 +482,10 @@ private:
     lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
     lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
 
+    //FIXME: Set by sstable_writer to influence sstable writing behavior.
+    //       Remove when doing #3012
+    bool _correctly_serialize_non_compound_range_tombstones;
+
     // _pi_write is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
     struct {
@@ -500,6 +507,10 @@ private:
             const composite& clustering_key,
             const std::vector<bytes_view>& column_names,
             composite::eoc marker = composite::eoc::none);
+
+    void maybe_flush_pi_block(file_writer& out,
+            const composite& clustering_key,
+            bytes colname);
 
     schema_ptr _schema;
     sstring _dir;
@@ -534,7 +545,7 @@ private:
     void write_compression(const io_priority_class& pc);
 
     future<> read_scylla_metadata(const io_priority_class& pc);
-    void write_scylla_metadata(const io_priority_class& pc, shard_id shard = engine().cpu_id());
+    void write_scylla_metadata(const io_priority_class& pc, shard_id shard, sstable_enabled_features features);
 
     future<> read_filter(const io_priority_class& pc);
 
@@ -598,19 +609,22 @@ private:
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     // NOTE: functions used to generate sstable components.
-    void write_row_marker(file_writer& out, const row_marker& marker, const composite& clustering_key);
+    void maybe_write_row_marker(file_writer& out, const schema& schema, const row_marker& marker, const composite& clustering_key);
     void write_clustered_row(file_writer& out, const schema& schema, const clustering_row& clustered_row);
     void write_static_row(file_writer& out, const schema& schema, const row& static_row);
     void write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef);
-    void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none);
-    void write_column_name(file_writer& out, bytes_view column_names);
-    void write_range_tombstone(file_writer& out, const composite& start, composite::eoc start_marker, const composite& end, composite::eoc end_marker, std::vector<bytes_view> suffix, const tombstone t);
-    void write_range_tombstone(file_writer& out, const composite& start, const composite& end, std::vector<bytes_view> suffix, const tombstone t) {
-        write_range_tombstone(out, start, composite::eoc::start, end, composite::eoc::end, std::move(suffix), std::move(t));
-    }
+    void write_range_tombstone(file_writer& out, const composite& start, composite::eoc start_marker, const composite& end, composite::eoc end_marker,
+                               std::vector<bytes_view> suffix, const tombstone t, const column_mask = column_mask::range_tombstone);
+    void write_range_tombstone_bound(file_writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none);
+    void index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker);
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection);
-    void write_row_tombstone(file_writer& out, const composite& key, const row_tombstone t);
+    void maybe_write_row_tombstone(file_writer& out, const composite& key, const clustering_row& clustered_row);
     void write_deletion_time(file_writer& out, const tombstone t);
+
+    void index_and_write_column_name(file_writer& out,
+            const composite& clustering,
+            const std::vector<bytes_view>& column_names,
+            composite::eoc marker = composite::eoc::none);
 
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 public:
@@ -620,6 +634,14 @@ public:
 
     bool has_scylla_component() const {
         return has_component(component_type::Scylla);
+    }
+
+    bool has_correct_promoted_index_entries() const {
+        return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundPIEntries);
+    }
+
+    bool has_correct_non_compound_range_tombstones() const {
+        return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundRangeTombstones);
     }
 
     bool filter_has_key(const key& key) {
@@ -724,6 +746,11 @@ public:
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::unordered_set<shared_sstable>;
 
+shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable::version_types v, sstable::format_types f, gc_clock::time_point now = gc_clock::now(),
+            io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = 128*1024);
+
+
+
 struct entry_descriptor {
     sstring ks;
     sstring cf;
@@ -819,6 +846,7 @@ class sstable_writer {
     std::unique_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
+    bool _correctly_serialize_non_compound_range_tombstones;
 private:
     void prepare_file_writer();
     void finish_file_writer();
@@ -828,7 +856,8 @@ public:
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard) {}
+            _components_writer(std::move(o._components_writer)), _shard(o._shard),
+            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }
     stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }

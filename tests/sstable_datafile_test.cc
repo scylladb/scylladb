@@ -47,6 +47,7 @@
 #include "cell_locking.hh"
 #include "simple_schema.hh"
 #include "memtable-sstable.hh"
+#include "tests/sstable_assertions.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1009,6 +1010,8 @@ static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const 
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
+  return seastar::async([] {
+    storage_service_for_tests ssft;
     BOOST_REQUIRE(smp::count == 1);
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
@@ -1030,7 +1033,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
     auto generations = make_lw_shared<std::vector<unsigned long>>({1, 2, 3, 4});
 
-    return do_for_each(*generations, [generations, cf, cm, s, tmp] (unsigned long generation) {
+    do_for_each(*generations, [generations, cf, cm, s, tmp] (unsigned long generation) {
         // create 4 sstables of similar size to be compacted later on.
 
         auto mt = make_lw_shared<memtable>(s);
@@ -1083,7 +1086,8 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         });
     }).finally([s, cm, tmp, cl_stats] {
         return cm->stop().then([cm] {});
-    });
+    }).get();
+  });
 }
 
 SEASTAR_TEST_CASE(compact) {
@@ -1650,8 +1654,6 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 SEASTAR_TEST_CASE(test_counter_write) {
     return test_setup::do_with_test_directory([] {
         return seastar::async([] {
-            storage_service_for_tests ssft;
-
             auto s = schema_builder(some_keyspace, some_column_family)
                     .with_column("p1", utf8_type, column_kind::partition_key)
                     .with_column("c1", utf8_type, column_kind::clustering_key)
@@ -2280,6 +2282,7 @@ static shared_sstable make_sstable_containing(std::function<shared_sstable()> ss
 SEASTAR_TEST_CASE(tombstone_purge_test) {
     BOOST_REQUIRE(smp::count == 1);
     return seastar::async([] {
+        storage_service_for_tests ssft;
         cell_locker_stats cl_stats;
 
         // In a column family with gc_grace_seconds set to 0, check that a tombstone
@@ -3175,6 +3178,7 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         {
             auto s = schema_builder("ks", "cf")
                 .with_column("pk", utf8_type, column_kind::partition_key)
@@ -3222,6 +3226,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test) {
 
 SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -3270,6 +3275,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 
 SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck1", utf8_type, column_kind::clustering_key)
@@ -3439,6 +3445,7 @@ shared_sstable make_sstable(sstring path, streamed_mutation sm, sstable_writer_c
 
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         simple_schema table;
 
         std::vector<mutation_fragment> fragments;
@@ -3506,6 +3513,7 @@ uint64_t consume_all(streamed_mutation& sm) {
 
 SEASTAR_TEST_CASE(test_skipping_using_index) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         simple_schema table;
 
         const unsigned rows_per_part = 10;
@@ -3842,4 +3850,64 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
 
             BOOST_REQUIRE(!reader().get0());
         });
+}
+
+SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
+    // create table ks.test (pk int, ck int, v int, primary key(pk, ck)) with compact storage;
+    //
+    // Populated with:
+    //
+    // insert into ks.test (pk, ck, v) values (1, 1, 1);
+    // insert into ks.test (pk, ck, v) values (1, 2, 1);
+    // insert into ks.test (pk, ck, v) values (1, 3, 1);
+    // delete from ks.test where pk = 1 and ck = 2;
+    return seastar::async([] {
+        auto s = schema_builder("ks", "test")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build(schema_builder::compact_storage::yes);
+
+        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        {
+            assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
+    // create table ks.test (pk int, ck int, v int, primary key(pk, ck)) with compact storage;
+    //
+    // Populated with:
+    //
+    // insert into ks.test (pk, ck, v) values (1, 1, 1);
+    // insert into ks.test (pk, ck, v) values (1, 2, 1);
+    // insert into ks.test (pk, ck, v) values (1, 3, 1);
+    // delete from ks.test where pk = 1 and ck = 2;
+    return seastar::async([] {
+        auto s = schema_builder("ks", "test")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build(schema_builder::compact_storage::yes);
+
+        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        sst->load().get0();
+
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
+        auto dk = dht::global_partitioner().decorate_key(*s, pk);
+        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+        mutation m(dk, s);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(1511270919978349, int32_type->decompose(1), { }));
+        m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
+
+        {
+            auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
+            assert_that(sst->as_mutation_source()(s, dht::partition_range::make_singular(dk), slice))
+                    .produces(m)
+                    .produces_end_of_stream();
+        }
+    });
 }
