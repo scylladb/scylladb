@@ -397,6 +397,37 @@ mutation_partition::apply(const schema& s, mutation_partition&& p) {
     revert_static_row.cancel();
 }
 
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p) {
+    _tombstone.apply(p._tombstone);
+    _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
+    _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
+
+    rows_entry::compare less(s);
+    auto del = current_deleter<rows_entry>();
+    auto p_i = p._rows.begin();
+    while (p_i != p._rows.end()) {
+        rows_entry& src_e = *p_i;
+        auto i = _rows.lower_bound(src_e, less);
+        if (i == _rows.end() || less(src_e, *i)) {
+            p_i = p._rows.erase(p_i);
+            _rows.insert_before(i, src_e);
+        } else {
+            i->_row.apply_monotonically(s, std::move(src_e._row));
+            p_i = p._rows.erase_and_dispose(p_i, del);
+        }
+    }
+}
+
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
+    if (s.version() == p_schema.version()) {
+        apply_monotonically(s, std::move(p));
+    } else {
+        mutation_partition p2(p);
+        p2.upgrade(p_schema, s);
+        apply_monotonically(s, std::move(p2));
+    }
+}
+
 void
 mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
     if (p_schema.version() == s.version()) {
@@ -960,6 +991,10 @@ void deletable_row::revert(const schema& s, deletable_row& src) {
 }
 
 void deletable_row::apply(const schema& s, deletable_row&& src) {
+    apply_monotonically(s, std::move(src));
+}
+
+void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
     _cells.apply(s, column_kind::regular_column, std::move(src._cells));
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
@@ -1035,6 +1070,22 @@ apply_reversibly(const column_definition& def, atomic_cell_or_collection& dst,  
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
         src = ct->merge(dst.as_collection_mutation(), src.as_collection_mutation());
         std::swap(dst, src);
+    }
+}
+
+void
+apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst,  atomic_cell_or_collection& src) {
+    // Must be run via with_linearized_managed_bytes() context, but assume it is
+    // provided via an upper layer
+    if (def.is_atomic()) {
+        if (def.is_counter()) {
+            counter_cell_view::apply_reversibly(dst, src); // FIXME: Optimize
+        } else if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
+            std::swap(dst, src);
+        }
+    } else {
+        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
+        dst = ct->merge(dst.as_collection_mutation(), src.as_collection_mutation());
     }
 }
 
@@ -1163,6 +1214,43 @@ row::apply_reversibly(const column_definition& column, atomic_cell_or_collection
             _size++;
         } else {
             ::apply_reversibly(column, i->cell(), value);
+        }
+    }
+}
+
+void
+row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value) {
+    static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
+                  && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
+                  "noexcept required for atomicity");
+
+    // our mutations are not yet immutable
+    auto id = column.id;
+    if (_type == storage_type::vector && id < max_vector_size) {
+        if (id >= _storage.vector.v.size()) {
+            _storage.vector.v.resize(id);
+            _storage.vector.v.emplace_back(std::move(value));
+            _storage.vector.present.set(id);
+            _size++;
+        } else if (!bool(_storage.vector.v[id])) {
+            _storage.vector.v[id] = std::move(value);
+            _storage.vector.present.set(id);
+            _size++;
+        } else {
+            ::apply_monotonically(column, _storage.vector.v[id], value);
+        }
+    } else {
+        if (_type == storage_type::vector) {
+            vector_to_set();
+        }
+        auto i = _storage.set.lower_bound(id, cell_entry::compare());
+        if (i == _storage.set.end() || i->id() != id) {
+            cell_entry* e = current_allocator().construct<cell_entry>(id);
+            _storage.set.insert(i, *e);
+            _size++;
+            e->_cell = std::move(value);
+        } else {
+            ::apply_monotonically(column, i->cell(), value);
         }
     }
 }
@@ -1625,6 +1713,10 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
 }
 
 void row::apply(const schema& s, column_kind kind, row&& other) {
+    apply_monotonically(s, kind, std::move(other));
+}
+
+void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
     if (other.empty()) {
         return;
     }
@@ -1633,8 +1725,8 @@ void row::apply(const schema& s, column_kind kind, row&& other) {
     } else {
         reserve(other._storage.set.rbegin()->id());
     }
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-        apply(s.column_at(kind, id), std::move(cell));
+    other.consume_with([&] (column_id id, atomic_cell_or_collection& cell) {
+        apply_monotonically(s.column_at(kind, id), std::move(cell));
     });
 }
 

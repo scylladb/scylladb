@@ -253,6 +253,9 @@ public:
     //
     void apply(const column_definition& column, atomic_cell_or_collection&& cell);
 
+    // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell);
+
     // Equivalent to calling apply_reversibly() with a row containing only given cell.
     // See reversibly_mergeable.hh
     void apply_reversibly(const column_definition& column, atomic_cell_or_collection& cell);
@@ -264,7 +267,8 @@ public:
 
     void apply(const schema&, column_kind, const row& src);
     void apply(const schema&, column_kind, row&& src);
-
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema&, column_kind, row&& src);
     // See reversibly_mergeable.hh
     void apply_reversibly(const schema&, column_kind, row& src);
     // See reversibly_mergeable.hh
@@ -637,6 +641,7 @@ public:
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
     void apply(const schema& s, deletable_row&& src);
+    void apply_monotonically(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -727,6 +732,9 @@ public:
     is_dummy dummy() const { return is_dummy(_flags._dummy); }
     void apply(row_tombstone t) {
         _row.apply(t);
+    }
+    void apply_monotonically(const schema& s, rows_entry&& e) {
+        _row.apply(s, std::move(e._row));
     }
     // See reversibly_mergeable.hh
     void apply_reversibly(const schema& s, rows_entry& e) {
@@ -941,6 +949,13 @@ public:
     void apply(const schema& s, mutation_partition&& p);
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
+
+    // Applies p to this instance.
+    //
+    // Monotonic exception guarantees. In case of exception the sum of p and this remains the same as before the exception.
+    // This instance and p are governed by the same schema.
+    void apply_monotonically(const schema& s, mutation_partition&& p);
+    void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.
