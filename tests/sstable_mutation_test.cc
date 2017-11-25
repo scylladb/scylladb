@@ -895,7 +895,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
         {
@@ -951,7 +951,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
         {
@@ -1003,7 +1003,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
-            sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+            sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
             sst->load().get();
 
             {
@@ -1045,7 +1045,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           sstables::sstable::version_types::ka,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
-        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
         {
@@ -1082,7 +1082,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
         assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
