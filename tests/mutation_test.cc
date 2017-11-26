@@ -44,6 +44,7 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
+#include "tests/test_services.hh"
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
 
@@ -279,6 +280,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     return seastar::async([] {
+    storage_service_for_tests ssft;
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
@@ -343,6 +345,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
     return with_column_family(s, cfg, [s](column_family& cf) {
         return seastar::async([s, &cf] {
+            storage_service_for_tests ssft;
             // populate
             auto new_key = [&] {
                 static thread_local int next = 0;
@@ -406,6 +409,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
+    return seastar::async([] {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
@@ -416,7 +420,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     cfg.enable_disk_writes = false;
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
-    return with_column_family(s, cfg, [s] (auto& cf) mutable {
+    with_column_family(s, cfg, [s] (auto& cf) mutable {
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -456,7 +460,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
                 BOOST_REQUIRE(shadow == result);
             });
         });
-    }).then([cf_stats] {});
+    }).then([cf_stats] {}).get();
+    });
 }
 
 SEASTAR_TEST_CASE(test_cell_ordering) {
