@@ -33,6 +33,7 @@
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
 #include "tests/simple_schema.hh"
+#include "tests/test_services.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
@@ -343,6 +344,7 @@ struct sst_factory {
 
 SEASTAR_TEST_CASE(combined_mutation_reader_test) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         //logging::logger_registry().set_logger_level("database", logging::log_level::trace);
 
         simple_schema s;
@@ -723,6 +725,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
 SEASTAR_TEST_CASE(restricted_reader_reading) {
     return async([&] {
+        storage_service_for_tests ssft;
         restriction_data rd(new_reader_base_cost);
 
         {
@@ -770,6 +773,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return async([&] {
+        storage_service_for_tests ssft;
         restriction_data rd(new_reader_base_cost, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds{10}));
 
         {
@@ -797,6 +801,7 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
 
 SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
     return async([&] {
+        storage_service_for_tests ssft;
         restriction_data rd(new_reader_base_cost, {}, 1);
 
         {
@@ -823,6 +828,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 
 SEASTAR_TEST_CASE(restricted_reader_create_reader) {
     return async([&] {
+        storage_service_for_tests ssft;
         restriction_data rd(new_reader_base_cost);
 
         {
