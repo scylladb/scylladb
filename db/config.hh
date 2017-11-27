@@ -632,6 +632,11 @@ public:
             , "org.apache.cassandra.auth.AllowAllAuthorizer" \
             , "org.apache.cassandra.auth.CassandraAuthorizer" \
     )   \
+    val(role_manager, sstring, "org.apache.cassandra.auth.CassandraRoleManager", Used,    \
+            "The role-management backend, used to maintain grantts and memberships between roles.\n"    \
+            "The available role-managers are:\n"    \
+            "\tCassandraRoleManager : Stores role data in the system_auth keyspace."    \
+    )   \
     val(permissions_validity_in_ms, uint32_t, 10000, Used,     \
             "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used. The cached value is considered valid as long as both its value is not older than the permissions_validity_in_ms " \
             "and the cached value has been read at least once during the permissions_validity_in_ms time frame. If any of these two conditions doesn't hold the cached value is going to be evicted from the cache.\n"  \

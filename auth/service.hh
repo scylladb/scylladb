@@ -31,6 +31,7 @@
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
+#include "auth/role_manager.hh"
 #include "delayed_tasks.hh"
 #include "seastarx.hh"
 
@@ -49,14 +50,12 @@ class migration_listener;
 
 namespace auth {
 
-class authenticator;
-class authorizer;
-
 struct service_config final {
     static service_config from_db_config(const db::config&);
 
     sstring authorizer_java_name;
     sstring authenticator_java_name;
+    sstring role_manager_java_name;
 };
 
 class service final {
@@ -70,6 +69,10 @@ class service final {
 
     std::unique_ptr<authenticator> _authenticator;
 
+    // Similar functionality as this class, except for roles. It will replace the user-based functions when Scylla
+    // switches over to role-based access-control. Until then, it's mostly dormant.
+    std::unique_ptr<role_manager> _role_manager;
+
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
 
@@ -81,7 +84,8 @@ public:
             cql3::query_processor&,
             ::service::migration_manager&,
             std::unique_ptr<authorizer>,
-            std::unique_ptr<authenticator>);
+            std::unique_ptr<authenticator>,
+            std::unique_ptr<role_manager>);
 
     service(
             permissions_cache_config,
@@ -119,8 +123,18 @@ public:
         return *_authorizer;
     }
 
+    role_manager& underlying_role_manager() {
+        return *_role_manager;
+    }
+
+    const role_manager& underlying_role_manager() const {
+        return *_role_manager;
+    }
+
 private:
     future<bool> has_existing_users() const;
+
+    future<> create_keyspace_if_missing() const;
 
     bool should_create_metadata() const;
 

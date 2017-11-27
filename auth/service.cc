@@ -116,10 +116,12 @@ static future<::shared_ptr<cql3::untyped_result_set>> select_user(cql3::query_pr
 service_config service_config::from_db_config(const db::config& dc) {
     const qualified_name qualified_authorizer_name(meta::AUTH_PACKAGE_NAME, dc.authorizer());
     const qualified_name qualified_authenticator_name(meta::AUTH_PACKAGE_NAME, dc.authenticator());
+    const qualified_name qualified_role_manager_name(meta::AUTH_PACKAGE_NAME, dc.role_manager());
 
     service_config c;
     c.authorizer_java_name = qualified_authorizer_name;
     c.authenticator_java_name = qualified_authenticator_name;
+    c.role_manager_java_name = qualified_role_manager_name;
 
     return c;
 }
@@ -128,13 +130,15 @@ service::service(
         permissions_cache_config c,
         cql3::query_processor& qp,
         ::service::migration_manager& mm,
-        std::unique_ptr<authorizer> a,
-        std::unique_ptr<authenticator> b)
+        std::unique_ptr<authorizer> z,
+        std::unique_ptr<authenticator> a,
+        std::unique_ptr<role_manager> r)
             : _cache_config(std::move(c))
             , _qp(qp)
             , _migration_manager(mm)
-            , _authorizer(std::move(a))
-            , _authenticator(std::move(b))
+            , _authorizer(std::move(z))
+            , _authenticator(std::move(a))
+            , _role_manager(std::move(r))
             , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer)) {
 }
 
@@ -148,19 +152,12 @@ service::service(
                       qp,
                       mm,
                       create_object<authorizer>(sc.authorizer_java_name, qp, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, mm)) {
+                      create_object<authenticator>(sc.authenticator_java_name, qp, mm),
+                      create_object<role_manager>(sc.role_manager_java_name, qp, mm)) {
 }
 
-bool service::should_create_metadata() const {
-    const bool null_authorizer = _authorizer->qualified_java_name() == allow_all_authorizer_name();
-    const bool null_authenticator = _authenticator->qualified_java_name() == allow_all_authenticator_name();
-    return !null_authorizer || !null_authenticator;
-}
-
-future<> service::create_metadata_if_missing() {
+future<> service::create_keyspace_if_missing() const {
     auto& db = _qp.db().local();
-
-    auto f = make_ready_future<>();
 
     if (!db.has_keyspace(meta::AUTH_KS)) {
         std::map<sstring, sstring> opts{{"replication_factor", "1"}};
@@ -173,28 +170,36 @@ future<> service::create_metadata_if_missing() {
 
         // We use min_timestamp so that default keyspace metadata will loose with any manual adjustments.
         // See issue #2129.
-        f = _migration_manager.announce_new_keyspace(ksm, api::min_timestamp, false);
+        return _migration_manager.announce_new_keyspace(ksm, api::min_timestamp, false);
     }
 
-    return f.then([this] {
-        // 3 months.
-        static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
+    return make_ready_future<>();
+}
 
-        static const sstring users_table_query = sprint(
-                "CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY (%s)) WITH gc_grace_seconds=%s",
-                meta::AUTH_KS,
-                meta::USERS_CF,
-                meta::user_name_col_name,
-                meta::superuser_col_name,
-                meta::user_name_col_name,
-                gc_grace_seconds);
+bool service::should_create_metadata() const {
+    const bool null_authorizer = _authorizer->qualified_java_name() == allow_all_authorizer_name();
+    const bool null_authenticator = _authenticator->qualified_java_name() == allow_all_authenticator_name();
+    return !null_authorizer || !null_authenticator;
+}
 
-        return create_metadata_table_if_missing(
-                meta::USERS_CF,
-                _qp,
-                users_table_query,
-                _migration_manager);
-    }).then([this] {
+future<> service::create_metadata_if_missing() {
+    // 3 months.
+    static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
+
+    static const sstring users_table_query = sprint(
+            "CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY (%s)) WITH gc_grace_seconds=%s",
+            meta::AUTH_KS,
+            meta::USERS_CF,
+            meta::user_name_col_name,
+            meta::superuser_col_name,
+            meta::user_name_col_name,
+            gc_grace_seconds);
+
+    return create_metadata_table_if_missing(
+            meta::USERS_CF,
+            _qp,
+            users_table_query,
+            _migration_manager).then([this] {
         delay_until_system_ready(_delayed, [this] {
             return has_existing_users().then([this](bool existing) {
                 if (!existing) {
@@ -233,11 +238,15 @@ future<> service::create_metadata_if_missing() {
 
 future<> service::start() {
     return once_among_shards([this] {
-        if (should_create_metadata()) {
-            return create_metadata_if_missing();
-        }
+        return create_keyspace_if_missing().then([this] {
+            if (should_create_metadata()) {
+                return create_metadata_if_missing();
+            }
 
-        return make_ready_future<>();
+            return make_ready_future<>();
+        });
+    }).then([this] {
+        return _role_manager->start();
     }).then([this] {
         return when_all_succeed(_authorizer->start(), _authenticator->start());
     }).then([this] {
@@ -253,7 +262,7 @@ future<> service::stop() {
         _delayed.cancel_all();
         return sharded_permissions_cache.stop();
     }).then([this] {
-        return when_all_succeed(_authorizer->stop(), _authenticator->stop());
+        return when_all_succeed(_role_manager->start(), _authorizer->stop(), _authenticator->stop());
     });
 }
 

@@ -93,6 +93,7 @@ boost_tests = [
     'castas_fcts_test',
     'big_decimal_test',
     'aggregate_fcts_test',
+    'role_management_test',
 ]
 
 other_tests = [

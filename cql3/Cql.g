@@ -63,6 +63,12 @@ options {
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
 #include "cql3/statements/list_permissions_statement.hh"
+#include "cql3/statements/alter_role_statement.hh"
+#include "cql3/statements/list_roles_statement.hh"
+#include "cql3/statements/grant_role_statement.hh"
+#include "cql3/statements/revoke_role_statement.hh"
+#include "cql3/statements/drop_role_statement.hh"
+#include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -80,6 +86,8 @@ options {
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
+#include "cql3/role_name.hh"
+#include "cql3/role_options.hh"
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
@@ -345,6 +353,12 @@ cqlStatement returns [shared_ptr<raw::parsed_statement> stmt]
     | st32=createViewStatement         { $stmt = st32; }
     | st33=alterViewStatement          { $stmt = st33; }
     | st34=dropViewStatement           { $stmt = st34; }
+    | st35=listRolesStatement          { $stmt = st35; }
+    | st36=grantRoleStatement          { $stmt = st36; }
+    | st37=revokeRoleStatement         { $stmt = st37; }
+    | st38=dropRoleStatement           { $stmt = st38; }
+    | st39=createRoleStatement         { $stmt = st39; }
+    | st40=alterRoleStatement          { $stmt = st40; }
     ;
 
 /*
@@ -990,6 +1004,22 @@ revokeStatement returns [::shared_ptr<revoke_statement> stmt]
       { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
     ;
 
+/**
+ * GRANT <rolename> to <grantee>
+ */
+grantRoleStatement returns [::shared_ptr<grant_role_statement> stmt]
+    : K_GRANT role=userOrRoleName K_TO grantee=userOrRoleName
+      { $stmt = ::make_shared<grant_role_statement>(std::move(role), std::move(grantee));  }
+    ;
+
+/**
+ * REVOKE <rolename> FROM <revokee>
+ */
+revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
+    : K_REVOKE role=userOrRoleName K_FROM revokee=userOrRoleName
+      { $stmt = ::make_shared<revoke_role_statement>(std::move(role), std::move(revokee)); }
+    ;
+
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
 		std::experimental::optional<auth::data_resource> r;
@@ -1077,6 +1107,73 @@ userOption[::shared_ptr<cql3::user_options> opts]
     : k=K_PASSWORD v=STRING_LITERAL { opts->put($k.text, $v.text); }
     ;
 
+/**
+ * CREATE ROLE [IF NOT EXISTS] <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ */
+createRoleStatement returns [::shared_ptr<create_role_statement> stmt]
+    @init {
+        cql3::role_options opts;
+        opts.is_superuser = false;
+        opts.can_login = false;
+        bool if_not_exists = false;
+    }
+    : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
+      (K_WITH roleAuthenticationOptions[opts])?
+      (K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; })?
+      (K_LOGIN { opts.can_login = true; } | K_NOLOGIN { opts.can_login = false; })?
+      { $stmt = ::make_shared<create_role_statement>(name, std::move(opts), if_not_exists); }
+    ;
+
+/**
+ * ALTER ROLE <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ */
+alterRoleStatement returns [::shared_ptr<alter_role_statement> stmt]
+    @init {
+        cql3::role_options opts;
+    }
+    : K_ALTER K_ROLE name=userOrRoleName
+      (K_WITH roleAuthenticationOptions[opts])?
+      (K_SUPERUSER { opts.is_superuser = true; }
+        | K_NOSUPERUSER { opts.is_superuser = false; })?
+      (K_LOGIN { opts.can_login = true; }
+        | K_NOLOGIN { opts.can_login = false; })?
+      { $stmt = ::make_shared<alter_role_statement>(name, std::move(opts)); }
+    ;
+
+/**
+ * DROP ROLE [IF EXISTS] <rolename>
+ */
+dropRoleStatement returns [::shared_ptr<drop_role_statement> stmt]
+    @init {
+        bool if_exists = false;
+    }
+    : K_DROP K_ROLE (K_IF K_EXISTS { if_exists = true; })? name=userOrRoleName
+      { $stmt = ::make_shared<drop_role_statement>(name, if_exists); }
+    ;
+
+/**
+ * LIST ROLES [OF <rolename>] [NORECURSIVE]
+ */
+listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
+    @init {
+        bool recursive = true;
+        std::experimental::optional<cql3::role_name> grantee;
+    }
+    : K_LIST K_ROLES
+        (K_OF g=userOrRoleName { grantee = std::move(g); })?
+        (K_NORECURSIVE { recursive = false; })?
+        { $stmt = ::make_shared<list_roles_statement>(grantee, recursive); }
+    ;
+
+roleAuthenticationOptions[cql3::role_options& opts]
+    : roleAuthenticationOption[opts] (K_AND roleAuthenticationOption[opts])*
+    ;
+
+roleAuthenticationOption[cql3::role_options& opts]
+    : K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; }
+    | K_OPTIONS m=mapLiteral { opts.options = convert_property_map(m); }
+    ;
+
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
@@ -1115,12 +1212,12 @@ userTypeName returns [uninitialized<cql3::ut_name> name]
     : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
     ;
 
-#if 0
-userOrRoleName returns [RoleName name]
-    @init { $name = new RoleName(); }
-    : roleName[name] {return $name;}
+userOrRoleName returns [uninitialized<cql3::role_name> name]
+    : t=IDENT              { $name = cql3::role_name($t.text, cql3::preserve_role_case::no); }
+    | t=QUOTED_NAME        { $name = cql3::role_name($t.text, cql3::preserve_role_case::yes); }
+    | k=unreserved_keyword { $name = cql3::role_name(k, cql3::preserve_role_case::no); }
+    | QMARK {add_recognition_error("Bind variables cannot be used for role names");}
     ;
-#endif
 
 ksName[::shared_ptr<cql3::keyspace_element_name> name]
     : t=IDENT              { $name->set_keyspace($t.text, false);}
@@ -1142,15 +1239,6 @@ idxName[::shared_ptr<cql3::index_name> name]
     | k=unreserved_keyword { $name->set_index(k, false); }
     | QMARK {add_recognition_error("Bind variables cannot be used for index names");}
     ;
-
-#if 0
-roleName[RoleName name]
-    : t=IDENT              { $name.setName($t.text, false); }
-    | t=QUOTED_NAME        { $name.setName($t.text, true); }
-    | k=unreserved_keyword { $name.setName(k, false); }
-    | QMARK {addRecognitionError("Bind variables cannot be used for role names");}
-    ;
-#endif
 
 constant returns [shared_ptr<cql3::constants::literal> constant]
     @init{std::string sign;}
@@ -1534,8 +1622,13 @@ basic_unreserved_keyword returns [sstring str]
         | K_ALL
         | K_USER
         | K_USERS
+        | K_ROLE
+        | K_ROLES
         | K_SUPERUSER
         | K_NOSUPERUSER
+        | K_LOGIN
+        | K_NOLOGIN
+        | K_OPTIONS
         | K_PASSWORD
         | K_EXISTS
         | K_CUSTOM
@@ -1631,9 +1724,14 @@ K_NORECURSIVE: N O R E C U R S I V E;
 
 K_USER:        U S E R;
 K_USERS:       U S E R S;
+K_ROLE:        R O L E;
+K_ROLES:       R O L E S;
 K_SUPERUSER:   S U P E R U S E R;
 K_NOSUPERUSER: N O S U P E R U S E R;
 K_PASSWORD:    P A S S W O R D;
+K_LOGIN:       L O G I N;
+K_NOLOGIN:     N O L O G I N;
+K_OPTIONS:     O P T I O N S;
 
 K_CLUSTERING:  C L U S T E R I N G;
 K_ASCII:       A S C I I;
