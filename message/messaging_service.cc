@@ -78,6 +78,8 @@
 #include "rpc/multi_algo_compressor_factory.hh"
 #include "partition_range_compat.hh"
 #include "stdx.hh"
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/indirected.hpp>
 
 namespace netw {
 
@@ -350,22 +352,18 @@ gms::inet_address messaging_service::listen_address() {
     return _listen_address;
 }
 
+static future<> stop_servers(std::array<std::unique_ptr<messaging_service::rpc_protocol_server_wrapper>, 2>& servers) {
+    return parallel_for_each(
+            servers | boost::adaptors::filtered([] (auto& ptr) { return bool(ptr); }) | boost::adaptors::indirected,
+            std::mem_fn(&messaging_service::rpc_protocol_server_wrapper::stop));
+}
+
 future<> messaging_service::stop_tls_server() {
-    for (auto&& s : _server_tls) {
-        if (s) {
-            return s->stop();
-        }
-    }
-    return make_ready_future<>();
+    return stop_servers(_server_tls);
 }
 
 future<> messaging_service::stop_nontls_server() {
-    for (auto&& s : _server) {
-        if (s) {
-            return s->stop();
-        }
-    }
-    return make_ready_future<>();
+    return stop_servers(_server);
 }
 
 future<> messaging_service::stop_client() {
