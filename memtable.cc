@@ -428,40 +428,72 @@ public:
     }
 };
 
-class flush_reader final : public mutation_reader::impl, private iterator_reader {
+class flush_reader final : public flat_mutation_reader::impl, private iterator_reader {
+    // FIXME: Similarly to scanning_reader we have an underlying
+    // flat_mutation_reader for each partition. This is suboptimal.
+    // Partition snapshot reader should be devirtualised and called directly
+    // without using any intermediate buffers.
+    flat_mutation_reader_opt _partition_reader;
     flush_memory_accounter _flushed_memory;
 public:
     flush_reader(schema_ptr s, lw_shared_ptr<memtable> m)
-        : iterator_reader(std::move(s), m, query::full_partition_range)
+        : impl(s)
+        , iterator_reader(std::move(s), m, query::full_partition_range)
         , _flushed_memory(*m)
     {}
     flush_reader(const flush_reader&) = delete;
     flush_reader(flush_reader&&) = delete;
     flush_reader& operator=(flush_reader&&) = delete;
     flush_reader& operator=(const flush_reader&) = delete;
-
-    virtual future<streamed_mutation_opt> operator()() override {
+private:
+    void get_next_partition() {
         return read_section()(region(), [&] {
             return with_linearized_managed_bytes([&] {
                 memtable_entry* e = fetch_entry();
-                if (!e) {
-                    return make_ready_future<streamed_mutation_opt>(stdx::nullopt);
-                } else {
+                if (e) {
                     auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), e->key().key());
                     auto snp = e->partition().read(region(), schema());
-                    auto mpsr = make_partition_snapshot_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr),
+                    auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(schema(), e->key(), std::move(cr),
                             snp, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, _flushed_memory);
                     _flushed_memory.account_component(*e);
                     _flushed_memory.account_component(*snp);
-                    auto ret = make_ready_future<streamed_mutation_opt>(std::move(mpsr));
+                    _partition_reader = std::move(mpsr);
                     advance();
-                    return ret;
                 }
             });
         });
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        return iterator_reader::fast_forward_to(pr);
+public:
+    virtual future<> fill_buffer() override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            if (!_partition_reader) {
+                get_next_partition();
+                if (!_partition_reader) {
+                    _end_of_stream = true;
+                    return make_ready_future<>();
+                }
+            }
+            return _partition_reader->consume_pausable([this] (mutation_fragment mf) {
+                push_mutation_fragment(std::move(mf));
+                return stop_iteration(is_buffer_full());
+            }).then([this] {
+                if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
+                    _partition_reader = stdx::nullopt;
+                }
+            });
+        });
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _partition_reader = stdx::nullopt;
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(position_range) override {
+        throw std::bad_function_call();
     }
 };
 
@@ -510,8 +542,7 @@ memtable::make_flat_reader(schema_ptr s,
 flat_mutation_reader
 memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
     if (group()) {
-        return flat_mutation_reader_from_mutation_reader(s, make_mutation_reader<flush_reader>(s, shared_from_this()),
-                                                         streamed_mutation::forwarding::no);
+        return make_flat_mutation_reader<flush_reader>(s, shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
         return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(),
