@@ -1791,7 +1791,6 @@ protected:
     promise<> _done_promise; // all target responded
     bool _timedout = false; // will be true if request timeouts
     timer<storage_proxy::clock_type> _timeout;
-    size_t _responses = 0;
     schema_ptr _schema;
 
     virtual void on_timeout() {}
@@ -1804,7 +1803,7 @@ public:
     {
         _timeout.set_callback([this] {
             _timedout = true;
-            _done_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, _responses != 0));
+            _done_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
             on_timeout();
         });
         _timeout.arm(timeout);
