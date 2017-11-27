@@ -332,6 +332,7 @@ public:
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
+    void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
 
     // Strong exception guarantees.
     // Assumes this instance and mpv are fully continuous.

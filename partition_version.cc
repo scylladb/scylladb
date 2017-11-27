@@ -23,6 +23,7 @@
 #include <seastar/util/defer.hh>
 
 #include "partition_version.hh"
+#include "partition_builder.hh"
 
 static void remove_or_mark_as_unique_owner(partition_version* current)
 {
@@ -223,32 +224,34 @@ partition_version& partition_entry::add_version(const schema& s) {
 
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
-    if (!_snapshot) {
-        _version->partition().apply(s, mp, mp_schema);
-    } else {
-        mutation_partition mp1 = mp;
-        if (s.version() != mp_schema.version()) {
-            mp1.upgrade(mp_schema, s);
-        }
-        auto new_version = current_allocator().construct<partition_version>(std::move(mp1));
-        new_version->insert_before(*_version);
+    apply(s, mutation_partition(mp), mp_schema);
+}
 
-        set_version(new_version);
+void partition_entry::apply(const schema& s, mutation_partition&& mp, const schema& mp_schema)
+{
+    if (s.version() != mp_schema.version()) {
+        mp.upgrade(mp_schema, s);
     }
+    auto new_version = current_allocator().construct<partition_version>(std::move(mp));
+    if (!_snapshot) {
+        try {
+            _version->partition().apply_monotonically(s, std::move(new_version->partition()));
+            current_allocator().destroy(new_version);
+            return;
+        } catch (...) {
+            // fall through
+        }
+    }
+    new_version->insert_before(*_version);
+    set_version(new_version);
 }
 
 void partition_entry::apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema)
 {
-    if (!_snapshot) {
-        _version->partition().apply(s, mpv, mp_schema);
-    } else {
-        mutation_partition mp(s.shared_from_this());
-        mp.apply(s, mpv, mp_schema);
-        auto new_version = current_allocator().construct<partition_version>(std::move(mp));
-        new_version->insert_before(*_version);
-
-        set_version(new_version);
-    }
+    mutation_partition mp(mp_schema.shared_from_this());
+    partition_builder pb(mp_schema, mp);
+    mpv.accept(mp_schema, pb);
+    apply(s, std::move(mp), mp_schema);
 }
 
 // Iterates over all rows in mutation represented by partition_entry.
