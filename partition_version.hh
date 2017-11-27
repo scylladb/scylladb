@@ -356,17 +356,15 @@ public:
     // succeeds the result will be as if the first attempt didn't fail.
     void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
 
+    partition_version& add_version(const schema& s);
+
     // Ensures that the latest version can be populated with data from given phase
     // by inserting a new version if necessary.
     // Doesn't affect value or continuity of the partition.
     // Returns a reference to the new latest version.
     partition_version& open_version(const schema& s, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
         if (_snapshot && _snapshot->_phase != phase) {
-            auto new_version = current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
-            new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
-            new_version->insert_before(*_version);
-            set_version(new_version);
-            return *new_version;
+            return add_version(s);
         }
         return *_version;
     }
