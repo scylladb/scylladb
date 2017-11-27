@@ -36,7 +36,8 @@ public:
         : _reader(std::move(reader))
     { }
 
-    flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk) {
+    flat_reader_assertions& produces_partition_start(const dht::decorated_key& dk,
+                                                     stdx::optional<tombstone> tomb = stdx::nullopt) {
         BOOST_TEST_MESSAGE(sprint("Expecting partition start with key %s", dk));
         auto mfopt = read_next();
         if (!mfopt) {
@@ -47,6 +48,9 @@ public:
         }
         if (!mfopt->as_partition_start().key().equal(*_reader.schema(), dk)) {
             BOOST_FAIL(sprint("Expected: partition start with key %s, got: %s", dk, *mfopt));
+        }
+        if (tomb && mfopt->as_partition_start().partition_tombstone() != *tomb) {
+            BOOST_FAIL(sprint("Expected: partition start with tombstone %s, got: %s", *tomb, *mfopt));
         }
         return *this;
     }
@@ -96,6 +100,25 @@ public:
         auto mfopt = read_next();
         if (bool(mfopt)) {
             BOOST_FAIL(sprint("Expected end of stream, got %s", *mfopt));
+        }
+        return *this;
+    }
+
+    flat_reader_assertions& produces_partition(const mutation& m) {
+        BOOST_TEST_MESSAGE(sprint("Expecting a partition with key %s", m));
+        produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
+        auto produced_m = mutation(m.decorated_key(), m.schema());
+        produced_m.partition().apply(m.partition().partition_tombstone());
+        auto mfopt = read_next();
+        while (mfopt && !mfopt->is_end_of_partition()) {
+            produced_m.apply(*mfopt);
+            mfopt = read_next();
+        }
+        if (!mfopt) {
+            BOOST_FAIL("Expected a partition end before the end of stream");
+        }
+        if (m != produced_m) {
+            BOOST_FAIL(sprint("Expected: partition %s, got: %s", m, produced_m));
         }
         return *this;
     }
