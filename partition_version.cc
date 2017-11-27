@@ -213,6 +213,14 @@ void partition_entry::set_version(partition_version* new_version)
     _version = partition_version_ref(*new_version);
 }
 
+partition_version& partition_entry::add_version(const schema& s) {
+    auto new_version = current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
+    new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
+    new_version->insert_before(*_version);
+    set_version(new_version);
+    return *new_version;
+}
+
 void partition_entry::apply(const schema& s, const mutation_partition& mp, const schema& mp_schema)
 {
     if (!_snapshot) {
