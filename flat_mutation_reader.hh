@@ -269,6 +269,10 @@ public:
     };
 private:
     std::unique_ptr<impl> _impl;
+
+    flat_mutation_reader() = default;
+    explicit operator bool() const noexcept { return bool(_impl); }
+    friend class optimized_optional<flat_mutation_reader>;
 public:
     // Documented in mutation_reader::forwarding in mutation_reader.hh.
     class partition_range_forwarding_tag;
@@ -360,6 +364,12 @@ public:
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
     const schema_ptr& schema() const { return _impl->_schema; }
 };
+
+template<>
+struct move_constructor_disengages<flat_mutation_reader> {
+    enum { value = true };
+};
+using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
 
 template<typename Impl, typename... Args>
 flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
