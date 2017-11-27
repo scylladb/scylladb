@@ -24,10 +24,6 @@
 #include <boost/test/unit_test.hpp>
 
 #include "sstables/compress.hh"
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 BOOST_AUTO_TEST_CASE(segmented_offsets_basic_functionality) {
     sstables::compression::segmented_offsets offsets;

@@ -31,11 +31,6 @@
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 // Returns random keys sorted in ring order.
 // The schema must have a single bytes_type partition key column.
 static std::vector<dht::ring_position> make_ring(schema_ptr s, int n_keys) {

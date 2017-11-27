@@ -24,10 +24,6 @@
 #include "utils/serialized_action.hh"
 #include "tests/test-utils.hh"
 #include "utils/phased_barrier.hh"
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 SEASTAR_TEST_CASE(test_serialized_action_triggering) {
     return seastar::async([] {

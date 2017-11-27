@@ -29,11 +29,6 @@
 #include "range_tombstone_list.hh"
 #include "range_tombstone_list_assertions.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 static schema_ptr s = schema_builder("ks", "cf")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("ck1", int32_type, column_kind::clustering_key)

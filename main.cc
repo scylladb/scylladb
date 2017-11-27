@@ -59,8 +59,6 @@
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
 
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;

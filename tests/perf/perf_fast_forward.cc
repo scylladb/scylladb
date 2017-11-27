@@ -33,11 +33,6 @@
 #include "transport/messages/result_message.hh"
 #include "sstables/shared_index_lists.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 using namespace std::chrono_literals;
 using int_range = nonwrapping_range<int>;
 

@@ -41,10 +41,6 @@
 #include "tests/test_services.hh"
 #include "cell_locking.hh"
 #include "memtable-sstable.hh"
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace sstables;
 

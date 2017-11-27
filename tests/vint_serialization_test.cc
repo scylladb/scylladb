@@ -24,16 +24,12 @@
 #include "vint-serialization.hh"
 
 #include "bytes.hh"
-#include "disk-error-handler.hh"
 
 #include <boost/test/unit_test.hpp>
 
 #include <array>
 #include <cstdint>
 #include <random>
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace seastar;
 

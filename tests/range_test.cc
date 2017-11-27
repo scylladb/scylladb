@@ -29,7 +29,6 @@
 #include "query-request.hh"
 #include "schema_builder.hh"
 
-#include "disk-error-handler.hh"
 #include "locator/token_metadata.hh"
 
 // yuck, but what can one do?  needed for BOOST_REQUIRE_EQUAL
@@ -41,9 +40,6 @@ operator<<(ostream& os, const stdx::nullopt_t&) {
 }
 
 }
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 static
 bool includes_token(const schema& s, const dht::partition_range& r, const dht::token& tok) {

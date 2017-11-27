@@ -29,12 +29,7 @@
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
 
-#include "disk-error-handler.hh"
-
 #include "db/config.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::literals::chrono_literals;
 

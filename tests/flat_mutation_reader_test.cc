@@ -36,13 +36,9 @@
 #include "tmpdir.hh"
 #include "sstable_test.hh"
 
-#include "disk-error-handler.hh"
 #include "tests/test_services.hh"
 #include "tests/simple_schema.hh"
 #include "flat_mutation_reader_assertions.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 static void test_double_conversion_through_mutation_reader(const std::vector<mutation>& mutations) {
     BOOST_REQUIRE(!mutations.empty());

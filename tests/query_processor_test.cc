@@ -35,11 +35,6 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 SEASTAR_TEST_CASE(test_execute_internal_insert) {
     return do_with_cql_env([] (auto& e) {
         auto& qp = e.local_qp();

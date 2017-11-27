@@ -28,11 +28,6 @@
 #include "schema_builder.hh"
 #include "mutation_source_test.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
 }

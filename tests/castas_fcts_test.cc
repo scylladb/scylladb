@@ -35,12 +35,7 @@
 #include "core/future-util.hh"
 #include "transport/messages/result_message.hh"
 
-#include "disk-error-handler.hh"
 #include "db/config.hh"
-
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 namespace {
 

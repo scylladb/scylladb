@@ -31,12 +31,7 @@
 #include "tests/memtable_snapshot_source.hh"
 #include <seastar/core/reactor.hh>
 
-#include "disk-error-handler.hh"
-
 logging::logger test_log("test");
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 static thread_local bool cancelled = false;
 

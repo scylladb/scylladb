@@ -31,11 +31,6 @@
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/range/irange.hpp>
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 using disk_array = utils::chunked_vector<uint64_t, 1024>;
 
 

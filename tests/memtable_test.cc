@@ -34,11 +34,6 @@
 #include "mutation_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
     return next_timestamp++;

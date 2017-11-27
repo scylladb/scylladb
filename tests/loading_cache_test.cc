@@ -50,12 +50,6 @@ static int rand_int(int max) {
     return uni(rng);
 }
 
-
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type general_disk_error;
-thread_local disk_error_signal_type commit_error;
-
 static const sstring test_file_name = "loading_cache_test.txt";
 static const sstring test_string = "1";
 static bool file_prepared = false;

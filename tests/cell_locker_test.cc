@@ -20,16 +20,12 @@
  */
 
 #include "tests/test-utils.hh"
-#include "disk-error-handler.hh"
 
 #include <seastar/core/thread.hh>
 
 #include "cell_locking.hh"
 #include "mutation.hh"
 #include "schema_builder.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 static schema_ptr make_schema()
 {

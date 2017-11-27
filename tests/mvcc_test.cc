@@ -27,15 +27,11 @@
 
 #include "partition_version.hh"
 #include "partition_snapshot_row_cursor.hh"
-#include "disk-error-handler.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/simple_schema.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::chrono_literals;
 

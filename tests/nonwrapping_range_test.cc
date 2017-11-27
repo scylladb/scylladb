@@ -28,11 +28,7 @@
 
 #include "schema_builder.hh"
 
-#include "disk-error-handler.hh"
 #include "locator/token_metadata.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using ring_position = dht::ring_position;
 

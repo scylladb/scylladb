@@ -162,9 +162,3 @@ SEASTAR_TEST_CASE(test_overlapping_compaction) {
             expect_many({"1", "2", "3", "4"}),
     });
 }
-
-
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;

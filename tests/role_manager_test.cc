@@ -24,12 +24,8 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "auth/authenticated_user.hh"
-#include "disk-error-handler.hh"
 #include "service/migration_manager.hh"
 #include "tests/cql_test_env.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 std::unique_ptr<auth::role_manager> make_manager(cql_test_env& env) {
     return std::make_unique<auth::standard_role_manager>(env.local_qp(), service::get_local_migration_manager());

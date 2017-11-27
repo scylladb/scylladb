@@ -25,11 +25,6 @@
 #include <boost/test/unit_test.hpp>
 #include "utils/big_decimal.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 namespace {
 
 void test_div(const char *r_cstr, const int64_t q, const char *expected_cstr) {

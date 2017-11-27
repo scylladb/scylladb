@@ -29,11 +29,6 @@
 #include "tests/test_services.hh"
 #include "tests/test-utils.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 SEASTAR_TEST_CASE(test_conversion_back_and_forth) {
     return seastar::async([] {
         storage_service_for_tests ssft;

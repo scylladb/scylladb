@@ -38,11 +38,6 @@
 #include "cql3/untyped_result_set.hh"
 #include "transport/messages/result_message.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 SEASTAR_TEST_CASE(test_query_virtual_table) {
     return do_with_cql_env([] (auto& e) {
         auto ranges = db::size_estimates::size_estimates_mutation_reader::get_local_ranges().get0();

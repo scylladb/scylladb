@@ -34,13 +34,8 @@
 #include "utils/div_ceil.hh"
 #include "repair/range_split.hh"
 
-#include "disk-error-handler.hh"
 #include "simple_schema.hh"
 #include "total_order_check.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 
 template <typename... Args>
 static

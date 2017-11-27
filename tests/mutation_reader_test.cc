@@ -41,11 +41,6 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)

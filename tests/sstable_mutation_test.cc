@@ -36,12 +36,8 @@
 #include "partition_slice_builder.hh"
 #include "tmpdir.hh"
 #include "memtable-sstable.hh"
-#include "disk-error-handler.hh"
 #include "tests/sstable_assertions.hh"
 #include "tests/test_services.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace sstables;
 

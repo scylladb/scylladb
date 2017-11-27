@@ -50,11 +50,7 @@
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
 
-#include "disk-error-handler.hh"
 #include "simple_schema.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 using namespace std::chrono_literals;
 

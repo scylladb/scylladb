@@ -31,11 +31,7 @@
 #include "total_order_check.hh"
 #include "schema_upgrader.hh"
 
-#include "disk-error-handler.hh"
 #include "mutation_assertions.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 void check_order_of_fragments(streamed_mutation sm)
 {

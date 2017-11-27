@@ -41,11 +41,6 @@
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 using namespace db;
 
 template<typename Func>

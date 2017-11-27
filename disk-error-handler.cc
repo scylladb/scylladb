@@ -20,6 +20,9 @@
 
 #include "disk-error-handler.hh"
 
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 thread_local io_error_handler commit_error_handler = default_io_error_handler(commit_error);
 thread_local io_error_handler general_disk_error_handler = default_io_error_handler(general_disk_error);
 thread_local io_error_handler sstable_write_error_handler = default_io_error_handler(sstable_write_error);

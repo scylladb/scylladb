@@ -34,12 +34,8 @@
 #include "cache_streamed_mutation.hh"
 #include "row_cache.hh"
 
-#include "disk-error-handler.hh"
 #include "memtable_snapshot_source.hh"
 #include "mutation_assertions.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
 
 /*
  * ===================

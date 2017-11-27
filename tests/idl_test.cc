@@ -33,13 +33,7 @@
 #include "bytes_ostream.hh"
 #include "serializer.hh"
 
-#include "disk-error-handler.hh"
-
 #include "stdx.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 
 struct simple_compound {
     // TODO: change this to test for #905

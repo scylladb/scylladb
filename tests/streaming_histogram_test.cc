@@ -45,11 +45,6 @@
 #include <map>
 #include <cmath>
 
-#include "disk-error-handler.hh"
-
-thread_local disk_error_signal_type commit_error;
-thread_local disk_error_signal_type general_disk_error;
-
 BOOST_AUTO_TEST_CASE(basic_streaming_histogram_test) {
     utils::streaming_histogram hist(5);
     long samples[] = {23, 19, 10, 16, 36, 2, 9, 32, 30, 45};
