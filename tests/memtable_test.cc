@@ -85,6 +85,68 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     });
 }
 
+SEASTAR_TEST_CASE(test_memtable_flush_reader) {
+    // Memtable flush reader is severly limited, it always assumes that
+    // the full partition range is being read and that
+    // streamed_mutation::forwarding is set to no. Therefore, we cannot use
+    // run_mutation_source_tests() to test it.
+    return seastar::async([] {
+        auto make_memtable = [] (dirty_memory_manager& mgr, std::vector<mutation> muts) {
+            assert(!muts.empty());
+            auto mt = make_lw_shared<memtable>(muts.front().schema(), mgr);
+            for (auto& m : muts) {
+                mt->apply(m);
+            }
+            return mt;
+        };
+
+        auto test_random_streams = [&] (random_mutation_generator&& gen) {
+            for (auto i = 0; i < 4; i++) {
+                dirty_memory_manager mgr;
+                auto muts = gen(4);
+
+                BOOST_TEST_MESSAGE("Simple read");
+                auto mt = make_memtable(mgr, muts);
+                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                    .produces_partition(muts[0])
+                    .produces_partition(muts[1])
+                    .produces_partition(muts[2])
+                    .produces_partition(muts[3])
+                    .produces_end_of_stream();
+
+                BOOST_TEST_MESSAGE("Read with next_partition() calls between partition");
+                mt = make_memtable(mgr, muts);
+                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                    .next_partition()
+                    .produces_partition(muts[0])
+                    .next_partition()
+                    .produces_partition(muts[1])
+                    .next_partition()
+                    .produces_partition(muts[2])
+                    .next_partition()
+                    .produces_partition(muts[3])
+                    .next_partition()
+                    .produces_end_of_stream();
+
+                BOOST_TEST_MESSAGE("Read with next_partition() calls inside partitions");
+                mt = make_memtable(mgr, muts);
+                assert_that(mt->make_flush_reader(gen.schema(), default_priority_class()))
+                    .produces_partition(muts[0])
+                    .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
+                    .next_partition()
+                    .produces_partition(muts[2])
+                    .next_partition()
+                    .produces_partition_start(muts[3].decorated_key(), muts[3].partition().partition_tombstone())
+                    .next_partition()
+                    .produces_end_of_stream();
+            }
+        };
+
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no));
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    });
+}
+
 SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result) {
     return seastar::async([] {
         auto common_builder = schema_builder("ks", "cf")
