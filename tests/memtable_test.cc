@@ -32,6 +32,7 @@
 #include "mutation_source_test.hh"
 #include "mutation_reader_assertions.hh"
 #include "mutation_assertions.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 #include "disk-error-handler.hh"
 
@@ -172,9 +173,9 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
         auto flush_reader_check = assert_that(mt->make_flush_reader(s, service::get_local_priority_manager().memtable_flush_priority()));
-        flush_reader_check.produces(current_ring[0]);
+        flush_reader_check.produces_partition(current_ring[0]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
-        flush_reader_check.produces(current_ring[1]);
+        flush_reader_check.produces_partition(current_ring[1]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
         part0_stream = {};
@@ -183,7 +184,7 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
 
         logalloc::shard_tracker().full_compaction();
 
-        flush_reader_check.produces(current_ring[2]);
+        flush_reader_check.produces_partition(current_ring[2]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
         flush_reader_check.produces_end_of_stream();
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
@@ -257,18 +258,6 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
     });
 }
 
-struct function_invoking_consumer {
-    std::function<void()> func;
-
-    template<typename T>
-    stop_iteration consume(T t) {
-        func();
-        return stop_iteration::no;
-    }
-
-    void consume_end_of_stream() { }
-};
-
 // Reproducer for #1746
 SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
     return seastar::async([] {
@@ -300,15 +289,14 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
 
         auto rd = mt->make_flush_reader(s, service::get_local_priority_manager().memtable_flush_priority());
 
-        auto consume_mutation = [] (streamed_mutation_opt part) {
-            assert(part);
-            consume(*part, function_invoking_consumer{[] {
-                logalloc::shard_tracker().full_compaction();
-            }}).get();
-        };
-
         for (int i = 0; i < partitions; ++i) {
-            consume_mutation(rd().get0());
+            auto mfopt = rd().get0();
+            BOOST_REQUIRE(bool(mfopt));
+            BOOST_REQUIRE(mfopt->is_partition_start());
+            while (!mfopt->is_end_of_partition()) {
+                logalloc::shard_tracker().full_compaction();
+                mfopt = rd().get0();
+            }
             virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
         }
 

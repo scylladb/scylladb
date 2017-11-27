@@ -4300,9 +4300,8 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
     cfg.leave_unsealed = leave_unsealed;
     cfg.thread_scheduling_group = tsg;
     cfg.monitor = std::move(monitor);
-    auto fmr = flat_mutation_reader_from_mutation_reader(mt.schema(), mt.make_flush_reader(mt.schema(), pc),
-                                                         streamed_mutation::forwarding::no);
-    return sst->write_components(std::move(fmr), mt.partition_count(), mt.schema(), cfg, pc);
+    return sst->write_components(mt.make_flush_reader(mt.schema(), pc),
+                                 mt.partition_count(), mt.schema(), cfg, pc);
 }
 
 future<>

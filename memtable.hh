@@ -221,7 +221,7 @@ public:
         return make_flat_reader(s, range, full_slice);
     }
 
-    mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
+    flat_mutation_reader make_flush_reader(schema_ptr, const io_priority_class& pc);
 
     mutation_source as_data_source();
 

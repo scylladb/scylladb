@@ -507,14 +507,15 @@ memtable::make_flat_reader(schema_ptr s,
     }
 }
 
-mutation_reader
+flat_mutation_reader
 memtable::make_flush_reader(schema_ptr s, const io_priority_class& pc) {
     if (group()) {
-        return make_mutation_reader<flush_reader>(std::move(s), shared_from_this());
+        return flat_mutation_reader_from_mutation_reader(s, make_mutation_reader<flush_reader>(s, shared_from_this()),
+                                                         streamed_mutation::forwarding::no);
     } else {
         auto& full_slice = s->full_slice();
-        return mutation_reader_from_flat_mutation_reader(make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(),
-            query::full_partition_range, full_slice, pc, mutation_reader::forwarding::no));
+        return make_flat_mutation_reader<scanning_reader>(std::move(s), shared_from_this(),
+            query::full_partition_range, full_slice, pc, mutation_reader::forwarding::no);
     }
 }
 
