@@ -160,7 +160,7 @@ void partition_snapshot::merge_partition_versions() {
         while (current && !current->is_referenced()) {
             auto next = current->next();
             try {
-                first_used->partition().apply(*_schema, std::move(current->partition()));
+                first_used->partition().apply_monotonically(*_schema, std::move(current->partition()));
                 current_allocator().destroy(current);
             } catch (...) {
                 // Set _version so that the merge can be retried.
@@ -424,14 +424,14 @@ public:
         mutation_partition::rows_type& rows = _pe.version()->partition().clustered_rows();
         if (_next_in_latest_version != rows.end() && _rows_cmp(key, *_next_in_latest_version) == 0) {
             src.consume_row([&] (deletable_row&& row) {
-                _next_in_latest_version->row().apply(_schema, std::move(row));
+                _next_in_latest_version->row().apply_monotonically(_schema, std::move(row));
             });
         } else {
             auto e = current_allocator().construct<rows_entry>(key);
             e->set_continuous(_heap.empty() ? is_continuous::yes : _heap[0].current_row->continuous());
             rows.insert_before(_next_in_latest_version, *e);
             src.consume_row([&] (deletable_row&& row) {
-                e->row().apply(_schema, std::move(row));
+                e->row().apply_monotonically(_schema, std::move(row));
             });
         }
     }
