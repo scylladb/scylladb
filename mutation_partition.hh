@@ -266,6 +266,7 @@ public:
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
     void apply(const schema&, column_kind, const row& src);
+    // Weak exception guarantees
     void apply(const schema&, column_kind, row&& src);
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
@@ -956,6 +957,11 @@ public:
     // This instance and p are governed by the same schema.
     void apply_monotonically(const schema& s, mutation_partition&& p);
     void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
+
+    // Weak exception guarantees.
+    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema);
+    void apply_weak(const schema& s, mutation_partition&&);
+    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

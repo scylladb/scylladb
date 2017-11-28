@@ -444,6 +444,23 @@ mutation_partition::apply(const schema& s, mutation_partition_view p, const sche
     }
 }
 
+mutation_partition::apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    // FIXME: Optimize
+    mutation_partition p2(*this, copy_comparators_only{});
+    partition_builder b(p_schema, p2);
+    p.accept(p_schema, b);
+    apply_monotonically(s, std::move(p2), p_schema);
+}
+
+void mutation_partition::apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    // FIXME: Optimize
+    apply_monotonically(s, mutation_partition(p), p_schema);
+}
+
+void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
+    apply_monotonically(s, std::move(p));
+}
+
 tombstone
 mutation_partition::range_tombstone_for_row(const schema& schema, const clustering_key& key) const {
     tombstone t = _tombstone;
