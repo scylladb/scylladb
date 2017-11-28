@@ -251,11 +251,6 @@ public:
     // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
     void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell);
 
-    // Equivalent to calling apply_reversibly() with a row containing only given cell.
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const column_definition& column, atomic_cell_or_collection& cell);
-    // See reversibly_mergeable.hh
-    void revert(const column_definition& column, atomic_cell_or_collection& cell) noexcept;
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
@@ -266,10 +261,6 @@ public:
     void apply(const schema&, column_kind, row&& src);
     // Monotonic exception guarantees
     void apply_monotonically(const schema&, column_kind, row&& src);
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema&, column_kind, row& src);
-    // See reversibly_mergeable.hh
-    void revert(const schema&, column_kind, row& src) noexcept;
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -356,10 +347,6 @@ public:
             *this = rm;
         }
     }
-    // See reversibly_mergeable.hh
-    void apply_reversibly(row_marker& rm) noexcept;
-    // See reversibly_mergeable.hh
-    void revert(row_marker& rm) noexcept;
     // Expires cells and tombstones. Removes items covered by higher level
     // tombstones.
     // Returns true if row marker is live.
@@ -567,17 +554,6 @@ public:
         _shadowable.maybe_shadow(_regular, marker);
     }
 
-    // See reversibly_mergeable.hh
-    void apply_reversibly(row_tombstone& t, row_marker marker) noexcept {
-        std::swap(*this, t);
-        apply(t, marker);
-    }
-
-    // See reversibly_mergeable.hh
-    void revert(row_tombstone& t) noexcept {
-        std::swap(*this, t);
-    }
-
     friend std::ostream& operator<<(std::ostream& out, const row_tombstone& t) {
         if (t) {
             return out << "{row_tombstone: " << t._regular << (t.is_shadowable() ? t._shadowable : shadowable_tombstone()) << "}";
@@ -630,11 +606,6 @@ public:
         _deleted_at = {};
     }
 
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema& s, deletable_row& src);
-    // See reversibly_mergeable.hh
-    void revert(const schema& s, deletable_row& src);
-
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
     void apply(const schema& s, deletable_row&& src);
@@ -663,19 +634,10 @@ class rows_entry {
         bool _after_ck : 1;
         bool _continuous : 1; // See doc of is_continuous.
         bool _dummy : 1;
-        bool _erased : 1; // Used only temporarily during apply_reversibly(). Refs #2012.
-        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _erased(false) { }
+        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false) { }
     } _flags{};
     friend class mutation_partition;
 public:
-    struct erased_tag {};
-    rows_entry(erased_tag, const rows_entry& e)
-        : _key(e._key)
-    {
-        _flags._erased = true;
-        _flags._before_ck = e._flags._before_ck;
-        _flags._after_ck = e._flags._after_ck;
-    }
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
@@ -733,19 +695,8 @@ public:
     void apply_monotonically(const schema& s, rows_entry&& e) {
         _row.apply(s, std::move(e._row));
     }
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema& s, rows_entry& e) {
-        _row.apply_reversibly(s, e._row);
-    }
-    // See reversibly_mergeable.hh
-    void revert(const schema& s, rows_entry& e) noexcept {
-        _row.revert(s, e._row);
-    }
     bool empty() const {
         return _row.empty();
-    }
-    bool erased() const {
-        return _flags._erased;
     }
     struct tri_compare {
         position_in_partition::tri_compare _c;
