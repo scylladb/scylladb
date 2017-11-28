@@ -32,6 +32,8 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/simple_schema.hh"
+#include "tests/mutation_source_test.hh"
+#include "tests/failure_injecting_allocation_strategy.hh"
 
 using namespace std::chrono_literals;
 
@@ -418,4 +420,45 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
             }
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_apply_is_atomic) {
+    auto do_test = [](auto&& gen) {
+        failure_injecting_allocation_strategy alloc(standard_allocator());
+        with_allocator(alloc, [&] {
+            auto target = gen();
+            auto second = gen();
+
+            auto expected = target + second;
+
+            size_t fail_offset = 0;
+            while (true) {
+                mutation_partition m2 = second.partition();
+                auto e = partition_entry(target.partition());
+                //auto snap1 = e.read(r, gen.schema());
+
+                alloc.fail_after(fail_offset++);
+                try {
+                    e.apply(*target.schema(), std::move(m2), *second.schema());
+                    alloc.stop_failing();
+                    break;
+                } catch (const std::bad_alloc&) {
+                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                        .is_equal_to(target)
+                        .has_same_continuity(target);
+                    e.apply(*target.schema(), std::move(m2), *second.schema());
+                    assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                        .is_equal_to(expected)
+                        .has_same_continuity(expected);
+                }
+                assert_that(mutation(target.schema(), target.decorated_key(), e.squashed(*target.schema())))
+                    .is_equal_to(expected)
+                    .has_same_continuity(expected);
+            }
+        });
+    };
+
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
+    do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
+    return make_ready_future<>();
 }

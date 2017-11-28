@@ -194,6 +194,9 @@ private:
     //
     template<typename Func, typename Rollback>
     void for_each_cell(Func&&, Rollback&&);
+
+    template<typename Func>
+    void consume_with(Func&&);
 public:
     // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
     // noexcept if Func doesn't throw.
@@ -238,34 +241,26 @@ public:
     }
 
     // Merges cell's value into the row.
+    // Weak exception guarantees.
     void apply(const column_definition& column, const atomic_cell_or_collection& cell);
 
-    //
     // Merges cell's value into the row.
-    //
-    // In case of exception the current object is left with a value equivalent to the original state.
-    //
-    // The external cell is left in a valid state, such that it will commute with
-    // current object to the same value should the exception had not occurred.
-    //
+    // Weak exception guarantees.
     void apply(const column_definition& column, atomic_cell_or_collection&& cell);
 
-    // Equivalent to calling apply_reversibly() with a row containing only given cell.
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const column_definition& column, atomic_cell_or_collection& cell);
-    // See reversibly_mergeable.hh
-    void revert(const column_definition& column, atomic_cell_or_collection& cell) noexcept;
+    // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell);
+
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
+    // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
+    // Weak exception guarantees
     void apply(const schema&, column_kind, row&& src);
-
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema&, column_kind, row& src);
-    // See reversibly_mergeable.hh
-    void revert(const schema&, column_kind, row& src) noexcept;
+    // Monotonic exception guarantees
+    void apply_monotonically(const schema&, column_kind, row&& src);
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -352,10 +347,6 @@ public:
             *this = rm;
         }
     }
-    // See reversibly_mergeable.hh
-    void apply_reversibly(row_marker& rm) noexcept;
-    // See reversibly_mergeable.hh
-    void revert(row_marker& rm) noexcept;
     // Expires cells and tombstones. Removes items covered by higher level
     // tombstones.
     // Returns true if row marker is live.
@@ -563,17 +554,6 @@ public:
         _shadowable.maybe_shadow(_regular, marker);
     }
 
-    // See reversibly_mergeable.hh
-    void apply_reversibly(row_tombstone& t, row_marker marker) noexcept {
-        std::swap(*this, t);
-        apply(t, marker);
-    }
-
-    // See reversibly_mergeable.hh
-    void revert(row_tombstone& t) noexcept {
-        std::swap(*this, t);
-    }
-
     friend std::ostream& operator<<(std::ostream& out, const row_tombstone& t) {
         if (t) {
             return out << "{row_tombstone: " << t._regular << (t.is_shadowable() ? t._shadowable : shadowable_tombstone()) << "}";
@@ -626,14 +606,10 @@ public:
         _deleted_at = {};
     }
 
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema& s, deletable_row& src);
-    // See reversibly_mergeable.hh
-    void revert(const schema& s, deletable_row& src);
-
     // Weak exception guarantees. After exception, both src and this will commute to the same value as
     // they would should the exception not happen.
     void apply(const schema& s, deletable_row&& src);
+    void apply_monotonically(const schema& s, deletable_row&& src);
 public:
     row_tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -658,19 +634,10 @@ class rows_entry {
         bool _after_ck : 1;
         bool _continuous : 1; // See doc of is_continuous.
         bool _dummy : 1;
-        bool _erased : 1; // Used only temporarily during apply_reversibly(). Refs #2012.
-        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _erased(false) { }
+        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false) { }
     } _flags{};
     friend class mutation_partition;
 public:
-    struct erased_tag {};
-    rows_entry(erased_tag, const rows_entry& e)
-        : _key(e._key)
-    {
-        _flags._erased = true;
-        _flags._before_ck = e._flags._before_ck;
-        _flags._after_ck = e._flags._after_ck;
-    }
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
@@ -725,19 +692,11 @@ public:
     void apply(row_tombstone t) {
         _row.apply(t);
     }
-    // See reversibly_mergeable.hh
-    void apply_reversibly(const schema& s, rows_entry& e) {
-        _row.apply_reversibly(s, e._row);
-    }
-    // See reversibly_mergeable.hh
-    void revert(const schema& s, rows_entry& e) noexcept {
-        _row.revert(s, e._row);
+    void apply_monotonically(const schema& s, rows_entry&& e) {
+        _row.apply(s, std::move(e._row));
     }
     bool empty() const {
         return _row.empty();
-    }
-    bool erased() const {
-        return _flags._erased;
     }
     struct tri_compare {
         position_in_partition::tri_compare _c;
@@ -921,23 +880,25 @@ public:
     // Commutative when this_schema == p_schema. If schemas differ, data in p which
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
-    // Strong exception guarantees.
+    // Weak exception guarantees.
     void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
-    //
-    // Applies p to current object.
-    //
-    // Commutative when this_schema == p_schema. If schemas differ, data in p which
-    // is not representable in this_schema is dropped, thus apply() loses commutativity.
-    //
-    // If exception is thrown, this object will be left in a state equivalent to the entry state
-    // and p will be left in a state which will commute with current object to the same value
-    // should the exception had not occurred.
-    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
     // Use in case this instance and p share the same schema.
     // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
     void apply(const schema& s, mutation_partition&& p);
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
+
+    // Applies p to this instance.
+    //
+    // Monotonic exception guarantees. In case of exception the sum of p and this remains the same as before the exception.
+    // This instance and p are governed by the same schema.
+    void apply_monotonically(const schema& s, mutation_partition&& p);
+    void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
+
+    // Weak exception guarantees.
+    void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema);
+    void apply_weak(const schema& s, mutation_partition&&);
+    void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema);
 
     // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.

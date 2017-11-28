@@ -47,6 +47,7 @@
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
 #include "tests/test_services.hh"
+#include "tests/failure_injecting_allocation_strategy.hh"
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
 
@@ -761,109 +762,32 @@ SEASTAR_TEST_CASE(test_marker_apply) {
     return make_ready_future<>();
 }
 
-class failure_injecting_allocation_strategy : public allocation_strategy {
-    allocation_strategy& _delegate;
-    uint64_t _alloc_count;
-    uint64_t _fail_at = std::numeric_limits<uint64_t>::max();
-public:
-    failure_injecting_allocation_strategy(allocation_strategy& delegate) : _delegate(delegate) {}
-
-    virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
-        if (_alloc_count >= _fail_at) {
-            stop_failing();
-            throw std::bad_alloc();
-        }
-        ++_alloc_count;
-        return _delegate.alloc(mf, size, alignment);
-    }
-
-    virtual void free(void* ptr, size_t size) override {
-        _delegate.free(ptr, size);
-    }
-
-    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
-        return _delegate.object_memory_size_in_allocator(obj);
-    }
-
-    // Counts allocation attempts which are not failed due to fail_at().
-    uint64_t alloc_count() const {
-        return _alloc_count;
-    }
-
-    void fail_after(uint64_t count) {
-        _fail_at = _alloc_count + count;
-    }
-
-    void stop_failing() {
-        _fail_at = std::numeric_limits<uint64_t>::max();
-    }
-};
-
-SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
-  auto do_test = [] (auto&& gen) {
-    failure_injecting_allocation_strategy alloc(standard_allocator());
-    with_allocator(alloc, [&] {
-        auto target = gen();
-
-        BOOST_TEST_MESSAGE(sprint("Target: %s", target));
-
-        for (int i = 0; i < 10; ++i) {
+SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
+    auto do_test = [](auto&& gen) {
+        failure_injecting_allocation_strategy alloc(standard_allocator());
+        with_allocator(alloc, [&] {
+            auto target = gen();
             auto second = gen();
 
-            BOOST_TEST_MESSAGE(sprint("Second: %s", second));
+            auto expected = target + second;
 
-            auto expected_apply_result = target;
-            expected_apply_result.apply(second);
-
-            BOOST_TEST_MESSAGE(sprint("Expected: %s", expected_apply_result));
-
-            // Test the apply(const mutation&) variant
-            {
-                auto m = target;
-
-                // Try to fail at every possible allocation point during apply()
-                size_t fail_offset = 0;
-                while (true) {
-                    BOOST_TEST_MESSAGE(sprint("Failing allocation at %d", fail_offset));
-                    alloc.fail_after(fail_offset++);
-                    try {
-                        m.apply(second);
-                        alloc.stop_failing();
-                        BOOST_TEST_MESSAGE("Checking that apply has expected result");
-                        assert_that(m).is_equal_to(expected_apply_result);
-                        break; // we exhausted all allocation points
-                    } catch (const std::bad_alloc&) {
-                        BOOST_TEST_MESSAGE("Checking that apply was reverted");
-                        assert_that(m).is_equal_to(target)
-                            .has_same_continuity(target);
-                    }
+            size_t fail_offset = 0;
+            while (true) {
+                mutation m = target;
+                mutation_partition m2 = second.partition();
+                alloc.fail_after(fail_offset++);
+                try {
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
+                    alloc.stop_failing();
+                    break;
+                } catch (const std::bad_alloc&) {
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
                 }
+                assert_that(m).is_equal_to(expected)
+                    .has_same_continuity(expected);
             }
-
-            // Test the apply(mutation&&) variant
-            {
-                size_t fail_offset = 0;
-                while (true) {
-                    auto copy_of_second = second;
-                    auto m = target;
-                    alloc.fail_after(fail_offset++);
-                    try {
-                        m.apply(std::move(copy_of_second));
-                        alloc.stop_failing();
-                        assert_that(m).is_equal_to(expected_apply_result);
-                        break; // we exhausted all allocation points
-                    } catch (const std::bad_alloc&) {
-                        assert_that(m).is_equal_to(target);
-                        // they should still commute
-                        m.apply(copy_of_second);
-                        assert_that(m).is_equal_to(expected_apply_result)
-                            .has_same_continuity(expected_apply_result);
-                    }
-                }
-            }
-        }
-    });
-  };
+        });
+    };
 
     do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
     do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));

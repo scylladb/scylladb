@@ -136,94 +136,6 @@ struct reversal_traits<true> {
     }
 };
 
-
-//
-// apply_reversibly_intrusive_set() and revert_intrusive_set() implement ReversiblyMergeable
-// for a rows_type container of ReversiblyMergeable entries.
-//
-// See reversibly_mergeable.hh
-//
-// Requirements:
-//  - entry has distinct key and value states
-//  - entries are ordered only by key in the container
-//  - entry can have an empty value
-//  - presence of an entry with an empty value doesn't affect equality of the containers
-//  - E::empty() returns true iff the value is empty
-//  - E(e.key()) creates an entry with empty value but the same key as that of e.
-//
-// Implementation of ReversiblyMergeable for the entry's value is provided via Apply and Revert functors.
-//
-// ReversiblyMergeable is constructed assuming the following properties of the 'apply' operation
-// on containers:
-//
-//  apply([{k1, v1}], [{k1, v2}]) = [{k1, apply(v1, v2)}]
-//  apply([{k1, v1}], [{k2, v2}]) = [{k1, v1}, {k2, v2}]
-//
-
-// revert for apply_reversibly_intrusive_set()
-void revert_intrusive_set_range(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src,
-    mutation_partition::rows_type::iterator start,
-    mutation_partition::rows_type::iterator end) noexcept
-{
-    auto deleter = current_deleter<rows_entry>();
-    while (start != end) {
-        auto& e = *start;
-        // lower_bound() can allocate if linearization is required but it should have
-        // been already performed by the lower_bound() invocation in apply_reversibly_intrusive_set() and
-        // stored in the linearization context.
-        auto i = dst.find(e, rows_entry::compare(s));
-        assert(i != dst.end());
-        rows_entry& dst_e = *i;
-
-        if (e.erased()) {
-            dst.erase(i);
-            start = src.erase_and_dispose(start, deleter);
-            start = src.insert_before(start, dst_e);
-        } else {
-            dst_e.revert(s, e);
-        }
-
-        ++start;
-    }
-}
-
-void revert_intrusive_set(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src) noexcept {
-    revert_intrusive_set_range(s, dst, src, src.begin(), src.end());
-}
-
-// Applies src onto dst. See comment above revert_intrusive_set_range() for more details.
-//
-// Returns an object which upon going out of scope, unless cancel() is called on it,
-// reverts the applicaiton by calling revert_intrusive_set(). The references to containers
-// must be stable as long as the returned object is live.
-auto apply_reversibly_intrusive_set(const schema& s, mutation_partition::rows_type& dst, mutation_partition::rows_type& src) {
-    auto src_i = src.begin();
-    try {
-        rows_entry::compare cmp(s);
-        while (src_i != src.end()) {
-            rows_entry& src_e = *src_i;
-
-            auto i = dst.lower_bound(src_e, cmp);
-            if (i == dst.end() || cmp(src_e, *i)) {
-                // Construct erased entry which will represent missing dst entry for revert.
-                rows_entry* empty_e = current_allocator().construct<rows_entry>(rows_entry::erased_tag{}, src_e);
-                [&] () noexcept {
-                    src_i = src.erase(src_i);
-                    src_i = src.insert_before(src_i, *empty_e);
-                    dst.insert_before(i, src_e);
-                }();
-            } else {
-                i->apply_reversibly(s, src_e);
-            }
-            ++src_i;
-        }
-        return defer([&s, &dst, &src] { revert_intrusive_set(s, dst, src); });
-    } catch (...) {
-        revert_intrusive_set_range(s, dst, src, src.begin(), src_i);
-        throw;
-    }
-}
-
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
@@ -318,17 +230,16 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
-void
-mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
-    if (s.version() != p_schema.version()) {
-        auto p2 = p;
-        p2.upgrade(p_schema, s);
-        apply(s, std::move(p2));
-        return;
-    }
+void mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    apply_weak(s, p, p_schema);
+}
 
-    mutation_partition tmp(p);
-    apply(s, std::move(tmp));
+void mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    apply_weak(s, std::move(p));
+}
+
+void mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    apply_weak(s, p, p_schema);
 }
 
 struct mutation_fragment_applier {
@@ -368,49 +279,53 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void
-mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
-    if (s.version() != p_schema.version()) {
-        // We can't upgrade p in-place due to exception guarantees
-        apply(s, p, p_schema);
-        return;
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p) {
+    _tombstone.apply(p._tombstone);
+    _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
+    _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
+
+    rows_entry::compare less(s);
+    auto del = current_deleter<rows_entry>();
+    auto p_i = p._rows.begin();
+    while (p_i != p._rows.end()) {
+        rows_entry& src_e = *p_i;
+        auto i = _rows.lower_bound(src_e, less);
+        if (i == _rows.end() || less(src_e, *i)) {
+            p_i = p._rows.erase(p_i);
+            _rows.insert_before(i, src_e);
+        } else {
+            i->_row.apply_monotonically(s, std::move(src_e._row));
+            p_i = p._rows.erase_and_dispose(p_i, del);
+        }
     }
-
-    apply(s, std::move(p));
 }
 
-void
-mutation_partition::apply(const schema& s, mutation_partition&& p) {
-    auto revert_row_tombstones = _row_tombstones.apply_reversibly(s, p._row_tombstones);
-
-    _static_row.apply_reversibly(s, column_kind::static_column, p._static_row);
-    auto revert_static_row = defer([&] {
-        _static_row.revert(s, column_kind::static_column, p._static_row);
-    });
-
-    auto revert_rows = apply_reversibly_intrusive_set(s, _rows, p._rows);
-
-    _tombstone.apply(p._tombstone); // noexcept
-
-    revert_rows.cancel();
-    revert_row_tombstones.cancel();
-    revert_static_row.cancel();
-}
-
-void
-mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
-    if (p_schema.version() == s.version()) {
-        mutation_partition p2(*this, copy_comparators_only{});
-        partition_builder b(s, p2);
-        p.accept(s, b);
-        apply(s, std::move(p2));
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
+    if (s.version() == p_schema.version()) {
+        apply_monotonically(s, std::move(p));
     } else {
-        mutation_partition p2(*this, copy_comparators_only{});
-        partition_builder b(p_schema, p2);
-        p.accept(p_schema, b);
+        mutation_partition p2(p);
         p2.upgrade(p_schema, s);
-        apply(s, std::move(p2));
+        apply_monotonically(s, std::move(p2));
     }
+}
+
+void
+mutation_partition::apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    // FIXME: Optimize
+    mutation_partition p2(*this, copy_comparators_only{});
+    partition_builder b(p_schema, p2);
+    p.accept(p_schema, b);
+    apply_monotonically(s, std::move(p2), p_schema);
+}
+
+void mutation_partition::apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    // FIXME: Optimize
+    apply_monotonically(s, mutation_partition(p), p_schema);
+}
+
+void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
+    apply_monotonically(s, std::move(p));
 }
 
 tombstone
@@ -947,19 +862,11 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
     return _cells.equal(kind, s, other._cells, other_schema);
 }
 
-void deletable_row::apply_reversibly(const schema& s, deletable_row& src) {
-    _cells.apply_reversibly(s, column_kind::regular_column, src._cells);
-    _marker.apply_reversibly(src._marker); // noexcept
-    _deleted_at.apply_reversibly(src._deleted_at, _marker); // noexcept
-}
-
-void deletable_row::revert(const schema& s, deletable_row& src) {
-    _cells.revert(s, column_kind::regular_column, src._cells);
-    _deleted_at.revert(src._deleted_at);
-    _marker.revert(src._marker);
-}
-
 void deletable_row::apply(const schema& s, deletable_row&& src) {
+    apply_monotonically(s, std::move(src));
+}
+
+void deletable_row::apply_monotonically(const schema& s, deletable_row&& src) {
     _cells.apply(s, column_kind::regular_column, std::move(src._cells));
     _marker.apply(src._marker);
     _deleted_at.apply(src._deleted_at, _marker);
@@ -1015,58 +922,30 @@ bool mutation_partition::equal_continuity(const schema& s, const mutation_partit
 }
 
 void
-apply_reversibly(const column_definition& def, atomic_cell_or_collection& dst,  atomic_cell_or_collection& src) {
+apply_monotonically(const column_definition& def, atomic_cell_or_collection& dst,  atomic_cell_or_collection& src) {
     // Must be run via with_linearized_managed_bytes() context, but assume it is
     // provided via an upper layer
     if (def.is_atomic()) {
-        auto&& src_ac = src.as_atomic_cell_ref();
         if (def.is_counter()) {
-            auto did_apply = counter_cell_view::apply_reversibly(dst, src);
-            src_ac.set_revert(did_apply);
-        } else {
-            if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
-                std::swap(dst, src);
-                src_ac.set_revert(true);
-            } else {
-                src_ac.set_revert(false);
-            }
+            counter_cell_view::apply_reversibly(dst, src); // FIXME: Optimize
+        } else if (compare_atomic_cell_for_merge(dst.as_atomic_cell(), src.as_atomic_cell()) < 0) {
+            std::swap(dst, src);
         }
     } else {
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
-        src = ct->merge(dst.as_collection_mutation(), src.as_collection_mutation());
-        std::swap(dst, src);
-    }
-}
-
-void
-revert(const column_definition& def, atomic_cell_or_collection& dst, atomic_cell_or_collection& src) noexcept {
-    static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
-                  && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
-                  "for std::swap() to be noexcept");
-    if (def.is_atomic()) {
-        auto&& ac = src.as_atomic_cell_ref();
-        if (ac.is_revert_set()) {
-            ac.set_revert(false);
-            if (def.is_counter()) {
-                counter_cell_view::revert_apply(dst, src);
-            } else {
-                std::swap(dst, src);
-            }
-        }
-    } else {
-        std::swap(dst, src);
+        dst = ct->merge(dst.as_collection_mutation(), src.as_collection_mutation());
     }
 }
 
 void
 row::apply(const column_definition& column, const atomic_cell_or_collection& value) {
-    atomic_cell_or_collection tmp(value);
-    apply(column, std::move(tmp));
+    auto tmp = value;
+    apply_monotonically(column, std::move(tmp));
 }
 
 void
 row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
-    apply_reversibly(column, value);
+    apply_monotonically(column, std::move(value));
 }
 
 template<typename Func, typename Rollback>
@@ -1108,8 +987,30 @@ void row::for_each_cell(Func&& func, Rollback&& rollback) {
     }
 }
 
+template<typename Func>
+void row::consume_with(Func&& func) {
+    if (_type == storage_type::vector) {
+        unsigned i = 0;
+        for (; i < _storage.vector.v.size(); i++) {
+            if (_storage.vector.present.test(i)) {
+                func(i, _storage.vector.v[i]);
+                _storage.vector.present.reset(i);
+                --_size;
+            }
+        }
+    } else {
+        auto del = current_deleter<cell_entry>();
+        auto i = _storage.set.begin();
+        while (i != _storage.set.end()) {
+            func(i->id(), i->cell());
+            i = _storage.set.erase_and_dispose(i, del);
+            --_size;
+        }
+    }
+}
+
 void
-row::apply_reversibly(const column_definition& column, atomic_cell_or_collection& value) {
+row::apply_monotonically(const column_definition& column, atomic_cell_or_collection&& value) {
     static_assert(std::is_nothrow_move_constructible<atomic_cell_or_collection>::value
                   && std::is_nothrow_move_assignable<atomic_cell_or_collection>::value,
                   "noexcept required for atomicity");
@@ -1127,7 +1028,7 @@ row::apply_reversibly(const column_definition& column, atomic_cell_or_collection
             _storage.vector.present.set(id);
             _size++;
         } else {
-            ::apply_reversibly(column, _storage.vector.v[id], value);
+            ::apply_monotonically(column, _storage.vector.v[id], value);
         }
     } else {
         if (_type == storage_type::vector) {
@@ -1136,36 +1037,11 @@ row::apply_reversibly(const column_definition& column, atomic_cell_or_collection
         auto i = _storage.set.lower_bound(id, cell_entry::compare());
         if (i == _storage.set.end() || i->id() != id) {
             cell_entry* e = current_allocator().construct<cell_entry>(id);
-            std::swap(e->_cell, value);
             _storage.set.insert(i, *e);
             _size++;
+            e->_cell = std::move(value);
         } else {
-            ::apply_reversibly(column, i->cell(), value);
-        }
-    }
-}
-
-void
-row::revert(const column_definition& column, atomic_cell_or_collection& src) noexcept {
-    auto id = column.id;
-    if (_type == storage_type::vector) {
-        auto& dst = _storage.vector.v[id];
-        if (!src) {
-            std::swap(dst, src);
-            _storage.vector.present.reset(id);
-            --_size;
-        } else {
-            ::revert(column, dst, src);
-        }
-    } else {
-        auto i = _storage.set.find(id, cell_entry::compare());
-        auto& dst = i->cell();
-        if (!src) {
-            std::swap(dst, src);
-            _storage.set.erase_and_dispose(i, current_deleter<cell_entry>());
-            --_size;
-        } else {
-            ::revert(column, dst, src);
+            ::apply_monotonically(column, i->cell(), value);
         }
     }
 }
@@ -1572,22 +1448,6 @@ row& row::operator=(row&& other) noexcept {
     return *this;
 }
 
-void row::apply_reversibly(const schema& s, column_kind kind, row& other) {
-    if (other.empty()) {
-        return;
-    }
-    if (other._type == storage_type::vector) {
-        reserve(other._storage.vector.v.size() - 1);
-    } else {
-        reserve(other._storage.set.rbegin()->id());
-    }
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-        apply_reversibly(s.column_at(kind, id), cell);
-    }, [&] (column_id id, atomic_cell_or_collection& cell) noexcept {
-        revert(s.column_at(kind, id), cell);
-    });
-}
-
 void row::apply(const schema& s, column_kind kind, const row& other) {
     if (other.empty()) {
         return;
@@ -1603,6 +1463,10 @@ void row::apply(const schema& s, column_kind kind, const row& other) {
 }
 
 void row::apply(const schema& s, column_kind kind, row&& other) {
+    apply_monotonically(s, kind, std::move(other));
+}
+
+void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
     if (other.empty()) {
         return;
     }
@@ -1611,14 +1475,8 @@ void row::apply(const schema& s, column_kind kind, row&& other) {
     } else {
         reserve(other._storage.set.rbegin()->id());
     }
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) {
-        apply(s.column_at(kind, id), std::move(cell));
-    });
-}
-
-void row::revert(const schema& s, column_kind kind, row& other) noexcept {
-    other.for_each_cell([&] (column_id id, atomic_cell_or_collection& cell) noexcept {
-        revert(s.column_at(kind, id), cell);
+    other.consume_with([&] (column_id id, atomic_cell_or_collection& cell) {
+        apply_monotonically(s.column_at(kind, id), std::move(cell));
     });
 }
 
@@ -1777,18 +1635,6 @@ mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) 
     converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
     accept(old_schema, v);
     *this = std::move(tmp);
-}
-
-void row_marker::apply_reversibly(row_marker& rm) noexcept {
-    if (compare_row_marker_for_merge(*this, rm) < 0) {
-        std::swap(*this, rm);
-    } else {
-        rm = *this;
-    }
-}
-
-void row_marker::revert(row_marker& rm) noexcept {
-    std::swap(*this, rm);
 }
 
 // Adds mutation to query::result.
