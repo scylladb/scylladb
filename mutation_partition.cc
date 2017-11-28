@@ -318,17 +318,16 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
-void
-mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
-    if (s.version() != p_schema.version()) {
-        auto p2 = p;
-        p2.upgrade(p_schema, s);
-        apply(s, std::move(p2));
-        return;
-    }
+void mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    apply_weak(s, p, p_schema);
+}
 
-    mutation_partition tmp(p);
-    apply(s, std::move(tmp));
+void mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    apply_weak(s, std::move(p));
+}
+
+void mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    apply_weak(s, p, p_schema);
 }
 
 struct mutation_fragment_applier {
@@ -368,35 +367,6 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void
-mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
-    if (s.version() != p_schema.version()) {
-        // We can't upgrade p in-place due to exception guarantees
-        apply(s, p, p_schema);
-        return;
-    }
-
-    apply(s, std::move(p));
-}
-
-void
-mutation_partition::apply(const schema& s, mutation_partition&& p) {
-    auto revert_row_tombstones = _row_tombstones.apply_reversibly(s, p._row_tombstones);
-
-    _static_row.apply_reversibly(s, column_kind::static_column, p._static_row);
-    auto revert_static_row = defer([&] {
-        _static_row.revert(s, column_kind::static_column, p._static_row);
-    });
-
-    auto revert_rows = apply_reversibly_intrusive_set(s, _rows, p._rows);
-
-    _tombstone.apply(p._tombstone); // noexcept
-
-    revert_rows.cancel();
-    revert_row_tombstones.cancel();
-    revert_static_row.cancel();
-}
-
 void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p) {
     _tombstone.apply(p._tombstone);
     _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
@@ -429,21 +399,6 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
 }
 
 void
-mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
-    if (p_schema.version() == s.version()) {
-        mutation_partition p2(*this, copy_comparators_only{});
-        partition_builder b(s, p2);
-        p.accept(s, b);
-        apply(s, std::move(p2));
-    } else {
-        mutation_partition p2(*this, copy_comparators_only{});
-        partition_builder b(p_schema, p2);
-        p.accept(p_schema, b);
-        p2.upgrade(p_schema, s);
-        apply(s, std::move(p2));
-    }
-}
-
 mutation_partition::apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema) {
     // FIXME: Optimize
     mutation_partition p2(*this, copy_comparators_only{});
@@ -1128,13 +1083,13 @@ revert(const column_definition& def, atomic_cell_or_collection& dst, atomic_cell
 
 void
 row::apply(const column_definition& column, const atomic_cell_or_collection& value) {
-    atomic_cell_or_collection tmp(value);
-    apply(column, std::move(tmp));
+    auto tmp = value;
+    apply_monotonically(column, std::move(tmp));
 }
 
 void
 row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
-    apply_reversibly(column, value);
+    apply_monotonically(column, std::move(value));
 }
 
 template<typename Func, typename Rollback>

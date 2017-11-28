@@ -241,16 +241,11 @@ public:
     }
 
     // Merges cell's value into the row.
+    // Weak exception guarantees.
     void apply(const column_definition& column, const atomic_cell_or_collection& cell);
 
-    //
     // Merges cell's value into the row.
-    //
-    // In case of exception the current object is left with a value equivalent to the original state.
-    //
-    // The external cell is left in a valid state, such that it will commute with
-    // current object to the same value should the exception had not occurred.
-    //
+    // Weak exception guarantees.
     void apply(const column_definition& column, atomic_cell_or_collection&& cell);
 
     // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
@@ -265,6 +260,7 @@ public:
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
+    // Weak exception guarantees
     void apply(const schema&, column_kind, const row& src);
     // Weak exception guarantees
     void apply(const schema&, column_kind, row&& src);
@@ -933,18 +929,8 @@ public:
     // Commutative when this_schema == p_schema. If schemas differ, data in p which
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
-    // Strong exception guarantees.
+    // Weak exception guarantees.
     void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
-    //
-    // Applies p to current object.
-    //
-    // Commutative when this_schema == p_schema. If schemas differ, data in p which
-    // is not representable in this_schema is dropped, thus apply() loses commutativity.
-    //
-    // If exception is thrown, this object will be left in a state equivalent to the entry state
-    // and p will be left in a state which will commute with current object to the same value
-    // should the exception had not occurred.
-    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
     // Use in case this instance and p share the same schema.
     // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
     void apply(const schema& s, mutation_partition&& p);
