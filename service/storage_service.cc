@@ -89,6 +89,7 @@ static const sstring INDEXES_FEATURE = "INDEXES";
 static const sstring DIGEST_MULTIPARTITION_READ_FEATURE = "DIGEST_MULTIPARTITION_READ";
 static const sstring CORRECT_COUNTER_ORDER_FEATURE = "CORRECT_COUNTER_ORDER";
 static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
+static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
 
 distributed<storage_service> _the_storage_service;
 
@@ -133,7 +134,8 @@ sstring storage_service::get_config_supported_features() {
         COUNTERS_FEATURE,
         DIGEST_MULTIPARTITION_READ_FEATURE,
         CORRECT_COUNTER_ORDER_FEATURE,
-        SCHEMA_TABLES_V3
+        SCHEMA_TABLES_V3,
+        CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
     };
     if (service::get_local_storage_service()._db.local().get_config().experimental()) {
         features.push_back(MATERIALIZED_VIEWS_FEATURE);
@@ -344,6 +346,7 @@ void storage_service::register_features() {
     _digest_multipartition_read_feature = gms::feature(DIGEST_MULTIPARTITION_READ_FEATURE);
     _correct_counter_order_feature = gms::feature(CORRECT_COUNTER_ORDER_FEATURE);
     _schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
+    _correct_non_compound_range_tombstones = gms::feature(CORRECT_NON_COMPOUND_RANGE_TOMBSTONES);
 
     if (_db.local().get_config().experimental()) {
         _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);
