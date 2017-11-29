@@ -393,13 +393,9 @@ data_consume_context::~data_consume_context() {
         f.handle_exception([ctx = std::move(_ctx), sst = std::move(_sst)](auto) {});
     }
 };
-data_consume_context::data_consume_context(data_consume_context&& o) noexcept
-    : _ctx(std::move(o._ctx))
-{ }
-data_consume_context& data_consume_context::operator=(data_consume_context&& o) noexcept {
-    _ctx = std::move(o._ctx);
-    return *this;
-}
+data_consume_context::data_consume_context(data_consume_context&& o) noexcept = default;
+data_consume_context& data_consume_context::operator=(data_consume_context&& o) noexcept = default;
+
 data_consume_context::data_consume_context(shared_sstable sst, row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
     : _sst(std::move(sst)), _ctx(new data_consume_rows_context(consumer, std::move(input), start, maxlen))
 { }
