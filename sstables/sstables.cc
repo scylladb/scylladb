@@ -1528,8 +1528,9 @@ void sstable::write_range_tombstone_bound(file_writer& out,
         const composite& clustering_element,
         const std::vector<bytes_view>& column_names,
         composite::eoc marker) {
-    if (!_correctly_serialize_non_compound_range_tombstones) {
-        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
+    if (!_correctly_serialize_non_compound_range_tombstones && !clustering_element.is_compound()) {
+        auto vals = clustering_element.values();
+        write_compound_non_dense_column_name(out, composite::serialize_value(vals, true), column_names, marker);
     } else {
         write_column_name(out, s, clustering_element, column_names, marker);
     }
