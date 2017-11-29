@@ -3141,7 +3141,7 @@ std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
 
 std::chrono::milliseconds storage_service::get_ring_delay() {
     auto ring_delay = _db.local().get_config().ring_delay_ms();
-    slogger.trace("Set RING_DELAY to {}ms", ring_delay);
+    slogger.trace("Get RING_DELAY: {}ms", ring_delay);
     return std::chrono::milliseconds(ring_delay);
 }
 
