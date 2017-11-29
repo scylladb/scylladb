@@ -241,7 +241,7 @@ public:
     using component_view = std::pair<bytes_view, eoc>;
 private:
     template<typename Value, typename = std::enable_if_t<!std::is_same<const data_value, std::decay_t<Value>>::value>>
-    static size_t size(Value& val) {
+    static size_t size(Value&& val) {
         return val.size();
     }
     static size_t size(const data_value& val) {
