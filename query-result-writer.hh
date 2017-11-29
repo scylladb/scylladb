@@ -131,10 +131,10 @@ class result::builder {
     short_read _short_read;
     result_memory_accounter _memory_accounter;
 public:
-    builder(const partition_slice& slice, result_request request, result_memory_accounter memory_accounter)
+    builder(const partition_slice& slice, result_options options, result_memory_accounter memory_accounter)
         : _slice(slice)
         , _w(ser::writer_of_query_result<bytes_ostream>(_out).start_partitions())
-        , _request(request)
+        , _request(options.request)
         , _memory_accounter(std::move(memory_accounter))
     { }
     builder(builder&&) = delete; // _out is captured by reference

@@ -184,7 +184,7 @@ static sizes calculate_sizes(const mutation& m) {
     result.cache = tracker.region().occupancy().used_space() - cache_initial_occupancy;     
     result.frozen = freeze(m).representation().size();
     result.canonical = canonical_mutation(m).representation().size();
-    result.query_result = m.query(partition_slice_builder(*s).build(), query::result_request::only_result).buf().size();
+    result.query_result = m.query(partition_slice_builder(*s).build(), query::result_options::only_result()).buf().size();
 
     tmpdir sstable_dir;
     auto sst = sstables::make_sstable(s,

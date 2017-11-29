@@ -121,20 +121,20 @@ mutation::query(query::result::builder& builder,
 
 query::result
 mutation::query(const query::partition_slice& slice,
-    query::result_request request,
+    query::result_options opts,
     gc_clock::time_point now, uint32_t row_limit) &&
 {
-    query::result::builder builder(slice, request, { });
+    query::result::builder builder(slice, opts, { });
     std::move(*this).query(builder, slice, now, row_limit);
     return builder.build();
 }
 
 query::result
 mutation::query(const query::partition_slice& slice,
-    query::result_request request,
+    query::result_options opts,
     gc_clock::time_point now, uint32_t row_limit) const&
 {
-    return mutation(*this).query(slice, request, now, row_limit);
+    return mutation(*this).query(slice, opts, now, row_limit);
 }
 
 size_t

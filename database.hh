@@ -643,7 +643,8 @@ public:
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
-        const query::read_command& cmd, query::result_request request,
+        const query::read_command& cmd,
+        query::result_options opts,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
@@ -1192,7 +1193,7 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_request request,
+    future<lw_shared_ptr<query::result>, cache_temperature> query(schema_ptr, const query::read_command& cmd, query::result_options opts,
                                                                   const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
                                                                   uint64_t max_result_size, db::timeout_clock::time_point timeout = db::no_timeout);
     future<reconcilable_result, cache_temperature> query_mutations(schema_ptr, const query::read_command& cmd, const dht::partition_range& range,

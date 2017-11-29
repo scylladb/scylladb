@@ -253,7 +253,7 @@ private:
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
-                                                                           query::result_request request,
+                                                                           query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,
                                                                            clock_type::time_point timeout,
                                                                            uint64_t max_size = query::result_memory_limiter::maximum_result_size);

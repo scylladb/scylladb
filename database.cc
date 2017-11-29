@@ -2914,12 +2914,12 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 struct query_state {
     explicit query_state(schema_ptr s,
                          const query::read_command& cmd,
-                         query::result_request request,
+                         query::result_options opts,
                          const dht::partition_range_vector& ranges,
                          query::result_memory_accounter memory_accounter = { })
             : schema(std::move(s))
             , cmd(cmd)
-            , builder(cmd.slice, request, std::move(memory_accounter))
+            , builder(cmd.slice, opts, std::move(memory_accounter))
             , limit(cmd.row_limit)
             , partition_limit(cmd.partition_limit)
             , current_partition_range(ranges.begin())
@@ -2945,16 +2945,16 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
+column_family::query(schema_ptr s, const query::read_command& cmd, query::result_options opts,
                      const dht::partition_range_vector& partition_ranges,
                      tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter,
                      uint64_t max_size, db::timeout_clock::time_point timeout) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    auto f = request == query::result_request::only_digest
+    auto f = opts.request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
-    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
-        auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges, std::move(accounter));
+    return f.then([this, lc, s = std::move(s), &cmd, opts, &partition_ranges, trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
+        auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;
         return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout] {
             auto&& range = *qs.current_partition_range++;
@@ -3003,10 +3003,10 @@ std::chrono::milliseconds column_family::get_coordinator_read_latency_percentile
 static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
 future<lw_shared_ptr<query::result>, cache_temperature>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
+database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
+    return data_query_stage(&cf, std::move(s), seastar::cref(cmd), opts, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
                             max_result_size,
                             timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
