@@ -515,7 +515,6 @@ int main(int ac, char** av) {
                     , cluster_name
                     , phi
                     , cfg->listen_on_broadcast_address());
-            supervisor::notify("starting messaging service");
             supervisor::notify("starting storage proxy");
             proxy.start(std::ref(db)).get();
             // #293 - do not stop anything
@@ -603,6 +602,7 @@ int main(int ac, char** av) {
             supervisor::notify("starting streaming service");
             streaming::stream_session::init_streaming_service(db).get();
             api::set_server_stream_manager(ctx).get();
+            supervisor::notify("starting messaging service");
             // Start handling REPAIR_CHECKSUM_RANGE messages
             netw::get_messaging_service().invoke_on_all([&db] (auto& ms) {
                 ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, dht::token_range range, rpc::optional<repair_checksum> hash_version) {
