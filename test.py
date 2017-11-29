@@ -126,7 +126,7 @@ def boost_test_wants_double_dash(path):
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
-    parser = argparse.ArgumentParser(description="Seastar test runner")
+    parser = argparse.ArgumentParser(description="Scylla test runner")
     parser.add_argument('--fast',  action="store_true",
                         help="Run only fast tests")
     parser.add_argument('--name',  action="store",
