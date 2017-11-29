@@ -586,7 +586,6 @@ int main(int ac, char** av) {
                     cf.trigger_compaction();
                 }
             }).get();
-            api::set_server_storage_service(ctx).get();
             api::set_server_gossip(ctx).get();
             api::set_server_snitch(ctx).get();
             api::set_server_storage_proxy(ctx).get();
