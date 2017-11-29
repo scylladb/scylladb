@@ -141,7 +141,6 @@ if __name__ == "__main__":
                         help='Verbose reporting')
     args = parser.parse_args()
 
-    black_hole = open('/dev/null', 'w')
     print_status = print_status_verbose if args.verbose else print_status_short
 
     test_to_run = []
