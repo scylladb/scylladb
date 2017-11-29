@@ -30,19 +30,21 @@
 class md5_hasher {
     CryptoPP::Weak::MD5 hash{};
 public:
+    static constexpr size_t size = CryptoPP::Weak::MD5::DIGESTSIZE;
+
     void update(const char* ptr, size_t length) {
         static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
         hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
     }
 
     bytes finalize() {
-        bytes digest{bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE};
+        bytes digest{bytes::initialized_later(), size};
         hash.Final(reinterpret_cast<unsigned char*>(digest.begin()));
         return digest;
     }
 
-    std::array<uint8_t, CryptoPP::Weak::MD5::DIGESTSIZE> finalize_array() {
-        std::array<uint8_t, CryptoPP::Weak::MD5::DIGESTSIZE> array;
+    std::array<uint8_t, size> finalize_array() {
+        std::array<uint8_t, size> array;
         hash.Final(reinterpret_cast<unsigned char*>(array.data()));
         return array;
     }
