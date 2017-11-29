@@ -214,10 +214,10 @@ static const class_registrator<
         auth::authenticator,
         auth::transitional_authenticator,
         cql3::query_processor&,
-        ::service::migration_manager&> transitional_authenticator_reg("com.scylladb.auth.TransitionalAuthenticator");
+        ::service::migration_manager&> transitional_authenticator_reg(auth::PACKAGE_NAME + "TransitionalAuthenticator");
 
 static const class_registrator<
         auth::authorizer,
         auth::transitional_authorizer,
         cql3::query_processor&,
-        ::service::migration_manager&> transitional_authorizer_reg("com.scylladb.auth.TransitionalAuthorizer");
+        ::service::migration_manager&> transitional_authorizer_reg(auth::PACKAGE_NAME + "TransitionalAuthorizer");
