@@ -105,8 +105,6 @@ public:
     future<> skip_to(indexable_element, uint64_t begin);
     uint64_t position() const;
     bool eof() const;
-    // Define (as defaults) the destructor and move operations in the source
-    // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
     data_consume_context(data_consume_context&&) noexcept;
     data_consume_context& operator=(data_consume_context&&) noexcept;
