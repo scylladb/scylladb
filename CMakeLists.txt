@@ -137,4 +137,5 @@ target_include_directories(scylla PUBLIC
         ${SEASTAR_DPDK_INCLUDE_DIRS}
         ${SEASTAR_INCLUDE_DIRS}
         ${Boost_INCLUDE_DIRS}
+        xxhash
         build/release/gen)
