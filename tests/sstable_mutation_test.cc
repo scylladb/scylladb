@@ -1084,3 +1084,45 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
     });
 }
+
+SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compound) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto dir = make_lw_shared<tmpdir>();
+        schema_builder builder("ks", "cf");
+        builder.with_column("p", utf8_type, column_kind::partition_key);
+        builder.with_column("c", int32_type, column_kind::clustering_key);
+        builder.with_column("v", int32_type);
+        auto s = builder.build(schema_builder::compact_storage::yes);
+
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        mutation m(dk, s);
+
+        m.partition().apply_row_tombstone(*s, range_tombstone(
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
+                bound_kind::incl_start,
+                clustering_key_prefix::from_exploded(*s, {int32_type->decompose(2)}),
+                bound_kind::incl_end,
+                {1, gc_clock::now()}));
+
+        auto mt = make_lw_shared<memtable>(s);
+        mt->apply(m);
+
+        auto sst = sstables::make_sstable(s,
+                                          dir->path,
+                                          1 /* generation */,
+                                          sstables::sstable::version_types::ka,
+                                          sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        cfg.correctly_serialize_non_compound_range_tombstones = false;
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->load().get();
+
+        {
+            auto slice = partition_slice_builder(*s).build();
+            assert_that(sst->as_mutation_source()(s, dht::partition_range::make_singular(dk), slice))
+                    .produces(m)
+                    .produces_end_of_stream();
+        }
+    });
+}
