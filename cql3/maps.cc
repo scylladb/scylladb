@@ -245,11 +245,6 @@ maps::delayed_value::bind(const query_options& options) {
         if (value_bytes.is_unset_value()) {
             return constants::UNSET_VALUE;
         }
-        if (value_bytes->size() > std::numeric_limits<uint16_t>::max()) {
-            throw exceptions::invalid_request_exception(sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
-                                                    std::numeric_limits<uint16_t>::max(),
-                                                    value_bytes->size()));
-        }
         buffers.emplace(std::move(to_bytes(*key_bytes)), std::move(to_bytes(*value_bytes)));
     }
     return ::make_shared<value>(std::move(buffers));
@@ -299,12 +294,6 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     auto value = _t->bind_and_get(params._options);
     if (!key) {
         throw invalid_request_exception("Invalid null map key");
-    }
-    if (value && value->size() >= std::numeric_limits<uint16_t>::max()) {
-        throw invalid_request_exception(
-                sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
-                       std::numeric_limits<uint16_t>::max(),
-                       value->size()));
     }
     auto avalue = value ? params.make_cell(*value) : params.make_dead_cell();
     map_type_impl::mutation update = { {}, { { std::move(to_bytes(*key)), std::move(avalue) } } };

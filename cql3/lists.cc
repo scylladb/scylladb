@@ -202,12 +202,6 @@ lists::delayed_value::bind(const query_options& options) {
         if (bo.is_unset_value()) {
             return constants::UNSET_VALUE;
         }
-        // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-        if (bo->size() > std::numeric_limits<uint16_t>::max()) {
-            throw exceptions::invalid_request_exception(sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
-                    std::numeric_limits<uint16_t>::max(),
-                    bo->size()));
-        }
 
         buffers.push_back(std::move(to_bytes(*bo)));
     }
@@ -305,11 +299,6 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
     if (!value) {
         mut.cells.emplace_back(eidx, params.make_dead_cell());
     } else {
-        if (value->size() > std::numeric_limits<uint16_t>::max()) {
-            throw exceptions::invalid_request_exception(
-                    sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
-                            std::numeric_limits<uint16_t>::max(), value->size()));
-        }
         mut.cells.emplace_back(eidx, params.make_cell(*value));
     }
     auto smut = ltype->serialize_mutation_form(mut);

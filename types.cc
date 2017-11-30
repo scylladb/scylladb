@@ -1944,6 +1944,11 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     if (sf.using_32_bits_for_collections()) {
         serialize_int32(out, int32_t(val_bytes.size()));
     } else {
+        if (val_bytes.size() > std::numeric_limits<uint16_t>::max()) {
+            throw marshal_exception(
+                    sprint("Collection value exceeds the length limit for protocol v%d. Collection values are limited to %d bytes but %d bytes value provided",
+                            sf.protocol_version(), std::numeric_limits<uint16_t>::max(), val_bytes.size()));
+        }
         serialize_int16(out, uint16_t(val_bytes.size()));
     }
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);

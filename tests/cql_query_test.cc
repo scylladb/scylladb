@@ -2474,3 +2474,48 @@ SEASTAR_TEST_CASE(test_secondary_index_query) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_insert_large_collection_values) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&e] {
+            auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+            auto set_type = set_type_impl::get_instance(utf8_type, true);
+            auto list_type = list_type_impl::get_instance(utf8_type, true);
+            e.create_table([map_type, set_type, list_type] (auto ks_name) {
+                // CQL: CREATE TABLE tbl (pk text PRIMARY KEY, m map<text, text>, s set<text>, l list<text>);
+                return schema({}, ks_name, "tbl",
+                    {{"pk", utf8_type}},
+                    {},
+                    {
+                        {"m", map_type},
+                        {"s", set_type},
+                        {"l", list_type}
+                    },
+                    {},
+                    utf8_type);
+            }).get();
+            sstring long_value(std::numeric_limits<uint16_t>::max() + 10, 'x');
+            e.execute_cql(sprint("INSERT INTO tbl (pk, l) VALUES ('Zamyatin', ['%s']);", long_value)).get();
+            assert_that(e.execute_cql("SELECT l FROM tbl WHERE pk ='Zamyatin';").get0())
+                    .is_rows().with_rows({
+                            { make_list_value(list_type, list_type_impl::native_type({{long_value}})).serialize() }
+                    });
+            BOOST_REQUIRE_THROW(e.execute_cql(sprint("INSERT INTO tbl (pk, s) VALUES ('Orwell', {'%s'});", long_value)).get(), std::exception);
+            e.execute_cql(sprint("INSERT INTO tbl (pk, m) VALUES ('Haksli', {'key': '%s'});", long_value)).get();
+            assert_that(e.execute_cql("SELECT m FROM tbl WHERE pk ='Haksli';").get0())
+                    .is_rows().with_rows({
+                            { make_map_value(map_type, map_type_impl::native_type({{sstring("key"), long_value}})).serialize() }
+                    });
+            BOOST_REQUIRE_THROW(e.execute_cql(sprint("INSERT INTO tbl (pk, m) VALUES ('Golding', {'%s': 'value'});", long_value)).get(), std::exception);
+
+            auto make_query_options = [] (cql_protocol_version_type version) {
+                    return std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::experimental::nullopt,
+                            std::vector<cql3::raw_value_view>(), false,
+                            cql3::query_options::specific_options::DEFAULT, cql_serialization_format{version});
+            };
+
+            BOOST_REQUIRE_THROW(e.execute_cql("SELECT l FROM tbl WHERE pk = 'Zamyatin';", make_query_options(2)).get(), std::exception);
+            BOOST_REQUIRE_THROW(e.execute_cql("SELECT m FROM tbl WHERE pk = 'Haksli';", make_query_options(2)).get(), std::exception);
+        });
+    });
+}
