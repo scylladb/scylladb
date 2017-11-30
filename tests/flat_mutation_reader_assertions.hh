@@ -27,6 +27,7 @@
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
     flat_mutation_reader _reader;
+    dht::partition_range _pr;
 private:
     mutation_fragment_opt read_next() {
         return _reader().get0();
@@ -124,7 +125,8 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
-        _reader.fast_forward_to(pr);
+        _pr = pr;
+        _reader.fast_forward_to(_pr).get();
         return *this;
     }
 
@@ -134,7 +136,7 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(position_range pr) {
-        _reader.fast_forward_to(std::move(pr));
+        _reader.fast_forward_to(std::move(pr)).get();
         return *this;
     }
 };
