@@ -153,8 +153,7 @@ public:
         }
 
         if (!expired.empty()) {
-            auto expired_as_set = boost::copy_range<std::unordered_set<shared_sstable>>(expired);
-            auto is_expired = [&] (const shared_sstable& s) { return expired_as_set.find(s) != expired_as_set.end(); };
+            auto is_expired = [&] (const shared_sstable& s) { return expired.find(s) != expired.end(); };
             candidates.erase(boost::remove_if(candidates, is_expired), candidates.end());
         }
 

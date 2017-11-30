@@ -145,8 +145,7 @@ public:
         auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before.time_since_epoch().count());
 
         if (!expired.empty()) {
-            auto expired_as_set = boost::copy_range<std::unordered_set<sstables::shared_sstable>>(expired);
-            auto is_expired = [&] (const sstables::shared_sstable& s) { return expired_as_set.find(s) != expired_as_set.end(); };
+            auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.find(s) != expired.end(); };
             uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
         }
 
