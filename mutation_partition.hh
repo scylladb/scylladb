@@ -854,8 +854,6 @@ private:
 
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
-
-    bool check_continuity(const schema&, const position_range&, is_continuous);
 public:
     struct copy_comparators_only {};
     struct incomplete_tag {};
@@ -901,6 +899,8 @@ public:
     bool fully_continuous(const schema&, const position_range&);
     // Returns true iff all keys from given range are marked as not continuous and range is not empty.
     bool fully_discontinuous(const schema&, const position_range&);
+    // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
+    bool check_continuity(const schema&, const position_range&, is_continuous);
     // Removes all data, marking affected ranges as discontinuous.
     void evict() noexcept;
     // Applies mutation_fragment.
