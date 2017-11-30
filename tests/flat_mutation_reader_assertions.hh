@@ -145,6 +145,12 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces(const dht::decorated_key& dk) {
+        produces_partition_start(dk);
+        next_partition();
+        return *this;
+    }
+
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         _pr = pr;
         _reader.fast_forward_to(_pr).get();
