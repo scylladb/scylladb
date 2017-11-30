@@ -939,12 +939,7 @@ bool mutation_partition::equal(const schema& this_schema, const mutation_partiti
 
 bool mutation_partition::equal_continuity(const schema& s, const mutation_partition& p) const {
     return _static_row_continuous == p._static_row_continuous
-        && boost::equal(_rows, p._rows, [&] (const rows_entry& e1, const rows_entry& e2) {
-            position_in_partition::equal_compare eq(s);
-            return eq(e1.position(), e2.position())
-                   && e1.continuous() == e2.continuous()
-                   && e1.dummy() == e2.dummy();
-        });
+        && get_continuity(s).equals(s, p.get_continuity(s));
 }
 
 void
