@@ -209,19 +209,27 @@ private:
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
         auto schema = _cf.schema();
         sstring formatted_msg = "[";
+        auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - schema->gc_grace_seconds());
 
         for (auto& sst : _sstables) {
+            // Compacted sstable keeps track of its ancestors.
+            _ancestors.push_back(sst->generation());
+            _info->start_size += sst->bytes_on_disk();
+            _info->total_partitions += sst->get_estimated_key_count();
+            formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
+
+            // Do not actually compact a sstable that is fully expired and can be safely
+            // dropped without ressurrecting old data.
+            if (fully_expired.count(sst)) {
+                continue;
+            }
+
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
-            _info->total_partitions += sst->get_estimated_key_count();
-            // Compacted sstable keeps track of its ancestors.
-            _ancestors.push_back(sst->generation());
-            formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
-            _info->start_size += sst->bytes_on_disk();
             // TODO:
             // Note that this is not fully correct. Since we might be merging sstables that originated on
             // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
