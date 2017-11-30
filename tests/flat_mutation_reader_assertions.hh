@@ -105,6 +105,27 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces(mutation_fragment::kind k, std::vector<int> ck_elements) {
+        std::vector<bytes> ck_bytes;
+        for (auto&& e : ck_elements) {
+            ck_bytes.emplace_back(int32_type->decompose(e));
+        }
+        auto ck = clustering_key_prefix::from_exploded(*_reader.schema(), std::move(ck_bytes));
+
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected mutation fragment %s, got end of stream", ck));
+        }
+        if (mfopt->mutation_fragment_kind() != k) {
+            BOOST_FAIL(sprint("Expected mutation fragment kind %s, got: %s", k, mfopt->mutation_fragment_kind()));
+        }
+        clustering_key::equality ck_eq(*_reader.schema());
+        if (!ck_eq(mfopt->key(), ck)) {
+            BOOST_FAIL(sprint("Expected key %s, got: %s", ck, mfopt->key()));
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_partition(const mutation& m) {
         BOOST_TEST_MESSAGE(sprint("Expecting a partition with key %s", m));
         produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
