@@ -860,14 +860,14 @@ future<reconcilable_result, rpc::optional<cache_temperature>> messaging_service:
     return send_message_timeout<future<reconcilable_result, rpc::optional<cache_temperature>>>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
-void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type, cache_temperature> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, compat::wrapping_partition_range pr)>&& func) {
+void messaging_service::register_read_digest(std::function<future<query::result_digest, api::timestamp_type, cache_temperature> (const rpc::client_info&, rpc::opt_time_point timeout, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
     register_handler(this, netw::messaging_verb::READ_DIGEST, std::move(func));
 }
 void messaging_service::unregister_read_digest() {
     _rpc->unregister_handler(netw::messaging_verb::READ_DIGEST);
 }
-future<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr) {
-    return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>>(this, netw::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
+future<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const dht::partition_range& pr, query::digest_algorithm da) {
+    return send_message_timeout<future<query::result_digest, rpc::optional<api::timestamp_type>, rpc::optional<cache_temperature>>>(this, netw::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr, da);
 }
 
 // Wrapper for TRUNCATE

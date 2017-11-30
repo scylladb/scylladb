@@ -260,6 +260,7 @@ private:
     future<query::result_digest, api::timestamp_type, cache_temperature> query_result_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                                                    tracing::trace_state_ptr trace_state,
                                                                                                    clock_type::time_point timeout,
+                                                                                                   query::digest_algorithm da,
                                                                                                    uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
     future<foreign_ptr<lw_shared_ptr<query::result>>>
     query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
