@@ -24,7 +24,6 @@
 #include "cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
-#include "md5_hasher.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "db/marshal/type_parser.hh"
