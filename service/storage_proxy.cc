@@ -2457,7 +2457,9 @@ public:
 };
 
 query::digest_algorithm digest_algorithm() {
-    return query::digest_algorithm::MD5;
+    return service::get_local_storage_service().cluster_supports_xxhash_digest_algorithm()
+         ? query::digest_algorithm::xxHash
+         : query::digest_algorithm::MD5;
 }
 
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
