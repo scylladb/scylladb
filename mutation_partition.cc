@@ -779,15 +779,22 @@ operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_col
     return fprint(os, "{column: %s %s}", c.first, c.second);
 }
 
+// Transforms given range of printable into a range of strings where each element
+// in the original range is prefxied with given string.
+template<typename RangeOfPrintable>
+static auto prefixed(const sstring& prefix, const RangeOfPrintable& r) {
+    return r | boost::adaptors::transformed([&] (auto&& e) { return sprint("%s%s", prefix, e); });
+}
+
 std::ostream&
 operator<<(std::ostream& os, const row& r) {
     sstring cells;
     switch (r._type) {
     case row::storage_type::set:
-        cells = ::join(", ", r.get_range_set());
+        cells = ::join(",", prefixed("\n      ", r.get_range_set()));
         break;
     case row::storage_type::vector:
-        cells = ::join(", ", r.get_range_vector());
+        cells = ::join(",", prefixed("\n      ", r.get_range_vector()));
         break;
     }
     return fprint(os, "{row: %s}", cells);
@@ -817,9 +824,11 @@ operator<<(std::ostream& os, const rows_entry& re) {
 
 std::ostream&
 operator<<(std::ostream& os, const mutation_partition& mp) {
-    return fprint(os, "{mutation_partition: %s (%s) static cont=%d %s clustered %s}",
-                  mp._tombstone, ::join(", ", mp._row_tombstones), mp._static_row_continuous, mp._static_row,
-                  ::join(", ", mp._rows));
+    return fprint(os, "{mutation_partition: %s,\n range_tombstones: {%s},\n static: cont=%d %s,\n clustered: {%s}}",
+                  mp._tombstone,
+                  ::join(",", prefixed("\n    ", mp._row_tombstones)),
+                  mp._static_row_continuous, mp._static_row,
+                  ::join(",", prefixed("\n    ", mp._rows)));
 }
 
 constexpr gc_clock::duration row_marker::no_ttl;
