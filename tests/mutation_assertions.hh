@@ -66,6 +66,13 @@ public:
         return *this;
     }
 
+    mutation_assertion& is_continuous(const position_range& r, is_continuous cont = is_continuous::yes) {
+        if (!_m.partition().check_continuity(*_m.schema(), r, cont)) {
+            BOOST_FAIL(sprint("Expected range %s to be %s in %s", r, cont ? "continuous" : "discontinuous", _m));
+        }
+        return *this;
+    }
+
     // Verifies that mutation data remains unchanged when upgraded to the new schema
     void is_upgrade_equivalent(schema_ptr new_schema) {
         mutation m2 = _m;
