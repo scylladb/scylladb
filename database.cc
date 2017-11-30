@@ -3008,17 +3008,6 @@ void database::register_connection_drop_notifier(netw::messaging_service& ms) {
     });
 }
 
-std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
-    return out << to_hex(c._data);
-}
-
-std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    const ::schema& s = *m.schema();
-    fprint(os, "{%s.%s key %s data ", s.ks_name(), s.cf_name(), m.decorated_key());
-    os << m.partition() << "}";
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     return fprint(out, "{column_family: %s/%s}", cf._schema->ks_name(), cf._schema->cf_name());
 }
