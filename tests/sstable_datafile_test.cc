@@ -2976,23 +2976,30 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
 
+    auto t0 = gc_clock::from_time_t(1).time_since_epoch().count();
+    auto t1 = gc_clock::from_time_t(10).time_since_epoch().count();
+    auto t2 = gc_clock::from_time_t(15).time_since_epoch().count();
+    auto t3 = gc_clock::from_time_t(20).time_since_epoch().count();
+    auto t4 = gc_clock::from_time_t(30).time_since_epoch().count();
+
     {
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
-        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
-        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(0, 10, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(20, 25, std::numeric_limits<int32_t>::max()));
+        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/15);
+        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(15));
         BOOST_REQUIRE(expired.size() == 0);
     }
 
     {
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
-        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
-        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(15, 20, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(30, 40, std::numeric_limits<int32_t>::max()));
+
+        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/25);
+        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(25));
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst->generation() == 1);

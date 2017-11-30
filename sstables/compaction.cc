@@ -541,7 +541,7 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
 }
 
 std::unordered_set<sstables::shared_sstable>
-get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before) {
+get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
     clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     if (compacting.empty()) {
@@ -555,7 +555,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
 
     for (auto& sstable : overlapping) {
-        if (sstable->get_stats_metadata().max_local_deletion_time >= gc_before) {
+        if (sstable->get_max_local_deletion_time() >= gc_before) {
             min_timestamp = std::min(min_timestamp, sstable->get_stats_metadata().min_timestamp);
         }
     }
@@ -575,7 +575,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
         // expired data won't be purged because undeleted sstables are taken into account when
         // calculating max purgeable timestamp, and not doing it could lead to a compaction loop.
-        if (candidate->get_stats_metadata().max_local_deletion_time < gc_before && !has_undeleted_ancestor(candidate)) {
+        if (candidate->get_max_local_deletion_time() < gc_before && !has_undeleted_ancestor(candidate)) {
             clogger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
             candidates.insert(candidate);
         } else {

@@ -146,7 +146,7 @@ public:
 
         if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
             clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");
-            expired = get_fully_expired_sstables(cf, candidates, gc_before.time_since_epoch().count());
+            expired = get_fully_expired_sstables(cf, candidates, gc_before);
             _last_expired_check = db_clock::now();
         } else {
             clogger.debug("TWCS skipping check for fully expired SSTables");

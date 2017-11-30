@@ -142,7 +142,7 @@ public:
         }
 
         // Find fully expired SSTables. Those will be included no matter what.
-        auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before.time_since_epoch().count());
+        auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before);
 
         if (!expired.empty()) {
             auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.find(s) != expired.end(); };
