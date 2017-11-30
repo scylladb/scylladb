@@ -30,6 +30,7 @@
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
+#include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
 #include "tests/simple_schema.hh"
@@ -462,6 +463,175 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
             .produces(table_b_mutations[1])
             .produces(c_d_merged)
             .produces(table_a_mutations.back());
+    });
+}
+
+static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) {
+    static int i{0};
+
+    mutation m(std::move(dk), s.schema());
+    s.add_row(m, s.make_ckey(++i), sprint("val_%i", i));
+    return m;
+}
+
+class dummy_incremental_selector : public reader_selector {
+    schema_ptr _s;
+    std::vector<std::vector<mutation>> _readers_mutations;
+    streamed_mutation::forwarding _fwd;
+    dht::partition_range _pr;
+
+    const dht::token& position() const {
+        return _readers_mutations.back().front().token();
+    }
+    flat_mutation_reader pop_reader() {
+        auto muts = std::move(_readers_mutations.back());
+        _readers_mutations.pop_back();
+        _selector_position = _readers_mutations.empty() ? dht::maximum_token() : position();
+        return flat_mutation_reader_from_mutation_reader(_s, make_reader_returning_many(std::move(muts), _pr), _fwd);
+    }
+public:
+    // readers_mutations is expected to be sorted on both levels.
+    // 1) the inner vector is expected to be sorted by decorated_key.
+    // 2) the outer vector is expected to be sorted by the decorated_key
+    //  of its first mutation.
+    dummy_incremental_selector(schema_ptr s,
+            std::vector<std::vector<mutation>> reader_mutations,
+            dht::partition_range pr = query::full_partition_range,
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
+        : _s(std::move(s))
+        , _readers_mutations(std::move(reader_mutations))
+        , _fwd(fwd)
+        , _pr(std::move(pr)) {
+        // So we can pop the next reader off the back
+        boost::reverse(_readers_mutations);
+        _selector_position = position();
+    }
+    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
+        if (_readers_mutations.empty()) {
+            return {};
+        }
+
+        std::vector<flat_mutation_reader> readers;
+
+        if (!t) {
+            readers.emplace_back(pop_reader());
+            return readers;
+        }
+
+        while (!_readers_mutations.empty() && *t >= _selector_position) {
+            readers.emplace_back(pop_reader());
+        }
+        return readers;
+    }
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+        return create_new_readers(&pr.start()->value().token());
+    }
+};
+
+SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        simple_schema s;
+        auto pkeys = s.make_pkeys(3);
+
+        auto mut1 = make_mutation_with_key(s, pkeys[0]);
+        auto mut2a = make_mutation_with_key(s, pkeys[1]);
+        auto mut2b = make_mutation_with_key(s, pkeys[1]);
+        auto mut3 = make_mutation_with_key(s, pkeys[2]);
+        std::vector<std::vector<mutation>> readers_mutations{
+            {mut1},
+            {mut2a},
+            {mut2b},
+            {mut3}
+        };
+
+        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+                std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
+                streamed_mutation::forwarding::no,
+                mutation_reader::forwarding::no);
+
+        assert_that(std::move(reader))
+            .produces_partition(mut1)
+            .produces_partition(mut2a + mut2b)
+            .produces_partition(mut3)
+            .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        simple_schema s;
+        auto pkeys = s.make_pkeys(3);
+
+        auto mut1 = make_mutation_with_key(s, pkeys[0]);
+        auto mut2a = make_mutation_with_key(s, pkeys[1]);
+        auto mut2b = make_mutation_with_key(s, pkeys[1]);
+        auto mut3a = make_mutation_with_key(s, pkeys[2]);
+        auto mut3b = make_mutation_with_key(s, pkeys[2]);
+        auto mut3c = make_mutation_with_key(s, pkeys[2]);
+
+        tombstone tomb(100, {});
+        mut2b.partition().apply(tomb);
+
+        std::vector<std::vector<mutation>> readers_mutations{
+            {mut1, mut2a, mut3a},
+            {mut2b, mut3b},
+            {mut3c}
+        };
+
+        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+                std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
+                streamed_mutation::forwarding::no,
+                mutation_reader::forwarding::no);
+
+        assert_that(std::move(reader))
+            .produces_partition(mut1)
+            .produces_partition(mut2a + mut2b)
+            .produces_partition(mut3a + mut3b + mut3c)
+            .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+
+        simple_schema s;
+        auto pkeys = s.make_pkeys(5);
+
+        auto mut1a = make_mutation_with_key(s, pkeys[0]);
+        auto mut1b = make_mutation_with_key(s, pkeys[0]);
+        auto mut2a = make_mutation_with_key(s, pkeys[1]);
+        auto mut2c = make_mutation_with_key(s, pkeys[1]);
+        auto mut3a = make_mutation_with_key(s, pkeys[2]);
+        auto mut3d = make_mutation_with_key(s, pkeys[2]);
+        auto mut4b = make_mutation_with_key(s, pkeys[3]);
+        auto mut5b = make_mutation_with_key(s, pkeys[4]);
+        std::vector<std::vector<mutation>> readers_mutations{
+            {mut1a, mut2a, mut3a},
+            {mut1b, mut4b, mut5b},
+            {mut2c},
+            {mut3d},
+        };
+
+        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+                std::make_unique<dummy_incremental_selector>(s.schema(),
+                        std::move(readers_mutations),
+                        dht::partition_range::make_ending_with(dht::partition_range::bound(pkeys[1], false))),
+                streamed_mutation::forwarding::no,
+                mutation_reader::forwarding::yes);
+
+        assert_that(std::move(reader))
+            .produces_partition(mut1a + mut1b)
+            .produces_end_of_stream()
+            .fast_forward_to(dht::partition_range::make(dht::partition_range::bound(pkeys[2], true), dht::partition_range::bound(pkeys[3], true)))
+            .produces_partition(mut3a + mut3d)
+            .fast_forward_to(dht::partition_range::make_starting_with(dht::partition_range::bound(pkeys[4], true)))
+            .produces_partition(mut5b)
+            .produces_end_of_stream();
     });
 }
 
