@@ -325,7 +325,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(schema_ptr s, flat_
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     const ::schema& s = *m.schema();
-    fprint(os, "{%s.%s key %s data ", s.ks_name(), s.cf_name(), m.decorated_key());
+    fprint(os, "{%s.%s %s ", s.ks_name(), s.cf_name(), m.decorated_key());
     os << m.partition() << "}";
     return os;
 }
