@@ -220,6 +220,9 @@ future<> standard_role_manager::start() {
                                 db::consistency_level::QUORUM,
                                 {meta::DEFAULT_SUPERUSER_NAME}).then([](auto&&) {
                             log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
+                        }).handle_exception([] (auto ep) {
+                            log.error("Failed to create superuser role '{}: {}", meta::DEFAULT_SUPERUSER_NAME, ep);
+                            return make_ready_future<>();
                         });
                     });
                 }
