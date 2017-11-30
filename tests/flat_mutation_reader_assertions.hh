@@ -127,6 +127,10 @@ public:
     }
 
     flat_reader_assertions& produces_partition(const mutation& m) {
+        return produces(m);
+    }
+
+    flat_reader_assertions& produces(const mutation& m) {
         BOOST_TEST_MESSAGE(sprint("Expecting a partition with key %s", m));
         produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
         auto produced_m = mutation(m.decorated_key(), m.schema());
