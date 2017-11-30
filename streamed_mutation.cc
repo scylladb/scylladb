@@ -58,13 +58,13 @@ std::ostream& operator<<(std::ostream& out, partition_region r) {
 }
 
 std::ostream& operator<<(std::ostream& out, position_in_partition_view pos) {
-    out << "{position: type " << pos._type << ", bound_weight " << pos._bound_weight << ", key ";
+    out << "{position: " << pos._type << ",";
     if (pos._ck) {
         out << *pos._ck;
     } else {
         out << "null";
     }
-    return out << "}";
+    return out << "," << pos._bound_weight << "}";
 }
 
 std::ostream& operator<<(std::ostream& out, const position_in_partition& pos) {
