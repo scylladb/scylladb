@@ -111,6 +111,14 @@ private:
     struct vector_storage {
         std::bitset<max_vector_size> present;
         vector_type v;
+
+        vector_storage() = default;
+        vector_storage(const vector_storage&) = default;
+        vector_storage(vector_storage&& other) noexcept
+                : present(other.present)
+                , v(std::move(other.v)) {
+            other.present = {};
+        }
     };
 
     union storage {

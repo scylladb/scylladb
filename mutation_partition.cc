@@ -1464,6 +1464,7 @@ row::row(row&& other) noexcept
     } else {
         new (&_storage.set) map_type(std::move(other._storage.set));
     }
+    other._size = 0;
 }
 
 row& row::operator=(row&& other) noexcept {
