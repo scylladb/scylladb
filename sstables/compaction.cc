@@ -112,7 +112,7 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
     }
 }
 
-static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable>& sstables) {
+static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable> sstables) {
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
         return x->generation() < y->generation();
@@ -541,7 +541,7 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
 }
 
 std::unordered_set<sstables::shared_sstable>
-get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
+get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
     clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     if (compacting.empty()) {

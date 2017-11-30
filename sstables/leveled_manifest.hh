@@ -333,7 +333,7 @@ public:
     }
 
     template <typename T>
-    static std::vector<sstables::shared_sstable> overlapping(const schema& s, std::vector<sstables::shared_sstable>& candidates, T& others) {
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, const std::vector<sstables::shared_sstable>& candidates, const T& others) {
         assert(!candidates.empty());
         /*
          * Picking each sstable from others that overlap one of the sstable of candidates is not enough
@@ -364,7 +364,7 @@ public:
     }
 
     template <typename T>
-    static std::vector<sstables::shared_sstable> overlapping(const schema& s, sstables::shared_sstable& sstable, T& others) {
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, const sstables::shared_sstable& sstable, const T& others) {
         return overlapping(s, sstable->get_first_decorated_key()._token, sstable->get_last_decorated_key()._token, others);
     }
 
@@ -372,7 +372,7 @@ public:
      * @return sstables from @param sstables that contain keys between @param start and @param end, inclusive.
      */
     template <typename T>
-    static std::vector<sstables::shared_sstable> overlapping(const schema& s, dht::token start, dht::token end, T& sstables) {
+    static std::vector<sstables::shared_sstable> overlapping(const schema& s, dht::token start, dht::token end, const T& sstables) {
         assert(start <= end);
 
         std::vector<sstables::shared_sstable> overlapped;
