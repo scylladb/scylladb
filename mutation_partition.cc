@@ -808,11 +808,11 @@ operator<<(std::ostream& os, const row& r) {
 std::ostream&
 operator<<(std::ostream& os, const row_marker& rm) {
     if (rm.is_missing()) {
-        return fprint(os, "{missing row_marker}");
+        return fprint(os, "{row_marker: }");
     } else if (rm._ttl == row_marker::dead) {
-        return fprint(os, "{dead row_marker %s %s}", rm._timestamp, rm._expiry.time_since_epoch().count());
+        return fprint(os, "{row_marker: dead %s %s}", rm._timestamp, rm._expiry.time_since_epoch().count());
     } else {
-        return fprint(os, "{row_marker %s %s %s}", rm._timestamp, rm._ttl.count(),
+        return fprint(os, "{row_marker: %s %s %s}", rm._timestamp, rm._ttl.count(),
             rm._ttl != row_marker::no_ttl ? rm._expiry.time_since_epoch().count() : 0);
     }
 }
