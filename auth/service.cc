@@ -262,7 +262,7 @@ future<> service::stop() {
         _delayed.cancel_all();
         return sharded_permissions_cache.stop();
     }).then([this] {
-        return when_all_succeed(_role_manager->start(), _authorizer->stop(), _authenticator->stop());
+        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
     });
 }
 
