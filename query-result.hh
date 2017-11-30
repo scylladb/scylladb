@@ -21,12 +21,9 @@
 
 #pragma once
 
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 #include "digest_algorithm.hh"
 #include "query-request.hh"
-#include "md5_hasher.hh"
 #include <experimental/optional>
 #include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
@@ -284,7 +281,6 @@ struct result_options {
 
 class result_digest {
 public:
-    static_assert(16 == CryptoPP::Weak::MD5::DIGESTSIZE, "MD5 digest size is all wrong");
     using type = std::array<uint8_t, 16>;
 private:
     type _digest;

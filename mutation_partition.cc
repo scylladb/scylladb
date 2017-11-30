@@ -613,7 +613,7 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
 }
 
 // returns the timestamp of a latest update to the row
-static api::timestamp_type hash_row_slice(md5_hasher& hasher,
+static api::timestamp_type hash_row_slice(query::digester& hasher,
     const schema& s,
     column_kind kind,
     const row& cells,
@@ -625,14 +625,14 @@ static api::timestamp_type hash_row_slice(md5_hasher& hasher,
         if (!cell) {
             continue;
         }
-        feed_hash(hasher, id);
+        hasher.feed_hash(id);
         auto&& def = s.column_at(kind, id);
         if (def.is_atomic()) {
-            feed_hash(hasher, cell->as_atomic_cell(), def);
+            hasher.feed_hash(cell->as_atomic_cell(), def);
             max = std::max(max, cell->as_atomic_cell().timestamp());
         } else {
             auto&& cm = cell->as_collection_mutation();
-            feed_hash(hasher, cm, def);
+            hasher.feed_hash(cm, def);
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             max = std::max(max, ctype->last_update(cm));
         }
@@ -717,7 +717,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
         }
         if (pw.requested_digest()) {
             auto pt = partition_tombstone();
-            ::feed_hash(pw.digest(), pt);
+            pw.digest().feed_hash(pt);
             auto t = hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
             pw.last_modified() = std::max({pw.last_modified(), pt.timestamp, t});
         }
@@ -739,8 +739,8 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
         auto row_tombstone = tombstone_for_row(s, e);
 
         if (pw.requested_digest()) {
-            e.key().feed_hash(pw.digest(), s);
-            ::feed_hash(pw.digest(), row_tombstone);
+            pw.digest().feed_hash(e.key(), s);
+            pw.digest().feed_hash(row_tombstone);
             auto t = hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
             pw.last_modified() = std::max({pw.last_modified(), row_tombstone.tomb().timestamp, t});
         }
@@ -1672,7 +1672,7 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             _memory_accounter.update(stream.size());
         }
         if (_pw.requested_digest()) {
-            ::feed_hash(_pw.digest(), current_tombstone);
+            _pw.digest().feed_hash(current_tombstone);
             auto t = hash_row_slice(_pw.digest(), _schema, column_kind::static_column,
                                     r, slice.static_columns);
             _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.timestamp, t});
@@ -1701,8 +1701,8 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
     const query::partition_slice& slice = _pw.slice();
 
     if (_pw.requested_digest()) {
-        cr.key().feed_hash(_pw.digest(), _schema);
-        ::feed_hash(_pw.digest(), current_tombstone);
+        _pw.digest().feed_hash(cr.key(), _schema);
+        _pw.digest().feed_hash(current_tombstone);
         auto t = hash_row_slice(_pw.digest(), _schema, column_kind::regular_column, cr.cells(), slice.regular_columns);
         _pw.last_modified() = std::max({_pw.last_modified(), current_tombstone.tomb().timestamp, t});
     }
