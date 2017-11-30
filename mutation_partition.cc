@@ -2071,6 +2071,29 @@ void mutation_partition::make_fully_continuous() {
     }
 }
 
+clustering_interval_set mutation_partition::get_continuity(const schema& s, is_continuous cont) const {
+    clustering_interval_set result;
+    auto i = _rows.begin();
+    auto prev_pos = position_in_partition::before_all_clustered_rows();
+    while (i != _rows.end()) {
+        if (i->continuous() == cont) {
+            result.add(s, position_range(std::move(prev_pos), position_in_partition(i->position())));
+        }
+        if (i->position().is_clustering_row() && bool(i->dummy()) == !bool(cont)) {
+            result.add(s, position_range(position_in_partition(i->position()),
+                position_in_partition::after_key(i->position().key())));
+        }
+        prev_pos = i->position().is_clustering_row()
+            ? position_in_partition::after_key(i->position().key())
+            : position_in_partition(i->position());
+        ++i;
+    }
+    if (cont) {
+        result.add(s, position_range(std::move(prev_pos), position_in_partition::after_all_clustered_rows()));
+    }
+    return result;
+}
+
 void mutation_partition::evict() noexcept {
     if (!_rows.empty()) {
         // We need to keep the last entry to mark the range containing all evicted rows as discontinuous.

@@ -863,6 +863,8 @@ public:
     void set_static_row_continuous(bool value) { _static_row_continuous = value; }
     bool is_fully_continuous() const;
     void make_fully_continuous();
+    // Returns clustering row ranges which have continuity matching the is_continuous argument.
+    clustering_interval_set get_continuity(const schema&, is_continuous = is_continuous::yes) const;
     // Returns true iff all keys from given range are marked as continuous, or range is empty.
     bool fully_continuous(const schema&, const position_range&);
     // Returns true iff all keys from given range are marked as not continuous and range is not empty.
