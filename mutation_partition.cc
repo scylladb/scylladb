@@ -819,7 +819,14 @@ operator<<(std::ostream& os, const row_marker& rm) {
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
-    return fprint(os, "{deletable_row: %s %s %s}", dr._marker, dr._deleted_at, dr._cells);
+    os << "{deletable_row: ";
+    if (!dr._marker.is_missing()) {
+        os << dr._marker << " ";
+    }
+    if (dr._deleted_at) {
+        os << dr._deleted_at << " ";
+    }
+    return os << dr._cells << "}";
 }
 
 std::ostream&
@@ -829,11 +836,16 @@ operator<<(std::ostream& os, const rows_entry& re) {
 
 std::ostream&
 operator<<(std::ostream& os, const mutation_partition& mp) {
-    return fprint(os, "{mutation_partition: %s,\n range_tombstones: {%s},\n static: cont=%d %s,\n clustered: {%s}}",
-                  mp._tombstone,
-                  ::join(",", prefixed("\n    ", mp._row_tombstones)),
-                  mp._static_row_continuous, mp._static_row,
-                  ::join(",", prefixed("\n    ", mp._rows)));
+    os << "{mutation_partition: ";
+    if (mp._tombstone) {
+        os << mp._tombstone << ",";
+    }
+    if (!mp._row_tombstones.empty()) {
+        os << "\n range_tombstones: {" << ::join(",", prefixed("\n    ", mp._row_tombstones)) << "},";
+    }
+    os << "\n static: cont=" << int(mp._static_row_continuous) << " " << mp._static_row << ",";
+    os << "\n clustered: {" << ::join(",", prefixed("\n    ", mp._rows)) << "}}";
+    return os;
 }
 
 constexpr gc_clock::duration row_marker::no_ttl;
