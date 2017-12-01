@@ -35,6 +35,7 @@
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "db/consistency_level_type.hh"
+#include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "utils/class_registrator.hh"
 
@@ -209,10 +210,10 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             delay_until_system_ready(_delayed, [this] {
                 return seastar::async([this] {
-                    if (this->has_existing_roles()) {
-                        return;
-                    }
                     try {
+                        if (this->has_existing_roles()) {
+                            return;
+                        }
                         // Create the default superuser.
                         _qp.process(
                                 sprint(
@@ -222,8 +223,9 @@ future<> standard_role_manager::start() {
                                 db::consistency_level::QUORUM,
                                 {meta::DEFAULT_SUPERUSER_NAME}).get();
                         log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
-                    } catch (...) {
-                        log.error("Failed to create superuser role '{}: {}", meta::DEFAULT_SUPERUSER_NAME, std::current_exception());
+                    } catch (const exceptions::unavailable_exception& e) {
+                        log.warn("Skipped default role setup: some nodes were ready; will retry");
+                        throw e;
                     }
                 });
             });
