@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#
+# Converts assertion failure text involving two mutations to a diff.
+#
+# Usage: mutation_diff <path-to-test-output-file>
+#
+
+colordiff -u <(sed -n '/expected/,/got:/p' $1 | head -n-1) \
+             <(sed -n '/got:/,/^$/p' $1) | less -R
