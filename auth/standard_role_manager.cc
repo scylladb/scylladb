@@ -208,10 +208,10 @@ future<bool> standard_role_manager::has_existing_roles() const {
 future<> standard_role_manager::start() {
     return once_among_shards([this] {
         return this->create_metadata_tables_if_missing().then([this] {
-            return this->has_existing_roles().then([this](bool existing) {
-                if (!existing) {
-                    // Create the default superuser.
-                    delay_until_system_ready(_delayed, [this] {
+            delay_until_system_ready(_delayed, [this] {
+                return this->has_existing_roles().then([this](bool existing) {
+                    if (!existing) {
+                        // Create the default superuser.
                         return _qp.process(
                                 sprint(
                                         "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
@@ -224,10 +224,10 @@ future<> standard_role_manager::start() {
                             log.error("Failed to create superuser role '{}: {}", meta::DEFAULT_SUPERUSER_NAME, ep);
                             return make_ready_future<>();
                         });
-                    });
-                }
+                    }
 
-                return make_ready_future<>();
+                    return make_ready_future<>();
+                });
             });
         });
     });
