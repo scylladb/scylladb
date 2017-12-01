@@ -95,7 +95,7 @@ private:
 
     future<> create_metadata_tables_if_missing();
 
-    future<bool> has_existing_roles() const;
+    bool has_existing_roles() const;
 
     future<> modify_membership(stdx::string_view role_name, stdx::string_view grantee_name, membership_change);
 };
