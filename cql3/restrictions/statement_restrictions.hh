@@ -327,20 +327,7 @@ private:
         checkNotNull(value, "Invalid null token value");
         return p.getTokenFactory().fromByteArray(value);
     }
-#endif
 
-public:
-    /**
-     * Checks if the query does not contains any restriction on the clustering columns.
-     *
-     * @return <code>true</code> if the query does not contains any restriction on the clustering columns,
-     * <code>false</code> otherwise.
-     */
-    bool has_no_clustering_columns_restriction() const {
-        return _clustering_columns_restrictions->empty();
-    }
-
-#if 0
     // For non-composite slices, we don't support internally the difference between exclusive and
     // inclusive bounds, so we deal with it manually.
     bool is_non_composite_slice_with_exclusive_bounds()
@@ -382,6 +369,15 @@ public:
      */
     bool has_clustering_columns_restriction() const {
         return !_clustering_columns_restrictions->empty();
+    }
+
+    /**
+     * Checks if the restrictions contain any non-primary key restrictions
+     *
+     * @return <code>true</code> if the restrictions contain any non-primary key restrictions, <code>false</code> otherwise.
+     */
+    bool has_non_primary_key_restriction() const {
+        return !_nonprimary_key_restrictions->empty();
     }
 
     /**

@@ -681,6 +681,10 @@ void select_statement::validate_distinct_selection(schema_ptr schema,
                                                    ::shared_ptr<selection::selection> selection,
                                                    ::shared_ptr<restrictions::statement_restrictions> restrictions)
 {
+    if (restrictions->has_non_primary_key_restriction() || restrictions->has_clustering_columns_restriction()) {
+        throw exceptions::invalid_request_exception(
+            "SELECT DISTINCT with WHERE clause only supports restriction by partition key.");
+    }
     for (auto&& def : selection->get_columns()) {
         if (!def->is_partition_key() && !def->is_static()) {
             throw exceptions::invalid_request_exception(sprint(
