@@ -39,6 +39,8 @@ const sstring AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 }
 
+logging::logger auth_log("auth");
+
 future<> create_metadata_table_if_missing(
         const sstring& table_name,
         cql3::query_processor& qp,
