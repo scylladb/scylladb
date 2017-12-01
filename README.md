@@ -6,7 +6,7 @@
 $ git submodule update --init --recursive
 $ sudo ./install-dependencies.sh
 $ ./configure.py --mode=release
-$ ninja-build -j4 # Assuming 4 system threads.
+$ ninja -j4 # Assuming 4 system threads.
 $ ./build/release/scylla
 $ # Rejoice!
 ```
