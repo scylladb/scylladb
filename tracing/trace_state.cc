@@ -93,7 +93,7 @@ trace_state::~trace_state() {
     trace_state_logger.trace("{}: destructing", session_id());
 }
 
-void trace_state::stop_foreground_and_write() {
+void trace_state::stop_foreground_and_write() noexcept {
     // Do nothing if state hasn't been initiated
     if (is_in_state(state::inactive)) {
         return;
