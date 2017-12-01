@@ -82,7 +82,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> cql3::statements::
     throw std::runtime_error("unsupported operation");
 }
 
-void cql3::statements::authorization_statement::mayme_correct_resource(auth::resource& resource, const service::client_state& state) {
+void cql3::statements::authorization_statement::maybe_correct_resource(auth::resource& resource, const service::client_state& state) {
     if (resource.kind() == auth::resource_kind::data) {
         const auto data_view = auth::data_resource_view(resource);
         const auto keyspace = data_view.keyspace();

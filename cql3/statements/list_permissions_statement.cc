@@ -72,7 +72,7 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
     }
     return f.then([this, &state] {
         if (_resource) {
-            mayme_correct_resource(*_resource, state);
+            maybe_correct_resource(*_resource, state);
 
             if ((_resource->kind() == auth::resource_kind::data)
                     && !auth::resource_exists(auth::data_resource_view(*_resource))) {

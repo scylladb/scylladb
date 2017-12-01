@@ -74,7 +74,7 @@ public:
     execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
 protected:
-    static void mayme_correct_resource(auth::resource&, const service::client_state&);
+    static void maybe_correct_resource(auth::resource&, const service::client_state&);
 };
 
 }
