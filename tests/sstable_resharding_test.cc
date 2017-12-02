@@ -61,6 +61,7 @@ static schema_ptr get_schema() {
 }
 
 void run_sstable_resharding_test() {
+    storage_service_for_tests ssft;
     auto tmp = make_lw_shared<tmpdir>();
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
@@ -90,6 +91,7 @@ void run_sstable_resharding_test() {
     }
     auto sst = sstables::make_sstable(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
     sst->load().get();
+    sst->set_unshared();
 
     auto creator = [&cf, tmp] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
@@ -115,7 +117,7 @@ void run_sstable_resharding_test() {
         auto shard = shards.front();
         BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(new_sst->generation()) == shard);
 
-        assert_that(sst->as_mutation_source()(s))
+        assert_that(new_sst->as_mutation_source()(s))
             .produces(muts.at(shard))
             .produces_end_of_stream();
     }
