@@ -35,6 +35,7 @@
 #include "auth/roles-metadata.hh"
 #include "cql3/query_processor.hh"
 #include "db/consistency_level_type.hh"
+#include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "utils/class_registrator.hh"
 
@@ -168,7 +169,8 @@ future<> standard_role_manager::create_metadata_tables_if_missing() {
                     _migration_manager));
 }
 
-future<bool> standard_role_manager::has_existing_roles() const {
+// Must be called within the scope of a seastar thread
+bool standard_role_manager::has_existing_roles() const {
     static const sstring default_role_query = sprint(
         "SELECT * FROM %s WHERE %s = ?",
         meta::roles_table::qualified_name(),
@@ -179,54 +181,52 @@ future<bool> standard_role_manager::has_existing_roles() const {
     // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default role, we
     // can potentially avoid doing a range query with a high consistency level.
 
-    return async([this] {
-        const bool default_exists_one = !_qp.process(
-                default_role_query,
-                db::consistency_level::ONE,
-                {meta::DEFAULT_SUPERUSER_NAME},
-                true).get0()->empty();
+    const bool default_exists_one = !_qp.process(
+            default_role_query,
+            db::consistency_level::ONE,
+            {meta::DEFAULT_SUPERUSER_NAME},
+            true).get0()->empty();
 
-        if (default_exists_one) {
-            return true;
-        }
+    if (default_exists_one) {
+        return true;
+    }
 
-        const bool default_exists_quorum = !_qp.process(
-                default_role_query,
-                db::consistency_level::QUORUM,
-                {meta::DEFAULT_SUPERUSER_NAME},
-                true).get0()->empty();
+    const bool default_exists_quorum = !_qp.process(
+            default_role_query,
+            db::consistency_level::QUORUM,
+            {meta::DEFAULT_SUPERUSER_NAME},
+            true).get0()->empty();
 
-        if (default_exists_quorum) {
-            return true;
-        }
+    if (default_exists_quorum) {
+        return true;
+    }
 
-        const bool any_exists_quorum = !_qp.process(all_roles_query, db::consistency_level::QUORUM).get0()->empty();
-        return any_exists_quorum;
-    });
+    const bool any_exists_quorum = !_qp.process(all_roles_query, db::consistency_level::QUORUM).get0()->empty();
+    return any_exists_quorum;
 }
 
 future<> standard_role_manager::start() {
     return once_among_shards([this] {
         return this->create_metadata_tables_if_missing().then([this] {
             delay_until_system_ready(_delayed, [this] {
-                return this->has_existing_roles().then([this](bool existing) {
-                    if (!existing) {
+                return seastar::async([this] {
+                    try {
+                        if (this->has_existing_roles()) {
+                            return;
+                        }
                         // Create the default superuser.
-                        return _qp.process(
+                        _qp.process(
                                 sprint(
                                         "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
                                         meta::roles_table::qualified_name(),
                                         meta::roles_table::role_col_name),
                                 db::consistency_level::QUORUM,
-                                {meta::DEFAULT_SUPERUSER_NAME}).then([](auto&&) {
-                            log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
-                        }).handle_exception([] (auto ep) {
-                            log.error("Failed to create superuser role '{}: {}", meta::DEFAULT_SUPERUSER_NAME, ep);
-                            return make_ready_future<>();
-                        });
+                                {meta::DEFAULT_SUPERUSER_NAME}).get();
+                        log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
+                    } catch (const exceptions::unavailable_exception& e) {
+                        log.warn("Skipped default role setup: some nodes were ready; will retry");
+                        throw e;
                     }
-
-                    return make_ready_future<>();
                 });
             });
         });
