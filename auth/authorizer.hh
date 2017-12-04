@@ -49,7 +49,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "permission.hh"
-#include "data_resource.hh"
+#include "resource.hh"
 
 #include "seastarx.hh"
 

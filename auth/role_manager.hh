@@ -31,7 +31,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
-#include "auth/data_resource.hh"
+#include "auth/resource.hh"
 #include "seastarx.hh"
 #include "stdx.hh"
 

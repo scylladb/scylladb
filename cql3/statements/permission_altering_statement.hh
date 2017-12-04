@@ -43,7 +43,7 @@
 
 #include "authorization_statement.hh"
 #include "auth/permission.hh"
-#include "auth/data_resource.hh"
+#include "auth/resource.hh"
 
 namespace cql3 {
 

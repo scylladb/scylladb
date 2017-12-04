@@ -30,8 +30,8 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "auth/authenticated_user.hh"
-#include "auth/data_resource.hh"
 #include "auth/permission.hh"
+#include "auth/resource.hh"
 #include "log.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"

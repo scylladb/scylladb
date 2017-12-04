@@ -21,7 +21,7 @@
 
 #define BOOST_TEST_MODULE core
 
-#include "auth/data_resource.hh"
+#include "auth/resource.hh"
 
 #include <sstream>
 

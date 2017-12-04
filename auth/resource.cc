@@ -39,7 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "auth/data_resource.hh"
+#include "auth/resource.hh"
 
 #include <algorithm>
 #include <iterator>

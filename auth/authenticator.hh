@@ -53,9 +53,9 @@
 #include <seastar/core/enum.hh>
 
 #include "bytes.hh"
-#include "data_resource.hh"
 #include "enum_set.hh"
 #include "exceptions/exceptions.hh"
+#include "resource.hh"
 
 namespace db {
     class config;
