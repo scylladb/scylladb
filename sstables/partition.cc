@@ -742,33 +742,6 @@ public:
     stdx::optional<position_in_partition_view> maybe_skip();
 };
 
-future<streamed_mutation_opt>
-sstables::sstable::read_row(schema_ptr schema,
-                            const sstables::key& key,
-                            const query::partition_slice& slice,
-                            const io_priority_class& pc,
-                            reader_resource_tracker resource_tracker,
-                            streamed_mutation::forwarding fwd)
-{
-    return do_with(dht::global_partitioner().decorate_key(*schema,
-                key.to_partition_key(*schema)),
-                [this, schema, &slice, &pc, resource_tracker = std::move(resource_tracker), fwd] (auto& dk) {
-                    return this->read_row(schema, dk, slice, pc, std::move(resource_tracker), fwd);
-                });
-}
-
-flat_mutation_reader
-sstables::sstable::read_row_flat(schema_ptr schema,
-                                 const sstables::key& key,
-                                 const query::partition_slice& slice,
-                                 const io_priority_class& pc,
-                                 reader_resource_tracker resource_tracker,
-                                 streamed_mutation::forwarding fwd)
-{
-    auto dk = dht::global_partitioner().decorate_key(*schema, key.to_partition_key(*schema));
-    return this->read_row_flat(schema, std::move(dk), slice, pc, std::move(resource_tracker), fwd);
-}
-
 static inline void ensure_len(bytes_view v, size_t len) {
     if (v.size() < len) {
         throw malformed_sstable_exception(sprint("Expected {} bytes, but remaining is {}", len, v.size()));
