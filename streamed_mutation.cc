@@ -664,3 +664,7 @@ bool mutation_fragment::relevant_for_range_assuming_after(const schema& s, posit
 std::ostream& operator<<(std::ostream& out, const range_tombstone_stream& rtl) {
     return out << rtl._list;
 }
+
+std::ostream& operator<<(std::ostream& out, const clustering_interval_set& set) {
+    return out << "{" << ::join(",\n  ", set) << "}";
+}
