@@ -712,6 +712,10 @@ public:
         return _shards;
     }
 
+    gc_clock::time_point get_max_local_deletion_time() const {
+        return gc_clock::time_point(gc_clock::duration(get_stats_metadata().max_local_deletion_time));
+    }
+
     uint32_t get_sstable_level() const {
         return get_stats_metadata().sstable_level;
     }
