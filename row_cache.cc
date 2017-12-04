@@ -336,6 +336,24 @@ future<> read_context::create_sm() {
     });
 }
 
+future<> read_context::create_underlying_flat(bool skip_first_fragment) {
+    if (_range_query) {
+        // FIXME: Singular-range mutation readers don't support fast_forward_to(), so need to use a wide range
+        // here in case the same reader will need to be fast forwarded later.
+        _sm_range = dht::partition_range({dht::ring_position(*_key)}, {dht::ring_position(*_key)});
+    } else {
+        _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
+    }
+    return _underlying_flat.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase).then([this, skip_first_fragment] {
+        _underlying_snapshot = {};
+        if (skip_first_fragment) {
+            return _underlying_flat.underlying()().then([](auto &&mf) {});
+        } else {
+            return make_ready_future<>();
+        }
+    });
+}
+
 static streamed_mutation read_directly_from_underlying(streamed_mutation&& sm, read_context& reader) {
     if (reader.schema()->version() != sm.schema()->version()) {
         sm = transform(std::move(sm), schema_upgrader(reader.schema()));
