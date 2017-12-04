@@ -80,6 +80,12 @@ to_string(std::initializer_list<Printable> items) {
     return "[" + join(", ", std::begin(items), std::end(items)) + "]";
 }
 
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::pair<K, V>& p) {
+    os << "{" << p.first << ", " << p.second << "}";
+    return os;
+}
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
     os << "{" << join(", ", items) << "}";
@@ -94,6 +100,18 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& items) {
 
 template<typename T, size_t N>
 std::ostream& operator<<(std::ostream& os, const std::array<T, N>& items) {
+    os << "{" << join(", ", items) << "}";
+    return os;
+}
+
+template <typename K, typename V, typename... Args>
+std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V, Args...>& items) {
+    os << "{" << join(", ", items) << "}";
+    return os;
+}
+
+template <typename K, typename V, typename... Args>
+std::ostream& operator<<(std::ostream& os, const std::map<K, V, Args...>& items) {
     os << "{" << join(", ", items) << "}";
     return os;
 }
