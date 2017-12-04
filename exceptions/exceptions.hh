@@ -62,7 +62,9 @@ enum class exception_code : int32_t {
     IS_BOOTSTRAPPING= 0x1002,
     TRUNCATE_ERROR  = 0x1003,
     WRITE_TIMEOUT   = 0x1100,
+    WRITE_FAILURE   = 0x1500,
     READ_TIMEOUT    = 0x1200,
+    READ_FAILURE    = 0x1300,
 
     // 2xx: problem validating the request
     SYNTAX_ERROR    = 0x2000,
@@ -158,6 +160,40 @@ struct mutation_write_timeout_exception : public request_timeout_exception {
     mutation_write_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
         request_timeout_exception(exception_code::WRITE_TIMEOUT, ks, cf, consistency, received, block_for)
         , type{std::move(type)}
+    { }
+};
+
+class request_failure_exception : public cassandra_exception {
+public:
+    db::consistency_level consistency;
+    int32_t received;
+    int32_t failures;
+    int32_t block_for;
+
+protected:
+    request_failure_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_) noexcept
+        : cassandra_exception{code, prepare_message("Operation failed for %s.%s - received %d responses and %d failures from %d CL=%s.", ks, cf, received_, failures_, block_for_, consistency_)}
+        , consistency{consistency_}
+        , received{received_}
+        , failures{failures_}
+        , block_for{block_for_}
+    {}
+};
+
+struct mutation_write_failure_exception : public request_failure_exception {
+    db::write_type type;
+    mutation_write_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, db::write_type type_) noexcept :
+        request_failure_exception(exception_code::WRITE_FAILURE, ks, cf, consistency_, received_, failures_, block_for_)
+        , type{std::move(type_)}
+    { }
+};
+
+struct read_failure_exception : public request_failure_exception {
+    bool data_present;
+
+    read_failure_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
+        : request_failure_exception{exception_code::READ_FAILURE, ks, cf, consistency_, received_, failures_, block_for_}
+        , data_present{data_present_}
     { }
 };
 
