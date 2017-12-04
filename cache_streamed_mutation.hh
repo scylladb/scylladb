@@ -186,7 +186,7 @@ public:
 
 inline
 future<> cache_streamed_mutation::process_static_row() {
-    if (_snp->version()->partition().static_row_continuous()) {
+    if (_snp->static_row_continuous()) {
         _read_context->cache().on_row_hit();
         row sr = _lsa_manager.run_in_read_section([this] {
             return _snp->static_row();

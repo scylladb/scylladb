@@ -269,6 +269,7 @@ public:
 
     tombstone partition_tombstone() const;
     row static_row() const;
+    bool static_row_continuous() const;
     mutation_partition squashed() const;
     // Returns range tombstones overlapping with [start, end)
     std::vector<range_tombstone> range_tombstones(position_in_partition_view start, position_in_partition_view end);

@@ -117,6 +117,10 @@ row partition_snapshot::static_row() const {
                          [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); });
 }
 
+bool partition_snapshot::static_row_continuous() const {
+    return version()->partition().static_row_continuous();
+}
+
 tombstone partition_snapshot::partition_tombstone() const {
     return ::squashed<tombstone>(version(),
                                [] (const mutation_partition& mp) { return mp.partition_tombstone(); },
