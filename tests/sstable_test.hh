@@ -187,6 +187,13 @@ public:
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
     }
+
+    void rewrite_toc_without_scylla_component() {
+        _sst->_recognized_components.erase(sstable::component_type::Scylla);
+        remove_file(_sst->filename(sstable::component_type::TOC)).get();
+        _sst->write_toc(default_priority_class());
+        _sst->seal_sstable().get();
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
