@@ -136,7 +136,7 @@ struct table {
         }
         rd.push_back(mt->make_reader(s.schema(), r->pr, r->slice));
         rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice));
-        auto crd = make_combined_reader(std::move(rd), mutation_reader::forwarding::no);
+        auto crd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
         r->rd = flat_mutation_reader_from_mutation_reader(s.schema(), std::move(crd), streamed_mutation::forwarding::no);
         return r;
     }

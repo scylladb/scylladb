@@ -97,6 +97,143 @@ public:
     future<> fast_forward_to(const dht::partition_range& pr) { return _impl->fast_forward_to(pr); }
 };
 
+GCC6_CONCEPT(
+    template<typename Producer>
+    concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
+        // The returned fragments are expected to have the same
+        // position_in_partition. Iterators and references are expected
+        // to be valid until the next call to operator()().
+        { p() } -> future<boost::iterator_range<std::vector<mutation_fragment>::iterator>>;
+        // These have the same semantics as their
+        // flat_mutation_reader counterparts.
+        { p.next_partition() };
+        { p.fast_forward_to(part_range) } -> future<>;
+        { p.fast_forward_to(pos_range) } -> future<>;
+    };
+)
+
+/**
+ * Merge mutation-fragments produced by producer.
+ *
+ * Merge a non-decreasing stream of mutation-fragments into strictly
+ * increasing stream. The merger is stateful, it's intended to be kept
+ * around *at least* for merging an entire partition. That is, creating
+ * a new instance for each batch of fragments will produce incorrect
+ * results.
+ *
+ * Call operator() to get the next mutation fragment. operator() will
+ * consume fragments from the producer using operator().
+ * Any fast-forwarding has to be communicated to the merger object using
+ * fast_forward_to() and next_partition(), as appropriate.
+ */
+template<class Producer>
+GCC6_CONCEPT(
+    requires FragmentProducer<Producer>
+)
+class mutation_fragment_merger {
+    using iterator = std::vector<mutation_fragment>::iterator;
+
+    const schema_ptr _schema;
+    Producer _producer;
+    range_tombstone_stream _deferred_tombstones;
+    iterator _it;
+    iterator _end;
+    bool _end_of_stream = false;
+
+    void apply(mutation_fragment& to, mutation_fragment&& frag) {
+        if (to.is_range_tombstone()) {
+            if (auto remainder = to.as_mutable_range_tombstone().apply(*_schema, std::move(frag).as_range_tombstone())) {
+                _deferred_tombstones.apply(std::move(*remainder));
+            }
+        } else {
+            to.apply(*_schema, std::move(frag));
+        }
+    }
+
+    future<> fetch() {
+        if (!empty()) {
+            return make_ready_future<>();
+        }
+
+        return _producer().then([this] (boost::iterator_range<iterator> fragments) {
+            _it = fragments.begin();
+            _end = fragments.end();
+            if (empty()) {
+                _end_of_stream = true;
+            }
+        });
+    }
+
+    bool empty() const {
+        return _it == _end;
+    }
+
+    const mutation_fragment& top() const {
+        return *_it;
+    }
+
+    mutation_fragment pop() {
+        return std::move(*_it++);
+    }
+
+public:
+    mutation_fragment_merger(schema_ptr schema, Producer&& producer)
+        : _schema(std::move(schema))
+        , _producer(std::move(producer))
+        , _deferred_tombstones(*_schema) {
+    }
+
+    future<mutation_fragment_opt> operator()() {
+        if (_end_of_stream) {
+            return make_ready_future<mutation_fragment_opt>(_deferred_tombstones.get_next());
+        }
+
+        return fetch().then([this] () -> mutation_fragment_opt {
+            if (empty()) {
+                return _deferred_tombstones.get_next();
+            }
+
+            auto current = [&] {
+                if (auto rt = _deferred_tombstones.get_next(top())) {
+                    return std::move(*rt);
+                }
+                return pop();
+            }();
+
+            const auto equal = position_in_partition::equal_compare(*_schema);
+
+            // Position of current is always either < or == than those
+            // of the batch. In the former case there is nothing further
+            // to do.
+            if (empty() || !equal(current.position(), top().position())) {
+                return current;
+            }
+            while (!empty()) {
+                apply(current, pop());
+            }
+            return current;
+        });
+    }
+
+    void next_partition() {
+        _deferred_tombstones.reset();
+        _end_of_stream = false;
+        _producer.next_partition();
+    }
+
+    future<> fast_forward_to(const dht::partition_range& pr) {
+        _deferred_tombstones.reset();
+        _end_of_stream = false;
+        return _producer.fast_forward_to(pr);
+    }
+
+    future<> fast_forward_to(position_range pr) {
+        _deferred_tombstones.forward_to(pr.start());
+        _end_of_stream = false;
+        return _producer.fast_forward_to(std::move(pr));
+    }
+};
+
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
 template <typename Impl, typename... Args>
 inline
@@ -111,8 +248,8 @@ protected:
 public:
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
-    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) = 0;
-    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
+    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) = 0;
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const dht::token* const t) const noexcept {
@@ -120,60 +257,104 @@ public:
     }
 };
 
-// Combines multiple mutation_readers into one.
-class combined_mutation_reader : public mutation_reader::impl {
-    std::unique_ptr<reader_selector> _selector;
-    std::list<mutation_reader> _all_readers;
+// Merges the output of the sub-readers into a single non-decreasing
+// stream of mutation-fragments.
+class mutation_reader_merger {
+public:
+    struct reader_and_fragment {
+        flat_mutation_reader* reader;
+        mutation_fragment fragment;
 
-    struct mutation_and_reader {
-        streamed_mutation m;
-        mutation_reader* read;
-
-        bool operator<(const mutation_and_reader& other) const {
-            return read < other.read;
+        reader_and_fragment(flat_mutation_reader* r, mutation_fragment f)
+            : reader(r)
+            , fragment(std::move(f)) {
         }
-
-        struct less_compare {
-            bool operator()(const mutation_and_reader& a, mutation_reader* b) const {
-                return a.read < b;
-            }
-            bool operator()(mutation_reader* a, const mutation_and_reader& b) const {
-                return a < b.read;
-            }
-            bool operator()(const mutation_and_reader& a, const mutation_and_reader& b) const {
-                return a < b;
-            }
-        };
     };
-    std::vector<mutation_and_reader> _ptables;
-    // comparison function for std::make_heap()/std::push_heap()
-    static bool heap_compare(const mutation_and_reader& a, const mutation_and_reader& b) {
-        auto&& s = a.m.schema();
-        // order of comparison is inverted, because heaps produce greatest value first
-        return b.m.decorated_key().less_compare(*s, a.m.decorated_key());
-    }
-    std::vector<streamed_mutation> _current;
-    std::vector<mutation_reader*> _next;
+
+    using mutation_fragment_batch = boost::iterator_range<std::vector<mutation_fragment>::iterator>;
+private:
+    struct reader_heap_compare;
+    struct fragment_heap_compare;
+
+    std::unique_ptr<reader_selector> _selector;
+    // We need a list because we need stable addresses across additions
+    // and removals.
+    std::list<flat_mutation_reader> _all_readers;
+    // Readers positioned at a partition, different from the one we are
+    // reading from now. For these readers the attached fragment is
+    // always partition_start. Used to pick the next partition.
+    std::vector<reader_and_fragment> _reader_heap;
+    // Readers and their current fragments, belonging to the current
+    // partition.
+    std::vector<reader_and_fragment> _fragment_heap;
+    std::vector<flat_mutation_reader*> _next;
+    // Readers that reached EOS.
+    std::vector<flat_mutation_reader*> _halted_readers;
+    std::vector<mutation_fragment> _current;
+    dht::decorated_key_opt _key;
+    const schema_ptr _schema;
+    streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
     const dht::token* current_position() const;
     void maybe_add_readers(const dht::token* const t);
-    void add_readers(std::vector<mutation_reader> new_readers);
+    void add_readers(std::vector<flat_mutation_reader> new_readers);
     future<> prepare_next();
-    // Produces next mutation or disengaged optional if there are no more.
-    future<streamed_mutation_opt> next();
+    // Collect all forwardable readers into _next, and remove them from
+    // their previous containers (_halted_readers and _fragment_heap).
+    void prepare_forwardable_readers();
 public:
-    // The specified mutation_reader::forwarding tag must be the same for all included readers.
-    combined_mutation_reader(std::unique_ptr<reader_selector> selector, mutation_reader::forwarding fwd_mr);
-    virtual future<streamed_mutation_opt> operator()() override;
+    mutation_reader_merger(schema_ptr schema,
+            std::unique_ptr<reader_selector> selector,
+            streamed_mutation::forwarding fwd_sm,
+            mutation_reader::forwarding fwd_mr);
+    // Produces the next batch of mutation-fragments of the same
+    // position.
+    future<mutation_fragment_batch> operator()();
+    void next_partition();
+    future<> fast_forward_to(const dht::partition_range& pr);
+    future<> fast_forward_to(position_range pr);
+};
+
+// Combines multiple mutation_readers into one.
+class combined_mutation_reader : public flat_mutation_reader::impl {
+    mutation_fragment_merger<mutation_reader_merger> _producer;
+    streamed_mutation::forwarding _fwd_sm;
+public:
+    // The specified streamed_mutation::forwarding and
+    // mutation_reader::forwarding tag must be the same for all included
+    // readers.
+    combined_mutation_reader(schema_ptr schema,
+            std::unique_ptr<reader_selector> selector,
+            streamed_mutation::forwarding fwd_sm,
+            mutation_reader::forwarding fwd_mr);
+    virtual future<> fill_buffer() override;
+    virtual void next_partition() override;
     virtual future<> fast_forward_to(const dht::partition_range& pr) override;
+    virtual future<> fast_forward_to(position_range pr) override;
 };
 
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-mutation_reader make_combined_reader(std::vector<mutation_reader>, mutation_reader::forwarding);
-mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b, mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+mutation_reader make_combined_reader(schema_ptr schema,
+        std::vector<mutation_reader> readers,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+mutation_reader make_combined_reader(schema_ptr schema,
+        mutation_reader&& a,
+        mutation_reader&& b,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+flat_mutation_reader make_combined_reader(schema_ptr schema,
+        std::vector<flat_mutation_reader>,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding);
+flat_mutation_reader make_combined_reader(schema_ptr schema,
+        flat_mutation_reader&& a,
+        flat_mutation_reader&& b,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 // reads from the input readers, in order
 mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);

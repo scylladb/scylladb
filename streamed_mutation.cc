@@ -139,6 +139,10 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
     assert(!is_range_tombstone());
     _data->_size_in_bytes = stdx::nullopt;
     switch (_kind) {
+    case mutation_fragment::kind::partition_start:
+        _data->_partition_start.partition_tombstone().apply(mf._data->_partition_start.partition_tombstone());
+        mf._data->_partition_start.~partition_start();
+        break;
     case kind::static_row:
         _data->_static_row.apply(s, std::move(mf._data->_static_row));
         mf._data->_static_row.~static_row();
@@ -146,6 +150,10 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
     case kind::clustering_row:
         _data->_clustering_row.apply(s, std::move(mf._data->_clustering_row));
         mf._data->_clustering_row.~clustering_row();
+        break;
+    case mutation_fragment::kind::partition_end:
+        // Nothing to do for this guy.
+        mf._data->_partition_end.~partition_end();
         break;
     default: abort();
     }
