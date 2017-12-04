@@ -4,7 +4,6 @@ BASETGZ="/var/cache/pbuilder/scylla-server-$DIST.tgz"
 DISTRIBUTION="$DIST"
 BUILDRESULT="/var/cache/pbuilder/scylla-server-$DIST/result/"
 APTCACHE="/var/cache/pbuilder/scylla-server-$DIST/aptcache/"
-ALLOWUNTRUSTED=yes
 EXTRAPACKAGES="sudo"
 
 if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] || [ "$DIST" = "zesty" ] || [ "$DIST" = "artful" ]; then
