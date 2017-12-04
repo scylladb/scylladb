@@ -37,7 +37,7 @@ namespace cache {
 class autoupdating_underlying_flat_reader final {
     row_cache& _cache;
     read_context& _read_context;
-    stdx::optional<mutation_reader> _reader;
+    stdx::optional<flat_mutation_reader> _reader;
     utils::phased_barrier::phase_type _reader_creation_phase;
     dht::partition_range _range = { };
     stdx::optional<dht::decorated_key> _last_key;
@@ -47,17 +47,7 @@ public:
         : _cache(cache)
         , _read_context(context)
     { }
-    // Reads next partition without changing mutation source snapshot.
-    future<streamed_mutation_opt> read_next_same_phase() {
-        _last_key = std::move(_new_last_key);
-        return (*_reader)().then([this] (auto&& smopt) {
-            if (smopt) {
-                _new_last_key = smopt->decorated_key();
-            }
-            return std::move(smopt);
-        });
-    }
-    future<streamed_mutation_opt> operator()() {
+    future<mutation_fragment_opt> move_to_next_partition() {
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
@@ -66,7 +56,8 @@ public:
                 auto cmp = dht::ring_position_comparator(*_cache._schema);
                 auto&& new_range = _range.split_after(*_last_key, cmp);
                 if (!new_range) {
-                    return make_ready_future<streamed_mutation_opt>(streamed_mutation_opt());
+                    _reader = {};
+                    return make_ready_future<mutation_fragment_opt>();
                 }
                 _range = std::move(*new_range);
                 _last_key = {};
@@ -76,14 +67,20 @@ public:
             }
             auto& snap = _cache.snapshot_for_phase(phase);
             _reader = {}; // See issue #2644
-            _reader = _cache.create_underlying_reader(_read_context, snap, _range);
+            _reader = _cache.create_underlying_flat_reader(_read_context, snap, _range);
             _reader_creation_phase = phase;
         }
-        return (*_reader)().then([this] (auto&& smopt) {
-            if (smopt) {
-                _new_last_key = smopt->decorated_key();
+        _reader->next_partition();
+
+        if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
+            return make_ready_future<mutation_fragment_opt>();
+        }
+        return (*_reader)().then([this] (auto&& mfopt) {
+            if (mfopt) {
+                assert(mfopt->is_partition_start());
+                _new_last_key = mfopt->as_partition_start().key();
             }
-            return std::move(smopt);
+            return std::move(mfopt);
         });
     }
     future<> fast_forward_to(dht::partition_range&& range) {
@@ -103,7 +100,7 @@ public:
                 _reader = {}; // See issue #2644
             }
         }
-        _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
+        _reader = _cache.create_underlying_flat_reader(_read_context, snapshot, _range);
         _reader_creation_phase = phase;
         return make_ready_future<>();
     }
@@ -114,6 +111,7 @@ public:
     const dht::partition_range& range() const {
         return _range;
     }
+    flat_mutation_reader& underlying() { return *_reader; }
     dht::ring_position_view population_range_start() const {
         return _last_key ? dht::ring_position_view::for_after_key(*_last_key)
                          : dht::ring_position_view::for_range_start(_range);
