@@ -1210,6 +1210,14 @@ void sstable::validate_min_max_metadata() {
     }
 }
 
+void sstable::validate_max_local_deletion_time() {
+    if (!has_correct_max_deletion_time()) {
+        auto& entry = _components->statistics.contents[metadata_type::Stats];
+        auto& s = *static_cast<stats_metadata*>(entry.get());
+        s.max_local_deletion_time = std::numeric_limits<int32_t>::max();
+    }
+}
+
 void sstable::set_clustering_components_ranges() {
     if (!_schema->clustering_key_size()) {
         return;
@@ -1386,6 +1394,7 @@ future<> sstable::load(const io_priority_class& pc) {
                 read_filter(pc),
                 read_summary(pc)).then([this] {
             validate_min_max_metadata();
+            validate_max_local_deletion_time();
             set_clustering_components_ranges();
             return open_data();
         });
@@ -1399,6 +1408,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) {
         _index_file = make_checked_file(_read_error_handler, info.index.to_file());
         _shards = std::move(info.owners);
         validate_min_max_metadata();
+        validate_max_local_deletion_time();
         return update_info_for_opened_data();
     });
 }
