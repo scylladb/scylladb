@@ -900,7 +900,7 @@ public:
     // Returns true iff all keys from given range are marked as not continuous and range is not empty.
     bool fully_discontinuous(const schema&, const position_range&);
     // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
-    bool check_continuity(const schema&, const position_range&, is_continuous);
+    bool check_continuity(const schema&, const position_range&, is_continuous) const;
     // Removes all data, marking affected ranges as discontinuous.
     void evict() noexcept;
     // Applies mutation_fragment.

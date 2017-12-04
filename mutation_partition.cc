@@ -2226,7 +2226,7 @@ void mutation_partition::evict() noexcept {
 }
 
 bool
-mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) {
+mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) const {
     auto less = rows_entry::compare(s);
     auto i = _rows.lower_bound(r.start(), less);
     auto end = _rows.lower_bound(r.end(), less);
