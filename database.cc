@@ -431,7 +431,7 @@ public:
     incremental_reader_selector(incremental_reader_selector&&) = delete;
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
-    virtual std::vector<mutation_reader> create_new_readers(const dht::token* const t) override {
+    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
         dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(t));
 
         const auto& position = (t ? *t : _selector_position);
@@ -456,12 +456,14 @@ public:
 
         dblog.trace("incremental_reader_selector {}: {} new sstables to consider, advancing selector to {}", this, selection.sstables.size(), _selector_position);
 
-        return boost::copy_range<std::vector<mutation_reader>>(selection.sstables
+        return boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                 | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
-                | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+                | boost::adaptors::transformed([this] (auto& sst) {
+                    return flat_mutation_reader_from_mutation_reader(_s, this->create_reader(sst), _fwd);
+                }));
     }
 
-    virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
         _pr = &pr;
 
         if (_pr->start()->value().token() >= _selector_position) {
@@ -586,17 +588,19 @@ column_family::make_sstable_reader(schema_ptr s,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         mutation_reader::forwarding fwd_mr) {
-                    return make_mutation_reader<combined_mutation_reader>(
-                            std::make_unique<incremental_reader_selector>(std::move(s), std::move(sstables), pr, slice, pc,
+                    return make_flat_mutation_reader<combined_mutation_reader>(s,
+                            std::make_unique<incremental_reader_selector>(s, std::move(sstables), pr, slice, pc,
                                     reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr),
+                            fwd,
                             fwd_mr);
                 });
             return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
-            return make_mutation_reader<combined_mutation_reader>(
-                    std::make_unique<incremental_reader_selector>(std::move(s), std::move(sstables), pr, slice, pc,
+            return mutation_reader_from_flat_mutation_reader(make_flat_mutation_reader<combined_mutation_reader>(s,
+                    std::make_unique<incremental_reader_selector>(s, std::move(sstables), pr, slice, pc,
                             no_resource_tracking(), std::move(trace_state), fwd, fwd_mr),
-                    fwd_mr);
+                    fwd,
+                    fwd_mr));
         }
     }
 }
@@ -684,7 +688,7 @@ column_family::make_reader(schema_ptr s,
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
-    return make_combined_reader(std::move(readers), fwd_mr);
+    return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
 flat_mutation_reader
@@ -701,7 +705,7 @@ column_family::make_streaming_reader(schema_ptr s,
             readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
         }
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-        return make_combined_reader(std::move(readers), fwd_mr);
+        return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     });
 
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -4267,15 +4271,18 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr)
 {
-    return make_mutation_reader<combined_mutation_reader>(std::make_unique<incremental_reader_selector>(std::move(s),
-                std::move(sstables),
-                pr,
-                slice,
-                pc,
-                std::move(resource_tracker),
-                std::move(trace_state),
-                fwd,
-                fwd_mr), fwd_mr);
+    return mutation_reader_from_flat_mutation_reader(
+            make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
+                    std::move(sstables),
+                    pr,
+                    slice,
+                    pc,
+                    std::move(resource_tracker),
+                    std::move(trace_state),
+                    fwd,
+                    fwd_mr),
+            fwd,
+            fwd_mr));
 }
 
 future<>
