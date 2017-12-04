@@ -215,5 +215,7 @@ fi
 sudo -E DIST=$TARGET /usr/sbin/pbuilder update
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ]; then
     sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
+elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
+    sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/debian_install_gpgkey.sh
 fi
 sudo -E DIST=$TARGET pdebuild --buildresult build/debs
