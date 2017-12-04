@@ -277,6 +277,36 @@ public:
         return mf;
     }
 
+    // Returns a pointer to rows_entry with given position in latest version or
+    // creates a neutral one, provided that it belongs to a continuous range.
+    // Otherwise returns nullptr.
+    // Doesn't change logical value of mutation_partition or continuity of the snapshot.
+    // The cursor doesn't have to be valid.
+    // The cursor is invalid after the call.
+    rows_entry* ensure_entry_if_complete(position_in_partition_view pos) {
+        prepare_heap(pos);
+        bool left_continuous = true;
+        if (!_heap.empty()) {
+            recreate_current_row();
+            position_in_partition::equal_compare eq(_schema);
+            if (eq(position(), pos)) {
+                if (dummy()) {
+                    return nullptr;
+                }
+                if (is_in_latest_version()) {
+                    return &*get_iterator_in_latest_version();
+                }
+                left_continuous = continuous();
+            } else if (!continuous()) {
+                return nullptr;
+            }
+        }
+        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy::no, is_continuous(left_continuous));
+        rows.insert_before(get_iterator_in_latest_version(), *e);
+        return e;
+    }
+
     // Can be called when cursor is pointing at a row, even when invalid.
     const position_in_partition& position() const {
         return _position;
