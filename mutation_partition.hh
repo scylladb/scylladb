@@ -46,6 +46,7 @@
 #include "utils/with_relational_operators.hh"
 
 class mutation_fragment;
+class clustering_row;
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -966,6 +967,10 @@ public:
     // create a mutation_partition equal to the sum of other and this one.
     // This and other must both be governed by the same schema s.
     mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
+
+    // Returns a subset of this mutation holding only information relevant for given clustering ranges.
+    // Range tombstones will be trimmed to the boundaries of the clustering ranges.
+    mutation_partition sliced(const schema& s, const query::clustering_row_ranges&) const;
 
     // Returns true if there is no live data or tombstones.
     bool empty() const;

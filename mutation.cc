@@ -212,9 +212,7 @@ mutation& mutation::operator+=(mutation&& other) {
 }
 
 mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
-    auto m = mutation(schema(), decorated_key(), mutation_partition(partition(), *schema(), ranges));
-    m.partition().row_tombstones().trim(*schema(), ranges);
-    return m;
+    return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
 }
 
 class mutation_rebuilder {
