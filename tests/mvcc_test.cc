@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
         };
 
         auto apply = [&] (partition_entry& e, const mutation& m) {
-            e.apply_to_incomplete(s, partition_entry(m.partition()), s);
+            e.apply_to_incomplete(s, partition_entry(m.partition()), s, r);
         };
 
         auto ck1 = table.make_ckey(1);
@@ -202,7 +202,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
 
             // Check that snapshot data is not stolen when its entry is applied
             auto e2 = partition_entry(mutation_partition(table.schema()));
-            e2.apply_to_incomplete(s, std::move(e), s);
+            e2.apply_to_incomplete(s, std::move(e), s, r);
             assert_that(table.schema(), snap1->squashed()).is_equal_to(m1.partition());
             assert_that(table.schema(), e2.squashed(s)).is_equal_to((m2 + m3).partition());
         });
@@ -234,7 +234,7 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         };
 
         auto apply = [&] (schema_ptr e_schema, partition_entry& e, const mutation& m) {
-            e.apply_to_incomplete(*e_schema, partition_entry(m.partition()), *m.schema());
+            e.apply_to_incomplete(*e_schema, partition_entry(m.partition()), *m.schema(), r);
         };
 
       with_allocator(r.allocator(), [&] {

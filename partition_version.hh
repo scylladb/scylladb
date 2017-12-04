@@ -301,7 +301,7 @@ private:
 
     void set_version(partition_version*);
 
-    void apply_to_incomplete(const schema& s, partition_version* other);
+    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&);
 public:
     class rows_iterator;
     partition_entry() = default;
@@ -362,7 +362,7 @@ public:
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
+    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&);
 
     partition_version& add_version(const schema& s);
 

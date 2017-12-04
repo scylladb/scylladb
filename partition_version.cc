@@ -467,21 +467,23 @@ void partition_entry::with_detached_versions(Func&& func) {
     func(current);
 }
 
-void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema)
+void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
+    logalloc::region& reg)
 {
     if (s.version() != pe_schema.version()) {
         partition_entry entry(pe.squashed(pe_schema.shared_from_this(), s.shared_from_this()));
         entry.with_detached_versions([&] (partition_version* v) {
-            apply_to_incomplete(s, v);
+            apply_to_incomplete(s, v, reg);
         });
     } else {
         pe.with_detached_versions([&](partition_version* v) {
-            apply_to_incomplete(s, v);
+            apply_to_incomplete(s, v, reg);
         });
     }
 }
 
-void partition_entry::apply_to_incomplete(const schema& s, partition_version* version) {
+void partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
+        logalloc::region& reg) {
     partition_version& dst = open_version(s);
 
     bool can_move = true;
