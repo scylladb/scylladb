@@ -23,6 +23,69 @@
 
 #include "mutation.hh"
 
+class mutation_partition_assertion {
+    schema_ptr _schema;
+    const mutation_partition& _m;
+public:
+    mutation_partition_assertion(schema_ptr s, const mutation_partition& m)
+        : _schema(s)
+        , _m(m)
+    { }
+
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    mutation_partition_assertion& is_equal_to(const mutation_partition& other,
+            const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+        return is_equal_to(*_schema, other, ck_ranges);
+    }
+
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    mutation_partition_assertion& is_equal_to(const schema& s, const mutation_partition& other,
+            const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+        if (ck_ranges) {
+            mutation_partition_assertion(_schema, _m.sliced(*_schema, *ck_ranges))
+                .is_equal_to(s, other.sliced(s, *ck_ranges));
+            return *this;
+        }
+        if (!_m.equal(*_schema, other, s)) {
+            BOOST_FAIL(sprint("Mutations differ, expected %s\n ...but got: %s", other, _m));
+        }
+        if (!other.equal(s, _m, *_schema)) {
+            BOOST_FAIL(sprint("Mutation inequality is not symmetric for %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
+    mutation_partition_assertion& is_not_equal_to(const mutation_partition& other) {
+        return is_not_equal_to(*_schema, other);
+    }
+
+    mutation_partition_assertion& is_not_equal_to(const schema& s, const mutation_partition& other) {
+        if (_m.equal(*_schema, other, s)) {
+            BOOST_FAIL(sprint("Mutations equal but expected to differ: %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
+    mutation_partition_assertion& has_same_continuity(const mutation_partition& other) {
+        if (!_m.equal_continuity(*_schema, other)) {
+            BOOST_FAIL(sprint("Continuity doesn't match: %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
+    mutation_partition_assertion& is_continuous(const position_range& r, is_continuous cont = is_continuous::yes) {
+        if (!_m.check_continuity(*_schema, r, cont)) {
+            BOOST_FAIL(sprint("Expected range %s to be %s in %s", r, cont ? "continuous" : "discontinuous", _m));
+        }
+        return *this;
+    }
+};
+
+static inline
+mutation_partition_assertion assert_that(schema_ptr s, const mutation_partition& mp) {
+    return {std::move(s), mp};
+}
+
 class mutation_assertion {
     mutation _m;
 public:
@@ -60,16 +123,12 @@ public:
     }
 
     mutation_assertion& has_same_continuity(const mutation& other) {
-        if (!_m.partition().equal_continuity(*_m.schema(), other.partition())) {
-            BOOST_FAIL(sprint("Continuity doesn't match: %s\n ...and: %s", other, _m));
-        }
+        assert_that(_m.schema(), _m.partition()).has_same_continuity(other.partition());
         return *this;
     }
 
     mutation_assertion& is_continuous(const position_range& r, is_continuous cont = is_continuous::yes) {
-        if (!_m.partition().check_continuity(*_m.schema(), r, cont)) {
-            BOOST_FAIL(sprint("Expected range %s to be %s in %s", r, cont ? "continuous" : "discontinuous", _m));
-        }
+        assert_that(_m.schema(), _m.partition()).is_continuous(r, cont);
         return *this;
     }
 
