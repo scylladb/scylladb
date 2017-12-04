@@ -24,6 +24,7 @@
 
 #include "partition_version.hh"
 #include "partition_builder.hh"
+#include "partition_snapshot_row_cursor.hh"
 
 static void remove_or_mark_as_unique_owner(partition_version* current)
 {
@@ -307,6 +308,9 @@ public:
     const clustering_key& key() const {
         return _current_row[0].current_row->key();
     }
+    position_in_partition_view position() const {
+        return _current_row[0].current_row->position();
+    }
     bool is_dummy() const {
         return bool(_current_row[0].current_row->dummy());
     }
@@ -348,100 +352,6 @@ public:
         }
     }
 };
-
-namespace {
-
-// When applying partition_entry to an incomplete partition_entry this class is used to represent
-// the target incomplete partition_entry. It encapsulates the logic needed for handling multiple versions.
-class apply_incomplete_target final {
-    struct version {
-        mutation_partition::rows_type::iterator current_row;
-        mutation_partition::rows_type* rows;
-        size_t version_no;
-
-        struct compare {
-            const rows_entry::tri_compare& _cmp;
-        public:
-            explicit compare(const rows_entry::tri_compare& cmp) : _cmp(cmp) { }
-            bool operator()(const version& a, const version& b) const {
-                auto res = _cmp(*a.current_row, *b.current_row);
-                return res > 0 || (res == 0 && a.version_no > b.version_no);
-            }
-        };
-    };
-    const schema& _schema;
-    partition_entry& _pe;
-    rows_entry::tri_compare _rows_cmp;
-    rows_entry::compare _rows_less_cmp;
-    version::compare _version_cmp;
-    std::vector<version> _heap;
-    mutation_partition::rows_type::iterator _next_in_latest_version;
-public:
-    apply_incomplete_target(partition_entry& pe, const schema& schema)
-        : _schema(schema)
-        , _pe(pe)
-        , _rows_cmp(schema)
-        , _rows_less_cmp(schema)
-        , _version_cmp(_rows_cmp)
-    {
-        size_t version_no = 0;
-        _next_in_latest_version = pe.version()->partition().clustered_rows().begin();
-        for (auto&& v : pe.version()->elements_from_this()) {
-            if (!v.partition().clustered_rows().empty()) {
-                _heap.push_back({v.partition().clustered_rows().begin(), &v.partition().clustered_rows(), version_no});
-            }
-            ++version_no;
-        }
-        boost::range::make_heap(_heap, _version_cmp);
-    }
-    // Applies the row from source.
-    // Must be called for rows with monotonic keys.
-    // Weak exception guarantees. The target and source partitions are left
-    // in a state such that the two still commute to the same value on retry.
-    void apply(partition_entry::rows_iterator& src) {
-        auto&& key = src.key();
-        while (!_heap.empty() && _rows_less_cmp(*_heap[0].current_row, key)) {
-            boost::range::pop_heap(_heap, _version_cmp);
-            auto& curr = _heap.back();
-            curr.current_row = curr.rows->lower_bound(key, _rows_less_cmp);
-            if (curr.version_no == 0) {
-                _next_in_latest_version = curr.current_row;
-            }
-            if (curr.current_row == curr.rows->end()) {
-                _heap.pop_back();
-            } else {
-                boost::range::push_heap(_heap, _version_cmp);
-            }
-        }
-
-        if (!_heap.empty()) {
-            rows_entry& next_row = *_heap[0].current_row;
-            if (_rows_cmp(key, next_row) == 0) {
-                if (next_row.dummy()) {
-                    return;
-                }
-            } else if (!next_row.continuous()) {
-                return;
-            }
-        }
-
-        mutation_partition::rows_type& rows = _pe.version()->partition().clustered_rows();
-        if (_next_in_latest_version != rows.end() && _rows_cmp(key, *_next_in_latest_version) == 0) {
-            src.consume_row([&] (deletable_row&& row) {
-                _next_in_latest_version->row().apply_monotonically(_schema, std::move(row));
-            });
-        } else {
-            auto e = current_allocator().construct<rows_entry>(key);
-            e->set_continuous(_heap.empty() ? is_continuous::yes : _heap[0].current_row->continuous());
-            rows.insert_before(_next_in_latest_version, *e);
-            src.consume_row([&] (deletable_row&& row) {
-                e->row().apply_monotonically(_schema, std::move(row));
-            });
-        }
-    }
-};
-
-} // namespace
 
 template<typename Func>
 void partition_entry::with_detached_versions(Func&& func) {
@@ -485,10 +395,10 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe,
 void partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
         logalloc::region& reg) {
     partition_version& dst = open_version(s);
-
+    auto snp = read(reg, s.shared_from_this());
     bool can_move = true;
     auto current = version;
-    bool static_row_continuous = dst.partition().static_row_continuous();
+    bool static_row_continuous = snp->static_row_continuous();
     while (current) {
         can_move &= !current->is_referenced();
         dst.partition().apply(current->partition().partition_tombstone());
@@ -510,11 +420,16 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_version* ve
     }
 
     partition_entry::rows_iterator source(version, s);
-    apply_incomplete_target target(*this, s);
+    partition_snapshot_row_cursor cur(s, *snp);
 
     while (!source.done()) {
         if (!source.is_dummy()) {
-            target.apply(source);
+            rows_entry* e = cur.ensure_entry_if_complete(source.position());
+            if (e) {
+                source.consume_row([&] (deletable_row&& row) {
+                    e->row().apply_monotonically(s, std::move(row));
+                });
+            }
         }
         source.remove_current_row_when_possible();
         source.move_to_next_row();
