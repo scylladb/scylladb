@@ -73,11 +73,11 @@ private:
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
-        _authorizer.revoke_all(auth::data_resource(ks_name));
+        _authorizer.revoke_all(auth::resource(ks_name));
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        _authorizer.revoke_all(auth::data_resource(ks_name, cf_name));
+        _authorizer.revoke_all(auth::resource(ks_name, cf_name));
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
@@ -343,7 +343,7 @@ future<> service::delete_user(const sstring& name) {
             { name }).discard_result();
 }
 
-future<permission_set> service::get_permissions(::shared_ptr<authenticated_user> u, data_resource r) const {
+future<permission_set> service::get_permissions(::shared_ptr<authenticated_user> u, resource r) const {
     return sharded_permissions_cache.local().get(std::move(u), std::move(r));
 }
 

@@ -50,7 +50,7 @@
 
 cql3::statements::list_permissions_statement::list_permissions_statement(
                 auth::permission_set permissions,
-                std::experimental::optional<auth::data_resource> resource,
+                std::experimental::optional<auth::resource> resource,
                 std::experimental::optional<sstring> username, bool recursive)
                 : _permissions(permissions), _resource(std::move(resource)), _username(
                                 std::move(username)), _recursive(recursive) {
@@ -90,7 +90,7 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
         make_column("username"), make_column("resource"), make_column("permission")
     });
 
-    typedef std::experimental::optional<auth::data_resource> opt_resource;
+    typedef std::experimental::optional<auth::resource> opt_resource;
 
     std::vector<opt_resource> resources;
 

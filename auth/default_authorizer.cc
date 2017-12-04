@@ -106,7 +106,7 @@ future<> auth::default_authorizer::stop() {
 }
 
 future<auth::permission_set> auth::default_authorizer::authorize(
-                service& ser, ::shared_ptr<authenticated_user> user, data_resource resource) const {
+                service& ser, ::shared_ptr<authenticated_user> user, resource resource) const {
     return auth::is_super_user(ser, *user).then([this, user, resource = std::move(resource)](bool is_super) {
         if (is_super) {
             return make_ready_future<permission_set>(permissions::ALL);
@@ -139,7 +139,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
 
 future<> auth::default_authorizer::modify(
                 ::shared_ptr<authenticated_user> performer, permission_set set,
-                data_resource resource, sstring user, sstring op) {
+                resource resource, sstring user, sstring op) {
     // TODO: why does this not check super user?
     auto query = sprint("UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
                     meta::AUTH_KS, PERMISSIONS_CF, PERMISSIONS_NAME,
@@ -151,19 +151,19 @@ future<> auth::default_authorizer::modify(
 
 future<> auth::default_authorizer::grant(
                 ::shared_ptr<authenticated_user> performer, permission_set set,
-                data_resource resource, sstring to) {
+                resource resource, sstring to) {
     return modify(std::move(performer), std::move(set), std::move(resource), std::move(to), "+");
 }
 
 future<> auth::default_authorizer::revoke(
                 ::shared_ptr<authenticated_user> performer, permission_set set,
-                data_resource resource, sstring from) {
+                resource resource, sstring from) {
     return modify(std::move(performer), std::move(set), std::move(resource), std::move(from), "-");
 }
 
 future<std::vector<auth::permission_details>> auth::default_authorizer::list(
                 service& ser, ::shared_ptr<authenticated_user> performer, permission_set set,
-                optional<data_resource> resource, optional<sstring> user) const {
+                optional<resource> resource, optional<sstring> user) const {
     return auth::is_super_user(ser, *performer).then([this, performer, set = std::move(set), resource = std::move(resource), user = std::move(user)](bool is_super) {
         if (!is_super && (!user || performer->name() != *user)) {
             throw exceptions::unauthorized_exception(sprint("You are not authorized to view %s's permissions", user ? *user : "everyone"));
@@ -194,7 +194,7 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
             for (auto& row : *res) {
                 if (row.has(PERMISSIONS_NAME)) {
                     auto username = row.get_as<sstring>(USER_NAME);
-                    auto resource = data_resource::from_name(row.get_as<sstring>(RESOURCE_NAME));
+                    auto resource = resource::from_name(row.get_as<sstring>(RESOURCE_NAME));
                     auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
                     ps = permission_set::from_mask(ps.mask() & set.mask());
 
@@ -219,7 +219,7 @@ future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
                     });
 }
 
-future<> auth::default_authorizer::revoke_all(data_resource resource) {
+future<> auth::default_authorizer::revoke_all(resource resource) {
     auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
                     USER_NAME, meta::AUTH_KS, PERMISSIONS_CF, RESOURCE_NAME);
     return _qp.process(query, db::consistency_level::LOCAL_ONE, { resource.name() })
@@ -248,7 +248,7 @@ future<> auth::default_authorizer::revoke_all(data_resource resource) {
 
 
 const auth::resource_ids& auth::default_authorizer::protected_resources() {
-    static const resource_ids ids({ data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
+    static const resource_ids ids({ resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return ids;
 }
 

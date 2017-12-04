@@ -82,9 +82,9 @@ future<::shared_ptr<cql_transport::messages::result_message>> cql3::statements::
     throw std::runtime_error("unsupported operation");
 }
 
-void cql3::statements::authorization_statement::mayme_correct_resource(auth::data_resource& resource, const service::client_state& state) {
+void cql3::statements::authorization_statement::mayme_correct_resource(auth::resource& resource, const service::client_state& state) {
     if (resource.is_column_family_level() && resource.keyspace().empty()) {
-        resource = auth::data_resource(state.get_keyspace(), resource.column_family());
+        resource = auth::resource(state.get_keyspace(), resource.column_family());
     }
 }
 

@@ -49,7 +49,7 @@
 
 namespace auth {
 
-class data_resource {
+class resource {
 private:
     enum class level {
         ROOT, KEYSPACE, COLUMN_FAMILY
@@ -61,7 +61,7 @@ private:
     sstring _ks;
     sstring _cf;
 
-    data_resource(level, const sstring& ks = {}, const sstring& cf = {});
+    resource(level, const sstring& ks = {}, const sstring& cf = {});
 
     level get_level() const;
 public:
@@ -69,20 +69,20 @@ public:
      * Creates a DataResource representing the root-level resource.
      * @return the root-level resource.
      */
-    data_resource();
+    resource();
     /**
      * Creates a DataResource representing a keyspace.
      *
      * @param keyspace Name of the keyspace.
      */
-    data_resource(const sstring& ks);
+    resource(const sstring& ks);
     /**
      * Creates a DataResource instance representing a column family.
      *
      * @param keyspace Name of the keyspace.
      * @param columnFamily Name of the column family.
      */
-    data_resource(const sstring& ks, const sstring& cf);
+    resource(const sstring& ks, const sstring& cf);
 
     /**
      * Parses a data resource name into a DataResource instance.
@@ -90,7 +90,7 @@ public:
      * @param name Name of the data resource.
      * @return DataResource instance matching the name.
      */
-    static data_resource from_name(const sstring&);
+    static resource from_name(const sstring&);
 
     /**
      * @return Printable name of the resource.
@@ -100,7 +100,7 @@ public:
     /**
      * @return Parent of the resource, if any. Throws IllegalStateException if it's the root-level resource.
      */
-    data_resource get_parent() const;
+    resource get_parent() const;
 
     bool is_root_level() const {
         return get_level() == level::ROOT;
@@ -138,8 +138,8 @@ public:
 
     sstring to_string() const;
 
-    bool operator==(const data_resource&) const;
-    bool operator<(const data_resource&) const;
+    bool operator==(const resource&) const;
+    bool operator<(const resource&) const;
 
     size_t hash_value() const {
         return utils::tuple_hash()(_ks, _cf);
@@ -149,9 +149,9 @@ public:
 /**
  * Resource id mappings, i.e. keyspace and/or column families.
  */
-using resource_ids = std::set<data_resource>;
+using resource_ids = std::set<resource>;
 
-std::ostream& operator<<(std::ostream&, const data_resource&);
+std::ostream& operator<<(std::ostream&, const resource&);
 
 }
 

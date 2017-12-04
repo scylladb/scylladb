@@ -38,8 +38,8 @@
 namespace std {
 
 template <>
-struct hash<auth::data_resource> final {
-    size_t operator()(const auth::data_resource & v) const {
+struct hash<auth::resource> final {
+    size_t operator()(const auth::resource & v) const {
         return v.hash_value();
     }
 };
@@ -51,8 +51,8 @@ struct hash<auth::authenticated_user> final {
     }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::data_resource>& p) {
-    os << "{user: " << p.first.name() << ", data_resource: " << p.second << "}";
+inline std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::resource>& p) {
+    os << "{user: " << p.first.name() << ", resource: " << p.second << "}";
     return os;
 }
 
@@ -76,7 +76,7 @@ struct permissions_cache_config final {
 
 class permissions_cache final {
     using cache_type = utils::loading_cache<
-            std::pair<authenticated_user, data_resource>,
+            std::pair<authenticated_user, resource>,
             permission_set,
             utils::loading_cache_reload_enabled::yes,
             utils::simple_entry_size<permission_set>,
@@ -97,7 +97,7 @@ public:
         return _cache.stop();
     }
 
-    future<permission_set> get(::shared_ptr<authenticated_user>, data_resource);
+    future<permission_set> get(::shared_ptr<authenticated_user>, resource);
 };
 
 }

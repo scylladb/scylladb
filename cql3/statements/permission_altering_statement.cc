@@ -48,7 +48,7 @@
 #include "cql3/selection/selection.hh"
 
 cql3::statements::permission_altering_statement::permission_altering_statement(
-                auth::permission_set permissions, auth::data_resource resource,
+                auth::permission_set permissions, auth::resource resource,
                 sstring username)
                 : _permissions(permissions), _resource(std::move(resource)), _username(
                                 std::move(username)) {

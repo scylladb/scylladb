@@ -44,7 +44,7 @@ permissions_cache::permissions_cache(const permissions_cache_config& c, service&
           }) {
 }
 
-future<permission_set> permissions_cache::get(::shared_ptr<authenticated_user> user, data_resource r) {
+future<permission_set> permissions_cache::get(::shared_ptr<authenticated_user> user, resource r) {
     return _cache.get(key_type(*user, r));
 }
 

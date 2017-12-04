@@ -45,7 +45,7 @@
 #include "cql3/query_processor.hh"
 
 SEASTAR_TEST_CASE(test_data_resource) {
-    auth::data_resource root, keyspace("fisk"), column_family("fisk", "notter");
+    auth::resource root, keyspace("fisk"), column_family("fisk", "notter");
 
     BOOST_REQUIRE_EQUAL(root.is_root_level(), true);
     BOOST_REQUIRE_EQUAL(keyspace.is_keyspace_level(), true);

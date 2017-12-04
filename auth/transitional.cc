@@ -171,7 +171,7 @@ public:
     const sstring& qualified_java_name() const override {
         return transitional_authorizer_name();
     }
-    future<permission_set> authorize(service& ser, ::shared_ptr<authenticated_user> user, data_resource resource) const override {
+    future<permission_set> authorize(service& ser, ::shared_ptr<authenticated_user> user, resource resource) const override {
         return is_super_user(ser, *user).then([](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<permission::CREATE,
@@ -181,19 +181,19 @@ public:
             return make_ready_future<permission_set>(s ? permissions::ALL : transitional_permissions);
         });
     }
-    future<> grant(::shared_ptr<authenticated_user> user, permission_set ps, data_resource r, sstring s) override {
+    future<> grant(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
         return _authorizer->grant(std::move(user), std::move(ps), std::move(r), std::move(s));
     }
-    future<> revoke(::shared_ptr<authenticated_user> user, permission_set ps, data_resource r, sstring s) override {
+    future<> revoke(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
         return _authorizer->revoke(std::move(user), std::move(ps), std::move(r), std::move(s));
     }
-    future<std::vector<permission_details>> list(service& ser, ::shared_ptr<authenticated_user> user, permission_set ps, optional<data_resource> r, optional<sstring> s) const override {
+    future<std::vector<permission_details>> list(service& ser, ::shared_ptr<authenticated_user> user, permission_set ps, optional<resource> r, optional<sstring> s) const override {
         return _authorizer->list(ser, std::move(user), std::move(ps), std::move(r), std::move(s));
     }
     future<> revoke_all(sstring s) override {
         return _authorizer->revoke_all(std::move(s));
     }
-    future<> revoke_all(data_resource r) override {
+    future<> revoke_all(resource r) override {
         return _authorizer->revoke_all(std::move(r));
     }
     const resource_ids& protected_resources() override {

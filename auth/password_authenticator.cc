@@ -295,7 +295,7 @@ future<> auth::password_authenticator::drop(sstring username) {
 }
 
 const auth::resource_ids& auth::password_authenticator::protected_resources() const {
-    static const resource_ids ids({ data_resource(meta::AUTH_KS, CREDENTIALS_CF) });
+    static const resource_ids ids({ resource(meta::AUTH_KS, CREDENTIALS_CF) });
     return ids;
 }
 

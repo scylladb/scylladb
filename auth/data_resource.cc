@@ -44,30 +44,30 @@
 #include <regex>
 #include "service/storage_proxy.hh"
 
-const sstring auth::data_resource::ROOT_NAME("data");
+const sstring auth::resource::ROOT_NAME("data");
 
-auth::data_resource::data_resource(level l, const sstring& ks, const sstring& cf)
+auth::resource::resource(level l, const sstring& ks, const sstring& cf)
     : _level(l), _ks(ks), _cf(cf)
 {
 }
 
-auth::data_resource::data_resource()
-    : data_resource(level::ROOT)
+auth::resource::resource()
+    : resource(level::ROOT)
 {}
 
-auth::data_resource::data_resource(const sstring& ks)
-    : data_resource(level::KEYSPACE, ks)
+auth::resource::resource(const sstring& ks)
+    : resource(level::KEYSPACE, ks)
 {}
 
-auth::data_resource::data_resource(const sstring& ks, const sstring& cf)
-    : data_resource(level::COLUMN_FAMILY, ks, cf)
+auth::resource::resource(const sstring& ks, const sstring& cf)
+    : resource(level::COLUMN_FAMILY, ks, cf)
 {}
 
-auth::data_resource::level auth::data_resource::get_level() const {
+auth::resource::level auth::resource::get_level() const {
     return _level;
 }
 
-auth::data_resource auth::data_resource::from_name(
+auth::resource auth::resource::from_name(
                 const sstring& s) {
 
     static std::regex slash_regex("/");
@@ -82,17 +82,17 @@ auth::data_resource auth::data_resource::from_name(
     }
 
     if (n == 1) {
-        return data_resource();
+        return resource();
     }
     auto ks = *i++;
     if (n == 2) {
-        return data_resource(ks.str());
+        return resource(ks.str());
     }
     auto cf = *i++;
-    return data_resource(ks.str(), cf.str());
+    return resource(ks.str(), cf.str());
 }
 
-sstring auth::data_resource::name() const {
+sstring auth::resource::name() const {
     switch (get_level()) {
         case level::ROOT:
             return ROOT_NAME;
@@ -104,36 +104,36 @@ sstring auth::data_resource::name() const {
     }
 }
 
-auth::data_resource auth::data_resource::get_parent() const {
+auth::resource auth::resource::get_parent() const {
     switch (get_level()) {
     case level::KEYSPACE:
-        return data_resource();
+        return resource();
     case level::COLUMN_FAMILY:
-        return data_resource(_ks);
+        return resource(_ks);
     default:
         throw std::invalid_argument("Root-level resource can't have a parent");
     }
 }
 
-const sstring& auth::data_resource::keyspace() const {
+const sstring& auth::resource::keyspace() const {
     if (is_root_level()) {
         throw std::invalid_argument("ROOT data resource has no keyspace");
     }
     return _ks;
 }
 
-const sstring& auth::data_resource::column_family() const {
+const sstring& auth::resource::column_family() const {
     if (!is_column_family_level()) {
         throw std::invalid_argument(sprint("%s data resource has no column family", name()));
     }
     return _cf;
 }
 
-bool auth::data_resource::has_parent() const {
+bool auth::resource::has_parent() const {
     return !is_root_level();
 }
 
-bool auth::data_resource::exists() const {
+bool auth::resource::exists() const {
     switch (get_level()) {
         case level::ROOT:
             return true;
@@ -145,7 +145,7 @@ bool auth::data_resource::exists() const {
     }
 }
 
-sstring auth::data_resource::to_string() const {
+sstring auth::resource::to_string() const {
     switch (get_level()) {
         case level::ROOT:
             return "<all keyspaces>";
@@ -157,15 +157,15 @@ sstring auth::data_resource::to_string() const {
     }
 }
 
-bool auth::data_resource::operator==(const data_resource& v) const {
+bool auth::resource::operator==(const resource& v) const {
     return _ks == v._ks && _cf == v._cf;
 }
 
-bool auth::data_resource::operator<(const data_resource& v) const {
+bool auth::resource::operator<(const resource& v) const {
     return _ks < v._ks ? true : (v._ks < _ks ? false : _cf < v._cf);
 }
 
-std::ostream& auth::operator<<(std::ostream& os, const data_resource& r) {
+std::ostream& auth::operator<<(std::ostream& os, const resource& r) {
     return os << r.to_string();
 }
 

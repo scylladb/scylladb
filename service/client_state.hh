@@ -253,10 +253,10 @@ public:
     future<> has_schema_access(const schema& s, auth::permission p) const;
 
 private:
-    future<> has_access(const sstring&, auth::permission, auth::data_resource) const;
-    future<bool> check_has_permission(auth::permission, auth::data_resource) const;
+    future<> has_access(const sstring&, auth::permission, auth::resource) const;
+    future<bool> check_has_permission(auth::permission, auth::resource) const;
 public:
-    future<> ensure_has_permission(auth::permission, auth::data_resource) const;
+    future<> ensure_has_permission(auth::permission, auth::resource) const;
 
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error

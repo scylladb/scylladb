@@ -1022,7 +1022,7 @@ revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
 
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
-		std::experimental::optional<auth::data_resource> r;
+		std::experimental::optional<auth::resource> r;
 		std::experimental::optional<sstring> u;
 		bool recursive = true;
     }
@@ -1044,15 +1044,15 @@ permissionOrAll returns [auth::permission_set perms]
     | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
-resource returns [auth::data_resource res]
+resource returns [auth::resource res]
     : r=dataResource { $res = $r.res; }
     ;
 
-dataResource returns [auth::data_resource res]
-    : K_ALL K_KEYSPACES { $res = auth::data_resource(); }
-    | K_KEYSPACE ks = keyspaceName { $res = auth::data_resource($ks.id); }
+dataResource returns [auth::resource res]
+    : K_ALL K_KEYSPACES { $res = auth::resource(); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+      { $res = auth::resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
 
 /**

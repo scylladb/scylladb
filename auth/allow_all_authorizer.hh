@@ -56,15 +56,15 @@ public:
         return allow_all_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, data_resource) const override {
+    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const override {
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override {
+    future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
     }
 
-    future<> revoke(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override {
+    future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
@@ -72,7 +72,7 @@ public:
             service&,
             ::shared_ptr<authenticated_user> performer,
             permission_set,
-            stdx::optional<data_resource>,
+            stdx::optional<resource>,
             stdx::optional<sstring>) const override {
         throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
     }
@@ -81,7 +81,7 @@ public:
         return make_ready_future();
     }
 
-    future<> revoke_all(data_resource) override {
+    future<> revoke_all(resource) override {
         return make_ready_future();
     }
 
