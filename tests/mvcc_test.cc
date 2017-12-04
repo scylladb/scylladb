@@ -161,13 +161,6 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             return m;
         };
 
-        // FIXME: There is no assert_that() for mutation_partition
-        auto assert_equal = [&] (mutation_partition mp1, mutation_partition mp2) {
-            auto key = table.make_pkey(0);
-            assert_that(mutation(table.schema(), key, std::move(mp1)))
-                .is_equal_to(mutation(table.schema(), key, std::move(mp2)));
-        };
-
         auto apply = [&] (partition_entry& e, const mutation& m) {
             e.apply_to_incomplete(s, partition_entry(m.partition()), s);
         };
@@ -182,7 +175,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             auto m = new_mutation();
             table.add_row(m, ck1, "v");
             apply(e, m);
-            assert_equal(e.squashed(s), mutation_partition::make_incomplete(s));
+            assert_that(table.schema(), e.squashed(s)).is_equal_to(mutation_partition::make_incomplete(s));
         });
 
         BOOST_TEST_MESSAGE("Check that continuity from latest version wins");
@@ -205,13 +198,13 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
 
             auto m3 = mutation_with_row(ck1);
             apply(e, m3);
-            assert_equal(e.squashed(s), (m2 + m3).partition());
+            assert_that(table.schema(), e.squashed(s)).is_equal_to((m2 + m3).partition());
 
             // Check that snapshot data is not stolen when its entry is applied
             auto e2 = partition_entry(mutation_partition(table.schema()));
             e2.apply_to_incomplete(s, std::move(e), s);
-            assert_equal(snap1->squashed(), m1.partition());
-            assert_equal(e2.squashed(s), (m2 + m3).partition());
+            assert_that(table.schema(), snap1->squashed()).is_equal_to(m1.partition());
+            assert_that(table.schema(), e2.squashed(s)).is_equal_to((m2 + m3).partition());
         });
     });
 
