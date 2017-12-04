@@ -4305,3 +4305,10 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
     auto monitor = seastar::make_shared<permit_monitor>(sstable_write_permit::unconditional());
     return write_memtable_to_sstable(mt, std::move(sst), std::move(monitor));
 }
+
+std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {
+    auto sec = std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
+    std::ostream tmp(os.rdbuf());
+    tmp << std::setw(12) << sec;
+    return os;
+}
