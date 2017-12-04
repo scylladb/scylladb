@@ -267,11 +267,15 @@ struct mutation_fragment_applier {
 
     void operator()(clustering_row cr) {
         auto& dr = _mp.clustered_row(_s, std::move(cr.key()));
-        dr.apply(cr.tomb());
-        dr.apply(cr.marker());
-        dr.cells().apply(_s, column_kind::regular_column, std::move(cr.cells()));
+        dr.apply(_s, std::move(cr));
     }
 };
+
+void deletable_row::apply(const schema& s, clustering_row cr) {
+    apply(cr.tomb());
+    apply(cr.marker());
+    cells().apply(s, column_kind::regular_column, std::move(cr.cells()));
+}
 
 void
 mutation_partition::apply(const schema& s, const mutation_fragment& mf) {

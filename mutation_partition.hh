@@ -594,6 +594,8 @@ public:
         : _deleted_at(tomb), _marker(marker), _cells(cells)
     {}
 
+    void apply(const schema&, clustering_row);
+
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
     }
