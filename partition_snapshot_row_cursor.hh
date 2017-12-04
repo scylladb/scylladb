@@ -280,6 +280,19 @@ public:
 
     bool is_in_latest_version() const;
 
+    // Reads the rest of the partition into a mutation_partition object.
+    // There must be at least one entry ahead of the cursor.
+    // The cursor must be pointing at a row and valid.
+    // The cursor will not be pointing at a row after this.
+    mutation_partition read_partition() {
+        mutation_partition p(_schema.shared_from_this());
+        do {
+            p.clustered_row(_schema, position(), is_dummy(dummy()), is_continuous(continuous()))
+                .apply(_schema, row().as_clustering_row());
+        } while (next());
+        return p;
+    }
+
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
         out << "{cursor: position=" << cur._position << ", ";
         if (!cur.iterators_valid()) {
