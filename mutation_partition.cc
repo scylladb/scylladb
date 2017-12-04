@@ -1019,6 +1019,12 @@ bool mutation_partition::equal_continuity(const schema& s, const mutation_partit
         });
 }
 
+mutation_partition mutation_partition::sliced(const schema& s, const query::clustering_row_ranges& ranges) const {
+    auto p = mutation_partition(*this, s, ranges);
+    p.row_tombstones().trim(s, ranges);
+    return p;
+}
+
 void
 apply_reversibly(const column_definition& def, atomic_cell_or_collection& dst,  atomic_cell_or_collection& src) {
     // Must be run via with_linearized_managed_bytes() context, but assume it is
