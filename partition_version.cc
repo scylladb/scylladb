@@ -581,6 +581,14 @@ partition_snapshot::range_tombstones(position_in_partition_view start, position_
     return boost::copy_range<std::vector<range_tombstone>>(list.slice(*_schema, start, end));
 }
 
+std::vector<range_tombstone>
+partition_snapshot::range_tombstones()
+{
+    return range_tombstones(
+        position_in_partition_view::before_all_clustered_rows(),
+        position_in_partition_view::after_all_clustered_rows());
+}
+
 std::ostream& operator<<(std::ostream& out, partition_entry& e) {
     out << "{";
     bool first = true;

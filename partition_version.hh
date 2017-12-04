@@ -272,6 +272,8 @@ public:
     mutation_partition squashed() const;
     // Returns range tombstones overlapping with [start, end)
     std::vector<range_tombstone> range_tombstones(position_in_partition_view start, position_in_partition_view end);
+    // Returns all range tombstones
+    std::vector<range_tombstone> range_tombstones();
 };
 
 // Represents mutation_partition with snapshotting support a la MVCC.
