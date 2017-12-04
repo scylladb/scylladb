@@ -98,7 +98,7 @@ SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
 
             auto check_range = [&s] (partition_snapshot& snap, const query::clustering_range& range,
                     std::initializer_list<range_tombstone> expected) {
-                auto tombstones = snap.range_tombstones(*s,
+                auto tombstones = snap.range_tombstones(
                     position_in_partition::for_range_start(range),
                     position_in_partition::for_range_end(range));
                 check_tombstone_slice(*s, tombstones, range, expected);

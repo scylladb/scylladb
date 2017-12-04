@@ -564,21 +564,21 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
 }
 
 std::vector<range_tombstone>
-partition_snapshot::range_tombstones(const ::schema& s, position_in_partition_view start, position_in_partition_view end)
+partition_snapshot::range_tombstones(position_in_partition_view start, position_in_partition_view end)
 {
     partition_version* v = &*version();
     if (!v->next()) {
         return boost::copy_range<std::vector<range_tombstone>>(
-            v->partition().row_tombstones().slice(s, start, end));
+            v->partition().row_tombstones().slice(*_schema, start, end));
     }
-    range_tombstone_list list(s);
+    range_tombstone_list list(*_schema);
     while (v) {
-        for (auto&& rt : v->partition().row_tombstones().slice(s, start, end)) {
-            list.apply(s, rt);
+        for (auto&& rt : v->partition().row_tombstones().slice(*_schema, start, end)) {
+            list.apply(*_schema, rt);
         }
         v = v->next();
     }
-    return boost::copy_range<std::vector<range_tombstone>>(list.slice(s, start, end));
+    return boost::copy_range<std::vector<range_tombstone>>(list.slice(*_schema, start, end));
 }
 
 std::ostream& operator<<(std::ostream& out, partition_entry& e) {
