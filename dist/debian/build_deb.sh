@@ -213,4 +213,7 @@ if [ $NO_CLEAN -eq 0 ]; then
     sudo -E DIST=$TARGET /usr/sbin/pbuilder create
 fi
 sudo -E DIST=$TARGET /usr/sbin/pbuilder update
+if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ]; then
+    sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
+fi
 sudo -E DIST=$TARGET pdebuild --buildresult build/debs

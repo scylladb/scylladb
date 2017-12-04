@@ -11,7 +11,7 @@ if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] |
     MIRRORSITE="http://archive.ubuntu.com/ubuntu/"
     COMPONENTS="main restricted universe multiverse"
     DEBOOTSTRAPOPTS="--keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg"
-    OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ $DIST-updates main restricted universe multiverse|deb [arch=amd64] http://ppa.launchpad.net/scylladb/ppa/ubuntu $DIST main"
+    OTHERMIRROR="deb http://archive.ubuntu.com/ubuntu/ $DIST-updates main restricted universe multiverse"
 elif [ "$DIST" = "jessie" ]; then
     MIRRORSITE="http://deb.debian.org/debian/"
     COMPONENTS="main contrib non-free"
