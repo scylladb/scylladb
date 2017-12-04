@@ -1930,6 +1930,14 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     return to_feature_set(app_state->value);
 }
 
+bool gossiper::node_has_feature(inet_address endpoint, const feature& f) const {
+    auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
+    if (!app_state) {
+        return {};
+    }
+    return app_state->value.find(f.name()) != sstring::npos;
+}
+
 std::set<sstring> gossiper::get_supported_features() const {
     std::unordered_map<inet_address, std::set<sstring>> features_map;
     std::set<sstring> common_features;
