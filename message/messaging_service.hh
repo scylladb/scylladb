@@ -108,7 +108,8 @@ enum class messaging_verb : int32_t {
     GET_SCHEMA_VERSION = 21,
     SCHEMA_CHECK = 22,
     COUNTER_MUTATION = 23,
-    LAST = 24,
+    MUTATION_FAILED = 24,
+    LAST = 25,
 };
 
 } // namespace netw
@@ -310,6 +311,11 @@ public:
     void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation_done();
     future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id);
+
+    // Wrapper for MUTATION_FAILED
+    void register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed)>&& func);
+    void unregister_mutation_failed();
+    future<> send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed);
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>

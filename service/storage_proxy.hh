@@ -229,6 +229,7 @@ private:
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
+    void got_failure_response(response_id_type id, gms::inet_address from, size_t count);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,

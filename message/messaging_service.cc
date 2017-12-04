@@ -401,7 +401,7 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
                verb == messaging_verb::STREAM_MUTATION_DONE ||
                verb == messaging_verb::COMPLETE_MESSAGE) {
         idx = 2;
-    } else if (verb == messaging_verb::MUTATION_DONE) {
+    } else if (verb == messaging_verb::MUTATION_DONE || verb == messaging_verb::MUTATION_FAILED) {
         idx = 3;
     }
     return idx;
@@ -809,6 +809,16 @@ void messaging_service::unregister_mutation_done() {
 }
 future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id) {
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
+}
+
+void messaging_service::register_mutation_failed(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id, size_t num_failed)>&& func) {
+    register_handler(this, netw::messaging_verb::MUTATION_FAILED, std::move(func));
+}
+void messaging_service::unregister_mutation_failed() {
+    _rpc->unregister_handler(netw::messaging_verb::MUTATION_FAILED);
+}
+future<> messaging_service::send_mutation_failed(msg_addr id, unsigned shard, response_id_type response_id, size_t num_failed) {
+    return send_message_oneway(this, messaging_verb::MUTATION_FAILED, std::move(id), std::move(shard), std::move(response_id), num_failed);
 }
 
 void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> (const rpc::client_info&, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda)>&& func) {
