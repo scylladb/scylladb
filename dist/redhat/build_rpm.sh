@@ -6,7 +6,7 @@ print_usage() {
     echo "  --jobs  specify number of jobs"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
-    echo "  --rebuild-deb  ignored (for compatibility with previous versions)"
+    echo "  --rebuild-dep  ignored (for compatibility with previous versions)"
     exit 1
 }
 JOBS=0
@@ -26,9 +26,9 @@ while [ $# -gt 0 ]; do
             TARGET=$2
             shift 2
             ;;
-	"--rebuild-dep")
-	    shift 1
-	    ;;
+        "--rebuild-dep")
+            shift 1
+            ;;
         *)
             print_usage
             ;;
