@@ -2,18 +2,16 @@
 
 . /etc/os-release
 print_usage() {
-    echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-x86_64 --configure-user"
+    echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-x86_64"
     echo "  --jobs  specify number of jobs"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
-    echo "  --configure-user  configure current user as mock group member"
     echo "  --rebuild-deb  ignored (for compatibility with previous versions)"
     exit 1
 }
 JOBS=0
 DIST=0
 TARGET=
-USERMOD=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--jobs")
@@ -27,10 +25,6 @@ while [ $# -gt 0 ]; do
         "--target")
             TARGET=$2
             shift 2
-            ;;
-        "--configure-user")
-            USERMOD=1
-            shift 1
             ;;
 	"--rebuild-dep")
 	    shift 1
