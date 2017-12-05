@@ -1169,18 +1169,6 @@ sstables::sstable::read_row_flat(schema_ptr schema,
     return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no);
 }
 
-mutation_reader
-sstable::read_range_rows(schema_ptr schema,
-                         const dht::partition_range& range,
-                         const query::partition_slice& slice,
-                         const io_priority_class& pc,
-                         reader_resource_tracker resource_tracker,
-                         streamed_mutation::forwarding fwd,
-                         mutation_reader::forwarding fwd_mr) {
-    return mutation_reader_from_flat_mutation_reader(
-        read_range_rows_flat(std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr));
-}
-
 flat_mutation_reader
 sstable::read_range_rows_flat(schema_ptr schema,
                          const dht::partition_range& range,
