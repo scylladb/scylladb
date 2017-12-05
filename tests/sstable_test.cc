@@ -878,9 +878,10 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/wrongrange", 114).then([] (auto sstp) {
-        return do_with(sstables::key("todata"), [sstp] (auto& key) {
+        return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
                 return make_ready_future<>();
             });
         });
@@ -1052,17 +1053,19 @@ static query::partition_slice make_partition_slice(const schema& s, sstring ck1,
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto row = sstp->read_row(s, sstables::key(key.c_str()), ps).get0();
-        if (!row) {
+        auto dkey = make_dkey(s, key.c_str());
+        auto rd = sstp->read_row_flat(s, dkey, ps);
+        auto mfopt = rd().get0();
+        if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        auto mfopt = (*row)().get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = (*row)().get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
@@ -1071,17 +1074,19 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
 // Count the number of CQL rows in one partition
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([sstp, s, key] () mutable {
-        auto row = sstp->read_row(s, sstables::key(key.c_str())).get0();
-        if (!row) {
+        auto dkey = make_dkey(s, key.c_str());
+        auto rd = sstp->read_row_flat(s, dkey);
+        auto mfopt = rd().get0();
+        if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        auto mfopt = (*row)().get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = (*row)().get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
@@ -1092,18 +1097,19 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto reader = sstp->read_range_rows(s, query::full_partition_range, ps);
+        auto reader = sstp->read_range_rows_flat(s, query::full_partition_range, ps);
         int nrows = 0;
-        auto smopt = reader().get0();
-        while (smopt) {
-            auto mfopt = (*smopt)().get0();
-            while (mfopt) {
+        auto mfopt = reader().get0();
+        while (mfopt) {
+            mfopt = reader().get0();
+            BOOST_REQUIRE(mfopt);
+            while (!mfopt->is_end_of_partition()) {
                 if (mfopt->is_clustering_row()) {
                     nrows++;
                 }
-                mfopt = (*smopt)().get0();
+                mfopt = reader().get0();
             }
-            smopt = reader().get0();
+            mfopt = reader().get0();
         }
         return nrows;
     });

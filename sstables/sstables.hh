@@ -275,32 +275,6 @@ public:
     // a filter on the clustering keys which we want to read, which
     // additionally determines also if all the static columns will also be
     // returned in the result.
-    future<streamed_mutation_opt> read_row(
-        schema_ptr schema,
-        dht::ring_position_view key,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-    future<streamed_mutation_opt> read_row(schema_ptr schema, dht::ring_position_view key) {
-        auto& full_slice = schema->full_slice();
-        return read_row(std::move(schema), std::move(key), full_slice);
-    }
-
-    future<streamed_mutation_opt> read_row(
-        schema_ptr schema,
-        const sstables::key& key,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-    future<streamed_mutation_opt> read_row(schema_ptr schema, const sstables::key& key) {
-        auto& full_slice = schema->full_slice();
-        return read_row(std::move(schema), key, full_slice);
-    }
-
     flat_mutation_reader read_row_flat(
         schema_ptr schema,
         dht::ring_position_view key,
@@ -312,34 +286,6 @@ public:
     flat_mutation_reader read_row_flat(schema_ptr schema, dht::ring_position_view key) {
         auto& full_slice = schema->full_slice();
         return read_row_flat(std::move(schema), std::move(key), full_slice);
-    }
-
-    flat_mutation_reader read_row_flat(
-        schema_ptr schema,
-        const sstables::key& key,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-    flat_mutation_reader read_row_flat(schema_ptr schema, const sstables::key& key) {
-        auto& full_slice = schema->full_slice();
-        return read_row_flat(std::move(schema), key, full_slice);
-    }
-
-    // Returns a mutation_reader for given range of partitions
-    mutation_reader read_range_rows(
-        schema_ptr schema,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-
-    mutation_reader read_range_rows(schema_ptr schema, const dht::partition_range& range) {
-        auto& full_slice = schema->full_slice();
-        return read_range_rows(std::move(schema), range, full_slice);
     }
 
     // Returns a mutation_reader for given range of partitions
