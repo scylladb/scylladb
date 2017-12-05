@@ -42,11 +42,13 @@
 
 using namespace sstables;
 
+
 SEASTAR_TEST_CASE(nonexistent_key) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "invalid_key"), [sstp] (auto& key) {
             auto s = uncompressed_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return (*rd)().then([sstp, s, &key, rd] (auto mutation) {
                 BOOST_REQUIRE(!mutation);
                 return make_ready_future<>();
             });
@@ -58,9 +60,8 @@ future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(make_dkey(uncompressed_schema(), std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
-            return sstp->read_row(s, key).then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd, map = std::move(map)] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 for (auto&& e : mp.range(*s, nonwrapping_range<clustering_key_prefix>())) {
@@ -126,9 +127,8 @@ future<mutation> generate_clustered(bytes&& key) {
     return reusable_sst(complex_schema(), "tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(make_dkey(complex_schema(), std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
-            return sstp->read_row(s, key).then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 return std::move(*mutation);
             });
@@ -441,9 +441,9 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
     return reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_sparse_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
-            return sstp->read_row(s, key).then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
+                BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 auto row = mp.clustered_row(*s, clustering_key::make_empty());
                 match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
@@ -458,9 +458,8 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
     return reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_simple_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
-            return sstp->read_row(s, key).then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
                 auto& mp = mutation->partition();
 
                 auto exploded = exploded_clustering_prefix({"cl1"});
@@ -478,9 +477,8 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
     return reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
-            return sstp->read_row(s, key).then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
                 auto& mp = mutation->partition();
 
                 auto exploded = exploded_clustering_prefix({"cl1", "cl2"});

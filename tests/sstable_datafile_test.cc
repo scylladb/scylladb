@@ -816,9 +816,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         return write_memtable_to_sstable(*mt, sst).then([s, sst, mt, verifier, tomb, &static_set_col] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(make_dkey(s, "key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, verifier, tomb, &static_set_col, rd] (auto mutation) {
                         auto verify_set = [&tomb] (auto m) {
                             BOOST_REQUIRE(bool(m.tomb) == true);
                             BOOST_REQUIRE(m.tomb == tomb);
@@ -845,9 +844,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                     });
                 }).then([sstp, s, verifier] {
                     return do_with(make_dkey(s, "key2"), [sstp, s, verifier] (auto& key) {
-                        return sstp->read_row(s, key).then([] (auto sm) {
-                            return mutation_from_streamed_mutation(std::move(sm));
-                        }).then([sstp, s, verifier] (auto mutation) {
+                        auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                        return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, verifier, rd] (auto mutation) {
                             auto m = verifier(mutation);
                             BOOST_REQUIRE(!m.tomb);
                             BOOST_REQUIRE(m.cells.size() == 1);
@@ -879,9 +877,8 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         return write_memtable_to_sstable(*mt, sst).then([s, tomb] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
                 return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s, tomb] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -916,9 +913,8 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         return write_memtable_to_sstable(*mtp, sst).then([s, tomb, generation] {
             return reusable_sst(s, "tests/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
                 return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                            return mutation_from_streamed_mutation(std::move(sm));
-                        }).then([sstp, s, tomb] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
@@ -1393,9 +1389,8 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 37).then([s] (auto sstp) {
                 return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
 
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
@@ -1429,9 +1424,8 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 38).then([s] (auto sstp) {
                 return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto clustering = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
@@ -1466,9 +1460,8 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 39).then([s] (auto sstp) {
                 return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto row = mp.clustered_row(*s, clustering_key::make_empty());
                         match_live_cell(row.cells(), *s, "cl1", data_value(data_value(to_bytes("cl1"))));
@@ -1563,9 +1556,8 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         return write_memtable_to_sstable(*mt, sst).then([s, tomb] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 41).then([s, tomb] (auto sstp) mutable {
                 return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
-                    return sstp->read_row(s, key).then([] (auto sm) {
-                        return mutation_from_streamed_mutation(std::move(sm));
-                    }).then([sstp, s, tomb] (auto mutation) {
+                    auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+                    return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, tomb, rd] (auto mutation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.clustered_rows().calculate_size() == 1);
                         auto c_row = *(mp.clustered_rows().begin());

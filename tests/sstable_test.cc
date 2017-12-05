@@ -880,7 +880,8 @@ SEASTAR_TEST_CASE(wrong_range) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/wrongrange", 114).then([] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
-            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+            auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
+            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
                 return make_ready_future<>();
             });
         });
@@ -1053,17 +1054,18 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
     return seastar::async([sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
         auto dkey = make_dkey(s, key.c_str());
-        auto row = sstp->read_row(s, dkey, ps).get0();
-        if (!row) {
+        auto rd = sstp->read_row_flat(s, dkey, ps);
+        auto mfopt = rd().get0();
+        if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        auto mfopt = (*row)().get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = (*row)().get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
@@ -1073,17 +1075,18 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([sstp, s, key] () mutable {
         auto dkey = make_dkey(s, key.c_str());
-        auto row = sstp->read_row(s, dkey).get0();
-        if (!row) {
+        auto rd = sstp->read_row_flat(s, dkey);
+        auto mfopt = rd().get0();
+        if (!mfopt) {
             return 0;
         }
         int nrows = 0;
-        auto mfopt = (*row)().get0();
+        mfopt = rd().get0();
         while (mfopt) {
             if (mfopt->is_clustering_row()) {
                 nrows++;
             }
-            mfopt = (*row)().get0();
+            mfopt = rd().get0();
         }
         return nrows;
     });
