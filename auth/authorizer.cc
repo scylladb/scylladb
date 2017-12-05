@@ -92,9 +92,9 @@ auth::authorizer::setup(const sstring& type) {
             future<> revoke_all(resource) override {
                 return make_ready_future();
             }
-            const resource_ids& protected_resources() override {
-                static const resource_ids ids;
-                return ids;
+            const resource_set& protected_resources() override {
+                static const resource_set resources;
+                return resources;
             }
             future<> validate_configuration() const override {
                 return make_ready_future();

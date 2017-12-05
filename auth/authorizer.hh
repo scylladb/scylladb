@@ -154,7 +154,7 @@ public:
      *
      * @return Keyspaces, column families that will be unmodifiable by users; other resources.
      */
-    virtual const resource_ids& protected_resources() = 0;
+    virtual const resource_set& protected_resources() = 0;
 
     /**
      * Validates configuration of IAuthorizer implementation (if configurable).

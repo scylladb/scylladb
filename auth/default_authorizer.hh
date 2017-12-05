@@ -80,7 +80,7 @@ public:
 
     future<> revoke_all(resource) override;
 
-    const resource_ids& protected_resources() override;
+    const resource_set& protected_resources() override;
 
     future<> validate_configuration() const override;
 

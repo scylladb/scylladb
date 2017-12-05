@@ -194,6 +194,6 @@ struct hash<auth::resource> {
 
 namespace auth {
 
-using resource_ids = std::unordered_set<resource>;
+using resource_set = std::unordered_set<resource>;
 
 }

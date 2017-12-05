@@ -120,7 +120,7 @@ public:
     future<> drop(sstring username) override {
         return _authenticator->drop(username);
     }
-    const resource_ids& protected_resources() const override {
+    const resource_set& protected_resources() const override {
         return _authenticator->protected_resources();
     }
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
@@ -196,7 +196,7 @@ public:
     future<> revoke_all(resource r) override {
         return _authorizer->revoke_all(std::move(r));
     }
-    const resource_ids& protected_resources() override {
+    const resource_set& protected_resources() override {
         return _authorizer->protected_resources();
     }
     future<> validate_configuration() const override {

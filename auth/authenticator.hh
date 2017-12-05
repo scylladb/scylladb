@@ -160,9 +160,9 @@ public:
      * Set of resources that should be made inaccessible to users and only accessible internally.
      *
      * @return Keyspaces, column families that will be unmodifiable by users; other resources.
-     * @see resource_ids
+     * @see resource_set
      */
-    virtual const resource_ids& protected_resources() const = 0;
+    virtual const resource_set& protected_resources() const = 0;
 
     class sasl_challenge {
     public:
