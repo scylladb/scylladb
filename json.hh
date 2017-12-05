@@ -22,11 +22,30 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "core/print.hh"
 
 #include <json/json.h>
 
 namespace seastar { // FIXME: not ours
 namespace json {
+
+inline sstring to_sstring(const Json::Value& value) {
+#if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010400) // >= 1.4.0
+    Json::StreamWriterBuilder wbuilder;
+    wbuilder.settings_["indentation"] = "";
+    auto str = Json::writeString(wbuilder, value);
+#else
+    Json::FastWriter writer;
+    // Json::FastWriter unnecessarily adds a newline at the end of string.
+    // There is a method omitEndingLineFeed() which prevents that, but it seems
+    // to be too recent addition, so, at least for now, a workaround is needed.
+    auto str = writer.write(value);
+    if (str.length() && str.back() == '\n') {
+        str.pop_back();
+    }
+#endif
+    return str;
+}
 
 template<typename Map>
 inline sstring to_json(const Map& map) {
@@ -34,22 +53,28 @@ inline sstring to_json(const Map& map) {
     for (auto&& kv : map) {
         root[kv.first] = Json::Value(kv.second);
     }
-    Json::FastWriter writer;
-    // Json::FastWriter unnecessarily adds a newline at the end of string.
-    // There is a method omitEndingLineFeed() which prevents that, but it seems
-    // to be too recent addition, so, at least for now, a workaround is needed.
-    auto str = writer.write(root);
-    if (str.length() && str.back() == '\n') {
-        str.pop_back();
+    return to_sstring(root);
+}
+
+inline Json::Value to_json_value(const sstring& raw) {
+    Json::Value root;
+#if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010400) // >= 1.4.0
+    Json::CharReaderBuilder rbuilder;
+    std::unique_ptr<Json::CharReader> reader(rbuilder.newCharReader());
+    bool result = reader->parse(raw.begin(), raw.end(), &root, NULL);
+    if (!result) {
+        throw std::runtime_error(sprint("Failed to parse JSON: %s", raw));
     }
-    return str;
+#else
+    Json::Reader reader;
+    reader.parse(std::string{raw}, root);
+#endif
+    return root;
 }
 
 template<typename Map>
 inline Map to_map(const sstring& raw, Map&& map) {
-    Json::Value root;
-    Json::Reader reader;
-    reader.parse(std::string{raw}, root);
+    Json::Value root = to_json_value(raw);
     for (auto&& member : root.getMemberNames()) {
         map.emplace(member, root[member].asString());
     }
