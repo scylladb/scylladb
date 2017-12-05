@@ -2072,6 +2072,17 @@ database::database(const db::config& cfg)
     , _version(empty_version)
     , _compaction_manager(std::make_unique<compaction_manager>())
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _compaction_io_controller(service::get_local_compaction_priority(), 250ms, [this] () -> float {
+        auto backlog = _compaction_manager->backlog();
+        // This means we are using an unimplemented strategy
+        if (std::isinf(backlog)) {
+            // returning the normalization factor means that we'll return the maximum
+            // output in the _control_points. We can get rid of this when we implement
+            // all strategies.
+            return compaction_io_controller::normalization_factor;
+        }
+        return _compaction_manager->backlog() / memory::stats().total_memory();
+    })
 {
     _compaction_manager->start();
     setup_metrics();
@@ -3585,6 +3596,8 @@ database::stop() {
         return _dirty_memory_manager.shutdown();
     }).then([this] {
         return _streaming_dirty_memory_manager.shutdown();
+    }).then([this] {
+        return _compaction_io_controller.shutdown();
     });
 }
 
