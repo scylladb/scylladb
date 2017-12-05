@@ -841,6 +841,8 @@ public:
     friend class distributed_loader;
 };
 
+using sstable_reader_factory_type = std::function<mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
+
 mutation_reader make_range_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
