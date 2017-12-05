@@ -390,7 +390,7 @@ class incremental_reader_selector : public reader_selector {
 
     mutation_reader create_reader(sstables::shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
-        mutation_reader reader = sst->read_range_rows(_s, *_pr, _slice, _pc, _resource_tracker, _fwd, _fwd_mr);
+        mutation_reader reader = mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(_s, *_pr, _slice, _pc, _resource_tracker, _fwd, _fwd_mr));
         if (sst->is_shared()) {
             reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
         }
@@ -520,7 +520,7 @@ public:
         return parallel_for_each(std::move(candidates),
             [this](const sstables::shared_sstable& sstable) {
                 tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return sstable->read_row(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd).then([this](auto smo) {
+                return streamed_mutation_from_flat_mutation_reader(sstable->read_row_flat(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd)).then([this](auto smo) {
                     if (smo) {
                         _mutations.emplace_back(std::move(*smo));
                     }

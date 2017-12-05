@@ -637,3 +637,10 @@ inline
 ::mutation_source as_mutation_source(sstables::shared_sstable sst) {
     return sst->as_mutation_source();
 }
+
+
+inline dht::decorated_key make_dkey(schema_ptr s, bytes b)
+{
+    auto sst_key = sstables::key::from_bytes(b);
+    return dht::global_partitioner().decorate_key(*s, sst_key.to_partition_key(*s));
+}

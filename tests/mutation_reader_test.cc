@@ -426,14 +426,15 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         for (auto table : tables) {
             sstables->insert(table);
 
-            sstable_mutation_readers.emplace_back(table->read_range_rows(
+            sstable_mutation_readers.emplace_back(
+                mutation_reader_from_flat_mutation_reader(table->read_range_rows_flat(
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes));
+                    mutation_reader::forwarding::yes)));
         }
 
         auto list_reader = make_combined_reader(std::move(sstable_mutation_readers), mutation_reader::forwarding::yes);
@@ -522,14 +523,14 @@ class tracking_reader : public mutation_reader::impl {
     std::size_t _ff_count{0};
 public:
     tracking_reader(semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
-        : _reader(sst->read_range_rows(
+        : _reader(mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(
                         schema,
                         query::full_partition_range,
                         schema->full_slice(),
                         default_priority_class(),
                         reader_resource_tracker(resources_sem),
                         streamed_mutation::forwarding::no,
-                        mutation_reader::forwarding::yes)) {
+                        mutation_reader::forwarding::yes))) {
     }
 
     virtual future<streamed_mutation_opt> operator()() override {

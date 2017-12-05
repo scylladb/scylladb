@@ -27,6 +27,7 @@
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
     flat_mutation_reader _reader;
+    dht::partition_range _pr;
 private:
     mutation_fragment_opt read_next() {
         return _reader().get0();
@@ -104,7 +105,32 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces(mutation_fragment::kind k, std::vector<int> ck_elements) {
+        std::vector<bytes> ck_bytes;
+        for (auto&& e : ck_elements) {
+            ck_bytes.emplace_back(int32_type->decompose(e));
+        }
+        auto ck = clustering_key_prefix::from_exploded(*_reader.schema(), std::move(ck_bytes));
+
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected mutation fragment %s, got end of stream", ck));
+        }
+        if (mfopt->mutation_fragment_kind() != k) {
+            BOOST_FAIL(sprint("Expected mutation fragment kind %s, got: %s", k, mfopt->mutation_fragment_kind()));
+        }
+        clustering_key::equality ck_eq(*_reader.schema());
+        if (!ck_eq(mfopt->key(), ck)) {
+            BOOST_FAIL(sprint("Expected key %s, got: %s", ck, mfopt->key()));
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_partition(const mutation& m) {
+        return produces(m);
+    }
+
+    flat_reader_assertions& produces(const mutation& m) {
         BOOST_TEST_MESSAGE(sprint("Expecting a partition with key %s", m));
         produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
         auto produced_m = mutation(m.decorated_key(), m.schema());
@@ -123,8 +149,58 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces(const dht::decorated_key& dk) {
+        produces_partition_start(dk);
+        next_partition();
+        return *this;
+    }
+
+    template<typename Range>
+    flat_reader_assertions& produces(const Range& range) {
+        for (auto&& m : range) {
+            produces(m);
+        }
+        return *this;
+    }
+
+    void has_monotonic_positions() {
+        position_in_partition::less_compare less(*_reader.schema());
+        mutation_fragment_opt previous_fragment;
+        mutation_fragment_opt previous_partition;
+        bool inside_partition = false;
+        for (;;) {
+            auto mfo = read_next();
+            if (!mfo) {
+                break;
+            }
+            if (mfo->is_partition_start()) {
+                BOOST_REQUIRE(!inside_partition);
+                auto& dk = mfo->as_partition_start().key();
+                if (previous_partition && !previous_partition->as_partition_start().key().less_compare(*_reader.schema(), dk)) {
+                    BOOST_FAIL(sprint("previous partition had greater key: prev=%s, current=%s", *previous_partition, *mfo));
+                }
+                previous_partition = std::move(mfo);
+                previous_fragment = stdx::nullopt;
+                inside_partition = true;
+            } else if (mfo->is_end_of_partition()) {
+                BOOST_REQUIRE(inside_partition);
+                inside_partition = false;
+            } else {
+                BOOST_REQUIRE(inside_partition);
+                if (previous_fragment) {
+                    if (!less(previous_fragment->position(), mfo->position())) {
+                        BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *previous_fragment, *mfo));
+                    }
+                }
+                previous_fragment = std::move(mfo);
+            }
+        }
+        BOOST_REQUIRE(!inside_partition);
+    }
+
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
-        _reader.fast_forward_to(pr);
+        _pr = pr;
+        _reader.fast_forward_to(_pr).get();
         return *this;
     }
 
@@ -134,7 +210,7 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(position_range pr) {
-        _reader.fast_forward_to(std::move(pr));
+        _reader.fast_forward_to(std::move(pr)).get();
         return *this;
     }
 };
