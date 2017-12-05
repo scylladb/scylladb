@@ -155,6 +155,14 @@ public:
         return *this;
     }
 
+    template<typename Range>
+    flat_reader_assertions& produces(const Range& range) {
+        for (auto&& m : range) {
+            produces(m);
+        }
+        return *this;
+    }
+
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         _pr = pr;
         _reader.fast_forward_to(_pr).get();
