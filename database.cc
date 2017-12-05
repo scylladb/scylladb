@@ -4287,6 +4287,34 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
             fwd_mr));
 }
 
+mutation_reader make_range_sstable_reader(schema_ptr s,
+        lw_shared_ptr<sstables::sstable_set> sstables,
+        const dht::partition_range& pr,
+        const query::partition_slice& slice,
+        const io_priority_class& pc,
+        reader_resource_tracker resource_tracker,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr)
+{
+    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
+        return mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr));
+    };
+    return mutation_reader_from_flat_mutation_reader(
+            make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
+                    std::move(sstables),
+                    pr,
+                    slice,
+                    pc,
+                    std::move(resource_tracker),
+                    std::move(trace_state),
+                    fwd,
+                    fwd_mr,
+                    std::move(reader_factory_fn)),
+            fwd,
+            fwd_mr));
+}
+
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
                           seastar::shared_ptr<sstables::write_monitor> monitor,
