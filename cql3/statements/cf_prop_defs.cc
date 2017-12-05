@@ -65,6 +65,8 @@ const sstring cf_prop_defs::KW_COMPACTION = "compaction";
 const sstring cf_prop_defs::KW_COMPRESSION = "compression";
 const sstring cf_prop_defs::KW_CRC_CHECK_CHANCE = "crc_check_chance";
 
+const sstring cf_prop_defs::KW_ID = "id";
+
 const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
@@ -81,7 +83,7 @@ void cf_prop_defs::validate() {
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
-        KW_COMPRESSION, KW_CRC_CHECK_CHANCE
+        KW_COMPRESSION, KW_CRC_CHECK_CHANCE, KW_ID
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -89,6 +91,12 @@ void cf_prop_defs::validate() {
         sstring("populate_io_cache_on_flush"),
     });
     property_definitions::validate(keywords, obsolete_keywords);
+
+    try {
+        get_id();
+    } catch(...) {
+        std::throw_with_nested(exceptions::configuration_exception("Invalid table id"));
+    }
 
     auto compaction_options = get_compaction_options();
     if (!compaction_options.empty()) {
@@ -152,6 +160,15 @@ int32_t cf_prop_defs::get_default_time_to_live() const
 int32_t cf_prop_defs::get_gc_grace_seconds() const
 {
     return get_int(KW_GCGRACESECONDS, DEFAULT_GC_GRACE_SECONDS);
+}
+
+stdx::optional<utils::UUID> cf_prop_defs::get_id() const {
+    auto id = get_simple(KW_ID);
+    if (id) {
+        return utils::UUID(*id);
+    }
+
+    return stdx::nullopt;
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder) {

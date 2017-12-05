@@ -185,6 +185,9 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         column_name = _raw_column_name->prepare_column_identifier(schema);
         def = get_column_definition(schema, *column_name);
     }
+    if (_properties->get_id()) {
+        throw exceptions::configuration_exception("Cannot alter table id.");
+    }
 
     auto& cf = db.find_column_family(schema);
     std::vector<view_ptr> view_updates;

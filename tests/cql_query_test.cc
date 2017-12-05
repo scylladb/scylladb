@@ -57,6 +57,30 @@ SEASTAR_TEST_CASE(test_create_table_statement) {
     });
 }
 
+SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
+    return do_with_cql_env([](auto &e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
+            auto id = e.local_db().find_schema("ks", "tbl")->id();
+            e.execute_cql("DROP TABLE tbl").get();
+            BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tbl").get(), std::exception);
+            e.execute_cql(
+                sprint("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH id='%s'", id)).get();
+            assert_that(e.execute_cql("SELECT * FROM tbl").get0())
+                .is_rows().with_size(0);
+            BOOST_REQUIRE_THROW(
+                e.execute_cql(sprint("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='%s'", id)).get(),
+                std::invalid_argument);
+            BOOST_REQUIRE_THROW(
+                e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='55'").get(),
+                exceptions::configuration_exception);
+            BOOST_REQUIRE_THROW(
+                e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
+                exceptions::configuration_exception);
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {

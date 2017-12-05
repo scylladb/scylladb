@@ -59,11 +59,13 @@ namespace statements {
 create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
-                                               column_set_type static_columns)
+                                               column_set_type static_columns,
+                                               const stdx::optional<utils::UUID>& id)
     : schema_altering_statement{name}
     , _static_columns{static_columns}
     , _properties{properties}
     , _if_not_exists{if_not_exists}
+    , _id(id)
 {
 }
 
@@ -118,7 +120,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
 schema_ptr create_table_statement::get_cf_meta_data() {
-    schema_builder builder{keyspace(), column_family()};
+    schema_builder builder{keyspace(), column_family(), _id};
     apply_properties_to(builder);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }
@@ -186,7 +188,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
     _properties.validate();
 
-    auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns);
+    auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 
     std::experimental::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
     for (auto&& entry : _definitions) {
