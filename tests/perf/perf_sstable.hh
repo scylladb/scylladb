@@ -128,13 +128,19 @@ public:
 
     // Mappers below
     future<double> flush_memtable(int idx) {
-        auto start = test_env::now();
-        size_t partitions = _mt->partition_count();
-        return test_setup::create_empty_test_dir(dir()).then([this, idx] {
+        return seastar::async([this, idx] {
+            storage_service_for_tests ssft;
+            size_t partitions = _mt->partition_count();
+
+            test_setup::create_empty_test_dir(dir()).get();
             auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), idx, sstable::version_types::ka, sstable::format_types::big);
-            return write_memtable_to_sstable(*_mt, sst).then([sst] {});
-        }).then([start, partitions] {
+
+            auto start = test_env::now();
+            write_memtable_to_sstable(*_mt, sst).get();
             auto end = test_env::now();
+
+            _mt->revert_flushed_memory();
+
             auto duration = std::chrono::duration<double>(end - start).count();
             return partitions / duration;
         });
