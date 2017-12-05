@@ -180,7 +180,7 @@ public:
     }
 };
 
-class abstract_write_response_handler : public enable_shared_from_this<abstract_write_response_handler> {
+class abstract_write_response_handler {
 protected:
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
