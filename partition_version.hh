@@ -172,6 +172,10 @@ public:
         assert(_version);
         return *_version;
     }
+    const partition_version& operator*() const {
+        assert(_version);
+        return *_version;
+    }
     partition_version* operator->() {
         assert(_version);
         return _version;
