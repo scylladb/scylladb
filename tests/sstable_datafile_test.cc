@@ -814,7 +814,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 11, la, big);
         return write_memtable_to_sstable(*mt, sst).then([s, sst, mt, verifier, tomb, &static_set_col] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
-                return do_with(sstables::key("key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
@@ -843,7 +843,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                         verify_set(m);
                     });
                 }).then([sstp, s, verifier] {
-                    return do_with(sstables::key("key2"), [sstp, s, verifier] (auto& key) {
+                    return do_with(make_dkey(s, "key2"), [sstp, s, verifier] (auto& key) {
                         return sstp->read_row(s, key).then([] (auto sm) {
                             return mutation_from_streamed_mutation(std::move(sm));
                         }).then([sstp, s, verifier] (auto mutation) {
@@ -877,7 +877,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 12, la, big);
         return write_memtable_to_sstable(*mt, sst).then([s, tomb] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
-                return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s, tomb] (auto mutation) {
@@ -914,7 +914,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", generation, la, big);
         return write_memtable_to_sstable(*mtp, sst).then([s, tomb, generation] {
             return reusable_sst(s, "tests/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
-                return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                             return mutation_from_streamed_mutation(std::move(sm));
                         }).then([sstp, s, tomb] (auto mutation) {
@@ -1399,7 +1399,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 37, la, big);
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 37).then([s] (auto sstp) {
-                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
@@ -1435,7 +1435,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 38, la, big);
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 38).then([s] (auto sstp) {
-                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
@@ -1472,7 +1472,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 39, la, big);
         return write_memtable_to_sstable(*mtp, sst).then([s] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 39).then([s] (auto sstp) {
-                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s] (auto mutation) {
@@ -1569,7 +1569,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         auto sst = make_sstable(s, "tests/sstables/tests-temporary", 41, la, big);
         return write_memtable_to_sstable(*mt, sst).then([s, tomb] {
             return reusable_sst(s, "tests/sstables/tests-temporary", 41).then([s, tomb] (auto sstp) mutable {
-                return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
+                return do_with(make_dkey(s, "key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([] (auto sm) {
                         return mutation_from_streamed_mutation(std::move(sm));
                     }).then([sstp, s, tomb] (auto mutation) {

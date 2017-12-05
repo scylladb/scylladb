@@ -878,7 +878,7 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/wrongrange", 114).then([] (auto sstp) {
-        return do_with(sstables::key("todata"), [sstp] (auto& key) {
+        return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 return make_ready_future<>();
@@ -1052,7 +1052,8 @@ static query::partition_slice make_partition_slice(const schema& s, sstring ck1,
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstring ck1, sstring ck2) {
     return seastar::async([sstp, s, key, ck1, ck2] () mutable {
         auto ps = make_partition_slice(*s, ck1, ck2);
-        auto row = sstp->read_row(s, sstables::key(key.c_str()), ps).get0();
+        auto dkey = make_dkey(s, key.c_str());
+        auto row = sstp->read_row(s, dkey, ps).get0();
         if (!row) {
             return 0;
         }
@@ -1071,7 +1072,8 @@ static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key, sstri
 // Count the number of CQL rows in one partition
 static future<int> count_rows(sstable_ptr sstp, schema_ptr s, sstring key) {
     return seastar::async([sstp, s, key] () mutable {
-        auto row = sstp->read_row(s, sstables::key(key.c_str())).get0();
+        auto dkey = make_dkey(s, key.c_str());
+        auto row = sstp->read_row(s, dkey).get0();
         if (!row) {
             return 0;
         }

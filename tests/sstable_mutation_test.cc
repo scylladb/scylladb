@@ -38,12 +38,13 @@
 #include "memtable-sstable.hh"
 #include "tests/sstable_assertions.hh"
 #include "tests/test_services.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 using namespace sstables;
 
 SEASTAR_TEST_CASE(nonexistent_key) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([] (auto sstp) {
-        return do_with(key::from_bytes(to_bytes("invalid_key")), [sstp] (auto& key) {
+        return do_with(make_dkey(uncompressed_schema(), "invalid_key"), [sstp] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 BOOST_REQUIRE(!mutation);
@@ -55,7 +56,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
 
 future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&map) {
     return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
-        return do_with(sstables::key(std::move(k)), [sstp, map = std::move(map)] (auto& key) {
+        return do_with(make_dkey(uncompressed_schema(), std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -123,7 +124,7 @@ SEASTAR_TEST_CASE(uncompressed_4) {
 template <int Generation>
 future<mutation> generate_clustered(bytes&& key) {
     return reusable_sst(complex_schema(), "tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
-        return do_with(sstables::key(std::move(k)), [sstp] (auto& key) {
+        return do_with(make_dkey(complex_schema(), std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -438,7 +439,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
 
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
     return reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
-        return do_with(sstables::key("first_row"), [sstp] (auto& key) {
+        return do_with(make_dkey(compact_sparse_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -455,7 +456,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
 
 SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
     return reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
-        return do_with(sstables::key("first_row"), [sstp] (auto& key) {
+        return do_with(make_dkey(compact_simple_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
@@ -475,7 +476,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
 
 SEASTAR_TEST_CASE(compact_storage_dense_read) {
     return reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
-        return do_with(sstables::key("first_row"), [sstp] (auto& key) {
+        return do_with(make_dkey(compact_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
             return sstp->read_row(s, key).then([] (auto sm) {
                 return mutation_from_streamed_mutation(std::move(sm));
