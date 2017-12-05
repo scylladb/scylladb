@@ -313,18 +313,20 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
         auto stop = make_lw_shared<bool>(false);
         return do_with(dht::partition_range::make(dht::ring_position::starting_at(min),
                                                               dht::ring_position::ending_at(max)), [&, sstp, s] (auto& pr) {
-            auto mutations = sstp->read_range_rows(s, pr);
+            auto mutations = make_lw_shared<flat_mutation_reader>(sstp->read_range_rows_flat(s, pr));
             return do_until([stop] { return *stop; },
                 // Note: The data in the following lambda, including
                 // "mutations", continues to live until after the last
                 // iteration's future completes, so its lifetime is safe.
                 [sstp, mutations = std::move(mutations), &expected, expected_size, count, stop] () mutable {
-                    return mutations().then([&expected, expected_size, count, stop] (streamed_mutation_opt mutation) mutable {
-                        if (mutation) {
+                    return (*mutations)().then([&expected, expected_size, count, stop, mutations] (mutation_fragment_opt mfopt) mutable {
+                        if (mfopt) {
+                            BOOST_REQUIRE(mfopt->is_partition_start());
                             BOOST_REQUIRE(*count < expected_size);
-                            BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mutation->key().explode());
+                            BOOST_REQUIRE(std::vector<bytes>({expected.back()}) == mfopt->as_partition_start().key().key().explode());
                             expected.pop_back();
                             (*count)++;
+                            mutations->next_partition();
                         } else {
                             *stop = true;
                         }
