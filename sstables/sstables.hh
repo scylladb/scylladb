@@ -275,19 +275,6 @@ public:
     // a filter on the clustering keys which we want to read, which
     // additionally determines also if all the static columns will also be
     // returned in the result.
-    future<streamed_mutation_opt> read_row(
-        schema_ptr schema,
-        dht::ring_position_view key,
-        const query::partition_slice& slice,
-        const io_priority_class& pc = default_priority_class(),
-        reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-
-    future<streamed_mutation_opt> read_row(schema_ptr schema, dht::ring_position_view key) {
-        auto& full_slice = schema->full_slice();
-        return read_row(std::move(schema), std::move(key), full_slice);
-    }
-
     flat_mutation_reader read_row_flat(
         schema_ptr schema,
         dht::ring_position_view key,
