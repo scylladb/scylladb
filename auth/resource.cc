@@ -124,8 +124,8 @@ resource resource::role(stdx::string_view role) {
 }
 
 resource resource::from_name(stdx::string_view name) {
-    static const std::unordered_map<sstring, resource_kind> reverse_roots = [] {
-        std::unordered_map<sstring, resource_kind> result;
+    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
+        std::unordered_map<stdx::string_view, resource_kind> result;
 
         for (const auto& pair : roots) {
             result.emplace(pair.second, pair.first);
