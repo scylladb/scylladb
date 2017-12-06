@@ -180,7 +180,7 @@ public:
     }
 };
 
-class abstract_write_response_handler : public enable_shared_from_this<abstract_write_response_handler> {
+class abstract_write_response_handler {
 protected:
     storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
@@ -191,29 +191,40 @@ protected:
     db::write_type _type;
     std::unique_ptr<mutation_holder> _mutation_holder;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
-    size_t _pending_endpoints; // how many endpoints in bootstrap state there is
     // added dead_endpoints as a memeber here as well. This to be able to carry the info across
     // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
     // it should not be a huge burden. (flw)
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
-    bool _timedout = false;
     bool _throttled = false;
+    enum class error : uint8_t {
+        NONE,
+        TIMEOUT,
+        FAILURE,
+    };
+    error _error = error::NONE;
+    size_t _failed = 0;
+    size_t _total_endpoints = 0;
+
 protected:
+    virtual bool waited_for(gms::inet_address from) = 0;
     virtual void signal(gms::inet_address from) {
-        signal();
+        if (waited_for(from)) {
+            signal();
+        }
     }
+
 public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
             : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
-              _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
+              _dead_endpoints(std::move(dead_endpoints)) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
-        _total_block_for = db::block_for(ks, _cl) + _pending_endpoints;
+        _total_block_for = db::block_for(ks, _cl) + pending_endpoints;
         ++_proxy->_stats.writes;
     }
     virtual ~abstract_write_response_handler() {
@@ -226,8 +237,10 @@ public:
                 _proxy->_stats.background_write_bytes -= _mutation_holder->size();
                 _proxy->unthrottle();
             }
-        } else if (_timedout) {
+        } else if (_error == error::TIMEOUT) {
             _ready.set_exception(mutation_write_timeout_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _total_block_for, _type));
+        } else if (_error == error::FAILURE) {
+            _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
         }
     };
     bool is_counter() const {
@@ -252,11 +265,21 @@ public:
              }
          }
     }
+    virtual bool failure(gms::inet_address from, size_t count) {
+        if (waited_for(from)) {
+            _failed += count;
+            if (_total_block_for + _failed > _total_endpoints) {
+                _error = error::FAILURE;
+                return true;
+            }
+        }
+        return false;
+    }
     void on_timeout() {
         if (_cl_achieved) {
             slogger.trace("Write is not acknowledged by {} replicas after achieving CL", get_targets());
         }
-        _timedout = true;
+        _error = error::TIMEOUT;
     }
     // return true on last ack
     bool response(gms::inet_address from) {
@@ -294,39 +317,52 @@ public:
 };
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
-    void signal(gms::inet_address from) override {
-        if (is_me(from) || db::is_local(from)) {
-            abstract_write_response_handler::signal();
-        }
+    bool waited_for(gms::inet_address from) override {
+        return is_me(from) || db::is_local(from);
     }
+
 public:
     datacenter_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {}
+                        std::move(targets), std::move(tr_state), db::count_local_endpoints(pending_endpoints), std::move(dead_endpoints)) {
+        _total_endpoints = db::count_local_endpoints(_targets);
+    }
 };
 
 class write_response_handler : public abstract_write_response_handler {
+    bool waited_for(gms::inet_address from) override {
+        return true;
+    }
 public:
     write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints, tracing::trace_state_ptr tr_state) :
                 abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mh),
-                        std::move(targets), std::move(tr_state), pending_endpoints.size(), std::move(dead_endpoints)) {}
+                        std::move(targets), std::move(tr_state), pending_endpoints.size(), std::move(dead_endpoints)) {
+        _total_endpoints = _targets.size();
+    }
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
-    std::unordered_map<sstring, size_t> _dc_responses;
-    void signal(gms::inet_address from) override {
+    struct dc_info {
+        size_t acks;
+        size_t total_block_for;
+        size_t total_endpoints;
+        size_t failures;
+    };
+    std::unordered_map<sstring, dc_info> _dc_responses;
+    bool waited_for(gms::inet_address from) override {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
         sstring data_center = snitch_ptr->get_datacenter(from);
         auto dc_resp = _dc_responses.find(data_center);
 
-        if (dc_resp->second > 0) {
-            --dc_resp->second;
-            abstract_write_response_handler::signal();
+        if (dc_resp->second.acks < dc_resp->second.total_block_for) {
+            ++dc_resp->second.acks;
+            return true;
         }
+        return false;
     }
 public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
@@ -342,10 +378,26 @@ public:
                 auto pending_for_dc = boost::range::count_if(pending_endpoints, [&snitch_ptr, &dc] (const gms::inet_address& ep){
                     return snitch_ptr->get_datacenter(ep) == dc;
                 });
-                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc);
-                _pending_endpoints += pending_for_dc;
+                size_t total_endpoints_for_dc = boost::range::count_if(targets, [&snitch_ptr, &dc] (const gms::inet_address& ep){
+                    return snitch_ptr->get_datacenter(ep) == dc;
+                });
+                _dc_responses.emplace(dc, dc_info{0, db::local_quorum_for(ks, dc) + pending_for_dc, total_endpoints_for_dc, 0});
+                _total_block_for += pending_for_dc;
             }
         }
+    }
+    bool failure(gms::inet_address from, size_t count) override {
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        const sstring& dc = snitch_ptr->get_datacenter(from);
+        auto dc_resp = _dc_responses.find(dc);
+
+        dc_resp->second.failures += count;
+        _failed += count;
+        if (dc_resp->second.total_block_for + dc_resp->second.failures > dc_resp->second.total_endpoints) {
+            _error = error::FAILURE;
+            return true;
+        }
+        return false;
     }
 };
 
@@ -395,6 +447,16 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     if (it != _response_handlers.end()) {
         tracing::trace(it->second.handler->get_trace_state(), "Got a response from /{}", from);
         if (it->second.handler->response(from)) {
+            remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        }
+    }
+}
+
+void storage_proxy::got_failure_response(storage_proxy::response_id_type id, gms::inet_address from, size_t count) {
+    auto it = _response_handlers.find(id);
+    if (it != _response_handlers.end()) {
+        tracing::trace(it->second.handler->get_trace_state(), "Got {} failures from /{}", count, from);
+        if (it->second.handler->failure(from, count)) {
             remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
         }
     }
@@ -1539,6 +1601,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         auto coordinator = forward.back();
         forward.pop_back();
 
+        size_t forward_size = forward.size();
         future<> f = make_ready_future<>();
 
 
@@ -1560,8 +1623,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             }
         }
 
-        f.handle_exception([coordinator, p = shared_from_this()] (std::exception_ptr eptr) {
+        f.handle_exception([response_id, forward_size, coordinator, handler_ptr, p = shared_from_this()] (std::exception_ptr eptr) {
             ++p->_stats.writes_errors.get_ep_stat(coordinator);
+            p->got_failure_response(response_id, coordinator, forward_size + 1);
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -1790,13 +1854,20 @@ protected:
     db::consistency_level _cl;
     size_t _targets_count;
     promise<> _done_promise; // all target responded
-    bool _timedout = false; // will be true if request timeouts
+    bool _request_failed = false; // will be true if request fails or timeouts
     timer<storage_proxy::clock_type> _timeout;
-    size_t _responses = 0;
     schema_ptr _schema;
+    size_t _failed = 0;
 
-    virtual void on_timeout() {}
+    virtual void on_failure(std::exception_ptr ex) = 0;
+    virtual void on_timeout() = 0;
     virtual size_t response_count() const = 0;
+    virtual void fail_request(std::exception_ptr ex) {
+        _request_failed = true;
+        _done_promise.set_exception(ex);
+        _timeout.cancel();
+        on_failure(ex);
+    }
 public:
     abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, storage_proxy::clock_type::time_point timeout)
         : _cl(cl)
@@ -1804,17 +1875,16 @@ public:
         , _schema(std::move(schema))
     {
         _timeout.set_callback([this] {
-            _timedout = true;
-            _done_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, _responses != 0));
             on_timeout();
         });
         _timeout.arm(timeout);
     }
     virtual ~abstract_read_resolver() {};
+    virtual void on_error(gms::inet_address ep) = 0;
     future<> done() {
         return _done_promise.get_future();
     }
-    virtual void error(gms::inet_address ep, std::exception_ptr eptr) {
+    void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
         try {
             std::rethrow_exception(eptr);
@@ -1828,7 +1898,10 @@ public:
             why = "Unknown exception";
         }
 
-        // do nothing other than log for now, request will timeout eventually
+        if (!_request_failed) { // request may fail only once.
+            on_error(ep);
+        }
+
         slogger.error("Exception when communicating with {}: {}", ep, why);
     }
 };
@@ -1841,10 +1914,14 @@ class digest_read_resolver : public abstract_read_resolver {
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     std::vector<query::result_digest> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
+    size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
 
-    virtual void on_timeout() override {
+    void on_timeout() override {
+        fail_request(std::make_exception_ptr(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result)));
+    }
+    void on_failure(std::exception_ptr ex) override {
         if (!_cl_reported) {
-            _cl_promise.set_exception(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
+            _cl_promise.set_exception(ex);
         }
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
@@ -1854,9 +1931,10 @@ class digest_read_resolver : public abstract_read_resolver {
         return _digest_results.size();
     }
 public:
-    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout), _block_for(block_for) {}
+    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, 0, timeout),
+                                _block_for(block_for),  _target_count_for_cl(target_count_for_cl) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
-        if (!_timedout) {
+        if (!_request_failed) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest());
             _last_modified = std::max(_last_modified, result->last_modified());
@@ -1867,7 +1945,7 @@ public:
         }
     }
     void add_digest(gms::inet_address from, query::result_digest digest, api::timestamp_type last_modified) {
-        if (!_timedout) {
+        if (!_request_failed) {
             _digest_results.emplace_back(std::move(digest));
             _last_modified = std::max(_last_modified, last_modified);
             got_response(from);
@@ -1897,6 +1975,14 @@ public:
         if (is_completed()) {
             _timeout.cancel();
             _done_promise.set_value();
+        }
+    }
+    void on_error(gms::inet_address ep) override {
+        if (waiting_for(ep)) {
+            _failed++;
+        }
+        if (_block_for + _failed > _target_count_for_cl) {
+            fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result)));
         }
     }
     future<foreign_ptr<lw_shared_ptr<query::result>>, bool> has_cl() {
@@ -1991,10 +2077,14 @@ class data_read_resolver : public abstract_read_resolver {
     std::vector<reply> _data_results;
     std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> _diffs;
 private:
-    virtual void on_timeout() override {
+    void on_timeout() override {
+        fail_request(std::make_exception_ptr(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0)));
+    }
+    void on_failure(std::exception_ptr ex) override {
         // we will not need them any more
         _data_results.clear();
     }
+
     virtual size_t response_count() const override {
         return _data_results.size();
     }
@@ -2207,7 +2297,7 @@ public:
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-        if (!_timedout) {
+        if (!_request_failed) {
             _max_live_count = std::max(result->row_count(), _max_live_count);
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
@@ -2215,6 +2305,9 @@ public:
                 _done_promise.set_value();
             }
         }
+    }
+    void on_error(gms::inet_address ep) override {
+        fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0)));
     }
     uint32_t max_live_count() const {
         return _max_live_count;
@@ -2620,7 +2713,8 @@ protected:
 
 public:
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(storage_proxy::clock_type::time_point timeout) {
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for, timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for,
+                db::is_datacenter_local(_cl) ? db::count_local_endpoints(_targets): _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout).finally([exec]() {
@@ -3675,7 +3769,8 @@ void storage_proxy::init_messaging_service() {
             timeout = *t;
         }
 
-        return do_with(std::move(in), get_local_shared_storage_proxy(), [src_addr = std::move(src_addr), &cinfo, forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) mutable {
+        return do_with(std::move(in), get_local_shared_storage_proxy(), size_t(0),
+                [src_addr = std::move(src_addr), &cinfo, forward = std::move(forward), reply_to, shard, response_id, trace_state_ptr, timeout] (const frozen_mutation& m, shared_ptr<storage_proxy>& p, size_t& errors) mutable {
             ++p->_stats.received_mutations;
             p->_stats.forwarded_mutations += forward.size();
             return when_all(
@@ -3696,7 +3791,7 @@ void storage_proxy::init_messaging_service() {
                     return ms.send_mutation_done(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
-                }).handle_exception([reply_to, shard, &p] (std::exception_ptr eptr) {
+                }).handle_exception([reply_to, shard, &p, &errors] (std::exception_ptr eptr) {
                     seastar::log_level l = seastar::log_level::warn;
                     try {
                         std::rethrow_exception(eptr);
@@ -3708,21 +3803,35 @@ void storage_proxy::init_messaging_service() {
                         // ignore
                     }
                     slogger.log(l, "Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
+                    errors++;
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout] (gms::inet_address forward) {
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p, trace_state_ptr, timeout, &errors] (gms::inet_address forward) {
                     auto& ms = netw::get_local_messaging_service();
                     tracing::trace(trace_state_ptr, "Forwarding a mutation to /{}", forward);
-                    return ms.send_mutation(netw::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p] (future<> f) {
+                    return ms.send_mutation(netw::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id, tracing::make_trace_info(trace_state_ptr)).then_wrapped([&p, &errors] (future<> f) {
                         if (f.failed()) {
                             ++p->_stats.forwarding_errors;
+                            errors++;
                         };
                         f.ignore_ready_future();
                     });
                 })
-            ).then_wrapped([trace_state_ptr] (future<std::tuple<future<>, future<>>>&& f) {
-                // ignore ressult, since we'll be returning them via MUTATION_DONE verbs
-                tracing::trace(trace_state_ptr, "Mutation handling is done");
-                return netw::messaging_service::no_wait();
+            ).then_wrapped([trace_state_ptr, reply_to, shard, response_id, &errors] (future<std::tuple<future<>, future<>>>&& f) {
+                // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
+                auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
+                if (errors) {
+                    if (get_local_storage_service().node_supports_write_failure_reply(reply_to)) {
+                        tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
+                        auto& ms = netw::get_local_messaging_service();
+                        fut = ms.send_mutation_failed(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id, errors).then_wrapped([] (future<> f) {
+                            f.ignore_ready_future();
+                            return netw::messaging_service::no_wait();
+                        });
+                    }
+                }
+                return fut.finally([trace_state_ptr] {
+                    tracing::trace(trace_state_ptr, "Mutation handling is done");
+                });
             });
         });
     });
@@ -3730,6 +3839,13 @@ void storage_proxy::init_messaging_service() {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
             sp.got_response(response_id, from);
+            return netw::messaging_service::no_wait();
+        });
+    });
+    ms.register_mutation_failed([] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed] (storage_proxy& sp) {
+            sp.got_failure_response(response_id, from, num_failed);
             return netw::messaging_service::no_wait();
         });
     });
@@ -3840,6 +3956,7 @@ void storage_proxy::uninit_messaging_service() {
     auto& ms = netw::get_local_messaging_service();
     ms.unregister_mutation();
     ms.unregister_mutation_done();
+    ms.unregister_mutation_failed();
     ms.unregister_read_data();
     ms.unregister_read_mutation_data();
     ms.unregister_read_digest();

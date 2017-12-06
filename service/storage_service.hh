@@ -270,6 +270,7 @@ private:
     gms::feature _correct_counter_order_feature;
     gms::feature _schema_tables_v3;
     gms::feature _correct_non_compound_range_tombstones;
+    gms::feature _write_failure_reply_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -281,6 +282,7 @@ public:
         _correct_counter_order_feature.enable();
         _schema_tables_v3.enable();
         _correct_non_compound_range_tombstones.enable();
+        _write_failure_reply_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2248,6 +2250,10 @@ public:
 
     bool cluster_supports_reading_correctly_serialized_range_tombstones() const {
         return bool(_correct_non_compound_range_tombstones);
+    }
+
+    bool node_supports_write_failure_reply(gms::inet_address ep) const {
+        return gms::get_local_gossiper().node_has_feature(ep, _write_failure_reply_feature);
     }
 };
 

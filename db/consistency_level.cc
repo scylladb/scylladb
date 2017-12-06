@@ -59,18 +59,18 @@ namespace db {
 
 logging::logger cl_logger("consistency");
 
-size_t quorum_for(keyspace& ks) {
+size_t quorum_for(const keyspace& ks) {
     return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
 }
 
-size_t local_quorum_for(keyspace& ks, const sstring& dc) {
+size_t local_quorum_for(const keyspace& ks, const sstring& dc) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        network_topology_strategy* nrs =
-            static_cast<network_topology_strategy*>(&rs);
+        const network_topology_strategy* nrs =
+            static_cast<const network_topology_strategy*>(&rs);
 
         return (nrs->get_replication_factor(dc) / 2) + 1;
     }

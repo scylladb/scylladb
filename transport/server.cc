@@ -539,8 +539,12 @@ future<response_type>
             return make_ready_future<response_type>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_timeout_exception& ex) {
             return make_ready_future<response_type>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+        } catch (const exceptions::read_failure_exception& ex) {
+            return make_ready_future<response_type>(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
             return make_ready_future<response_type>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+        } catch (const exceptions::mutation_write_failure_exception& ex) {
+            return make_ready_future<response_type>(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::already_exists_exception& ex) {
             return make_ready_future<response_type>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
@@ -1029,6 +1033,22 @@ shared_ptr<cql_server::response> cql_server::connection::make_read_timeout_error
     return response;
 }
 
+shared_ptr<cql_server::response> cql_server::connection::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
+{
+    if (_version < 4) {
+        return make_read_timeout_error(stream, err, std::move(msg), cl, received, blockfor, data_present, tr_state);
+    }
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_int(numfailures);
+    response->write_byte(data_present);
+    return response;
+}
+
 shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
@@ -1037,6 +1057,22 @@ shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_tim
     response->write_consistency(cl);
     response->write_int(received);
     response->write_int(blockfor);
+    response->write_string(sprint("%s", type));
+    return response;
+}
+
+shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
+{
+    if (_version < 4) {
+        return make_mutation_write_timeout_error(stream, err, std::move(msg), cl, received, blockfor, type, tr_state);
+    }
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_int(numfailures);
     response->write_string(sprint("%s", type));
     return response;
 }
