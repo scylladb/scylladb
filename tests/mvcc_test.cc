@@ -528,6 +528,8 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
         with_allocator(alloc, [&] {
             auto target = gen();
             auto second = gen();
+            target.partition().make_fully_continuous();
+            second.partition().make_fully_continuous();
 
             auto expected = target + second;
 
