@@ -10,3 +10,4 @@ else
     echo "Unsupported distribution."
     exit 1
 fi
+apt-get update
