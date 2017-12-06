@@ -183,6 +183,8 @@ public:
         uint64_t background_reads = 0; // client no longer waits for the read
         uint64_t read_retries = 0; // read is retried with new limit
         uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
+        uint64_t speculative_digest_reads = 0;
+        uint64_t speculative_data_reads = 0;
 
         // Data read attempts
         split_stats data_read_attempts;
@@ -403,6 +405,7 @@ public:
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;
+    friend class speculating_read_executor;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

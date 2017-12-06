@@ -600,6 +600,12 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
 
         sm::make_total_operations("range_unavailable", [this] { return _stats.range_slice_unavailables._count; },
                        sm::description("number of range read operations failed due to an \"unavailable\" error")),
+
+        sm::make_total_operations("speculative_digest_reads", [this] { return _stats.speculative_digest_reads; },
+                       sm::description("number of speculative digest read requests that were sent")),
+
+        sm::make_total_operations("speculative_data_reads", [this] { return _stats.speculative_data_reads; },
+                       sm::description("number of speculative data read requests that were sent")),
     });
 
     _metrics.add_group(REPLICA_STATS_CATEGORY, {
@@ -2809,11 +2815,16 @@ public:
             if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
                 resolver->add_wait_targets(1); // we send one more request so wait for it too
                 // FIXME: consider disabling for CL=*ONE
-                bool want_digest = true;
-                future<> f = resolver->has_data() ?
-                        make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout) :
-                        make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, want_digest);
-                f.finally([exec = shared_from_this()]{});
+                auto send_request = [&] (bool has_data) {
+                    if (has_data) {
+                        _proxy->_stats.speculative_digest_reads++;
+                        return make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
+                    } else {
+                        _proxy->_stats.speculative_data_reads++;
+                        return make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
+                    }
+                };
+                send_request(resolver->has_data()).finally([exec = shared_from_this()]{});
             }
         });
         auto& sr = _schema->speculative_retry();
