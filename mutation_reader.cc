@@ -536,7 +536,7 @@ file reader_resource_tracker::track(file f) const {
 }
 
 
-class restricting_mutation_reader : public mutation_reader::impl {
+class restricting_mutation_reader : public flat_mutation_reader::impl {
     struct mutation_source_and_params {
         mutation_source _ms;
         schema_ptr _s;
@@ -547,13 +547,13 @@ class restricting_mutation_reader : public mutation_reader::impl {
         streamed_mutation::forwarding _fwd;
         mutation_reader::forwarding _fwd_mr;
 
-        mutation_reader operator()() {
-            return _ms(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
+        flat_mutation_reader operator()() {
+            return _ms.make_flat_mutation_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
         }
     };
 
     const restricted_mutation_reader_config& _config;
-    boost::variant<mutation_source_and_params, mutation_reader> _reader_or_mutation_source;
+    boost::variant<mutation_source_and_params, flat_mutation_reader> _reader_or_mutation_source;
 
     static const std::size_t new_reader_base_cost{16 * 1024};
 
@@ -563,7 +563,7 @@ class restricting_mutation_reader : public mutation_reader::impl {
                 : _config.resources_sem->wait(new_reader_base_cost);
 
         return f.then([this] {
-            mutation_reader reader = boost::get<mutation_source_and_params>(_reader_or_mutation_source)();
+            flat_mutation_reader reader = boost::get<mutation_source_and_params>(_reader_or_mutation_source)();
             _reader_or_mutation_source = std::move(reader);
 
             if (_config.active_reads) {
@@ -571,6 +571,22 @@ class restricting_mutation_reader : public mutation_reader::impl {
             }
 
             return make_ready_future<>();
+        });
+    }
+
+    template<typename Function>
+    GCC6_CONCEPT(
+        requires std::is_move_constructible<Function>::value
+            && requires(Function fn, flat_mutation_reader& reader) {
+                fn(reader);
+            }
+    )
+    decltype(auto) with_reader(Function fn) {
+        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
+            return fn(*reader);
+        }
+        return create_reader().then([this, fn = std::move(fn)] () mutable {
+            return fn(boost::get<flat_mutation_reader>(_reader_or_mutation_source));
         });
     }
 public:
@@ -583,7 +599,8 @@ public:
             tracing::trace_state_ptr trace_state,
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
-        : _config(config)
+        : impl(s)
+        , _config(config)
         , _reader_or_mutation_source(
                 mutation_source_and_params{std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr}) {
         if (_config.resources_sem->waiters() >= _config.max_queue_length) {
@@ -591,32 +608,46 @@ public:
         }
     }
     ~restricting_mutation_reader() {
-        if (boost::get<mutation_reader>(&_reader_or_mutation_source)) {
+        if (boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
             _config.resources_sem->signal(new_reader_base_cost);
             if (_config.active_reads) {
                 --(*_config.active_reads);
             }
         }
     }
-    future<streamed_mutation_opt> operator()() override {
-        // FIXME: we should defer freeing until the mutation is freed, perhaps,
-        //        rather than just returned
-        if (auto* reader = boost::get<mutation_reader>(&_reader_or_mutation_source)) {
-            return (*reader)();
-        }
 
-        return create_reader().then([this] {
-            return boost::get<mutation_reader>(_reader_or_mutation_source)();
+    virtual future<> fill_buffer() override {
+        return with_reader([this] (flat_mutation_reader& reader) {
+            return reader.fill_buffer().then([this, &reader] {
+                _end_of_stream = reader.is_end_of_stream();
+                while (!reader.is_buffer_empty()) {
+                    push_mutation_fragment(reader.pop_mutation_fragment());
+                }
+            });
         });
     }
-
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-        if (auto* reader = boost::get<mutation_reader>(&_reader_or_mutation_source)) {
-            return reader->fast_forward_to(pr);
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (!is_buffer_empty()) {
+            return;
         }
-
-        return create_reader().then([this, &pr] {
-            return boost::get<mutation_reader>(_reader_or_mutation_source).fast_forward_to(pr);
+        _end_of_stream = false;
+        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
+            return reader->next_partition();
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return with_reader([&pr] (flat_mutation_reader& reader) {
+            return reader.fast_forward_to(pr);
+        });
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        forward_buffer_to(pr.start());
+        _end_of_stream = false;
+        return with_reader([pr = std::move(pr)] (flat_mutation_reader& reader) mutable {
+            return reader.fast_forward_to(std::move(pr));
         });
     }
 };
@@ -631,8 +662,23 @@ make_restricted_reader(const restricted_mutation_reader_config& config,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr) {
-    return make_mutation_reader<restricting_mutation_reader>(config, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    auto rd = make_restricted_flat_reader(config, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    return mutation_reader_from_flat_mutation_reader(std::move(rd));
 }
+
+flat_mutation_reader
+make_restricted_flat_reader(const restricted_mutation_reader_config& config,
+                       mutation_source ms,
+                       schema_ptr s,
+                       const dht::partition_range& range,
+                       const query::partition_slice& slice,
+                       const io_priority_class& pc,
+                       tracing::trace_state_ptr trace_state,
+                       streamed_mutation::forwarding fwd,
+                       mutation_reader::forwarding fwd_mr) {
+    return make_flat_mutation_reader<restricting_mutation_reader>(config, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+}
+
 
 snapshot_source make_empty_snapshot_source() {
     return snapshot_source([] {

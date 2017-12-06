@@ -744,25 +744,40 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
 }
 
 
-class tracking_reader : public mutation_reader::impl {
-    mutation_reader _reader;
+class tracking_reader : public flat_mutation_reader::impl {
+    flat_mutation_reader _reader;
     std::size_t _call_count{0};
     std::size_t _ff_count{0};
 public:
     tracking_reader(semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
-        : _reader(mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(
+        : impl(schema)
+        , _reader(sst->read_range_rows_flat(
                         schema,
                         query::full_partition_range,
                         schema->full_slice(),
                         default_priority_class(),
                         reader_resource_tracker(resources_sem),
                         streamed_mutation::forwarding::no,
-                        mutation_reader::forwarding::yes))) {
+                        mutation_reader::forwarding::yes)) {
     }
 
-    virtual future<streamed_mutation_opt> operator()() override {
+
+    virtual future<> fill_buffer() override {
         ++_call_count;
-        return _reader();
+        return _reader.fill_buffer().then([this] {
+            _end_of_stream = _reader.is_end_of_stream();
+            while (!_reader.is_buffer_empty()) {
+                push_mutation_fragment(_reader.pop_mutation_fragment());
+            }
+        });
+    }
+
+    virtual void next_partition() override {
+        _end_of_stream = false;
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _reader.next_partition();
+        }
     }
 
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
@@ -771,6 +786,10 @@ public:
         // to come up with meaningful partition-ranges which is hard and
         // unecessary for these tests.
         return make_ready_future<>();
+    }
+
+    virtual future<> fast_forward_to(position_range) override {
+        throw std::bad_function_call();
     }
 
     std::size_t call_count() const {
@@ -783,25 +802,28 @@ public:
 };
 
 class reader_wrapper {
-    mutation_reader _reader;
+    flat_mutation_reader _reader;
     tracking_reader* _tracker{nullptr};
 
 public:
     reader_wrapper(
             const restricted_mutation_reader_config& config,
             schema_ptr schema,
-            lw_shared_ptr<sstables::sstable> sst) {
-        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
+            lw_shared_ptr<sstables::sstable> sst) : _reader(make_empty_flat_reader(schema)) {
+        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&, auto&&...) {
             auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
             _tracker = tracker_ptr.get();
-            return mutation_reader(std::move(tracker_ptr));
+            return flat_mutation_reader(std::move(tracker_ptr));
         });
 
-        _reader = make_restricted_reader(config, std::move(ms), std::move(schema));
+        _reader = make_restricted_flat_reader(config, std::move(ms), schema);
     }
 
-    future<streamed_mutation_opt> operator()() {
-        return _reader();
+    future<> operator()() {
+        while (!_reader.is_buffer_empty()) {
+            _reader.pop_mutation_fragment();
+        }
+        return _reader.fill_buffer();
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
