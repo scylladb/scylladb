@@ -354,6 +354,108 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
     });
 }
 
+SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
+    // Test that apply_to_incomplete() drops entries from source which fall outside continuity
+    // and that continuity is not affected.
+    return seastar::async([] {
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            auto s = gen.schema();
+
+            mutation m1 = gen();
+            mutation m2 = gen();
+            mutation m3 = gen();
+            mutation to_apply = gen();
+            to_apply.partition().make_fully_continuous();
+
+            auto e_combined = (m1 + m2 + m3).partition();
+            auto e_continuity = e_combined.get_continuity(*s);
+
+            auto expected_to_apply_slice = to_apply.partition();
+            if (!e_combined.static_row_continuous()) {
+                expected_to_apply_slice.static_row() = {};
+            }
+
+            auto expected = (m1 + m2 + m3).partition();
+            expected.apply_weak(*s, std::move(expected_to_apply_slice));
+
+            // Without active reader
+            auto test = [&] (bool with_active_reader) {
+                logalloc::reclaim_lock rl(r);
+                auto e = partition_entry(m3.partition());
+                partition_version& v2 = e.add_version(*s);
+                v2.partition() = m2.partition();
+                partition_version& v3 = e.add_version(*s);
+                v3.partition() = m1.partition();
+                lw_shared_ptr<partition_snapshot> snap;
+                if (with_active_reader) {
+                    snap = e.read(r, s);
+                }
+                e.apply_to_incomplete(*s, partition_entry(to_apply.partition()), *s, r);
+                assert_that(s, e.squashed(*s))
+                    .is_equal_to(expected, e_continuity.to_clustering_row_ranges())
+                    .has_same_continuity(e_combined);
+            };
+
+            test(false);
+            test(true);
+        });
+    });
+}
+
+// Call with region locked.
+static mutation_partition read_using_cursor(partition_snapshot& snap) {
+    partition_snapshot_row_cursor cur(*snap.schema(), snap);
+    cur.maybe_refresh();
+    auto mp = cur.read_partition();
+    for (auto&& rt : snap.range_tombstones()) {
+        mp.apply_delete(*snap.schema(), rt);
+    }
+    mp.apply(*snap.schema(), static_row(snap.static_row()));
+    mp.set_static_row_continuous(snap.static_row_continuous());
+    mp.apply(snap.partition_tombstone());
+    return mp;
+}
+
+SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
+    // Tests that reading many versions using a cursor gives the logical mutation back.
+    return seastar::async([] {
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            auto s = gen.schema();
+
+            mutation m1 = gen();
+            mutation m2 = gen();
+            mutation m3 = gen();
+
+            auto expected = (m1 + m2 + m3).partition();
+
+            {
+                logalloc::reclaim_lock rl(r);
+                auto e = partition_entry(m3.partition());
+                partition_version& v2 = e.add_version(*s);
+                partition_version& v3 = e.add_version(*s);
+                v2.partition() = m2.partition();
+                v3.partition() = m1.partition();
+
+                auto snap = e.read(r, s);
+                auto actual = read_using_cursor(*snap);
+
+                assert_that(s, actual).has_same_continuity(expected);
+
+                // Drop empty rows
+                can_gc_fn never_gc = [] (tombstone) { return false; };
+                actual.compact_for_compaction(*s, never_gc, gc_clock::now());
+                expected.compact_for_compaction(*s, never_gc, gc_clock::now());
+
+                assert_that(s, actual).is_equal_to(expected);
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
     return seastar::async([] {
         logalloc::region r;
