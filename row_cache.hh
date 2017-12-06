@@ -48,6 +48,7 @@ namespace cache {
 class autoupdating_underlying_flat_reader;
 class autoupdating_underlying_reader;
 class cache_streamed_mutation;
+class cache_flat_mutation_reader;
 class read_context;
 class lsa_manager;
 
@@ -194,6 +195,7 @@ public:
     friend class cache::autoupdating_underlying_flat_reader;
     friend class cache::autoupdating_underlying_reader;
     friend class cache::cache_streamed_mutation;
+    friend class cache::cache_flat_mutation_reader;
     struct stats {
         uint64_t partition_hits;
         uint64_t partition_misses;
@@ -276,6 +278,7 @@ public:
     friend class single_partition_populating_reader;
     friend class cache_entry;
     friend class cache::cache_streamed_mutation;
+    friend class cache::cache_flat_mutation_reader;
     friend class cache::lsa_manager;
     friend class cache::read_context;
     friend class partition_range_cursor;
