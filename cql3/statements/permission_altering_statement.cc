@@ -65,7 +65,9 @@ future<> cql3::statements::permission_altering_statement::check_access(const ser
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
         mayme_correct_resource(_resource, state);
-        if (!_resource.exists()) {
+
+        if ((_resource.kind() == auth::resource_kind::data)
+                && !auth::resource_exists(auth::data_resource_view(_resource))) {
             throw exceptions::invalid_request_exception(sprint("%s doesn't exist", _resource));
         }
 

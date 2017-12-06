@@ -235,12 +235,12 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 list_roles_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    static const auth::resource virtual_table(auth::meta::AUTH_KS, "role");
+    static const sstring virtual_table_name("roles");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {
         return ::make_shared<column_specification>(
-                virtual_table.keyspace(),
-                virtual_table.column_family(),
+                auth::meta::AUTH_KS,
+                virtual_table_name,
                 ::make_shared<column_identifier>(name, true),
                 ty);
     };

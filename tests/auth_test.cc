@@ -35,38 +35,14 @@
 #include "tests/cql_assertions.hh"
 
 #include "auth/allow_all_authenticator.hh"
-#include "auth/data_resource.hh"
 #include "auth/authenticator.hh"
 #include "auth/password_authenticator.hh"
 #include "auth/service.hh"
 #include "auth/authenticated_user.hh"
+#include "auth/data_resource.hh"
 
 #include "db/config.hh"
 #include "cql3/query_processor.hh"
-
-SEASTAR_TEST_CASE(test_data_resource) {
-    auth::resource root, keyspace("fisk"), column_family("fisk", "notter");
-
-    BOOST_REQUIRE_EQUAL(root.is_root_level(), true);
-    BOOST_REQUIRE_EQUAL(keyspace.is_keyspace_level(), true);
-    BOOST_REQUIRE_EQUAL(column_family.is_column_family_level(), true);
-
-    BOOST_REQUIRE_EQUAL(root.has_parent(), false);
-    BOOST_REQUIRE_EQUAL(keyspace.has_parent(), true);
-    BOOST_REQUIRE_EQUAL(column_family.has_parent(), true);
-
-    try {
-        root.get_parent();
-        BOOST_FAIL("Should not reach");
-    } catch (...) {
-        //  ok
-    }
-
-    BOOST_REQUIRE_EQUAL(keyspace.get_parent(), root);
-    BOOST_REQUIRE_EQUAL(column_family.get_parent(), keyspace);
-
-    return make_ready_future();
-}
 
 SEASTAR_TEST_CASE(test_default_authenticator) {
     return do_with_cql_env([](cql_test_env& env) {

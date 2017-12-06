@@ -95,6 +95,7 @@ boost_tests = [
     'aggregate_fcts_test',
     'role_manager_test',
     'caching_options_test',
+    'auth_resource_test',
 ]
 
 other_tests = [

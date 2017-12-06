@@ -73,7 +73,9 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
     return f.then([this, &state] {
         if (_resource) {
             mayme_correct_resource(*_resource, state);
-            if (!_resource->exists()) {
+
+            if ((_resource->kind() == auth::resource_kind::data)
+                    && !auth::resource_exists(auth::data_resource_view(*_resource))) {
                 throw exceptions::invalid_request_exception(sprint("%s doesn't exist", *_resource));
             }
         }
@@ -97,10 +99,16 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
     auto r = _resource;
     for (;;) {
         resources.emplace_back(r);
-        if (!r || !r->has_parent() || !_recursive) {
+        if (!r || !_recursive) {
             break;
         }
-        r = r->get_parent();
+
+        auto parent = r->parent();
+        if (!parent) {
+            break;
+        }
+
+        r = std::move(parent);
     }
 
     return map_reduce(resources, [&state, this](opt_resource r) {
@@ -121,7 +129,7 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
                 rs->add_row(
                                 std::vector<bytes_opt> { utf8_type->decompose(
                                                 v.user), utf8_type->decompose(
-                                                v.resource.to_string()),
+                                                sstring(sprint("%s", v.resource))),
                                                 utf8_type->decompose(p), });
             }
         }

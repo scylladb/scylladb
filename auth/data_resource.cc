@@ -39,133 +39,174 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "data_resource.hh"
+#include "auth/data_resource.hh"
 
-#include <regex>
+#include <algorithm>
+#include <iterator>
+#include <unordered_map>
+
+#include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string/split.hpp>
+
 #include "service/storage_proxy.hh"
 
-const sstring auth::resource::ROOT_NAME("data");
+namespace auth {
 
-auth::resource::resource(level l, const sstring& ks, const sstring& cf)
-    : _level(l), _ks(ks), _cf(cf)
-{
-}
-
-auth::resource::resource()
-    : resource(level::ROOT)
-{}
-
-auth::resource::resource(const sstring& ks)
-    : resource(level::KEYSPACE, ks)
-{}
-
-auth::resource::resource(const sstring& ks, const sstring& cf)
-    : resource(level::COLUMN_FAMILY, ks, cf)
-{}
-
-auth::resource::level auth::resource::get_level() const {
-    return _level;
-}
-
-auth::resource auth::resource::from_name(
-                const sstring& s) {
-
-    static std::regex slash_regex("/");
-
-    auto i = std::regex_token_iterator<sstring::const_iterator>(s.begin(),
-                    s.end(), slash_regex, -1);
-    auto e = std::regex_token_iterator<sstring::const_iterator>();
-    auto n = std::distance(i, e);
-
-    if (n > 3 || ROOT_NAME != sstring(*i++)) {
-        throw std::invalid_argument(sprint("%s is not a valid data resource name", s));
+std::ostream& operator<<(std::ostream& os, resource_kind kind) {
+    switch (kind) {
+        case resource_kind::data: os << "data"; break;
     }
 
-    if (n == 1) {
-        return resource();
-    }
-    auto ks = *i++;
-    if (n == 2) {
-        return resource(ks.str());
-    }
-    auto cf = *i++;
-    return resource(ks.str(), cf.str());
+    return os;
 }
 
-sstring auth::resource::name() const {
-    switch (get_level()) {
-        case level::ROOT:
-            return ROOT_NAME;
-        case level::KEYSPACE:
-            return sprint("%s/%s", ROOT_NAME, _ks);
-        case level::COLUMN_FAMILY:
-        default:
-            return sprint("%s/%s/%s", ROOT_NAME, _ks, _cf);
+static const std::unordered_map<resource_kind, stdx::string_view> roots{
+        {resource_kind::data, "data"},
+};
+
+static const std::unordered_map<resource_kind, std::size_t> max_parts{
+        {resource_kind::data, 2},
+};
+
+resource::resource(resource_kind kind) : _kind(kind), _parts{sstring(roots.at(kind))}  {
+}
+
+resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(kind) {
+    _parts.reserve(parts.size() + 1);
+    _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
+}
+
+resource resource::data(stdx::string_view keyspace) {
+    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)});
+}
+
+resource resource::data(stdx::string_view keyspace, stdx::string_view table) {
+    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)});
+}
+
+resource resource::from_name(stdx::string_view name) {
+    static const std::unordered_map<sstring, resource_kind> reverse_roots = [] {
+        std::unordered_map<sstring, resource_kind> result;
+
+        for (const auto& pair : roots) {
+            result.emplace(pair.second, pair.first);
+        }
+
+        return result;
+    }();
+
+    std::vector<sstring> parts;
+    boost::split(parts, name, [](char ch) { return ch == '/'; });
+
+    if (parts.empty()) {
+        throw invalid_resource_name(name);
     }
-}
 
-auth::resource auth::resource::get_parent() const {
-    switch (get_level()) {
-    case level::KEYSPACE:
-        return resource();
-    case level::COLUMN_FAMILY:
-        return resource(_ks);
-    default:
-        throw std::invalid_argument("Root-level resource can't have a parent");
+    const auto iter = reverse_roots.find(parts[0]);
+    if (iter == reverse_roots.end()) {
+        throw invalid_resource_name(name);
     }
-}
 
-const sstring& auth::resource::keyspace() const {
-    if (is_root_level()) {
-        throw std::invalid_argument("ROOT data resource has no keyspace");
+    const auto kind = iter->second;
+    parts.erase(parts.begin());
+
+    if (parts.size() > max_parts.at(kind)) {
+        throw invalid_resource_name(name);
     }
-    return _ks;
+
+    return resource(kind, std::move(parts));
 }
 
-const sstring& auth::resource::column_family() const {
-    if (!is_column_family_level()) {
-        throw std::invalid_argument(sprint("%s data resource has no column family", name()));
+resource resource::root_of(resource_kind kind) {
+    return resource(kind);
+}
+
+sstring resource::name() const {
+    return boost::algorithm::join(_parts, "/");
+}
+
+stdx::optional<resource> resource::parent() const {
+    if (_parts.size() == 1) {
+        return {};
     }
-    return _cf;
+
+    resource copy = *this;
+    copy._parts.pop_back();
+    return copy;
 }
 
-bool auth::resource::has_parent() const {
-    return !is_root_level();
-}
-
-bool auth::resource::exists() const {
-    switch (get_level()) {
-        case level::ROOT:
-            return true;
-        case level::KEYSPACE:
-            return service::get_local_storage_proxy().get_db().local().has_keyspace(_ks);
-        case level::COLUMN_FAMILY:
-        default:
-            return service::get_local_storage_proxy().get_db().local().has_schema(_ks, _cf);
+bool operator<(const resource& r1, const resource& r2) {
+    if (r1._kind != r2._kind) {
+        return r1._kind < r2._kind;
     }
+
+    return std::lexicographical_compare(
+            r1._parts.cbegin() + 1,
+            r1._parts.cend(),
+            r2._parts.cbegin() + 1,
+            r2._parts.cend());
 }
 
-sstring auth::resource::to_string() const {
-    switch (get_level()) {
-        case level::ROOT:
-            return "<all keyspaces>";
-        case level::KEYSPACE:
-            return sprint("<keyspace %s>", _ks);
-        case level::COLUMN_FAMILY:
-        default:
-            return sprint("<table %s.%s>", _ks, _cf);
+std::ostream& operator<<(std::ostream& os, const resource& r) {
+    switch (r.kind()) {
+        case resource_kind::data: return os << data_resource_view(r);
+    }
+
+    return os;
+}
+
+data_resource_view::data_resource_view(const resource& r) : _resource(r) {
+    if (r._kind != resource_kind::data) {
+        throw resource_kind_mismatch(resource_kind::data, r._kind);
     }
 }
 
-bool auth::resource::operator==(const resource& v) const {
-    return _ks == v._ks && _cf == v._cf;
+stdx::optional<stdx::string_view> data_resource_view::keyspace() const {
+    if (_resource._parts.size() == 1) {
+        return {};
+    }
+
+    return _resource._parts[1];
 }
 
-bool auth::resource::operator<(const resource& v) const {
-    return _ks < v._ks ? true : (v._ks < _ks ? false : _cf < v._cf);
+stdx::optional<stdx::string_view> data_resource_view::table() const {
+    if (_resource._parts.size() <= 2) {
+        return {};
+    }
+
+    return _resource._parts[2];
 }
 
-std::ostream& auth::operator<<(std::ostream& os, const resource& r) {
-    return os << r.to_string();
+std::ostream& operator<<(std::ostream& os, const data_resource_view& v) {
+    const auto keyspace = v.keyspace();
+    const auto table = v.table();
+
+    if (!keyspace) {
+        os << "<all keyspaces>";
+    } else if (!table) {
+        os << "<keyspace " << *keyspace << '>';
+    } else {
+        os << "<table " << *keyspace << '.' << *table << '>';
+    }
+
+    return os;
 }
 
+bool resource_exists(const data_resource_view& v) {
+    // TODO(jhaberku) This dependency on global data is a remnant from the previous version, and needs to be fixed in a
+    // dedicated patch.
+    auto& local_db = service::get_local_storage_proxy().get_db().local();
+
+    const auto keyspace = v.keyspace();
+    const auto table = v.table();
+
+    if (table) {
+        return local_db.has_schema(sstring(*keyspace), sstring(*table));
+    } else if (keyspace) {
+        return local_db.has_keyspace(sstring(*keyspace));
+    } else {
+        return true;
+    }
+}
+
+}

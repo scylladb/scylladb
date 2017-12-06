@@ -252,6 +252,7 @@ scylla_tests = [
     'tests/aggregate_fcts_test',
     'tests/role_manager_test',
     'tests/caching_options_test',
+    'tests/auth_resource_test',
 ]
 
 apps = [
@@ -652,6 +653,7 @@ pure_boost_tests = set([
     'tests/chunked_vector_test',
     'tests/big_decimal_test',
     'tests/caching_options_test',
+    'tests/auth_resource_test',
 ])
 
 tests_not_using_seastar_test_framework = set([

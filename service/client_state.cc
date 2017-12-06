@@ -100,22 +100,22 @@ future<> service::client_state::has_all_keyspaces_access(
         return make_ready_future();
     }
     validate_login();
-    return ensure_has_permission(p, auth::resource());
+    return ensure_has_permission(p, auth::resource::root_of(auth::resource_kind::data));
 }
 
 future<> service::client_state::has_keyspace_access(const sstring& ks,
                 auth::permission p) const {
-    return has_access(ks, p, auth::resource(ks));
+    return has_access(ks, p, auth::resource::data(ks));
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p) const {
     validation::validate_column_family(ks, cf);
-    return has_access(ks, p, auth::resource(ks, cf));
+    return has_access(ks, p, auth::resource::data(ks, cf));
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
-    return has_access(s.ks_name(), p, auth::resource(s.ks_name(), s.cf_name()));
+    return has_access(s.ks_name(), p, auth::resource::data(s.ks_name(), s.cf_name()));
 }
 
 future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::resource resource) const {
@@ -148,10 +148,10 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     static thread_local std::set<auth::resource> readable_system_resources = [] {
         std::set<auth::resource> tmp;
         for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
-            tmp.emplace(db::system_keyspace::NAME, cf);
+            tmp.insert(auth::resource::data(db::system_keyspace::NAME, cf));
         }
         for (auto cf : db::schema_tables::ALL) {
-            tmp.emplace(db::schema_tables::NAME, cf);
+            tmp.insert(auth::resource::data(db::schema_tables::NAME, cf));
         }
         return tmp;
     }();
@@ -178,10 +178,7 @@ future<bool> service::client_state::check_has_permission(auth::permission p, aut
         return make_ready_future<bool>(true);
     }
 
-    std::experimental::optional<auth::resource> parent;
-    if (resource.has_parent()) {
-        parent = resource.get_parent();
-    }
+    std::experimental::optional<auth::resource> parent = resource.parent();
 
     return _auth_service->get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
         if (set.contains(p)) {

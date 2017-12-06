@@ -246,9 +246,8 @@ future<> auth::default_authorizer::revoke_all(resource resource) {
     });
 }
 
-
 const auth::resource_ids& auth::default_authorizer::protected_resources() {
-    static const resource_ids ids({ resource(meta::AUTH_KS, PERMISSIONS_CF) });
+    static const resource_ids ids({ resource::data(meta::AUTH_KS, PERMISSIONS_CF) });
     return ids;
 }
 

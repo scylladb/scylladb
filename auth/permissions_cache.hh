@@ -33,16 +33,10 @@
 #include "auth/data_resource.hh"
 #include "auth/permission.hh"
 #include "log.hh"
+#include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 
 namespace std {
-
-template <>
-struct hash<auth::resource> final {
-    size_t operator()(const auth::resource & v) const {
-        return v.hash_value();
-    }
-};
 
 template <>
 struct hash<auth::authenticated_user> final {

@@ -1044,15 +1044,15 @@ permissionOrAll returns [auth::permission_set perms]
     | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
-resource returns [auth::resource res]
+resource returns [uninitialized<auth::resource> res]
     : r=dataResource { $res = $r.res; }
     ;
 
-dataResource returns [auth::resource res]
-    : K_ALL K_KEYSPACES { $res = auth::resource(); }
-    | K_KEYSPACE ks = keyspaceName { $res = auth::resource($ks.id); }
+dataResource returns [uninitialized<auth::resource> res]
+    : K_ALL K_KEYSPACES { $res = auth::resource::root_of(auth::resource_kind::data); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::resource::data($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+      { $res = auth::resource::data($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
 
 /**
