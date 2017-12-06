@@ -271,6 +271,16 @@ public:
         }
     };
 
+    struct reader_and_last_fragment_kind {
+        flat_mutation_reader* reader;
+        mutation_fragment::kind last_kind;
+
+        reader_and_last_fragment_kind(flat_mutation_reader* r, mutation_fragment::kind k)
+            : reader(r)
+            , last_kind(k) {
+        }
+    };
+
     using mutation_fragment_batch = boost::iterator_range<std::vector<mutation_fragment>::iterator>;
 private:
     struct reader_heap_compare;
@@ -287,9 +297,9 @@ private:
     // Readers and their current fragments, belonging to the current
     // partition.
     std::vector<reader_and_fragment> _fragment_heap;
-    std::vector<flat_mutation_reader*> _next;
+    std::vector<reader_and_last_fragment_kind> _next;
     // Readers that reached EOS.
-    std::vector<flat_mutation_reader*> _halted_readers;
+    std::vector<reader_and_last_fragment_kind> _halted_readers;
     std::vector<mutation_fragment> _current;
     dht::decorated_key_opt _key;
     const schema_ptr _schema;
