@@ -419,7 +419,6 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
                 logalloc::reclaim_lock rl(r);
                 BOOST_REQUIRE(cur.maybe_refresh());
                 BOOST_REQUIRE(eq(cur.position(), table.make_ckey(2)));
-                BOOST_REQUIRE(cur.continuous());
 
                 BOOST_REQUIRE(cur.next());
                 BOOST_REQUIRE(eq(cur.position(), table.make_ckey(3)));

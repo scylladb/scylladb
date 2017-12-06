@@ -175,6 +175,8 @@ public:
     //   advance_to(position());
     //
     // but avoids work if not necessary.
+    //
+    // Changes to attributes of the current row (e.g. continuity) don't have to be reflected.
     bool maybe_refresh() {
         if (!iterators_valid()) {
             return advance_to(_position);
