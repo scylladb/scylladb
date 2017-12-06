@@ -31,12 +31,13 @@
 #include "partition_snapshot_reader.hh"
 #include "partition_snapshot_row_cursor.hh"
 #include "read_context.hh"
+#include "flat_mutation_reader.hh"
 
 namespace cache {
 
 extern logging::logger clogger;
 
-class cache_flat_mutation_reader final : public streamed_mutation::impl {
+class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     enum class state {
         before_static_row,
 
@@ -120,6 +121,11 @@ class cache_flat_mutation_reader final : public streamed_mutation::impl {
     void maybe_add_to_cache(const range_tombstone& rt);
     void maybe_add_to_cache(const static_row& sr);
     void maybe_set_static_row_continuous();
+    void finish_reader() {
+        push_mutation_fragment(partition_end());
+        _end_of_stream = true;
+        _state = state::end_of_stream;
+    }
 public:
     cache_flat_mutation_reader(schema_ptr s,
                                dht::decorated_key dk,
@@ -127,7 +133,7 @@ public:
                                lw_shared_ptr<read_context> ctx,
                                lw_shared_ptr<partition_snapshot> snp,
                                row_cache& cache)
-        : streamed_mutation::impl(std::move(s), std::move(dk), snp->partition_tombstone())
+        : flat_mutation_reader::impl(std::move(s))
         , _snp(std::move(snp))
         , _position_cmp(*_schema)
         , _ck_ranges(std::move(crr))
@@ -141,12 +147,27 @@ public:
         , _next_row(*_schema, *_snp)
     {
         clogger.trace("csm {}: table={}.{}", this, _schema->ks_name(), _schema->cf_name());
+        push_mutation_fragment(partition_start(std::move(dk), _snp->partition_tombstone()));
     }
     cache_flat_mutation_reader(const cache_flat_mutation_reader&) = delete;
     cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
     virtual future<> fill_buffer() override;
     virtual ~cache_flat_mutation_reader() {
         maybe_merge_versions(_snp, _lsa_manager.region(), _lsa_manager.read_section());
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = true;
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        clear_buffer();
+        _end_of_stream = true;
+        return make_ready_future<>();
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        throw std::bad_function_call();
     }
 };
 
@@ -179,8 +200,7 @@ future<> cache_flat_mutation_reader::fill_buffer() {
     if (_state == state::before_static_row) {
         auto after_static_row = [this] {
             if (_ck_ranges_curr == _ck_ranges_end) {
-                _end_of_stream = true;
-                _state = state::end_of_stream;
+                finish_reader();
                 return make_ready_future<>();
             }
             _state = state::reading_from_cache;
@@ -244,7 +264,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer() {
 
 inline
 future<> cache_flat_mutation_reader::read_from_underlying() {
-    return consume_mutation_fragments_until(_read_context->get_streamed_mutation(),
+    return consume_mutation_fragments_until(_read_context->underlying_flat().underlying(),
         [this] { return _state != state::reading_from_underlying || is_buffer_full(); },
         [this] (mutation_fragment mf) {
             _read_context->cache().on_row_miss();
@@ -433,8 +453,7 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
 inline
 void cache_flat_mutation_reader::move_to_end() {
     drain_tombstones();
-    _end_of_stream = true;
-    _state = state::end_of_stream;
+    finish_reader();
     clogger.trace("csm {}: eos", this);
 }
 
@@ -619,13 +638,13 @@ bool cache_flat_mutation_reader::can_populate() const {
 
 } // namespace cache
 
-inline streamed_mutation make_cache_flat_mutation_reader(schema_ptr s,
-                                                      dht::decorated_key dk,
-                                                      query::clustering_key_filter_ranges crr,
-                                                      row_cache& cache,
-                                                      lw_shared_ptr<cache::read_context> ctx,
-                                                      lw_shared_ptr<partition_snapshot> snp)
+inline flat_mutation_reader make_cache_flat_mutation_reader(schema_ptr s,
+                                                            dht::decorated_key dk,
+                                                            query::clustering_key_filter_ranges crr,
+                                                            row_cache& cache,
+                                                            lw_shared_ptr<cache::read_context> ctx,
+                                                            lw_shared_ptr<partition_snapshot> snp)
 {
-    return make_streamed_mutation<cache::cache_flat_mutation_reader>(
+    return make_flat_mutation_reader<cache::cache_flat_mutation_reader>(
         std::move(s), std::move(dk), std::move(crr), std::move(ctx), std::move(snp), cache);
 }

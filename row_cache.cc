@@ -36,6 +36,7 @@
 #include "read_context.hh"
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
+#include "cache_flat_mutation_reader.hh"
 
 namespace cache {
 
