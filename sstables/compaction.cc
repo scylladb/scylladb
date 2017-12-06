@@ -540,7 +540,7 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     });
 }
 
-std::vector<sstables::shared_sstable>
+std::unordered_set<sstables::shared_sstable>
 get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before) {
     clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
 
@@ -548,7 +548,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         return {};
     }
 
-    std::list<sstables::shared_sstable> candidates;
+    std::unordered_set<sstables::shared_sstable> candidates;
     auto uncompacting_sstables = get_uncompacting_sstables(cf, compacting);
     // Get list of uncompacting sstables that overlap the ones being compacted.
     std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*cf.schema(), compacting, uncompacting_sstables);
@@ -577,7 +577,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         // calculating max purgeable timestamp, and not doing it could lead to a compaction loop.
         if (candidate->get_stats_metadata().max_local_deletion_time < gc_before && !has_undeleted_ancestor(candidate)) {
             clogger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
-            candidates.push_back(candidate);
+            candidates.insert(candidate);
         } else {
             min_timestamp = std::min(min_timestamp, candidate->get_stats_metadata().min_timestamp);
         }
@@ -595,7 +595,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
             it++;
         }
     }
-    return std::vector<sstables::shared_sstable>(candidates.begin(), candidates.end());
+    return candidates;
 }
 
 }

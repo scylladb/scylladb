@@ -142,7 +142,7 @@ public:
         }
 
         // Find fully expired SSTables. Those will be included no matter what.
-        std::vector<shared_sstable> expired;
+        std::unordered_set<shared_sstable> expired;
 
         if (db_clock::now() - _last_expired_check > _options.expired_sstable_check_frequency) {
             clogger.debug("TWCS expired check sufficiently far in the past, checking for fully expired SSTables");

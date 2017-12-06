@@ -130,6 +130,6 @@ namespace sstables {
     // max timestamp is lower than any other relevant sstable.
     // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
     // and possibly doesn't contain any tombstone that covers cells in other sstables.
-    std::vector<sstables::shared_sstable>
+    std::unordered_set<sstables::shared_sstable>
     get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before);
 }

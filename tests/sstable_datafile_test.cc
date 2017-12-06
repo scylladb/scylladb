@@ -2994,7 +2994,8 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
         auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/25);
         BOOST_REQUIRE(expired.size() == 1);
-        BOOST_REQUIRE(expired.front()->generation() == 1);
+        auto expired_sst = *expired.begin();
+        BOOST_REQUIRE(expired_sst->generation() == 1);
     }
 
     return make_ready_future<>();
