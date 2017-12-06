@@ -129,6 +129,27 @@ class partition_snapshot_row_cursor final {
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
         _position = position_in_partition(_current_row[0].it->position());
     }
+
+    void prepare_heap(position_in_partition_view lower_bound) {
+        memory::on_alloc_point();
+        rows_entry::compare less(_schema);
+        position_in_version::less_compare heap_less(_schema);
+        _heap.clear();
+        _current_row.clear();
+        _iterators.clear();
+        int version_no = 0;
+        for (auto&& v : _snp.versions()) {
+            auto& rows = v.partition().clustered_rows();
+            auto pos = rows.lower_bound(lower_bound, less);
+            auto end = rows.end();
+            _iterators.push_back(pos);
+            if (pos != end) {
+                _heap.push_back({pos, end, version_no});
+            }
+            ++version_no;
+        }
+        boost::range::make_heap(_heap, heap_less);
+    }
 public:
     partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp)
         : _schema(s)
@@ -205,24 +226,7 @@ public:
     // Must be called under reclaim lock.
     // When throws, the cursor is invalidated and its position is not changed.
     bool advance_to(position_in_partition_view lower_bound) {
-        memory::on_alloc_point();
-        rows_entry::compare less(_schema);
-        position_in_version::less_compare heap_less(_schema);
-        _heap.clear();
-        _current_row.clear();
-        _iterators.clear();
-        int version_no = 0;
-        for (auto&& v : _snp.versions()) {
-            auto& rows = v.partition().clustered_rows();
-            auto pos = rows.lower_bound(lower_bound, less);
-            auto end = rows.end();
-            _iterators.push_back(pos);
-            if (pos != end) {
-                _heap.push_back({pos, end, version_no});
-            }
-            ++version_no;
-        }
-        boost::range::make_heap(_heap, heap_less);
+        prepare_heap(lower_bound);
         _change_mark = _snp.get_change_mark();
         bool found = no_clustering_row_between(_schema, lower_bound, _heap[0].it->position());
         recreate_current_row();
