@@ -40,7 +40,7 @@ Description: Scylla kernel tuning configuration
 Package: scylla
 Section: metapackages
 Architecture: any
-Depends: scylla-server, scylla-jmx, scylla-tools, scylla-kernel-conf
+Depends: scylla-server, scylla-jmx, scylla-tools, scylla-tools-core, scylla-kernel-conf
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
