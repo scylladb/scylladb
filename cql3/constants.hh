@@ -123,7 +123,7 @@ public:
             // This is a workaround for antlr3 not distinguishing between
             // calling in lexer setText() with an empty string and not calling
             // setText() at all.
-            if (text.size() == 1 && text[0] == -1) {
+            if (text.size() == 1 && text[0] == '\xFF') {
                 text.reset();
             }
             return ::make_shared<literal>(type::STRING, text);
