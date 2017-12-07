@@ -48,7 +48,7 @@
 #include "cql3/selection/selection.hh"
 
 cql3::statements::permission_altering_statement::permission_altering_statement(
-                auth::permission_set permissions, auth::data_resource resource,
+                auth::permission_set permissions, auth::resource resource,
                 sstring username)
                 : _permissions(permissions), _resource(std::move(resource)), _username(
                                 std::move(username)) {
@@ -64,8 +64,10 @@ future<> cql3::statements::permission_altering_statement::check_access(const ser
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
-        mayme_correct_resource(_resource, state);
-        if (!_resource.exists()) {
+        maybe_correct_resource(_resource, state);
+
+        if ((_resource.kind() == auth::resource_kind::data)
+                && !auth::resource_exists(auth::data_resource_view(_resource))) {
             throw exceptions::invalid_request_exception(sprint("%s doesn't exist", _resource));
         }
 

@@ -105,7 +105,7 @@ public:
 
     future<> delete_user(const sstring& name);
 
-    future<permission_set> get_permissions(::shared_ptr<authenticated_user>, data_resource) const;
+    future<permission_set> get_permissions(::shared_ptr<authenticated_user>, resource) const;
 
     authenticator& underlying_authenticator() {
         return *_authenticator;

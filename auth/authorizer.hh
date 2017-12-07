@@ -49,7 +49,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "permission.hh"
-#include "data_resource.hh"
+#include "resource.hh"
 
 #include "seastarx.hh"
 
@@ -61,7 +61,7 @@ class authenticated_user;
 
 struct permission_details {
     sstring user;
-    data_resource resource;
+    ::auth::resource resource;
     permission_set permissions;
 
     bool operator<(const permission_details& v) const {
@@ -88,7 +88,7 @@ public:
      * @param resource Resource for which the authorization is being requested. @see DataResource.
      * @return Set of permissions of the user on the resource. Should never return empty. Use permission.NONE instead.
      */
-    virtual future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, data_resource) const = 0;
+    virtual future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const = 0;
 
     /**
      * Grants a set of permissions on a resource to a user.
@@ -102,7 +102,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<> grant(::shared_ptr<authenticated_user> performer, permission_set, data_resource, sstring to) = 0;
+    virtual future<> grant(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring to) = 0;
 
     /**
      * Revokes a set of permissions on a resource from a user.
@@ -116,7 +116,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<> revoke(::shared_ptr<authenticated_user> performer, permission_set, data_resource, sstring from) = 0;
+    virtual future<> revoke(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring from) = 0;
 
     /**
      * Returns a list of permissions on a resource of a user.
@@ -132,7 +132,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user> performer, permission_set, optional<data_resource>, optional<sstring>) const = 0;
+    virtual future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user> performer, permission_set, optional<resource>, optional<sstring>) const = 0;
 
     /**
      * This method is called before deleting a user with DROP USER query so that a new user with the same
@@ -147,14 +147,14 @@ public:
      *
      * @param droppedResource The resource to revoke all permissions on.
      */
-    virtual future<> revoke_all(data_resource) = 0;
+    virtual future<> revoke_all(resource) = 0;
 
     /**
      * Set of resources that should be made inaccessible to users and only accessible internally.
      *
      * @return Keyspaces, column families that will be unmodifiable by users; other resources.
      */
-    virtual const resource_ids& protected_resources() = 0;
+    virtual const resource_set& protected_resources() = 0;
 
     /**
      * Validates configuration of IAuthorizer implementation (if configurable).

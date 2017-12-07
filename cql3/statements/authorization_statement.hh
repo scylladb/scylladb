@@ -47,7 +47,7 @@
 #include "transport/messages_fwd.hh"
 
 namespace auth {
-class data_resource;
+class resource;
 }
 
 namespace cql3 {
@@ -74,7 +74,7 @@ public:
     execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
 protected:
-    static void mayme_correct_resource(auth::data_resource&, const service::client_state&);
+    static void maybe_correct_resource(auth::resource&, const service::client_state&);
 };
 
 }

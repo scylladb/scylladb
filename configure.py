@@ -252,6 +252,7 @@ scylla_tests = [
     'tests/aggregate_fcts_test',
     'tests/role_manager_test',
     'tests/caching_options_test',
+    'tests/auth_resource_test',
 ]
 
 apps = [
@@ -534,7 +535,7 @@ scylla_core = (['database.cc',
                  'auth/authenticator.cc',
                  'auth/common.cc',
                  'auth/default_authorizer.cc',
-                 'auth/data_resource.cc',
+                 'auth/resource.cc',
                  'auth/password_authenticator.cc',
                  'auth/permission.cc',
                  'auth/permissions_cache.cc',
@@ -652,6 +653,7 @@ pure_boost_tests = set([
     'tests/chunked_vector_test',
     'tests/big_decimal_test',
     'tests/caching_options_test',
+    'tests/auth_resource_test',
 ])
 
 tests_not_using_seastar_test_framework = set([

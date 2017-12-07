@@ -76,7 +76,7 @@ public:
     future<> create(sstring username, const option_map& options) override;
     future<> alter(sstring username, const option_map& options) override;
     future<> drop(sstring username) override;
-    const resource_ids& protected_resources() const override;
+    const resource_set& protected_resources() const override;
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
 

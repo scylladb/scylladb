@@ -68,24 +68,24 @@ public:
         return default_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, data_resource) const override;
+    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const override;
 
-    future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
+    future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
 
-    future<> revoke(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
+    future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
 
-    future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user>, permission_set, optional<data_resource>, optional<sstring>) const override;
+    future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user>, permission_set, optional<resource>, optional<sstring>) const override;
 
     future<> revoke_all(sstring) override;
 
-    future<> revoke_all(data_resource) override;
+    future<> revoke_all(resource) override;
 
-    const resource_ids& protected_resources() override;
+    const resource_set& protected_resources() override;
 
     future<> validate_configuration() const override;
 
 private:
-    future<> modify(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring, sstring);
+    future<> modify(::shared_ptr<authenticated_user>, permission_set, resource, sstring, sstring);
 };
 
 } /* namespace auth */

@@ -43,7 +43,7 @@
 
 #include "authorization_statement.hh"
 #include "auth/permission.hh"
-#include "auth/data_resource.hh"
+#include "auth/resource.hh"
 
 namespace cql3 {
 
@@ -52,11 +52,11 @@ namespace statements {
 class permission_altering_statement : public authorization_statement {
 protected:
     auth::permission_set _permissions;
-    auth::data_resource _resource;
+    auth::resource _resource;
     sstring _username;
 
 public:
-    permission_altering_statement(auth::permission_set, auth::data_resource, sstring);
+    permission_altering_statement(auth::permission_set, auth::resource, sstring);
 
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
     future<> check_access(const service::client_state&) override;

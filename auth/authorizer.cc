@@ -74,27 +74,27 @@ auth::authorizer::setup(const sstring& type) {
             const sstring& qualified_java_name() const override {
                 return allow_all_authorizer_name();
             }
-            future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override {
+            future<permission_set> authorize(::shared_ptr<authenticated_user>, resource) const override {
                 return make_ready_future<permission_set>(permissions::ALL);
             }
-            future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override {
+            future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
                 throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
             }
-            future<> revoke(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override {
+            future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
                 throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
             }
-            future<std::vector<permission_details>> list(::shared_ptr<authenticated_user> performer, permission_set, optional<data_resource>, optional<sstring>) const override {
+            future<std::vector<permission_details>> list(::shared_ptr<authenticated_user> performer, permission_set, optional<resource>, optional<sstring>) const override {
                 throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
             }
             future<> revoke_all(sstring dropped_user) override {
                 return make_ready_future();
             }
-            future<> revoke_all(data_resource) override {
+            future<> revoke_all(resource) override {
                 return make_ready_future();
             }
-            const resource_ids& protected_resources() override {
-                static const resource_ids ids;
-                return ids;
+            const resource_set& protected_resources() override {
+                static const resource_set resources;
+                return resources;
             }
             future<> validate_configuration() const override {
                 return make_ready_future();
