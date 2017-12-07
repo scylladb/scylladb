@@ -537,7 +537,7 @@ public:
     }
 };
 
-mutation_reader
+flat_mutation_reader
 column_family::make_sstable_reader(schema_ptr s,
                                    lw_shared_ptr<sstables::sstable_set> sstables,
                                    const dht::partition_range& pr,
@@ -557,7 +557,7 @@ column_family::make_sstable_reader(schema_ptr s,
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
-            return make_empty_reader(); // range doesn't belong to this shard
+            return make_empty_flat_reader(s); // range doesn't belong to this shard
         }
 
         if (config.resources_sem) {
@@ -572,10 +572,11 @@ column_family::make_sstable_reader(schema_ptr s,
                     return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
                                 _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd);
                 });
-            return mutation_reader_from_flat_mutation_reader(make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
+            return make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
-            return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+            auto rd = make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
                         _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
+            return flat_mutation_reader_from_mutation_reader(s, std::move(rd), fwd);
         }
     } else {
         if (config.resources_sem) {
@@ -590,7 +591,7 @@ column_family::make_sstable_reader(schema_ptr s,
                     return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                         reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr);
                 });
-            return mutation_reader_from_flat_mutation_reader(make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
+            return make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
             return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                 no_resource_tracking(), std::move(trace_state), fwd, fwd_mr);
@@ -678,7 +679,7 @@ column_family::make_reader(schema_ptr s,
     if (_config.enable_cache) {
         readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     } else {
-        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(mutation_reader_from_flat_mutation_reader(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
     }
 
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
@@ -697,7 +698,7 @@ column_family::make_streaming_reader(schema_ptr s,
         for (auto&& mt : *_memtables) {
             readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
         }
-        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(mutation_reader_from_flat_mutation_reader(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
         return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     });
 
@@ -4256,7 +4257,7 @@ void column_family::drop_hit_rate(gms::inet_address addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
 
-mutation_reader make_local_shard_sstable_reader(schema_ptr s,
+flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
@@ -4274,8 +4275,7 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         }
         return mutation_reader_from_flat_mutation_reader(std::move(reader));
     };
-    return mutation_reader_from_flat_mutation_reader(
-            make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
+    return make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
                     pr,
                     slice,
@@ -4286,7 +4286,7 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
                     fwd_mr,
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr));
+            fwd_mr);
 }
 
 mutation_reader make_range_sstable_reader(schema_ptr s,

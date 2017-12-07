@@ -206,7 +206,7 @@ public:
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
-    virtual mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const {
+    virtual flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const {
         return ::make_local_shard_sstable_reader(_cf.schema(),
                 std::move(ssts),
                 query::full_partition_range,
@@ -258,7 +258,7 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return flat_mutation_reader_from_mutation_reader(_cf.schema(), make_sstable_reader(std::move(ssts)), ::streamed_mutation::forwarding::no);
+        return make_sstable_reader(std::move(ssts));
     }
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
@@ -460,8 +460,8 @@ public:
     }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
-    mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
-        return ::make_range_sstable_reader(_cf.schema(),
+    flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
+        return flat_mutation_reader_from_mutation_reader(_cf.schema(), ::make_range_sstable_reader(_cf.schema(),
                 std::move(ssts),
                 query::full_partition_range,
                 _cf.schema()->full_slice(),
@@ -469,7 +469,7 @@ public:
                 no_resource_tracking(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no);
+                ::mutation_reader::forwarding::no), ::streamed_mutation::forwarding::no);
     }
 
     void report_start(const sstring& formatted_msg) const override {
