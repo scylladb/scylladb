@@ -1046,6 +1046,7 @@ permissionOrAll returns [auth::permission_set perms]
 
 resource returns [uninitialized<auth::resource> res]
     : d=dataResource { $res = std::move(d); }
+    | r=roleResource { $res = std::move(r); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
@@ -1053,6 +1054,11 @@ dataResource returns [uninitialized<auth::resource> res]
     | K_KEYSPACE ks = keyspaceName { $res = auth::resource::data($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
       { $res = auth::resource::data($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+    ;
+
+roleResource returns [uninitialized<auth::resource> res]
+    : K_ALL K_ROLES { $res = auth::resource::root_of(auth::resource_kind::role); }
+    | K_ROLE role = userOrRoleName { $res = auth::resource::role(static_cast<const cql3::role_name&>(role).to_string()); }
     ;
 
 /**
