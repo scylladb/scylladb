@@ -790,7 +790,7 @@ row_cache::make_flat_reader(schema_ptr s,
                     _tracker.touch(e);
                     upgrade_entry(e);
                     on_partition_hit();
-                    return flat_mutation_reader_from_mutation_reader(std::move(s), make_reader_returning(e.read(*this, *ctx)), fwd);
+                    return e.read_flat(*this, *ctx);
                 } else if (i->continuous()) {
                     return make_empty_flat_reader(std::move(s));
                 } else {
