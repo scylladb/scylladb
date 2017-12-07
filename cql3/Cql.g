@@ -1035,7 +1035,7 @@ listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     ;
 
 permission returns [auth::permission perm]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
@@ -1720,6 +1720,7 @@ K_OF:          O F;
 K_REVOKE:      R E V O K E;
 K_MODIFY:      M O D I F Y;
 K_AUTHORIZE:   A U T H O R I Z E;
+K_DESCRIBE:    D E S C R I B E;
 K_NORECURSIVE: N O R E C U R S I V E;
 
 K_USER:        U S E R;

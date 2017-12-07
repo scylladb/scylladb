@@ -48,7 +48,8 @@ const auth::permission_set auth::permissions::ALL =
                                 auth::permission::ALTER, auth::permission::DROP,
                                 auth::permission::SELECT,
                                 auth::permission::MODIFY,
-                                auth::permission::AUTHORIZE>();
+                                auth::permission::AUTHORIZE,
+                                auth::permission::DESCRIBE>();
 
 const auth::permission_set auth::permissions::NONE;
 
@@ -61,6 +62,7 @@ static const std::unordered_map<sstring, auth::permission> permission_names({
     { "SELECT", auth::permission::SELECT  },
     { "MODIFY", auth::permission::MODIFY   },
     { "AUTHORIZE", auth::permission::AUTHORIZE },
+    { "DESCRIBE", auth::permission::DESCRIBE },
 });
 
 const sstring& auth::permissions::to_string(permission p) {
