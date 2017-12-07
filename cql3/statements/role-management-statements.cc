@@ -124,26 +124,24 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
         const auto& user = *state.user();
         const bool user_is_superuser = auth::is_super_user(as, user).get0();
 
-        // TODO(jhaberku): Check the roles from the role cache of the authenticated user, once this is available.
-        if (user_is_superuser) {
+        if (_options.is_superuser) {
+            if (!user_is_superuser) {
+                throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
+            }
+
+            // TODO(jhaberku): Check the roles from the role cache of the authenticated user, once this is available.
             const auto roles = rm.query_granted(user.name(), auth::recursive_role_query::yes).get0();
             const bool granted_to_user = roles.count(_role) != 0;
 
             if (granted_to_user) {
                 throw exceptions::unauthorized_exception(
-                        "You are not allowed to alter the superuser status of yourself or of a role granted to you.");
+                        "You are not allowed to alter your own superuser status or that of a role granted to you.");
             }
         }
 
-        if (_options.is_superuser && !user_is_superuser) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
-        }
-
-        if (!user_is_superuser && (user.name() != _role)) {
-            throw exceptions::unauthorized_exception("You are not allowed to alter this role.");
-        }
-
-        if (!user_is_superuser) {
+        if (user.name() != _role) {
+            state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
+        } else {
             // TODO(jhaberku) Once we switch to roles, this is where we would query the authenticator for the set of
             // alterable options it supports (throwing errors as necessary).
         }

@@ -129,3 +129,46 @@ SEASTAR_TEST_CASE(create_role_restrictions) {
         });
     }, db_config_with_auth());
 }
+
+//
+// ALTER ROLE
+//
+
+SEASTAR_TEST_CASE(alter_role_restrictions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        env.execute_cql("CREATE ROLE lord").get0();
+
+        //
+        // A user cannot alter a role without ALTER on the role.
+        //
+
+        verify_unauthorized_then_ok(env, alice, "ALTER ROLE lord LOGIN", [&env] {
+            env.execute_cql("GRANT ALTER ON ROLE lord TO alice").get0();
+        });
+
+        //
+        // A user can alter themselves without any permissions.
+        //
+
+        with_user(env, bob, [&env] {
+            env.execute_cql("ALTER ROLE bob LOGIN").get0();
+        });
+
+        //
+        // Only superusers can alter superuser status.
+        //
+
+        verify_unauthorized_then_ok(env, bob, "ALTER ROLE lord SUPERUSER", [&env] {
+            env.execute_cql("ALTER USER bob SUPERUSER").get0();
+        });
+
+        //
+        // A user cannot alter their own superuser status.
+        //
+        // Note that `bob` is still a superuser.
+
+        with_user(env, bob, [&env] {
+            BOOST_REQUIRE_THROW(env.execute_cql("ALTER ROLE bob SUPERUSER").get0(), exceptions::unauthorized_exception);
+        });
+    }, db_config_with_auth());
+}
