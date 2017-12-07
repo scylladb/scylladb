@@ -603,10 +603,8 @@ column_family::make_sstable_reader(schema_ptr s,
 future<column_family::const_mutation_partition_ptr>
 column_family::find_partition(schema_ptr s, const dht::decorated_key& key) const {
     return do_with(dht::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
-        return do_with(this->make_reader(s, range), [] (mutation_reader& reader) {
-            return reader().then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
+        return do_with(this->make_reader(s, range), [s] (flat_mutation_reader& reader) {
+            return read_mutation_from_flat_mutation_reader(s, reader).then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
                 }
@@ -637,7 +635,7 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
     });
 }
 
-mutation_reader
+flat_mutation_reader
 column_family::make_reader(schema_ptr s,
                            const dht::partition_range& range,
                            const query::partition_slice& slice,
@@ -646,10 +644,10 @@ column_family::make_reader(schema_ptr s,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
     if (_virtual_reader) {
-        return (*_virtual_reader)(s, range, slice, pc, trace_state, fwd, fwd_mr);
+        return (*_virtual_reader).make_flat_mutation_reader(s, range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
-    std::vector<mutation_reader> readers;
+    std::vector<flat_mutation_reader> readers;
     readers.reserve(_memtables->size() + 1);
 
     // We're assuming that cache and memtables are both read atomically
@@ -673,13 +671,13 @@ column_family::make_reader(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+        readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(flat_mutation_reader_from_mutation_reader(s, _cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr), fwd));
     } else {
-        readers.emplace_back(mutation_reader_from_flat_mutation_reader(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }
 
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
@@ -693,12 +691,12 @@ column_family::make_streaming_reader(schema_ptr s,
 
     auto source = mutation_source([this] (schema_ptr s, const dht::partition_range& range, const query::partition_slice& slice,
                                       const io_priority_class& pc, tracing::trace_state_ptr trace_state, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
-        std::vector<mutation_reader> readers;
+        std::vector<flat_mutation_reader> readers;
         readers.reserve(_memtables->size() + 1);
         for (auto&& mt : *_memtables) {
-            readers.emplace_back(mt->make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
+            readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
         }
-        readers.emplace_back(mutation_reader_from_flat_mutation_reader(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr)));
+        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
         return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     });
 
@@ -718,23 +716,23 @@ column_family::for_all_partitions(schema_ptr s, Func&& func) const {
                   "bad Func signature");
 
     struct iteration_state {
-        mutation_reader reader;
+        flat_mutation_reader reader;
+        schema_ptr schema;
         Func func;
         bool ok = true;
         bool empty = false;
     public:
         bool done() const { return !ok || empty; }
         iteration_state(schema_ptr s, const column_family& cf, Func&& func)
-            : reader(cf.make_reader(std::move(s)))
+            : reader(cf.make_reader(s))
+            , schema(s)
             , func(std::move(func))
         { }
     };
 
     return do_with(iteration_state(std::move(s), *this, std::move(func)), [] (iteration_state& is) {
         return do_until([&is] { return is.done(); }, [&is] {
-            return is.reader().then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([&is](mutation_opt&& mo) {
+            return read_mutation_from_flat_mutation_reader(is.schema, is.reader).then([&is](mutation_opt&& mo) {
                 if (!mo) {
                     is.empty = true;
                 } else {

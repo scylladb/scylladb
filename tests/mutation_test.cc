@@ -50,6 +50,7 @@
 #include "tests/failure_injecting_allocation_strategy.hh"
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 #include "simple_schema.hh"
 
