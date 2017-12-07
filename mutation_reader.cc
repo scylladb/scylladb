@@ -204,8 +204,9 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
     do {
         boost::range::pop_heap(_fragment_heap, fragment_heap_compare(*_schema));
         auto& n = _fragment_heap.back();
+        const auto kind = n.fragment.mutation_fragment_kind();
         _current.emplace_back(std::move(n.fragment));
-        _next.emplace_back(n.reader, n.fragment.mutation_fragment_kind());
+        _next.emplace_back(n.reader, kind);
         _fragment_heap.pop_back();
     }
     while (!_fragment_heap.empty() && equal(_current.back().position(), _fragment_heap.front().fragment.position()));
