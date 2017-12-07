@@ -82,7 +82,6 @@ bool operator<(const permission_set&, const permission_set&);
 
 namespace permissions {
 
-extern const permission_set ALL_DATA;
 extern const permission_set ALL;
 extern const permission_set NONE;
 

@@ -1040,7 +1040,7 @@ permission returns [auth::permission perm]
     ;
 
 permissionOrAll returns [auth::permission_set perms]
-    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL_DATA; }
+    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL; }
     | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
