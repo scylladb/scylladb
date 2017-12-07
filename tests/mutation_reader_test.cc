@@ -315,6 +315,67 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
     });
 }
 
+SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        simple_schema s;
+
+        const auto pkeys = s.make_pkeys(4);
+        const auto ckeys = s.make_ckeys(4);
+
+        auto make_mutation = [&] (uint32_t n) {
+            mutation m(pkeys[n], s.schema());
+
+            int i{0};
+            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            ++i;
+            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            ++i;
+            s.add_row(m, ckeys[i], sprint("val_%i", i));
+            ++i;
+            s.add_row(m, ckeys[i], sprint("val_%i", i));
+
+            return m;
+        };
+
+        std::vector<std::vector<mutation>> readers_mutations{
+            {make_mutation(0), make_mutation(1), make_mutation(2), make_mutation(3)},
+            {make_mutation(0)},
+            {make_mutation(2)},
+        };
+
+        std::vector<flat_mutation_reader> readers;
+        for (auto& mutations : readers_mutations) {
+            readers.emplace_back(flat_mutation_reader_from_mutation_reader(s.schema(),
+                    make_reader_returning_many(mutations, s.schema()->full_slice(), streamed_mutation::forwarding::yes),
+                    streamed_mutation::forwarding::yes));
+        }
+
+        assert_that(make_combined_reader(s.schema(), std::move(readers), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no))
+                .produces_partition_start(pkeys[0])
+                .produces_end_of_stream()
+                .fast_forward_to(position_range::all_clustered_rows())
+                .produces_row_with_key(ckeys[0])
+                .next_partition()
+                .produces_partition_start(pkeys[1])
+                .produces_end_of_stream()
+                .fast_forward_to(position_range(position_in_partition::before_key(ckeys[2]), position_in_partition::after_key(ckeys[2])))
+                .produces_row_with_key(ckeys[2])
+                .produces_end_of_stream()
+                .fast_forward_to(position_range(position_in_partition::after_key(ckeys[2]), position_in_partition::after_all_clustered_rows()))
+                .produces_row_with_key(ckeys[3])
+                .produces_end_of_stream()
+                .next_partition()
+                .produces_partition_start(pkeys[2])
+                .fast_forward_to(position_range::all_clustered_rows())
+                .produces_row_with_key(ckeys[0])
+                .produces_row_with_key(ckeys[1])
+                .produces_row_with_key(ckeys[2])
+                .produces_row_with_key(ckeys[3])
+                .produces_end_of_stream();
+    });
+}
+
 struct sst_factory {
     schema_ptr s;
     sstring path;
