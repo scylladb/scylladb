@@ -112,7 +112,7 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
     }
 }
 
-static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable>& sstables) {
+static std::vector<shared_sstable> get_uncompacting_sstables(column_family& cf, std::vector<shared_sstable> sstables) {
     auto all_sstables = boost::copy_range<std::vector<shared_sstable>>(*cf.get_sstables_including_compacted_undeleted());
     boost::sort(all_sstables, [] (const shared_sstable& x, const shared_sstable& y) {
         return x->generation() < y->generation();
@@ -209,19 +209,27 @@ private:
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
         auto schema = _cf.schema();
         sstring formatted_msg = "[";
+        auto fully_expired = get_fully_expired_sstables(_cf, _sstables, gc_clock::now() - schema->gc_grace_seconds());
 
         for (auto& sst : _sstables) {
+            // Compacted sstable keeps track of its ancestors.
+            _ancestors.push_back(sst->generation());
+            _info->start_size += sst->bytes_on_disk();
+            _info->total_partitions += sst->get_estimated_key_count();
+            formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
+
+            // Do not actually compact a sstable that is fully expired and can be safely
+            // dropped without ressurrecting old data.
+            if (fully_expired.count(sst)) {
+                continue;
+            }
+
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
-            _info->total_partitions += sst->get_estimated_key_count();
-            // Compacted sstable keeps track of its ancestors.
-            _ancestors.push_back(sst->generation());
-            formatted_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
-            _info->start_size += sst->bytes_on_disk();
             // TODO:
             // Note that this is not fully correct. Since we might be merging sstables that originated on
             // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
@@ -540,22 +548,22 @@ reshard_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     });
 }
 
-std::vector<sstables::shared_sstable>
-get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before) {
+std::unordered_set<sstables::shared_sstable>
+get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before) {
     clogger.debug("Checking droppable sstables in {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     if (compacting.empty()) {
         return {};
     }
 
-    std::list<sstables::shared_sstable> candidates;
+    std::unordered_set<sstables::shared_sstable> candidates;
     auto uncompacting_sstables = get_uncompacting_sstables(cf, compacting);
     // Get list of uncompacting sstables that overlap the ones being compacted.
     std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*cf.schema(), compacting, uncompacting_sstables);
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
 
     for (auto& sstable : overlapping) {
-        if (sstable->get_stats_metadata().max_local_deletion_time >= gc_before) {
+        if (sstable->get_max_local_deletion_time() >= gc_before) {
             min_timestamp = std::min(min_timestamp, sstable->get_stats_metadata().min_timestamp);
         }
     }
@@ -575,9 +583,9 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
         // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
         // expired data won't be purged because undeleted sstables are taken into account when
         // calculating max purgeable timestamp, and not doing it could lead to a compaction loop.
-        if (candidate->get_stats_metadata().max_local_deletion_time < gc_before && !has_undeleted_ancestor(candidate)) {
+        if (candidate->get_max_local_deletion_time() < gc_before && !has_undeleted_ancestor(candidate)) {
             clogger.debug("Adding candidate of generation {} to list of possibly expired sstables", candidate->generation());
-            candidates.push_back(candidate);
+            candidates.insert(candidate);
         } else {
             min_timestamp = std::min(min_timestamp, candidate->get_stats_metadata().min_timestamp);
         }
@@ -595,7 +603,7 @@ get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstab
             it++;
         }
     }
-    return std::vector<sstables::shared_sstable>(candidates.begin(), candidates.end());
+    return candidates;
 }
 
 }

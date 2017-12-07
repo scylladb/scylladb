@@ -179,11 +179,20 @@ public:
     }
 
     void set_values(sstring first_key, sstring last_key, stats_metadata stats) {
+        // scylla component must be present for a sstable to be considered fully expired.
+        _sst->_recognized_components.insert(sstable::component_type::Scylla);
         _sst->_components->statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
         _sst->_components->summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
         _sst->_components->summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
+    }
+
+    void rewrite_toc_without_scylla_component() {
+        _sst->_recognized_components.erase(sstable::component_type::Scylla);
+        remove_file(_sst->filename(sstable::component_type::TOC)).get();
+        _sst->write_toc(default_priority_class());
+        _sst->seal_sstable().get();
     }
 };
 

@@ -142,24 +142,14 @@ public:
         }
 
         // Find fully expired SSTables. Those will be included no matter what.
-        auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before.time_since_epoch().count());
+        auto expired = get_fully_expired_sstables(cf, uncompacting, gc_before);
 
-        auto sort_ssts = [] (std::vector<sstables::shared_sstable>& sstables) {
-            std::sort(sstables.begin(), sstables.end(), [] (const auto& x, const auto& y) {
-                return x->generation() < y->generation();
-            });
-        };
-        sort_ssts(uncompacting);
-        sort_ssts(expired);
+        if (!expired.empty()) {
+            auto is_expired = [&] (const sstables::shared_sstable& s) { return expired.find(s) != expired.end(); };
+            uncompacting.erase(boost::remove_if(uncompacting, is_expired), uncompacting.end());
+        }
 
-        std::vector<sstables::shared_sstable> non_expired_set;
-        // Set non_expired_set with the elements that are in uncompacting, but not in the expired.
-        std::set_difference(uncompacting.begin(), uncompacting.end(), expired.begin(), expired.end(),
-            std::inserter(non_expired_set, non_expired_set.begin()), [] (const auto& x, const auto& y) {
-                return x->generation() < y->generation();
-            });
-
-        auto compaction_candidates = get_next_non_expired_sstables(cf, non_expired_set, gc_before);
+        auto compaction_candidates = get_next_non_expired_sstables(cf, uncompacting, gc_before);
         if (!expired.empty()) {
             compaction_candidates.insert(compaction_candidates.end(), expired.begin(), expired.end());
         }

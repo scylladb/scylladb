@@ -24,6 +24,7 @@
 
 #include "database_fwd.hh"
 #include "shared_sstable.hh"
+#include "gc_clock.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
@@ -130,6 +131,6 @@ namespace sstables {
     // max timestamp is lower than any other relevant sstable.
     // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
     // and possibly doesn't contain any tombstone that covers cells in other sstables.
-    std::vector<sstables::shared_sstable>
-    get_fully_expired_sstables(column_family& cf, std::vector<sstables::shared_sstable>& compacting, int32_t gc_before);
+    std::unordered_set<sstables::shared_sstable>
+    get_fully_expired_sstables(column_family& cf, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 }

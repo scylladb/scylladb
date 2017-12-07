@@ -2976,28 +2976,87 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     auto min_key = key_and_token_pair[0].first;
     auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
 
+    auto t0 = gc_clock::from_time_t(1).time_since_epoch().count();
+    auto t1 = gc_clock::from_time_t(10).time_since_epoch().count();
+    auto t2 = gc_clock::from_time_t(15).time_since_epoch().count();
+    auto t3 = gc_clock::from_time_t(20).time_since_epoch().count();
+    auto t4 = gc_clock::from_time_t(30).time_since_epoch().count();
+
     {
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
-        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
-        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(0, 10, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(20, 25, std::numeric_limits<int32_t>::max()));
+        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/15);
+        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(15));
         BOOST_REQUIRE(expired.size() == 0);
     }
 
     {
         auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm, cl_stats);
-        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(0, 10, 10));
-        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(15, 20, std::numeric_limits<int32_t>::max()));
-        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(30, 40, std::numeric_limits<int32_t>::max()));
+
+        auto sst1 = add_sstable_for_overlapping_test(cf, /*gen*/1, min_key, key_and_token_pair[1].first, build_stats(t0, t1, t1));
+        auto sst2 = add_sstable_for_overlapping_test(cf, /*gen*/2, min_key, key_and_token_pair[2].first, build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
+        auto sst3 = add_sstable_for_overlapping_test(cf, /*gen*/3, min_key, max_key, build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/25);
+        auto expired = get_fully_expired_sstables(*cf, compacting, /*gc before*/gc_clock::from_time_t(25));
         BOOST_REQUIRE(expired.size() == 1);
-        BOOST_REQUIRE(expired.front()->generation() == 1);
+        auto expired_sst = *expired.begin();
+        BOOST_REQUIRE(expired_sst->generation() == 1);
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto builder = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck1", utf8_type, column_kind::clustering_key)
+            .with_column("r1", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_sstable(s, tmp->path, (*gen)++, la, big);
+        };
+
+        auto mt = make_lw_shared<memtable>(s);
+        mutation m(key, s);
+        tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
+        m.partition().apply_delete(*s, c_key, tomb);
+        mt->apply(std::move(m));
+        auto sst = sst_gen();
+        write_memtable_to_sstable(*mt, sst).get();
+        sst = reusable_sst(s, tmp->path, 1).get0();
+
+        compaction_manager cm;
+        column_family::config cfg;
+        cell_locker_stats cl_stats;
+        auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), cm, cl_stats);
+
+        auto ssts = std::vector<shared_sstable>{ sst };
+        auto expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
+        BOOST_REQUIRE(expired.size() == 1);
+        auto expired_sst = *expired.begin();
+        BOOST_REQUIRE(expired_sst->generation() == 1);
+
+        // check that sstable will auto correct potentially bad max_deletion_time and thus sstable will not be fully expired
+        sstables::test(sst).rewrite_toc_without_scylla_component();
+        sst = reusable_sst(s, tmp->path, 1).get0();
+        ssts = std::vector<shared_sstable>{ sst };
+        expired = get_fully_expired_sstables(*cf, ssts, gc_clock::now());
+        BOOST_REQUIRE(expired.size() == 0);
+
+        auto ret = sstables::compact_sstables(ssts, *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+        BOOST_REQUIRE(ret.start_size == sst->bytes_on_disk());
+        BOOST_REQUIRE(ret.total_keys_written == 0);
+        BOOST_REQUIRE(ret.new_sstables.empty());
+    });
 }
 
 SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
