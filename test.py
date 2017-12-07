@@ -97,6 +97,7 @@ boost_tests = [
     'role_manager_test',
     'caching_options_test',
     'auth_resource_test',
+    'cql_roles_query_test',
 ]
 
 other_tests = [

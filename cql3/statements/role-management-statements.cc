@@ -71,9 +71,13 @@ static future<::shared_ptr<cql_transport::messages::result_message>> void_result
 future<> create_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
-    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
-        if (!super) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to perform CREATE ROLE queries.");
+    return async([this, &state] {
+        state.ensure_has_permission(auth::permission::CREATE, auth::resource::root_of(auth::resource_kind::role)).get0();
+
+        if (*_options.is_superuser) {
+            if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
+                throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
+            }
         }
     });
 }
