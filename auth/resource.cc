@@ -68,6 +68,25 @@ static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
 };
 
+static permission_set applicable_permissions(const data_resource_view& dv) {
+    if (dv.table()) {
+        return permission_set::of<
+                permission::ALTER,
+                permission::DROP,
+                permission::SELECT,
+                permission::MODIFY,
+                permission::AUTHORIZE>();
+    }
+
+    return permission_set::of<
+            permission::CREATE,
+            permission::ALTER,
+            permission::DROP,
+            permission::SELECT,
+            permission::MODIFY,
+            permission::AUTHORIZE>();
+}
+
 resource::resource(resource_kind kind) : _kind(kind), _parts{sstring(roots.at(kind))}  {
 }
 
@@ -133,6 +152,16 @@ stdx::optional<resource> resource::parent() const {
     resource copy = *this;
     copy._parts.pop_back();
     return copy;
+}
+
+permission_set resource::applicable_permissions() const {
+    permission_set ps;
+
+    switch (_kind) {
+        case resource_kind::data: ps = ::auth::applicable_permissions(data_resource_view(*this)); break;
+    }
+
+    return ps;
 }
 
 bool operator<(const resource& r1, const resource& r2) {

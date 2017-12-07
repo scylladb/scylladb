@@ -53,6 +53,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
+#include "auth/permission.hh"
 #include "seastarx.hh"
 #include "stdx.hh"
 #include "utils/hash.hh"
@@ -121,6 +122,8 @@ public:
     sstring name() const;
 
     stdx::optional<resource> parent() const;
+
+    permission_set applicable_permissions() const;
 
 private:
     // A root resource.
