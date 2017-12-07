@@ -1412,7 +1412,7 @@ public:
                 set_random_cells(row.cells(), column_kind::regular_column);
                 row.marker() = random_row_marker();
             } else {
-                m.partition().clustered_row(*_schema, ckey, is_dummy::yes, continuous);
+                m.partition().clustered_row(*_schema, position_in_partition_view::after_key(ckey), is_dummy::yes, continuous);
             }
         }
 
