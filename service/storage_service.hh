@@ -2252,8 +2252,8 @@ public:
         return bool(_correct_non_compound_range_tombstones);
     }
 
-    bool node_supports_write_failure_reply(gms::inet_address ep) const {
-        return gms::get_local_gossiper().node_has_feature(ep, _write_failure_reply_feature);
+    bool cluster_supports_write_failure_reply() const {
+        return bool(_write_failure_reply_feature);
     }
 };
 

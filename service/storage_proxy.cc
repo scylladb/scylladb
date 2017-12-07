@@ -3831,7 +3831,7 @@ void storage_proxy::init_messaging_service() {
                 // ignore results, since we'll be returning them via MUTATION_DONE/MUTATION_FAILURE verbs
                 auto fut = make_ready_future<seastar::rpc::no_wait_type>(netw::messaging_service::no_wait());
                 if (errors) {
-                    if (get_local_storage_service().node_supports_write_failure_reply(reply_to)) {
+                    if (get_local_storage_service().cluster_supports_write_failure_reply()) {
                         tracing::trace(trace_state_ptr, "Sending mutation_failure with {} failures to /{}", errors, reply_to);
                         auto& ms = netw::get_local_messaging_service();
                         fut = ms.send_mutation_failed(netw::messaging_service::msg_addr{reply_to, shard}, shard, response_id, errors).then_wrapped([] (future<> f) {

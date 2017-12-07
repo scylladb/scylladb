@@ -562,8 +562,6 @@ public:
     void check_knows_remote_features(sstring local_features_string) const;
     void check_knows_remote_features(sstring local_features_string, std::unordered_map<inet_address, sstring> peer_features_string) const;
     void maybe_enable_features();
-    // Return true if the feature is present on the node
-    bool node_has_feature(inet_address endpoint, const feature& f) const;
 private:
     void register_feature(feature* f);
     void unregister_feature(feature* f);
