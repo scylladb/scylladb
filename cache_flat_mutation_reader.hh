@@ -102,6 +102,10 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     bool after_current_range(position_in_partition_view position);
     bool can_populate() const;
     void maybe_update_continuity();
+    // Tries to ensure that the lower bound of the current population range exists.
+    // Returns false if it failed and range cannot be populated.
+    // Assumes can_populate().
+    bool ensure_population_lower_bound();
     void maybe_add_to_cache(const mutation_fragment& mf);
     void maybe_add_to_cache(const clustering_row& cr);
     void maybe_add_to_cache(const range_tombstone& rt);
@@ -300,7 +304,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                     clogger.trace("csm {}: inserted dummy at {}, cont={}", this, it->position(), it->continuous());
                                 }
                             });
-                        } else if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+                        } else if (ensure_population_lower_bound()) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
@@ -332,8 +336,16 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
 }
 
 inline
+bool cache_flat_mutation_reader::ensure_population_lower_bound() {
+    if (!_ck_ranges_curr->start()) {
+        return true;
+    }
+    return _last_row.refresh(*_snp);
+}
+
+inline
 void cache_flat_mutation_reader::maybe_update_continuity() {
-    if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
+    if (can_populate() && ensure_population_lower_bound()) {
             if (_next_row.is_in_latest_version()) {
                 clogger.trace("csm {}: mark {} continuous", this, _next_row.get_iterator_in_latest_version()->position());
                 _next_row.get_iterator_in_latest_version()->set_continuous(true);
@@ -396,7 +408,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         it = insert_result.first;
 
         rows_entry& e = *it;
-        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+        if (ensure_population_lower_bound()) {
             clogger.trace("csm {}: set_continuous({})", this, e.position());
             e.set_continuous(true);
         } else {
