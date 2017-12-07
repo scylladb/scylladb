@@ -39,5 +39,5 @@ struct noop_write_monitor final : public write_monitor {
     virtual void on_flush_completed() override { }
 };
 
-seastar::shared_ptr<write_monitor> default_write_monitor();
+write_monitor& default_write_monitor();
 }

@@ -73,9 +73,11 @@ logging::logger sstlog("sstable");
 
 static const db::config& get_config();
 
-seastar::shared_ptr<write_monitor> default_write_monitor() {
-    static thread_local seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
-    return monitor;
+// Because this is a noop and won't hold any state, it is better to use a global than a
+// thread_local. It will be faster, specially on non-x86.
+static noop_write_monitor default_noop_write_monitor;
+write_monitor& default_write_monitor() {
+    return default_noop_write_monitor;
 }
 
 static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,

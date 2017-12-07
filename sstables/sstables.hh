@@ -129,7 +129,7 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     stdx::optional<db::replay_position> replay_position;
     seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
-    seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
+    write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
 };
 
@@ -877,7 +877,7 @@ class sstable_writer {
     std::unique_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
-    seastar::shared_ptr<write_monitor> _monitor;
+    write_monitor* _monitor;
     bool _correctly_serialize_non_compound_range_tombstones;
 private:
     void prepare_file_writer();
@@ -888,7 +888,7 @@ public:
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(std::move(o._monitor)),
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
             _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }

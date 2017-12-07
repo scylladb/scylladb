@@ -847,7 +847,6 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
 
             dblog.debug("Flushing to {}", newtab->get_filename());
 
-            auto&& priority = service::get_local_streaming_write_priority();
             // This is somewhat similar to the main memtable flush, but with important differences.
             //
             // The first difference, is that we don't keep aggregate collectd statistics about this one.
@@ -856,25 +855,28 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             //
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
-            auto monitor = seastar::make_shared<permit_monitor>(permit.release_sstable_write_permit());
-            return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
-                return newtab->open_data();
-            }).then([this, old, newtab] () {
-                auto adder = [this, newtab] {
-                    add_sstable(newtab, {engine().cpu_id()});
-                    try_trigger_compaction();
-                    dblog.debug("Flushing to {} done", newtab->get_filename());
-                };
-                if (_config.enable_cache) {
-                    return _cache.update_invalidating(adder, *old);
-                } else {
-                    adder();
-                    return old->clear_gently();
-                }
-            }).handle_exception([old, permit = std::move(permit), newtab] (auto ep) {
-                newtab->mark_for_deletion();
-                dblog.error("failed to write streamed sstable: {}", ep);
-                return make_exception_future<>(ep);
+            auto fp = permit.release_sstable_write_permit();
+            return do_with(permit_monitor(std::move(fp)), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
+                auto&& priority = service::get_local_streaming_write_priority();
+                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
+                    return newtab->open_data();
+                }).then([this, old, newtab] () {
+                    auto adder = [this, newtab] {
+                        add_sstable(newtab, {engine().cpu_id()});
+                        try_trigger_compaction();
+                        dblog.debug("Flushing to {} done", newtab->get_filename());
+                    };
+                    if (_config.enable_cache) {
+                        return _cache.update_invalidating(adder, *old);
+                    } else {
+                        adder();
+                        return old->clear_gently();
+                    }
+                }).handle_exception([old, permit = std::move(permit), monitor = std::move(monitor), newtab] (auto ep) {
+                    newtab->mark_for_deletion();
+                    dblog.error("failed to write streamed sstable: {}", ep);
+                    return make_exception_future<>(ep);
+                });
             });
             // We will also not have any retry logic. If we fail here, we'll fail the streaming and let
             // the upper layers know. They can then apply any logic they want here.
@@ -907,14 +909,16 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
 
                 newtab->set_unshared();
 
-                auto&& priority = service::get_local_streaming_write_priority();
-                auto monitor = seastar::make_shared<permit_monitor>(permit.release_sstable_write_permit());
-                return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
-                    smb.sstables.emplace_back(newtab);
-                }).handle_exception([newtab] (auto ep) {
-                    newtab->mark_for_deletion();
-                    dblog.error("failed to write streamed sstable: {}", ep);
-                    return make_exception_future<>(ep);
+                auto fp = permit.release_sstable_write_permit();
+                return do_with(permit_monitor(std::move(fp)), [this, old, newtab, &smb, permit = std::move(permit)] (auto& monitor) mutable {
+                    auto&& priority = service::get_local_streaming_write_priority();
+                    return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
+                        smb.sstables.emplace_back(newtab);
+                    }).handle_exception([newtab, monitor = std::move(monitor)] (auto ep) {
+                        newtab->mark_for_deletion();
+                        dblog.error("failed to write streamed sstable: {}", ep);
+                        return make_exception_future<>(ep);
+                    });
                 });
             });
         });
@@ -994,24 +998,25 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    auto&& priority = service::get_local_memtable_flush_priority();
-    auto monitor = seastar::make_shared<permit_monitor>(std::move(permit));
-    return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
-        return newtab->open_data();
-    }).then([this, old, newtab] () {
-        dblog.debug("Flushing to {} done", newtab->get_filename());
-        return update_cache(old, newtab);
-    }).then([this, old, newtab] () noexcept {
-        _memtables->erase(old);
-        dblog.debug("Memtable for {} replaced", newtab->get_filename());
-        return stop_iteration::yes;
-    }).handle_exception([this, old, newtab] (auto e) {
-        newtab->mark_for_deletion();
-        dblog.error("failed to write sstable {}: {}", newtab->get_filename(), e);
-        // If we failed this write we will try the write again and that will create a new flush reader
-        // that will decrease dirty memory again. So we need to reset the accounting.
-        old->revert_flushed_memory();
-        return stop_iteration::no;
+    return do_with(permit_monitor(std::move(permit)), [this, old, newtab] (auto& monitor) {
+        auto&& priority = service::get_local_memtable_flush_priority();
+        return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
+            return newtab->open_data();
+        }).then([this, old, newtab] () {
+            dblog.debug("Flushing to {} done", newtab->get_filename());
+            return update_cache(old, newtab);
+        }).then([this, old, newtab] () noexcept {
+            _memtables->erase(old);
+            dblog.debug("Memtable for {} replaced", newtab->get_filename());
+            return stop_iteration::yes;
+        }).handle_exception([this, old, newtab, monitor = std::move(monitor)] (auto e) {
+            newtab->mark_for_deletion();
+            dblog.error("failed to write sstable {}: {}", newtab->get_filename(), e);
+            // If we failed this write we will try the write again and that will create a new flush reader
+            // that will decrease dirty memory again. So we need to reset the accounting.
+            old->revert_flushed_memory();
+            return stop_iteration::no;
+        });
     });
 }
 
@@ -4275,7 +4280,7 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
-                          seastar::shared_ptr<sstables::write_monitor> monitor,
+                          sstables::write_monitor& monitor,
                           bool backup, const io_priority_class& pc, bool leave_unsealed,
                           seastar::thread_scheduling_group *tsg) {
     sstables::sstable_writer_config cfg;
@@ -4283,15 +4288,16 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.thread_scheduling_group = tsg;
-    cfg.monitor = std::move(monitor);
+    cfg.monitor = &monitor;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc),
                                  mt.partition_count(), mt.schema(), cfg, pc);
 }
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
-    auto monitor = seastar::make_shared<permit_monitor>(sstable_write_permit::unconditional());
-    return write_memtable_to_sstable(mt, std::move(sst), std::move(monitor));
+    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst] (auto& monitor) {
+        return write_memtable_to_sstable(mt, std::move(sst), monitor);
+    });
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

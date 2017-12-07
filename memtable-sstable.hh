@@ -36,7 +36,7 @@
 future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
-        seastar::shared_ptr<sstables::write_monitor> mon,
+        sstables::write_monitor& mon,
         bool backup = false,
         const io_priority_class& pc = default_priority_class(),
         bool leave_unsealed = false,
