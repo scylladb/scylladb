@@ -652,20 +652,6 @@ public:
     }
 };
 
-mutation_reader
-make_restricted_reader(const restricted_mutation_reader_config& config,
-        mutation_source ms,
-        schema_ptr s,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        const io_priority_class& pc,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr) {
-    auto rd = make_restricted_flat_reader(config, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    return mutation_reader_from_flat_mutation_reader(std::move(rd));
-}
-
 flat_mutation_reader
 make_restricted_flat_reader(const restricted_mutation_reader_config& config,
                        mutation_source ms,
