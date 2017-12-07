@@ -1045,7 +1045,7 @@ permissionOrAll returns [auth::permission_set perms]
     ;
 
 resource returns [uninitialized<auth::resource> res]
-    : r=dataResource { $res = $r.res; }
+    : d=dataResource { $res = std::move(d); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
