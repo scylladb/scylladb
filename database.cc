@@ -572,7 +572,7 @@ column_family::make_sstable_reader(schema_ptr s,
                     return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
                                 _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd);
                 });
-            return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+            return mutation_reader_from_flat_mutation_reader(make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
         } else {
             return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
                         _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
@@ -590,7 +590,7 @@ column_family::make_sstable_reader(schema_ptr s,
                     return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                         reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr);
                 });
-            return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
+            return mutation_reader_from_flat_mutation_reader(make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr));
         } else {
             return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                 no_resource_tracking(), std::move(trace_state), fwd, fwd_mr);
