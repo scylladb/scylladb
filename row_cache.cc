@@ -1216,6 +1216,17 @@ streamed_mutation cache_entry::read(row_cache& rc, read_context& reader,
     }
 }
 
+flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader) {
+    auto source_and_phase = rc.snapshot_of(_key);
+    reader.enter_flat_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
+    return do_read_flat(rc, reader);
+}
+
+flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader, row_cache::phase_type phase) {
+    reader.enter_flat_partition(_key, phase);
+    return do_read_flat(rc, reader);
+}
+
 // Assumes reader is in the corresponding partition
 streamed_mutation cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), _schema, reader.phase());
@@ -1228,6 +1239,20 @@ streamed_mutation cache_entry::do_read(row_cache& rc, read_context& reader) {
         sm = make_forwardable(std::move(sm));
     }
     return std::move(sm);
+}
+
+// Assumes reader is in the corresponding partition
+flat_mutation_reader cache_entry::do_read_flat(row_cache& rc, read_context& reader) {
+    auto snp = _pe.read(rc._tracker.region(), _schema, reader.phase());
+    auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
+    auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
+    if (reader.schema()->version() != _schema->version()) {
+        r = transform(std::move(r), schema_upgrader(reader.schema()));
+    }
+    if (reader.fwd() == streamed_mutation::forwarding::yes) {
+        r = make_forwardable(std::move(r));
+    }
+    return std::move(r);
 }
 
 const schema_ptr& row_cache::schema() const {
