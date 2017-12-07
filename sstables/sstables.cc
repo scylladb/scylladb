@@ -2341,6 +2341,8 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _sst.create_data().get();
     _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
     prepare_file_writer();
+
+    _monitor->on_write_started(_writer->offset_tracker());
     _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
     _sst._shards = { shard };
 }

@@ -27,14 +27,21 @@
 #include <seastar/core/shared_ptr_incomplete.hh>
 
 namespace sstables {
+
+struct writer_offset_tracker {
+    uint64_t offset = 0;
+};
+
 class write_monitor {
 public:
     virtual ~write_monitor() { }
+    virtual void on_write_started(const writer_offset_tracker&) = 0;
     virtual void on_write_completed() = 0;
     virtual void on_flush_completed() = 0;
 };
 
 struct noop_write_monitor final : public write_monitor {
+    virtual void on_write_started(const writer_offset_tracker&) { };
     virtual void on_write_completed() override { }
     virtual void on_flush_completed() override { }
 };
