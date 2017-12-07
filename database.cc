@@ -587,12 +587,12 @@ column_family::make_sstable_reader(schema_ptr s,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         mutation_reader::forwarding fwd_mr) {
-                    return make_range_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
+                    return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                         reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr);
                 });
             return make_restricted_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
-            return make_range_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
+            return make_local_shard_sstable_reader(std::move(s), std::move(sstables), pr, slice, pc,
                 no_resource_tracking(), std::move(trace_state), fwd, fwd_mr);
         }
     }
@@ -4254,7 +4254,7 @@ void column_family::drop_hit_rate(gms::inet_address addr) {
     _cluster_cache_hit_rates.erase(addr);
 }
 
-mutation_reader make_range_sstable_reader(schema_ptr s,
+mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,

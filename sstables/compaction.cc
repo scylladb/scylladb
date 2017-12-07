@@ -237,7 +237,7 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return flat_mutation_reader_from_mutation_reader(_cf.schema(), ::make_range_sstable_reader(_cf.schema(),
+        return flat_mutation_reader_from_mutation_reader(_cf.schema(), ::make_local_shard_sstable_reader(_cf.schema(),
                 ssts,
                 query::full_partition_range,
                 _cf.schema()->full_slice(),

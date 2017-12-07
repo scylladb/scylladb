@@ -436,7 +436,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         auto list_reader = make_combined_reader(s.schema(),
                 std::move(sstable_mutation_readers));
 
-        auto incremental_reader = make_range_sstable_reader(
+        auto incremental_reader = make_local_shard_sstable_reader(
                 s.schema(),
                 sstables,
                 query::full_partition_range,
