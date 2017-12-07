@@ -51,9 +51,6 @@ const auth::permission_set auth::permissions::ALL_DATA =
                                 auth::permission::AUTHORIZE>();
 const auth::permission_set auth::permissions::ALL = auth::permissions::ALL_DATA;
 const auth::permission_set auth::permissions::NONE;
-const auth::permission_set auth::permissions::ALTERATIONS =
-                auth::permission_set::of<auth::permission::CREATE,
-                                auth::permission::ALTER, auth::permission::DROP>();
 
 static const std::unordered_map<sstring, auth::permission> permission_names({
     { "READ", auth::permission::READ },

@@ -85,7 +85,6 @@ namespace permissions {
 extern const permission_set ALL_DATA;
 extern const permission_set ALL;
 extern const permission_set NONE;
-extern const permission_set ALTERATIONS;
 
 const sstring& to_string(permission);
 permission from_string(const sstring&);
