@@ -7,14 +7,14 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-kernel-conf = @@VERSION@@
+Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-tools-core = @@VERSION@@ scylla-kernel-conf = @@VERSION@@
 Obsoletes:	scylla-server < 1.1
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
 This package installs all required packages for ScyllaDB,  including
-scylla-server, scylla-jmx, scylla-tools.
+scylla-server, scylla-jmx, scylla-tools, scylla-tools-core.
 
 # this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
