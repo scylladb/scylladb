@@ -43,7 +43,7 @@
 
 #include <seastar/core/sstring.hh>
 
-#include "cql3/statements/authorization_statement.hh"
+#include "cql3/statements/authentication_statement.hh"
 #include "cql3/role_name.hh"
 #include "cql3/role_options.hh"
 
@@ -51,7 +51,7 @@ namespace cql3 {
 
 namespace statements {
 
-class create_role_statement final : public authorization_statement {
+class create_role_statement final : public authentication_statement {
     sstring _role;
 
     bool _is_superuser;
