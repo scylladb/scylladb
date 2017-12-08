@@ -347,7 +347,7 @@ private:
     // Used to allow shutting down repairs in progress, and waiting for them.
     seastar::gate _gate;
     // Set when the repair service is being shutdown
-    std::atomic_bool _shutdown alignas(64);
+    std::atomic_bool _shutdown alignas(seastar::cache_line_size);
     // Map repair id into repair_info. The vector has smp::count elements, each
     // element will be accessed by only one shard.
     std::vector<std::unordered_map<int, lw_shared_ptr<repair_info>>> _repairs;

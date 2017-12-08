@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(test_enconding_of_legacy_composites) {
                         components({std::make_pair(bytes("el1"), composite::eoc::none)}));
     BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x00', '\x01'})).components(),
                         components({std::make_pair(bytes(""), composite::eoc::end)}));
-    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x05', 'e', 'l', 'e', 'm', '1', '\xff'})).components(),
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x05', 'e', 'l', 'e', 'm', '1', -1})).components(),
                         components({std::make_pair(bytes("elem1"), composite::eoc::start)}));
     BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\x05'})).components(),
                         components({std::make_pair(bytes("el1"), composite::eoc::end)}));
@@ -247,7 +247,7 @@ BOOST_AUTO_TEST_CASE(test_enconding_of_legacy_composites) {
                         components({std::make_pair(bytes("el1"), composite::eoc::none),
                                     std::make_pair(bytes("elem2"), composite::eoc::end)}));
 
-    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', '\xff', '\x00', '\x00', '\x01'})).components(),
+    BOOST_REQUIRE_EQUAL(composite(bytes({'\x00', '\x03', 'e', 'l', '1', -1, '\x00', '\x00', '\x01'})).components(),
                         components({std::make_pair(bytes("el1"), composite::eoc::start),
                                     std::make_pair(bytes(""), composite::eoc::end)}));
 }

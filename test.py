@@ -151,9 +151,9 @@ if __name__ == "__main__":
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test), 'other'))
+            test_to_run.append((os.path.join(prefix, test), 'other', '-c2 -m4G'.split()))
         for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test), 'boost'))
+            test_to_run.append((os.path.join(prefix, test), 'boost', '-c2 -m4G'.split()))
 
     if 'release' in modes_to_run:
         test_to_run.append(('build/release/tests/lsa_async_eviction_test', 'other',

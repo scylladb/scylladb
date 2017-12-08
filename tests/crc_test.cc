@@ -35,7 +35,7 @@ template <typename T, typename... Rest>
 inline
 uint32_t
 do_compute_crc(utils::crc32& c, const T& val, const Rest&... rest) {
-    c.process(val);
+    c.process_le(val);
     return do_compute_crc(c, rest...);
 }
 

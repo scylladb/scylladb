@@ -1135,7 +1135,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)170}));
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(int8_t)170}));
                         return read_mutation_from_flat_mutation_reader(s, *reader);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1147,7 +1147,7 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(!row.deleted_at());
                         auto &cells = row.cells();
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
-                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)180}));
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(int8_t)180}));
                         return read_mutation_from_flat_mutation_reader(s, *reader);
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
