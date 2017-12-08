@@ -303,6 +303,7 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             };
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            _end_of_stream = false;
             clear_buffer();
             _next = {};
             return _underlying.fast_forward_to(pr);
