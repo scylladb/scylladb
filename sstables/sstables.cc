@@ -2365,6 +2365,7 @@ void sstable_writer::consume_end_of_stream()
 {
     _components_writer->consume_end_of_stream();
     _components_writer = stdx::nullopt;
+    _monitor->on_data_write_completed();
     finish_file_writer();
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);

@@ -89,6 +89,7 @@ public:
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override { }
+    virtual void on_data_write_completed() override { }
     virtual void on_write_completed() override {
         // We need to start a flush before the current one finishes, otherwise
         // we'll have a period without significant disk activity when the current
