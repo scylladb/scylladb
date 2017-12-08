@@ -380,9 +380,9 @@ static flat_mutation_reader read_directly_from_underlying(read_context& reader) 
 class single_partition_populating_reader final : public flat_mutation_reader::impl {
     row_cache& _cache;
     lw_shared_ptr<read_context> _read_context;
-    flat_mutation_reader_opt _sm;
+    flat_mutation_reader_opt _reader;
 private:
-    future<> create_sm() {
+    future<> create_reader() {
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_flat_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
@@ -410,13 +410,13 @@ private:
                 }
                 _end_of_stream = true;
             } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
-                _sm = _cache._read_section(_cache._tracker.region(), [&] {
+                _reader = _cache._read_section(_cache._tracker.region(), [&] {
                     cache_entry& e = _cache.find_or_create(mfopt->as_partition_start().key(), mfopt->as_partition_start().partition_tombstone(), phase);
                     return e.read_flat(_cache, *_read_context, phase);
                 });
             } else {
                 _cache._tracker.on_mispopulate();
-                _sm = read_directly_from_underlying(*_read_context);
+                _reader = read_directly_from_underlying(*_read_context);
                 push_mutation_fragment(std::move(*mfopt));
             }
         });
@@ -430,8 +430,8 @@ public:
     { }
 
     virtual future<> fill_buffer() override {
-        if (!_sm) {
-            return create_sm().then([this] {
+        if (!_reader) {
+            return create_reader().then([this] {
                 if (_end_of_stream) {
                     return make_ready_future<>();
                 }
@@ -439,15 +439,15 @@ public:
             });
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return fill_buffer_from(*_sm).then([this] (bool sm_finished) {
-                if (sm_finished) {
+            return fill_buffer_from(*_reader).then([this] (bool reader_finished) {
+                if (reader_finished) {
                     _end_of_stream = true;
                 }
             });
         });
     }
     virtual void next_partition() override {
-        if (_sm) {
+        if (_reader) {
             clear_buffer();
             _end_of_stream = true;
         }
@@ -458,14 +458,14 @@ public:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range pr) override {
-        if (!_sm) {
+        if (!_reader) {
             _end_of_stream = true;
             return make_ready_future<>();
         }
         assert(bool(_read_context->fwd()));
         _end_of_stream = false;
         forward_buffer_to(pr.start());
-        return _sm->fast_forward_to(std::move(pr));
+        return _reader->fast_forward_to(std::move(pr));
     }
 };
 
