@@ -316,6 +316,62 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
     return make_flat_mutation_reader<reader>(std::move(m));
 }
 
+flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_partition) {
+    class reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _underlying;
+        bool _single_partition;
+        bool _static_row_done = false;
+        bool is_end_end_of_underlying_stream() const {
+            return _underlying.is_buffer_empty() && _underlying.is_end_of_stream();
+        }
+        future<> on_end_of_underlying_stream() {
+            if (!_static_row_done) {
+                _static_row_done = true;
+                return _underlying.fast_forward_to(position_range::all_clustered_rows());
+            }
+            push_mutation_fragment(partition_end());
+            if (_single_partition) {
+                _end_of_stream = true;
+                return make_ready_future<>();
+            }
+            _underlying.next_partition();
+            _static_row_done = false;
+            return _underlying.fill_buffer().then([this] {
+                _end_of_stream = is_end_end_of_underlying_stream();
+            });
+        }
+    public:
+        reader(flat_mutation_reader r, bool single_partition)
+            : impl(r.schema())
+            , _underlying(std::move(r))
+            , _single_partition(single_partition)
+        { }
+        virtual future<> fill_buffer() override {
+            return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+                return fill_buffer_from(_underlying).then([this] (bool underlying_finished) {
+                   return on_end_of_underlying_stream();
+                });
+            });
+        }
+        virtual future<> fast_forward_to(position_range pr) override {
+            throw std::bad_function_call();
+        }
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _underlying.next_partition();
+            }
+            _end_of_stream = is_end_end_of_underlying_stream();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            _end_of_stream = false;
+            clear_buffer();
+            return _underlying.fast_forward_to(pr);
+        }
+    };
+    return make_flat_mutation_reader<reader>(std::move(r), single_partition);
+}
+
 class empty_flat_reader final : public flat_mutation_reader::impl {
 public:
     empty_flat_reader(schema_ptr s) : impl(std::move(s)) { _end_of_stream = true; }
