@@ -345,12 +345,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> grant_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-
-    return async([this, &state] {
-        if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to GRANT roles.");
-        }
-    });
+    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>

@@ -227,3 +227,21 @@ SEASTAR_TEST_CASE(list_roles_restrictions) {
         });
     }, db_config_with_auth());
 }
+
+//
+// GRANT ROLE
+//
+
+SEASTAR_TEST_CASE(grant_role_restrictions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        env.execute_cql("CREATE ROLE lord").get0();
+
+        //
+        // A user cannot grant a role to another user without AUTHORIZE on the role being granted.
+        //
+
+        verify_unauthorized_then_ok(env, alice, "GRANT lord TO alice", [&env] {
+            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get0();
+        });
+    }, db_config_with_auth());
+}
