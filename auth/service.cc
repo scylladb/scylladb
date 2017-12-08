@@ -347,6 +347,29 @@ future<permission_set> service::get_permissions(::shared_ptr<authenticated_user>
     return sharded_permissions_cache.local().get(std::move(u), std::move(r));
 }
 
+future<bool> service::role_has_superuser(stdx::string_view role_name) const {
+    // TODO(jhaberku): Grab this from the roles cache once it exists.
+    return _role_manager->query_granted(
+            role_name,
+            recursive_role_query::yes).then([this](std::unordered_set<sstring> roles) {
+        return do_with(std::move(roles), [this](const std::unordered_set<sstring>& roles) {
+            return do_with(roles.begin(), [this, &roles](auto& iter) {
+                return repeat([this, &roles, &iter] {
+                    return _role_manager->is_superuser(*iter++).then([&roles, &iter](bool super) {
+                        if (super || (iter == roles.end())) {
+                            return stop_iteration::yes;
+                        }
+
+                        return stop_iteration::no;
+                    });
+                }).then([&roles, &iter] {
+                    return iter != roles.end();
+                });
+            });
+        });
+    });
+}
+
 //
 // Free functions.
 //

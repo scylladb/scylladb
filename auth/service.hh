@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <experimental/string_view>
 #include <memory>
 
 #include <seastar/core/future.hh>
@@ -34,6 +35,7 @@
 #include "auth/role_manager.hh"
 #include "delayed_tasks.hh"
 #include "seastarx.hh"
+#include "stdx.hh"
 
 namespace cql3 {
 class query_processor;
@@ -118,6 +120,15 @@ public:
     future<> delete_user(const sstring& name);
 
     future<permission_set> get_permissions(::shared_ptr<authenticated_user>, resource) const;
+
+    ///
+    /// Query whether the named role has been granted a role that is a superuser.
+    ///
+    /// A role is always granted to itself. Therefore, a role that "is" a superuser also "has" superuser.
+    ///
+    /// \throws \ref nonexistant_role if the role does not exist.
+    ///
+    future<bool> role_has_superuser(stdx::string_view role_name) const;
 
     authenticator& underlying_authenticator() {
         return *_authenticator;
