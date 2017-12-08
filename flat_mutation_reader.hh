@@ -465,6 +465,8 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
 
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
+flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
+
 flat_mutation_reader make_forwardable(flat_mutation_reader m);
 
 flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);

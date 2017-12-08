@@ -21,6 +21,7 @@
 
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
+#include "seastar/util/reference_wrapper.hh"
 #include <algorithm>
 
 #include <boost/range/adaptor/transformed.hpp>
@@ -241,6 +242,37 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
         };
     };
     return make_flat_mutation_reader<converting_reader>(std::move(s), std::move(legacy_reader), fwd);
+}
+
+flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
+    class reader : public flat_mutation_reader::impl {
+        reference_wrapper<flat_mutation_reader> _underlying;
+    public:
+        reader(flat_mutation_reader& r) : impl(r.schema()), _underlying(ref(r)) { }
+        virtual future<> fill_buffer() override {
+            return fill_buffer_from(_underlying.get()).then([this] (bool underlying_finished) {
+                _end_of_stream = underlying_finished;
+            });
+        }
+        virtual future<> fast_forward_to(position_range pr) override {
+            _end_of_stream = false;
+            forward_buffer_to(pr.start());
+            return _underlying.get().fast_forward_to(std::move(pr));
+        }
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _underlying.get().next_partition();
+            }
+            _end_of_stream = _underlying.get().is_end_of_stream() && _underlying.get().is_buffer_empty();
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            _end_of_stream = false;
+            clear_buffer();
+            return _underlying.get().fast_forward_to(pr);
+        }
+    };
+    return make_flat_mutation_reader<reader>(r);
 }
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {
