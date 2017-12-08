@@ -225,15 +225,29 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     state.ensure_not_anonymous();
 
     return async([this, &state] {
+        if (state.check_has_permission(
+                    auth::permission::DESCRIBE,
+                    auth::resource::root_of(auth::resource_kind::role)).get0()) {
+            return;
+        }
+
+        //
+        // A user can list all roles of themselves, and list all roles of any roles granted to them.
+        //
+
         const auto user_has_grantee = [this, &state] {
+            //
+            // TODO(jhaberku) Use the roles cache once it's available.
+            //
+
             auto& rm = state.get_auth_service()->underlying_role_manager();
             const auto roles = rm.query_granted(state.user()->name(), auth::recursive_role_query::yes).get0();
             return roles.count(*_grantee) != 0;
         };
 
-        if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0() && _grantee && !user_has_grantee()) {
+        if (_grantee && !user_has_grantee()) {
             throw exceptions::unauthorized_exception(
-                sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
+                    sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
         }
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
@@ -301,12 +315,18 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
         if (!_grantee) {
-            if (super) {
-                return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
-            }
+            // A user with DESCRIBE on the root role resource lists all roles in the system. A user without it lists
+            // only the roles granted to them.
+            return cs.check_has_permission(
+                    auth::permission::DESCRIBE,
+                    auth::resource::root_of(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
+                if (has_describe) {
+                    return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
+                }
 
-            return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
-                return make_results(rm, std::move(roles));
+                return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
+                    return make_results(rm, std::move(roles));
+                });
             });
         }
 

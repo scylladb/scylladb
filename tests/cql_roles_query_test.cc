@@ -209,3 +209,21 @@ SEASTAR_TEST_CASE(drop_role_restrictions) {
 
     }, db_config_with_auth());
 }
+
+//
+// LIST ROLES
+//
+
+SEASTAR_TEST_CASE(list_roles_restrictions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        env.execute_cql("CREATE ROLE lord").get0();
+
+        //
+        // A user cannot list all roles of a role not granted to them.
+        //
+
+        verify_unauthorized_then_ok(env, alice, "LIST ROLES OF lord", [&env] {
+            env.execute_cql("GRANT lord TO alice").get0();
+        });
+    }, db_config_with_auth());
+}
