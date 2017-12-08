@@ -572,7 +572,7 @@ partition_snapshot::range_tombstones(const ::schema& s, position_in_partition_vi
             list.apply(s, rt);
         }
     }
-    return boost::copy_range<std::vector<range_tombstone>>(list);
+    return boost::copy_range<std::vector<range_tombstone>>(list.slice(s, start, end));
 }
 
 std::ostream& operator<<(std::ostream& out, partition_entry& e) {
