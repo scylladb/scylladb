@@ -379,24 +379,16 @@ static flat_mutation_reader read_directly_from_underlying(read_context& reader) 
 // Reader which populates the cache using data from the delegate.
 class single_partition_populating_reader final : public flat_mutation_reader::impl {
     row_cache& _cache;
-    mutation_reader _delegate;
     lw_shared_ptr<read_context> _read_context;
-    streamed_mutation_opt _sm;
+    flat_mutation_reader_opt _sm;
 private:
-    void set_sm(streamed_mutation_opt sm) {
-        if (sm) {
-            _sm = std::move(sm);
-            push_mutation_fragment(partition_start(_sm->decorated_key(), _sm->partition_tombstone()));
-        } else {
-            _end_of_stream = true;
-        }
-    }
     future<> create_sm() {
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
-        _delegate = _cache.create_underlying_reader(*_read_context, src_and_phase.snapshot, _read_context->range());
-        return _delegate().then([this, phase] (auto sm) {
-            if (!sm) {
+        _read_context->enter_flat_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
+        _read_context->create_underlying_flat(false);
+        return _read_context->underlying_flat().underlying()().then([this, phase] (auto&& mfopt) {
+            if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
                         with_allocator(_cache._tracker.allocator(), [this] {
@@ -416,15 +408,16 @@ private:
                 } else {
                     _cache._tracker.on_mispopulate();
                 }
-                set_sm({});
+                _end_of_stream = true;
             } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
-                set_sm(_cache._read_section(_cache._tracker.region(), [&] {
-                    cache_entry& e = _cache.find_or_create(sm->decorated_key(), sm->partition_tombstone(), phase);
-                    return e.read(_cache, *_read_context, std::move(*sm), phase);
-                }));
+                _sm = _cache._read_section(_cache._tracker.region(), [&] {
+                    cache_entry& e = _cache.find_or_create(mfopt->as_partition_start().key(), mfopt->as_partition_start().partition_tombstone(), phase);
+                    return e.read_flat(_cache, *_read_context, phase);
+                });
             } else {
                 _cache._tracker.on_mispopulate();
-                set_sm(read_directly_from_underlying(std::move(*sm), *_read_context));
+                _sm = read_directly_from_underlying(*_read_context);
+                push_mutation_fragment(std::move(*mfopt));
             }
         });
     }
@@ -448,9 +441,6 @@ public:
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
             return fill_buffer_from(*_sm).then([this] (bool sm_finished) {
                 if (sm_finished) {
-                    if (_read_context->fwd() == streamed_mutation::forwarding::no) {
-                        push_mutation_fragment(partition_end());
-                    }
                     _end_of_stream = true;
                 }
             });
