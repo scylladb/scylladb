@@ -184,9 +184,16 @@ void drop_role_statement::validate(distributed<service::storage_proxy>&, const s
 future<> drop_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
-    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
-        if (!super) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to perform DROP ROLE queries.");
+    return async([this, &state] {
+        state.ensure_has_permission(auth::permission::DROP, auth::resource::role(_role)).get0();
+
+        auto& as = *state.get_auth_service();
+
+        const bool user_is_superuser = auth::is_super_user(as, *state.user()).get0();
+        const bool role_has_superuser = as.role_has_superuser(_role).get0();
+
+        if (role_has_superuser && !user_is_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can drop a superuser role.");
         }
     });
 }

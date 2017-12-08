@@ -172,3 +172,40 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         });
     }, db_config_with_auth());
 }
+
+//
+// DROP ROLE
+//
+
+SEASTAR_TEST_CASE(drop_role_restrictions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        env.execute_cql("CREATE ROLE LORD").get0();
+
+        //
+        // A user cannot drop a role without DROP on the role.
+        //
+
+        verify_unauthorized_then_ok(env, alice, "DROP ROLE lord", [&env] {
+            env.execute_cql("GRANT DROP ON ROLE lord TO alice").get0();
+        });
+
+        //
+        // A logged-in user cannot drop themselves.
+        //
+
+        with_user(env, alice, [&env] {
+            BOOST_REQUIRE_THROW(env.execute_cql("DROP ROLE alice").get0(), exceptions::request_validation_exception);
+        });
+
+        //
+        // Only a superuser can drop a role that has been granted a superuser role.
+        //
+
+        env.execute_cql("CREATE ROLE emperor SUPERUSER").get0();
+
+        verify_unauthorized_then_ok(env, bob, "DROP ROLE emperor", [&env] {
+            env.execute_cql("ALTER USER bob SUPERUSER").get0();
+        });
+
+    }, db_config_with_auth());
+}
