@@ -34,8 +34,116 @@
 #include "tests/simple_schema.hh"
 #include "tests/mutation_source_test.hh"
 #include "tests/failure_injecting_allocation_strategy.hh"
+#include "tests/range_tombstone_list_assertions.hh"
 
 using namespace std::chrono_literals;
+
+
+// Verifies that tombstones in "list" are monotonic, overlap with the requested range,
+// and have information equivalent with "expected" in that range.
+static
+void check_tombstone_slice(const schema& s, std::vector<range_tombstone> list,
+    const query::clustering_range& range,
+    std::initializer_list<range_tombstone> expected)
+{
+    range_tombstone_list actual(s);
+    position_in_partition::less_compare less(s);
+    position_in_partition prev_pos = position_in_partition::before_all_clustered_rows();
+
+    for (auto&& rt : list) {
+        if (!less(rt.position(), position_in_partition::for_range_end(range))) {
+            BOOST_FAIL(sprint("Range tombstone out of range: %s, range: %s", rt, range));
+        }
+        if (!less(position_in_partition::for_range_start(range), rt.end_position())) {
+            BOOST_FAIL(sprint("Range tombstone out of range: %s, range: %s", rt, range));
+        }
+        if (!less(prev_pos, rt.position())) {
+            BOOST_FAIL(sprint("Range tombstone breaks position monotonicity: %s, list: %s", rt, list));
+        }
+        prev_pos = position_in_partition(rt.position());
+        actual.apply(s, rt);
+    }
+
+    actual.trim(s, query::clustering_row_ranges{range});
+
+    range_tombstone_list expected_list(s);
+    for (auto&& rt : expected) {
+        expected_list.apply(s, rt);
+    }
+    expected_list.trim(s, query::clustering_row_ranges{range});
+
+    assert_that(s, actual).is_equal_to(expected_list);
+}
+
+SEASTAR_TEST_CASE(test_range_tombstone_slicing) {
+    return seastar::async([] {
+        logalloc::region r;
+        simple_schema table;
+        auto s = table.schema();
+        with_allocator(r.allocator(), [&] {
+            logalloc::reclaim_lock l(r);
+
+            auto rt1 = table.make_range_tombstone(table.make_ckey_range(1, 2));
+            auto rt2 = table.make_range_tombstone(table.make_ckey_range(4, 7));
+            auto rt3 = table.make_range_tombstone(table.make_ckey_range(6, 9));
+
+            mutation_partition m1(s);
+            m1.apply_delete(*s, rt1);
+            m1.apply_delete(*s, rt2);
+            m1.apply_delete(*s, rt3);
+
+            partition_entry e(m1);
+
+            auto snap = e.read(r, s);
+
+            auto check_range = [&s] (partition_snapshot& snap, const query::clustering_range& range,
+                    std::initializer_list<range_tombstone> expected) {
+                auto tombstones = snap.range_tombstones(*s,
+                    position_in_partition::for_range_start(range),
+                    position_in_partition::for_range_end(range));
+                check_tombstone_slice(*s, tombstones, range, expected);
+            };
+
+            check_range(*snap, table.make_ckey_range(0, 0), {});
+            check_range(*snap, table.make_ckey_range(1, 1), {rt1});
+            check_range(*snap, table.make_ckey_range(3, 4), {rt2});
+            check_range(*snap, table.make_ckey_range(3, 5), {rt2});
+            check_range(*snap, table.make_ckey_range(3, 6), {rt2, rt3});
+            check_range(*snap, table.make_ckey_range(6, 6), {rt2, rt3});
+            check_range(*snap, table.make_ckey_range(7, 10), {rt2, rt3});
+            check_range(*snap, table.make_ckey_range(8, 10), {rt3});
+            check_range(*snap, table.make_ckey_range(10, 10), {});
+            check_range(*snap, table.make_ckey_range(0, 10), {rt1, rt2, rt3});
+
+            auto rt4 = table.make_range_tombstone(table.make_ckey_range(1, 2));
+            auto rt5 = table.make_range_tombstone(table.make_ckey_range(5, 8));
+
+            mutation_partition m2(s);
+            m2.apply_delete(*s, rt4);
+            m2.apply_delete(*s, rt5);
+
+            auto&& v2 = e.add_version(*s);
+            v2.partition().apply_weak(*s, m2, *s);
+            auto snap2 = e.read(r, s);
+
+            check_range(*snap2, table.make_ckey_range(0, 0), {});
+            check_range(*snap2, table.make_ckey_range(1, 1), {rt4});
+            check_range(*snap2, table.make_ckey_range(3, 4), {rt2});
+            check_range(*snap2, table.make_ckey_range(3, 5), {rt2, rt5});
+            check_range(*snap2, table.make_ckey_range(3, 6), {rt2, rt3, rt5});
+            check_range(*snap2, table.make_ckey_range(4, 4), {rt2});
+            check_range(*snap2, table.make_ckey_range(5, 5), {rt2, rt5});
+            check_range(*snap2, table.make_ckey_range(6, 6), {rt2, rt3, rt5});
+            check_range(*snap2, table.make_ckey_range(7, 10), {rt2, rt3, rt5});
+            check_range(*snap2, table.make_ckey_range(8, 8), {rt3, rt5});
+            check_range(*snap2, table.make_ckey_range(9, 9), {rt3});
+            check_range(*snap2, table.make_ckey_range(8, 10), {rt3, rt5});
+            check_range(*snap2, table.make_ckey_range(10, 10), {});
+            check_range(*snap2, table.make_ckey_range(0, 10), {rt4, rt2, rt3, rt5});
+        });
+    });
+
+}
 
 SEASTAR_TEST_CASE(test_apply_to_incomplete) {
     return seastar::async([] {
