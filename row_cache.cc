@@ -365,6 +365,17 @@ static streamed_mutation read_directly_from_underlying(streamed_mutation&& sm, r
     return std::move(sm);
 }
 
+static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
+    flat_mutation_reader res = make_delegating_reader(reader.underlying_flat().underlying());
+    if (reader.schema()->version() != reader.underlying_flat().underlying().schema()->version()) {
+        res = transform(std::move(res), schema_upgrader(reader.schema()));
+    }
+    if (reader.fwd() == streamed_mutation::forwarding::no) {
+        res = make_nonforwardable(std::move(res), true);
+    }
+    return std::move(res);
+}
+
 // Reader which populates the cache using data from the delegate.
 class single_partition_populating_reader final : public flat_mutation_reader::impl {
     row_cache& _cache;
