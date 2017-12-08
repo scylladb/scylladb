@@ -1886,3 +1886,53 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
         }
     });
 }
+
+static void populate_range(row_cache& cache, dht::partition_range& pr, const query::clustering_row_ranges& ranges) {
+    for (auto&& r : ranges) {
+        populate_range(cache, pr, r);
+    }
+}
+
+SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versions) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        mutation m1(pk, s.schema());
+        m1.partition().apply_delete(*s.schema(),
+            s.make_range_tombstone(s.make_ckey_range(2, 107), s.new_tombstone()));
+        s.add_row(m1, s.make_ckey(5), "val");
+
+        // What is important here is that it contains a newer range tombstone
+        // which trims [2, 107] from m1 into (100, 107], which starts after ck=5.
+        mutation m2(pk, s.schema());
+        m2.partition().apply_delete(*s.schema(),
+            s.make_range_tombstone(s.make_ckey_range(1, 100), s.new_tombstone()));
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto make_sm = [&] {
+            auto rd = cache.make_reader(s.schema());
+            auto smo = rd().get0();
+            BOOST_REQUIRE(smo);
+            streamed_mutation& sm = *smo;
+            sm.set_max_buffer_size(1);
+            return std::move(sm);
+        };
+
+        apply(cache, underlying, m1);
+        populate_range(cache, pr, s.make_ckey_range(0, 3));
+
+        auto sm1 = make_sm();
+
+        apply(cache, underlying, m2);
+
+        assert_that(cache.make_reader(s.schema()))
+            .produces(m1 + m2)
+            .produces_end_of_stream();
+    });
+}

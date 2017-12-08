@@ -1274,7 +1274,7 @@ public:
                 set_random_cells(row.cells(), column_kind::regular_column);
                 row.marker() = random_row_marker();
             } else {
-                m.partition().clustered_row(*_schema, ckey, is_dummy::yes, continuous);
+                m.partition().clustered_row(*_schema, position_in_partition::after_all_clustered_rows(), is_dummy::yes, continuous);
             }
         }
 
