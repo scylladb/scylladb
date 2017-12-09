@@ -22,6 +22,8 @@
 #pragma once
 #include "../sstable_test.hh"
 #include "sstables/sstables.hh"
+#include "sstables/compaction_manager.hh"
+#include "cell_locking.hh"
 #include "mutation_reader.hh"
 #include "memtable-sstable.hh"
 #include <boost/accumulators/accumulators.hpp>
@@ -37,6 +39,7 @@ public:
         unsigned key_size;
         unsigned num_columns;
         unsigned column_size;
+        unsigned sstables;
         size_t buffer_size;
         sstring dir;
     };
@@ -103,7 +106,7 @@ public:
     future<> stop() { return make_ready_future<>(); }
 
     future<> fill_memtable() {
-        auto idx = boost::irange(0, int(_cfg.partitions));
+        auto idx = boost::irange(0, int(_cfg.partitions / _cfg.sstables));
         return do_for_each(idx.begin(), idx.end(), [this] (auto iteration) {
             auto key = partition_key::from_deeply_exploded(*s, { this->random_key() });
             auto mut = mutation(key, this->s);
@@ -143,6 +146,40 @@ public:
 
             auto duration = std::chrono::duration<double>(end - start).count();
             return partitions / duration;
+        });
+    }
+
+    future<double> compaction(int idx) {
+        return test_setup::create_empty_test_dir(dir()).then([this, idx] {
+            return seastar::async([this, idx] {
+                storage_service_for_tests ssft;
+                auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
+                    return sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big);
+                };
+
+                std::vector<shared_sstable> ssts;
+                for (auto i = 0; i < _cfg.sstables; i++) {
+                    auto sst = sst_gen();
+                    write_memtable_to_sstable(*_mt, sst).get();
+                    sst->open_data().get();
+                    _mt->revert_flushed_memory();
+                    ssts.push_back(std::move(sst));
+                }
+
+                cell_locker_stats cl_stats;
+                auto cm = make_lw_shared<compaction_manager>();
+                auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
+
+                auto start = test_env::now();
+                auto ret = sstables::compact_sstables(std::move(ssts), *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+                auto end = test_env::now();
+
+                auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
+                assert(ret.total_keys_written == partitions_per_sstable);
+
+                auto duration = std::chrono::duration<double>(end - start).count();
+                return ret.total_keys_written / duration;
+            });
         });
     }
 
