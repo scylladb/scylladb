@@ -2373,19 +2373,18 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
     class summary_generator {
         summary& _summary;
-        uint64_t _data_size;
         size_t _summary_byte_cost;
         uint64_t _next_data_offset_to_write_summary = 0;
     public:
         std::experimental::optional<key> first_key, last_key;
 
-        summary_generator(summary& s, uint64_t data_size) : _summary(s), _data_size(data_size), _summary_byte_cost(summary_byte_cost()) {}
+        summary_generator(summary& s) : _summary(s), _summary_byte_cost(summary_byte_cost()) {}
         bool should_continue() {
             return true;
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), _data_size, index_offset,
+            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset,
                 _next_data_offset_to_write_summary, _summary_byte_cost);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
@@ -2397,9 +2396,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 
     return open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
         return do_with(std::move(index_file), [this, &pc] (file index_file) {
-            return seastar::when_all_succeed(
-                    io_check([&] { return engine().file_size(this->filename(sstable::component_type::Data)); }),
-                    index_file.size()).then([this, &pc, index_file] (auto data_size, auto index_size) {
+            return index_file.size().then([this, &pc, index_file] (auto index_size) {
                 // an upper bound. Surely to be less than this.
                 auto estimated_partitions = index_size / sizeof(uint64_t);
                 prepare_summary(_components->summary, estimated_partitions, _schema->min_index_interval());
@@ -2408,7 +2405,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
                 auto stream = make_file_input_stream(index_file, 0, index_size, std::move(options));
-                return do_with(summary_generator(_components->summary, data_size),
+                return do_with(summary_generator(_components->summary),
                         [this, &pc, stream = std::move(stream), index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             s, trust_promoted_index::yes, std::move(stream), 0, index_size);
