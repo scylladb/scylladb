@@ -245,3 +245,24 @@ SEASTAR_TEST_CASE(grant_role_restrictions) {
         });
     }, db_config_with_auth());
 }
+
+//
+// REVOKE ROLE
+//
+
+SEASTAR_TEST_CASE(revoke_role_restrictions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        ensure_user_exists(env, alice);
+
+        env.execute_cql("CREATE ROLE lord").get0();
+        env.execute_cql("GRANT lord TO alice").get0();
+
+        //
+        // A user cannot revoke a role from another user without AUTHORIZE on the role being revoked.
+        //
+
+        verify_unauthorized_then_ok(env, alice, "REVOKE lord FROM alice", [&env] {
+            env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get0();
+        });
+    }, db_config_with_auth());
+}
