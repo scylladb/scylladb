@@ -75,7 +75,7 @@ cql3::statements::create_user_statement::execute(distributed<service::storage_pr
                 throw exceptions::invalid_request_exception(sprint("User %s already exists", _username));
             }
             if (exists && _if_not_exists) {
-                make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
+                return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
             }
             return auth::authenticator::get().create(_username, _opts->options()).then([this] {
                 return auth::auth::insert_user(_username, _superuser).then([] {
