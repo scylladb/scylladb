@@ -417,7 +417,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
             _read_context->cache().on_mispopulate();
         }
         with_allocator(standard_allocator(), [&] {
-            _last_row = partition_snapshot_row_weakref(*_snp, it);
+            _last_row = partition_snapshot_row_weakref(*_snp, it, true);
         });
     });
 }
@@ -502,7 +502,7 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
                     auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
                     return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
                 });
-                _last_row = partition_snapshot_row_weakref(*_snp, it);
+                _last_row = partition_snapshot_row_weakref(*_snp, it, true);
             } else {
                 _read_context->cache().on_mispopulate();
             }

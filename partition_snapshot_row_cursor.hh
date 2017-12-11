@@ -31,15 +31,17 @@ class partition_snapshot_row_weakref final {
     mutation_partition::rows_type::iterator _it;
     partition_snapshot::change_mark _change_mark;
     position_in_partition _pos = position_in_partition::min();
+    bool _in_latest = false;
 public:
     partition_snapshot_row_weakref() = default;
     // Makes this object point to a row pointed to by given partition_snapshot_row_cursor.
     explicit partition_snapshot_row_weakref(const partition_snapshot_row_cursor&);
     explicit partition_snapshot_row_weakref(std::nullptr_t) {}
-    partition_snapshot_row_weakref(partition_snapshot& snp, mutation_partition::rows_type::iterator it)
+    partition_snapshot_row_weakref(partition_snapshot& snp, mutation_partition::rows_type::iterator it, bool in_latest)
         : _it(it)
         , _change_mark(snp.get_change_mark())
         , _pos(it->position())
+        , _in_latest(in_latest)
     { }
     partition_snapshot_row_weakref& operator=(const partition_snapshot_row_cursor&);
     partition_snapshot_row_weakref& operator=(std::nullptr_t) noexcept {
@@ -54,6 +56,8 @@ public:
     const position_in_partition& position() const { return _pos; }
     // Returns true iff the object is valid.
     bool valid(partition_snapshot& snp) { return snp.get_change_mark() == _change_mark; }
+    // Call only when valid.
+    bool is_in_latest_version() const { return _in_latest; }
     // Brings the object back to validity and returns true iff the snapshot contains the row.
     // When not pointing at a row, returns false.
     bool refresh(partition_snapshot& snp) {
@@ -66,12 +70,14 @@ public:
         }
         _change_mark = snp_cm;
         rows_entry::compare less(*snp.schema());
+        _in_latest = true;
         for (auto&& v : snp.versions()) {
             auto& rows = v.partition().clustered_rows();
             _it = rows.find(_pos, less);
             if (_it != rows.end()) {
                 return true;
             }
+            _in_latest = false;
         }
         return false;
     }
@@ -385,6 +391,7 @@ partition_snapshot_row_weakref::partition_snapshot_row_weakref(const partition_s
     : _it(c._current_row[0].it)
     , _change_mark(c._change_mark)
     , _pos(c._position)
+    , _in_latest(c.is_in_latest_version())
 { }
 
 inline
