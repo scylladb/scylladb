@@ -54,14 +54,17 @@ static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
 
 future<> set_server_init(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+    auto rb02 = std::make_shared < api_registry_builder20 > (ctx.api_doc, "/v2");
 
-    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, rb02](routes& r) {
         r.register_exeption_handler(exception_reply);
         r.put(GET, "/ui", new httpd::file_handler(ctx.api_dir + "/index.html",
                 new content_replace("html")));
         r.add(GET, url("/ui").remainder("path"), new httpd::directory_handler(ctx.api_dir,
                 new content_replace("html")));
         rb->set_api_doc(r);
+        rb02->set_api_doc(r);
+        rb02->register_api_file(r, "swagger20_header");
         rb->register_function(r, "system",
                 "The system related API");
         set_system(ctx, r);
