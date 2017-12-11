@@ -22,6 +22,7 @@
 #include <boost/test/unit_test.hpp>
 #include "utils/loading_shared_values.hh"
 #include "utils/loading_cache.hh"
+#include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/sstring.hh>
@@ -70,8 +71,13 @@ static future<> prepare() {
 
     return open_file_dma((boost::filesystem::path(get_tmpdir().path) / test_file_name.c_str()).c_str(), open_flags::create | open_flags::wo).then([] (file f) {
         return do_with(std::move(f), [] (file& f) {
-            return f.dma_write(0, test_string.c_str(), test_string.size() + 1).then([] (size_t s) {
-                BOOST_REQUIRE_EQUAL(s, test_string.size() + 1);
+            auto size = test_string.size() + 1;
+            auto aligned_size = align_up(size, f.disk_write_dma_alignment());
+            auto buf = allocate_aligned_buffer<char>(aligned_size, f.disk_write_dma_alignment());
+            auto wbuf = buf.get();
+            std::copy_n(test_string.c_str(), size, wbuf);
+            return f.dma_write(0, wbuf, aligned_size).then([aligned_size, buf = std::move(buf)] (size_t s) {
+                BOOST_REQUIRE_EQUAL(s, aligned_size);
                 file_prepared = true;
             });
         });
@@ -81,7 +87,8 @@ static future<> prepare() {
 static future<sstring> loader(const int& k) {
     return open_file_dma((boost::filesystem::path(get_tmpdir().path) / test_file_name.c_str()).c_str(), open_flags::ro).then([] (file f) -> future<sstring> {
         return do_with(std::move(f), [] (file& f) -> future<sstring> {
-            return f.dma_read_exactly<char>(0, test_string.size() + 1).then([] (auto buf) {
+            auto size = align_up(test_string.size() + 1, f.disk_read_dma_alignment());
+            return f.dma_read_exactly<char>(0, size).then([] (auto buf) {
                 sstring str(buf.get());
                 BOOST_REQUIRE_EQUAL(str, test_string);
                 ++load_count;
