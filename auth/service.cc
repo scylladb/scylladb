@@ -86,8 +86,6 @@ private:
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
 
-static sharded<permissions_cache> sharded_permissions_cache{};
-
 static db::consistency_level consistency_for_user(const sstring& name) {
     if (name == meta::DEFAULT_SUPERUSER_NAME) {
         return db::consistency_level::QUORUM;
@@ -133,7 +131,8 @@ service::service(
         std::unique_ptr<authorizer> z,
         std::unique_ptr<authenticator> a,
         std::unique_ptr<role_manager> r)
-            : _cache_config(std::move(c))
+            : _permissions_cache_config(std::move(c))
+            , _permissions_cache(nullptr)
             , _qp(qp)
             , _migration_manager(mm)
             , _authorizer(std::move(z))
@@ -143,12 +142,12 @@ service::service(
 }
 
 service::service(
-        permissions_cache_config cache_config,
+        permissions_cache_config c,
         cql3::query_processor& qp,
         ::service::migration_manager& mm,
         const service_config& sc)
             : service(
-                      std::move(cache_config),
+                      std::move(c),
                       qp,
                       mm,
                       create_object<authorizer>(sc.authorizer_java_name, qp, mm),
@@ -244,18 +243,19 @@ future<> service::start() {
     }).then([this] {
         return when_all_succeed(_authorizer->start(), _authenticator->start());
     }).then([this] {
+        _permissions_cache = std::make_unique<permissions_cache>(_permissions_cache_config, *this, log);
+    }).then([this] {
         return once_among_shards([this] {
             _migration_manager.register_listener(_migration_listener.get());
-            return sharded_permissions_cache.start(std::ref(_cache_config), std::ref(*this), std::ref(log));
+            return make_ready_future<>();
         });
     });
 }
 
 future<> service::stop() {
-    return once_among_shards([this] {
-        _delayed.cancel_all();
-        return sharded_permissions_cache.stop();
-    }).then([this] {
+    _delayed.cancel_all();
+
+    return _permissions_cache->stop().then([this] {
         return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
     });
 }
@@ -338,7 +338,7 @@ future<> service::delete_user(const sstring& name) {
 }
 
 future<permission_set> service::get_permissions(::shared_ptr<authenticated_user> u, resource r) const {
-    return sharded_permissions_cache.local().get(std::move(u), std::move(r));
+    return _permissions_cache->get(std::move(u), std::move(r));
 }
 
 future<bool> service::role_has_superuser(stdx::string_view role_name) const {
