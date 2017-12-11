@@ -159,11 +159,17 @@ private:
 
     future<> create_keyspace_if_missing() const;
 
-    bool should_create_metadata() const;
-
     future<> create_metadata_if_missing();
 };
 
 future<bool> is_super_user(const service&, const authenticated_user&);
+
+///
+/// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
+///
+/// Put differently, when access control is not enforcing, all operations on resources will be allowed and users do not
+/// need to authenticate themselves.
+///
+bool is_enforcing(const service&);
 
 }

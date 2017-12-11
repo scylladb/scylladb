@@ -176,12 +176,6 @@ future<> service::create_keyspace_if_missing() const {
     return make_ready_future<>();
 }
 
-bool service::should_create_metadata() const {
-    const bool null_authorizer = _authorizer->qualified_java_name() == allow_all_authorizer_name();
-    const bool null_authenticator = _authenticator->qualified_java_name() == allow_all_authenticator_name();
-    return !null_authorizer || !null_authenticator;
-}
-
 future<> service::create_metadata_if_missing() {
     // 3 months.
     static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
@@ -239,7 +233,7 @@ future<> service::create_metadata_if_missing() {
 future<> service::start() {
     return once_among_shards([this] {
         return create_keyspace_if_missing().then([this] {
-            if (should_create_metadata()) {
+            if (is_enforcing(*this)) {
                 return create_metadata_if_missing();
             }
 
@@ -380,6 +374,15 @@ future<bool> is_super_user(const service& ser, const authenticated_user& u) {
     }
 
     return ser.is_super_user(u.name());
+}
+
+bool is_enforcing(const service& ser)  {
+    const bool enforcing_authorizer = ser.underlying_authorizer().qualified_java_name() != allow_all_authorizer_name();
+
+    const bool enforcing_authenticator = ser.underlying_authenticator().qualified_java_name()
+            != allow_all_authenticator_name();
+
+    return enforcing_authorizer || enforcing_authenticator;
 }
 
 }
