@@ -226,6 +226,10 @@ public:
         });
     }
 
+    virtual service::client_state& local_client_state() override {
+        return _core_local.local().client_state;
+    }
+
     virtual database& local_db() override {
         return _db->local();
     }
