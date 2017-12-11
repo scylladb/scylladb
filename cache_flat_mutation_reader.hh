@@ -101,6 +101,8 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void start_reading_from_underlying();
     bool after_current_range(position_in_partition_view position);
     bool can_populate() const;
+    // Marks the range between _last_row (exclusive) and _next_row (exclusive) as continuous,
+    // provided that the underlying reader still matches the latest version of the partition.
     void maybe_update_continuity();
     // Tries to ensure that the lower bound of the current population range exists.
     // Returns false if it failed and range cannot be populated.
