@@ -130,6 +130,12 @@ public:
     ///
     future<bool> role_has_superuser(stdx::string_view role_name) const;
 
+    ///
+    /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
+    ///
+    /// \throws \ref nonexistent_role if the role does not exist.
+    future<std::unordered_set<sstring>> get_roles(stdx::string_view role_name) const;
+
     authenticator& underlying_authenticator() {
         return *_authenticator;
     }

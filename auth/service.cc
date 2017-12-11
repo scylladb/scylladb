@@ -342,10 +342,7 @@ future<permission_set> service::get_permissions(::shared_ptr<authenticated_user>
 }
 
 future<bool> service::role_has_superuser(stdx::string_view role_name) const {
-    // TODO(jhaberku): Grab this from the roles cache once it exists.
-    return _role_manager->query_granted(
-            role_name,
-            recursive_role_query::yes).then([this](std::unordered_set<sstring> roles) {
+    return this->get_roles(std::move(role_name)).then([this](const std::unordered_set<sstring>& roles) {
         return do_with(std::move(roles), [this](const std::unordered_set<sstring>& roles) {
             return do_with(roles.begin(), [this, &roles](auto& iter) {
                 return repeat([this, &roles, &iter] {
@@ -362,6 +359,14 @@ future<bool> service::role_has_superuser(stdx::string_view role_name) const {
             });
         });
     });
+}
+
+future<std::unordered_set<sstring>> service::get_roles(stdx::string_view role_name) const {
+    //
+    // We may wish to cache this information in the future (as Apache Cassandra does).
+    //
+
+    return _role_manager->query_granted(role_name, recursive_role_query::yes);
 }
 
 //
