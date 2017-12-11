@@ -23,6 +23,8 @@
 import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re, platform
 from distutils.spawn import find_executable
 
+tempfile.tempdir = "./build/tmp"
+
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
 for line in open('/etc/os-release'):
@@ -83,12 +85,27 @@ def pkg_config(option, package):
     return output.decode('utf-8').strip()
 
 def try_compile(compiler, source = '', flags = []):
+    return try_compile_and_link(compiler, source, flags = flags + ['-c'])
+
+def ensure_tmp_dir_exists():
+    if not os.path.exists(tempfile.tempdir):
+        os.makedirs(tempfile.tempdir)
+
+def try_compile_and_link(compiler, source = '', flags = []):
+    ensure_tmp_dir_exists()
     with tempfile.NamedTemporaryFile() as sfile:
-        sfile.file.write(bytes(source, 'utf-8'))
-        sfile.file.flush()
-        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + args.user_cflags.split() + flags,
-                               stdout = subprocess.DEVNULL,
-                               stderr = subprocess.DEVNULL) == 0
+        ofile = tempfile.mktemp()
+        try:
+            sfile.file.write(bytes(source, 'utf-8'))
+            sfile.file.flush()
+            # We can't write to /dev/null, since in some cases (-ftest-coverage) gcc will create an auxiliary
+            # output file based on the name of the output file, and "/dev/null.gcsa" is not a good name
+            return subprocess.call([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
+                                   stdout = subprocess.DEVNULL,
+                                   stderr = subprocess.DEVNULL) == 0
+        finally:
+            if os.path.exists(ofile):
+                os.unlink(ofile)
 
 def warning_supported(warning, compiler):
     # gcc ignores -Wno-x even if it is not supported
@@ -106,6 +123,14 @@ def debug_flag(compiler):
         return '-g'
     else:
         print('Note: debug information disabled; upgrade your compiler')
+        return ''
+
+def gold_supported(compiler):
+    src_main = 'int main(int argc, char **argv) { return 0; }'
+    if try_compile_and_link(source = src_main, flags = ['-fuse-ld=gold'], compiler = compiler):
+        return '-fuse-ld=gold'
+    else:
+        print('Note: gold not found; using default system linker')
         return ''
 
 def maybe_static(flag, libs):
@@ -730,6 +755,8 @@ warnings = [w
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
+gold_linker_flag = gold_supported(compiler = args.cxx)
+
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 
@@ -884,11 +911,6 @@ os.makedirs(outdir, exist_ok = True)
 do_sanitize = True
 if args.static:
     do_sanitize = False
-
-# 'gold' linker doesn't come as a standard package on the Power platform yet
-gold_linker_flag = ''
-if not re.search("ppc", platform.machine()):
-    gold_linker_flag = '-fuse-ld=gold'
 
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
