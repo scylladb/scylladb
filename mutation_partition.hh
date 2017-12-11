@@ -685,6 +685,8 @@ public:
     void set_continuous(bool value) { _flags._continuous = value; }
     void set_continuous(is_continuous value) { set_continuous(bool(value)); }
     is_dummy dummy() const { return is_dummy(_flags._dummy); }
+    void set_dummy(bool value) { _flags._dummy = value; }
+    void set_dummy(is_dummy value) { _flags._dummy = bool(value); }
     void apply(row_tombstone t) {
         _row.apply(t);
     }
