@@ -920,7 +920,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
-            entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
+            entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region());
             _tracker.touch(entry);
             _tracker.on_merge();
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
@@ -943,7 +943,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             cache_entry& e = *cache_i;
             e.partition().evict(); // FIXME: evict gradually
             upgrade_entry(e);
-            e.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
+            e.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region());
         } else {
             _tracker.clear_continuity(*cache_i);
         }

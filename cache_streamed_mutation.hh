@@ -186,7 +186,7 @@ public:
 
 inline
 future<> cache_streamed_mutation::process_static_row() {
-    if (_snp->version()->partition().static_row_continuous()) {
+    if (_snp->static_row_continuous()) {
         _read_context->cache().on_row_hit();
         row sr = _lsa_manager.run_in_read_section([this] {
             return _snp->static_row();
@@ -449,7 +449,7 @@ inline
 void cache_streamed_mutation::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", this, _next_row.position(), _next_row_in_range);
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
-    for (auto&& rts : _snp->range_tombstones(*_schema, _lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
+    for (auto&& rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
         add_to_buffer(std::move(rts));
         if (is_buffer_full()) {
             return;

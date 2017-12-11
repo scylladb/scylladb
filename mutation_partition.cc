@@ -267,11 +267,15 @@ struct mutation_fragment_applier {
 
     void operator()(clustering_row cr) {
         auto& dr = _mp.clustered_row(_s, std::move(cr.key()));
-        dr.apply(cr.tomb());
-        dr.apply(cr.marker());
-        dr.cells().apply(_s, column_kind::regular_column, std::move(cr.cells()));
+        dr.apply(_s, std::move(cr));
     }
 };
+
+void deletable_row::apply(const schema& s, clustering_row cr) {
+    apply(cr.tomb());
+    apply(cr.marker());
+    cells().apply(s, column_kind::regular_column, std::move(cr.cells()));
+}
 
 void
 mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
@@ -939,12 +943,13 @@ bool mutation_partition::equal(const schema& this_schema, const mutation_partiti
 
 bool mutation_partition::equal_continuity(const schema& s, const mutation_partition& p) const {
     return _static_row_continuous == p._static_row_continuous
-        && boost::equal(_rows, p._rows, [&] (const rows_entry& e1, const rows_entry& e2) {
-            position_in_partition::equal_compare eq(s);
-            return eq(e1.position(), e2.position())
-                   && e1.continuous() == e2.continuous()
-                   && e1.dummy() == e2.dummy();
-        });
+        && get_continuity(s).equals(s, p.get_continuity(s));
+}
+
+mutation_partition mutation_partition::sliced(const schema& s, const query::clustering_row_ranges& ranges) const {
+    auto p = mutation_partition(*this, s, ranges);
+    p.row_tombstones().trim(s, ranges);
+    return p;
 }
 
 void
@@ -1464,6 +1469,7 @@ row::row(row&& other) noexcept
     } else {
         new (&_storage.set) map_type(std::move(other._storage.set));
     }
+    other._size = 0;
 }
 
 row& row::operator=(row&& other) noexcept {
@@ -1658,6 +1664,7 @@ void
 mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) {
     // We need to copy to provide strong exception guarantees.
     mutation_partition tmp(new_schema.shared_from_this());
+    tmp.set_static_row_continuous(_static_row_continuous);
     converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
     accept(old_schema, v);
     *this = std::move(tmp);
@@ -2069,6 +2076,29 @@ void mutation_partition::make_fully_continuous() {
     }
 }
 
+clustering_interval_set mutation_partition::get_continuity(const schema& s, is_continuous cont) const {
+    clustering_interval_set result;
+    auto i = _rows.begin();
+    auto prev_pos = position_in_partition::before_all_clustered_rows();
+    while (i != _rows.end()) {
+        if (i->continuous() == cont) {
+            result.add(s, position_range(std::move(prev_pos), position_in_partition(i->position())));
+        }
+        if (i->position().is_clustering_row() && bool(i->dummy()) == !bool(cont)) {
+            result.add(s, position_range(position_in_partition(i->position()),
+                position_in_partition::after_key(i->position().key())));
+        }
+        prev_pos = i->position().is_clustering_row()
+            ? position_in_partition::after_key(i->position().key())
+            : position_in_partition(i->position());
+        ++i;
+    }
+    if (cont) {
+        result.add(s, position_range(std::move(prev_pos), position_in_partition::after_all_clustered_rows()));
+    }
+    return result;
+}
+
 void mutation_partition::evict() noexcept {
     if (!_rows.empty()) {
         // We need to keep the last entry to mark the range containing all evicted rows as discontinuous.
@@ -2087,7 +2117,7 @@ void mutation_partition::evict() noexcept {
 }
 
 bool
-mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) {
+mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) const {
     auto less = rows_entry::compare(s);
     auto i = _rows.lower_bound(r.start(), less);
     auto end = _rows.lower_bound(r.end(), less);

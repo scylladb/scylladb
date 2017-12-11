@@ -46,6 +46,7 @@
 #include "utils/with_relational_operators.hh"
 
 class mutation_fragment;
+class clustering_row;
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -111,6 +112,14 @@ private:
     struct vector_storage {
         std::bitset<max_vector_size> present;
         vector_type v;
+
+        vector_storage() = default;
+        vector_storage(const vector_storage&) = default;
+        vector_storage(vector_storage&& other) noexcept
+                : present(other.present)
+                , v(std::move(other.v)) {
+            other.present = {};
+        }
     };
 
     union storage {
@@ -585,6 +594,8 @@ public:
         : _deleted_at(tomb), _marker(marker), _cells(cells)
     {}
 
+    void apply(const schema&, clustering_row);
+
     void apply(tombstone deleted_at) {
         _deleted_at.apply(deleted_at);
     }
@@ -812,8 +823,6 @@ private:
 
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
-
-    bool check_continuity(const schema&, const position_range&, is_continuous);
 public:
     struct copy_comparators_only {};
     struct incomplete_tag {};
@@ -855,10 +864,14 @@ public:
     void set_static_row_continuous(bool value) { _static_row_continuous = value; }
     bool is_fully_continuous() const;
     void make_fully_continuous();
+    // Returns clustering row ranges which have continuity matching the is_continuous argument.
+    clustering_interval_set get_continuity(const schema&, is_continuous = is_continuous::yes) const;
     // Returns true iff all keys from given range are marked as continuous, or range is empty.
     bool fully_continuous(const schema&, const position_range&);
     // Returns true iff all keys from given range are marked as not continuous and range is not empty.
     bool fully_discontinuous(const schema&, const position_range&);
+    // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
+    bool check_continuity(const schema&, const position_range&, is_continuous) const;
     // Removes all data, marking affected ranges as discontinuous.
     void evict() noexcept;
     // Applies mutation_fragment.
@@ -956,6 +969,10 @@ public:
     // create a mutation_partition equal to the sum of other and this one.
     // This and other must both be governed by the same schema s.
     mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
+
+    // Returns a subset of this mutation holding only information relevant for given clustering ranges.
+    // Range tombstones will be trimmed to the boundaries of the clustering ranges.
+    mutation_partition sliced(const schema& s, const query::clustering_row_ranges&) const;
 
     // Returns true if there is no live data or tombstones.
     bool empty() const;

@@ -172,6 +172,10 @@ public:
         assert(_version);
         return *_version;
     }
+    const partition_version& operator*() const {
+        assert(_version);
+        return *_version;
+    }
     partition_version* operator->() {
         assert(_version);
         return _version;
@@ -269,9 +273,12 @@ public:
 
     tombstone partition_tombstone() const;
     row static_row() const;
+    bool static_row_continuous() const;
     mutation_partition squashed() const;
     // Returns range tombstones overlapping with [start, end)
-    std::vector<range_tombstone> range_tombstones(const ::schema& s, position_in_partition_view start, position_in_partition_view end);
+    std::vector<range_tombstone> range_tombstones(position_in_partition_view start, position_in_partition_view end);
+    // Returns all range tombstones
+    std::vector<range_tombstone> range_tombstones();
 };
 
 // Represents mutation_partition with snapshotting support a la MVCC.
@@ -294,7 +301,7 @@ private:
 
     void set_version(partition_version*);
 
-    void apply_to_incomplete(const schema& s, partition_version* other);
+    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&);
 public:
     class rows_iterator;
     partition_entry() = default;
@@ -355,7 +362,7 @@ public:
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema);
+    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&);
 
     partition_version& add_version(const schema& s);
 
