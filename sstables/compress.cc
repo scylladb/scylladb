@@ -55,57 +55,34 @@ static inline uint64_t make_mask(uint8_t size_bits, uint8_t offset, mask_type t)
 
 /*
  * ----> memory addresses
- *
- * Little Endian (e.g. x86)
- *
- * |1|2|3|4| | | | | CPU integer
- *  -------
- *     |
- *     +-+ << shift = prefix bits
- *       |
- *
- * | |1|2|3|4| | | | raw storage (unaligned)
- *  = ------- =====
- *  |           |
- *  |           +-> suffix bits
- *  +-> prefix bits
- *
- *
- * Big Endian (e.g. PPC)
- *
- * | | | | |4|3|2|1| CPU integer
+ * MSB           LSB
+ * | | | | |3|2|1|0| CPU integer (big or little endian byte order)
  *          -------
  *             |
- *       +-----+ << shift = suffix bits
+ *       +-----+ << shift = prefix bits
  *       |
- *
- * | |4|3|2|1| | | | raw storage (unaligned)
+ *    -------
+ *  7 6 5 4 3 2 1 0  index*
+ * | |3|2|1|0| | | | raw storage (unaligned, little endian byte order)
  *  = ------- =====
  *  |           |
- *  |           +-> suffix bits
- *  +-> prefix bits
+ *  |           +-> prefix bits
+ *  +-> suffix bits
  *
  * |0|1|1|1|1|0|0|0| read/write mask
+ *
+ * * On big endian systems the indices in storage are reversed and
+ *   run left to right: 0 1 .. 6 7. To avoid differences in the
+ *   encoding logic on machines with different native byte orders
+ *   reads and writes to storage must be explicitly little endian.
  */
 struct bit_displacement {
     uint64_t shift;
     uint64_t mask;
 };
 
-inline uint64_t displacement_bits(uint64_t prefix_bits, uint8_t size_bits) {
-// Works with gcc and clang
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-    return prefix_bits;
-#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return 64 - prefix_bits - size_bits;
-#else
-#error "Unsupported platform or compiler, cannot detect endianness"
-#endif
-}
-
 inline bit_displacement displacement_for(uint64_t prefix_bits, uint8_t size_bits, mask_type t) {
-    const uint64_t d = displacement_bits(prefix_bits, size_bits);
-    return {d, make_mask(size_bits, d, t)};
+    return {prefix_bits, make_mask(size_bits, prefix_bits, t)};
 }
 
 std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) {
@@ -133,10 +110,7 @@ std::pair<bucket_info, segment_info> params_for_chunk_size(uint32_t chunk_size) 
 
 uint64_t compression::segmented_offsets::read(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits) const {
     const uint64_t offset_byte = offset_bits / 8;
-
-    uint64_t value{0};
-
-    std::copy_n(_storage[bucket_index].storage.get() + offset_byte, sizeof(value), reinterpret_cast<char*>(&value));
+    uint64_t value = seastar::read_le<uint64_t>(_storage[bucket_index].storage.get() + offset_byte);
 
     const auto displacement = displacement_for(offset_bits % 8, size_bits, mask_type::set);
 
@@ -149,9 +123,7 @@ uint64_t compression::segmented_offsets::read(uint64_t bucket_index, uint64_t of
 void compression::segmented_offsets::write(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits, uint64_t value) {
     const uint64_t offset_byte = offset_bits / 8;
 
-    uint64_t old_value{0};
-
-    std::copy_n(_storage[bucket_index].storage.get() + offset_byte, sizeof(old_value), reinterpret_cast<char*>(&old_value));
+    uint64_t old_value = seastar::read_le<uint64_t>(_storage[bucket_index].storage.get() + offset_byte);
 
     const auto displacement = displacement_for(offset_bits % 8, size_bits, mask_type::clear);
 
@@ -164,7 +136,7 @@ void compression::segmented_offsets::write(uint64_t bucket_index, uint64_t offse
     old_value &= displacement.mask;
     value |= old_value;
 
-    std::copy_n(reinterpret_cast<char*>(&value), sizeof(value), _storage[bucket_index].storage.get() + offset_byte);
+    seastar::write_le(_storage[bucket_index].storage.get() + offset_byte, value);
 }
 
 void compression::segmented_offsets::update_position_trackers(std::size_t index) const {
