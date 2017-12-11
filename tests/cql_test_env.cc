@@ -51,6 +51,8 @@ future<> await_background_jobs_on_all_shards();
 
 }
 
+static const sstring testing_superuser = "tester";
+
 static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
     return gms::get_failure_detector().start().then([seed_provider, cluster_name] {
         // Init gossiper
@@ -91,7 +93,7 @@ private:
         core_local_state(auth::service& auth_service)
             : client_state(service::client_state::for_external_calls(auth_service))
         {
-            client_state.set_login(::make_shared<auth::authenticated_user>("cassandra"));
+            client_state.set_login(::make_shared<auth::authenticated_user>(testing_superuser));
         }
 
         future<> stop() {
@@ -362,6 +364,10 @@ public:
                 gms::stop_gossiping().get();
                 auth_service->stop().get();
             });
+
+            if (auth::is_enforcing(auth_service->local())) {
+                auth_service->local().insert_user(testing_superuser, true).get();
+            }
 
             single_node_cql_env env(db, auth_service);
             env.start().get();
