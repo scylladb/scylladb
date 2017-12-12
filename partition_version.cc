@@ -199,6 +199,28 @@ partition_entry::partition_entry(mutation_partition mp)
     _version = partition_version_ref(*new_version);
 }
 
+partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, mutation_partition&& mp)
+    : partition_entry(std::move(mp))
+{
+    _version->partition().ensure_last_dummy(s);
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, mutation_partition&& mp) {
+    return {evictable_tag(), s, std::move(mp)};
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, const mutation_partition& mp) {
+    return make_evictable(s, mutation_partition(mp));
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, partition_entry&& pe) {
+    // If we can assume that _pe is fully continuous, we don't need to check all versions
+    // to determine what the continuity is.
+    // This doesn't change value and doesn't invalidate iterators, so can be called even with a snapshot.
+    pe.version()->partition().ensure_last_dummy(s);
+    return partition_entry(std::move(pe));
+}
+
 partition_entry::~partition_entry() {
     if (!_version) {
         return;

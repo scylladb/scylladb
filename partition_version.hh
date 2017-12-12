@@ -287,6 +287,11 @@ public:
 // objects called versions. The logical mutation_partition state represented
 // by that chain is equal to reducing the chain using mutation_partition::apply()
 // from left (latest version) to right.
+//
+// We distinguish evictable and non-evictable partition entries. Entries which
+// are non-evictable have all their elements non-evictable and fully continuous.
+// Partition snapshots inherit evictability of the entry, which remains invariant
+// for a snapshot.
 class partition_entry {
     partition_snapshot* _snapshot = nullptr;
     partition_version_ref _version;
@@ -303,10 +308,20 @@ private:
 
     void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&);
 public:
+    struct evictable_tag {};
     class rows_iterator;
+    // Constructs a non-evictable entry holding empty partition
     partition_entry() = default;
+    // Constructs a non-evictable entry
     explicit partition_entry(mutation_partition mp);
+    // Constructs an evictable entry
+    partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
     ~partition_entry();
+
+    static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
+    static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
+    // pe must be a non-evictable fully continuous entry.
+    static partition_entry make_evictable(const schema& s, partition_entry&& pe);
 
     partition_entry(partition_entry&& pe) noexcept
         : _snapshot(pe._snapshot), _version(std::move(pe._version))
@@ -338,15 +353,14 @@ public:
 
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
+    // Use only on non-evictable entries.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
     void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
-
-    // Strong exception guarantees.
-    // Assumes this instance and mpv are fully continuous.
     void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
 
     // Adds mutation_partition represented by "other" to the one represented
     // by this entry.
+    // This entry must be evictable.
     //
     // The argument must be fully-continuous.
     //
