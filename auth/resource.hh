@@ -59,21 +59,6 @@
 
 namespace auth {
 
-//
-// Resources are entities that users can be granted permissions on.
-//
-// Currently, the only known resources are keyspaces and tables. However, we shortly anticipate other kinds of resources
-// like roles.
-//
-// When they are stored as system metadata, resources have the form `root/part_0/part_1/.../part_n`.
-// Each kind of resource has a specific root prefix, followed by a maximum of `n` parts (where `n` is distinct for each
-// kind of resource as well). In this code, this form is called the "name".
-//
-// Since all resources have this same structure, all the different kinds are stored in instances of the same class:
-// `resource`. When we wish to query a resource for kind-specific data (like the table of a `data` resource), we create
-// a kind-specific "view" of the resource.
-//
-
 class invalid_resource_name : public std::invalid_argument {
     std::shared_ptr<sstring> _name;
 
@@ -94,6 +79,20 @@ enum class resource_kind {
 
 std::ostream& operator<<(std::ostream&, resource_kind);
 
+///
+/// Resources are entities that users can be granted permissions on.
+///
+/// Currently, the only known resources are keyspaces and tables. However, we shortly anticipate other kinds of
+/// resources like roles.
+///
+/// When they are stored as system metadata, resources have the form `root/part_0/part_1/.../part_n`. Each kind of
+/// resource has a specific root prefix, followed by a maximum of `n` parts (where `n` is distinct for each kind of
+/// resource as well). In this code, this form is called the "name".
+///
+/// Since all resources have this same structure, all the different kinds are stored in instances of the same class:
+/// \ref resource. When we wish to query a resource for kind-specific data (like the table of a "data" resource), we
+/// create a kind-specific "view" of the resource.
+///
 class resource final {
     resource_kind _kind;
 
@@ -105,14 +104,20 @@ public:
     static resource data(stdx::string_view keyspace);
     static resource data(stdx::string_view keyspace, stdx::string_view table);
 
-    // Throws `invalid_resource_name` when the name is malformed.
+    ///
+    /// Parse a resource name.
+    ///
+    /// \throws \ref invalid_resource_name when the name is malformed.
+    ///
     static resource from_name(stdx::string_view);
 
     resource_kind kind() const noexcept {
         return _kind;
     }
 
-    // A machine-friendly identifier unique to each resource.
+    ///
+    /// A machine-friendly identifier unique to each resource.
+    ///
     sstring name() const;
 
     stdx::optional<resource> parent() const;
@@ -150,14 +155,16 @@ public:
     }
 };
 
-// A `data` view of `resource`.
-//
-// If neither `keyspace` nor `table` is present, this is the root resource.
+/// A "data" view of \ref resource.
+///
+/// If neither `keyspace` nor `table` is present, this is the root resource.
 class data_resource_view final {
     const resource& _resource;
 
 public:
-    // Throws `resource_kind_mismatch` if the argument is not a `data` resource.
+    ///
+    /// \throws `resource_kind_mismatch` if the argument is not a `data` resource.
+    ///
     explicit data_resource_view(const resource& r);
 
     stdx::optional<stdx::string_view> keyspace() const;
