@@ -4287,7 +4287,7 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
             fwd_mr);
 }
 
-mutation_reader make_range_sstable_reader(schema_ptr s,
+flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
@@ -4300,8 +4300,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
         return mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr));
     };
-    return mutation_reader_from_flat_mutation_reader(
-            make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
+    return make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
                     pr,
                     slice,
@@ -4312,7 +4311,7 @@ mutation_reader make_range_sstable_reader(schema_ptr s,
                     fwd_mr,
                     std::move(reader_factory_fn)),
             fwd,
-            fwd_mr));
+            fwd_mr);
 }
 
 future<>

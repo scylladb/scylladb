@@ -461,7 +461,7 @@ public:
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
     flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
-        return flat_mutation_reader_from_mutation_reader(_cf.schema(), ::make_range_sstable_reader(_cf.schema(),
+        return ::make_range_sstable_reader(_cf.schema(),
                 std::move(ssts),
                 query::full_partition_range,
                 _cf.schema()->full_slice(),
@@ -469,7 +469,7 @@ public:
                 no_resource_tracking(),
                 nullptr,
                 ::streamed_mutation::forwarding::no,
-                ::mutation_reader::forwarding::no), ::streamed_mutation::forwarding::no);
+                ::mutation_reader::forwarding::no);
     }
 
     void report_start(const sstring& formatted_msg) const override {

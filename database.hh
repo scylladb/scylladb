@@ -854,7 +854,7 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr);
 
-mutation_reader make_range_sstable_reader(schema_ptr s,
+flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
