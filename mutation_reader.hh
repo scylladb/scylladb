@@ -381,35 +381,50 @@ GCC6_CONCEPT(
         { mf(dk) } -> bool;
     };
 )
-class filtering_reader : public mutation_reader::impl {
-    mutation_reader _rd;
+class filtering_reader : public flat_mutation_reader::impl {
+    flat_mutation_reader _rd;
     MutationFilter _filter;
-    streamed_mutation_opt _current;
     static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const dht::decorated_key&)>>::value, "bad MutationFilter signature");
 public:
-    filtering_reader(mutation_reader rd, MutationFilter&& filter)
-            : _rd(std::move(rd)), _filter(std::forward<MutationFilter>(filter)) {
+    filtering_reader(flat_mutation_reader rd, MutationFilter&& filter)
+        : impl(rd.schema())
+        , _rd(std::move(rd))
+        , _filter(std::forward<MutationFilter>(filter)) {
     }
-    virtual future<streamed_mutation_opt> operator()() override {\
-        return repeat([this] {
-            return _rd().then([this] (streamed_mutation_opt&& mo) mutable {
-                if (!mo) {
-                    _current = std::move(mo);
-                    return stop_iteration::yes;
-                } else {
-                    if (_filter(mo->decorated_key())) {
-                        _current = std::move(mo);
-                        return stop_iteration::yes;
+    virtual future<> fill_buffer() override {
+        return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this] {
+            return _rd.fill_buffer().then([this] {
+                while (!_rd.is_buffer_empty()) {
+                    auto mf = _rd.pop_mutation_fragment();
+                    if (mf.is_partition_start()) {
+                        auto& dk = mf.as_partition_start().key();
+                        if (!_filter(dk)) {
+                            _rd.next_partition();
+                            continue;
+                        }
                     }
-                    return stop_iteration::no;
+                    push_mutation_fragment(std::move(mf));
                 }
+                _end_of_stream = _rd.is_end_of_stream();
             });
-        }).then([this] {
-            return make_ready_future<streamed_mutation_opt>(std::move(_current));
         });
-    };
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = false;
+            _rd.next_partition();
+        }
+    }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
         return _rd.fast_forward_to(pr);
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        forward_buffer_to(pr.start());
+        _end_of_stream = false;
+        return _rd.fast_forward_to(std::move(pr));
     }
 };
 
@@ -419,8 +434,8 @@ public:
 // accepts mutation const& and returns a bool. The mutation stays in the
 // stream if and only if the filter returns true.
 template <typename MutationFilter>
-mutation_reader make_filtering_reader(mutation_reader rd, MutationFilter&& filter) {
-    return make_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
+flat_mutation_reader make_filtering_reader(flat_mutation_reader rd, MutationFilter&& filter) {
+    return make_flat_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
 // Calls the consumer for each element of the reader's stream until end of stream

@@ -4267,12 +4267,12 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         mutation_reader::forwarding fwd_mr)
 {
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
-        mutation_reader reader = mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr));
+        flat_mutation_reader reader = sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr);
         if (sst->is_shared()) {
             using sig = bool (&)(const dht::decorated_key&);
             reader = make_filtering_reader(std::move(reader), sig(belongs_to_current_shard));
         }
-        return std::move(reader);
+        return mutation_reader_from_flat_mutation_reader(std::move(reader));
     };
     return mutation_reader_from_flat_mutation_reader(
             make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
