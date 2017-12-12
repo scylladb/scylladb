@@ -55,6 +55,7 @@ namespace auth {
 std::ostream& operator<<(std::ostream& os, resource_kind kind) {
     switch (kind) {
         case resource_kind::data: os << "data"; break;
+        case resource_kind::role: os << "role"; break;
     }
 
     return os;
@@ -62,10 +63,12 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
 
 static const std::unordered_map<resource_kind, stdx::string_view> roots{
         {resource_kind::data, "data"},
+        {resource_kind::role, "roles"},
 };
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
+        {resource_kind::role, 1},
 };
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
@@ -87,6 +90,19 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
             permission::AUTHORIZE>();
 }
 
+static permission_set applicable_permissions(const role_resource_view& rv) {
+    if (rv.role()) {
+        return permission_set::of<permission::ALTER, permission::DROP, permission::AUTHORIZE>();
+    }
+
+    return permission_set::of<
+            permission::CREATE,
+            permission::ALTER,
+            permission::DROP,
+            permission::AUTHORIZE,
+            permission::DESCRIBE>();
+}
+
 resource::resource(resource_kind kind) : _kind(kind), _parts{sstring(roots.at(kind))}  {
 }
 
@@ -101,6 +117,10 @@ resource resource::data(stdx::string_view keyspace) {
 
 resource resource::data(stdx::string_view keyspace, stdx::string_view table) {
     return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)});
+}
+
+resource resource::role(stdx::string_view role) {
+    return resource(resource_kind::role, std::vector<sstring>{sstring(role)});
 }
 
 resource resource::from_name(stdx::string_view name) {
@@ -159,6 +179,7 @@ permission_set resource::applicable_permissions() const {
 
     switch (_kind) {
         case resource_kind::data: ps = ::auth::applicable_permissions(data_resource_view(*this)); break;
+        case resource_kind::role: ps = ::auth::applicable_permissions(role_resource_view(*this)); break;
     }
 
     return ps;
@@ -179,6 +200,7 @@ bool operator<(const resource& r1, const resource& r2) {
 std::ostream& operator<<(std::ostream& os, const resource& r) {
     switch (r.kind()) {
         case resource_kind::data: return os << data_resource_view(r);
+        case resource_kind::role: return os << role_resource_view(r);
     }
 
     return os;
@@ -236,6 +258,32 @@ bool resource_exists(const data_resource_view& v) {
     } else {
         return true;
     }
+}
+
+role_resource_view::role_resource_view(const resource& r) : _resource(r) {
+    if (r._kind != resource_kind::role) {
+        throw resource_kind_mismatch(resource_kind::role, r._kind);
+    }
+}
+
+stdx::optional<stdx::string_view> role_resource_view::role() const {
+    if (_resource._parts.size() == 1) {
+        return {};
+    }
+
+    return _resource._parts[1];
+}
+
+std::ostream& operator<<(std::ostream& os, const role_resource_view& v) {
+    const auto role = v.role();
+
+    if (!role) {
+        os << "<all roles>";
+    } else {
+        os << "<role " << *role << '>';
+    }
+
+    return os;
 }
 
 }

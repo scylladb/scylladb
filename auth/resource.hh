@@ -75,7 +75,7 @@ public:
 };
 
 enum class resource_kind {
-    data
+    data, role
 };
 
 std::ostream& operator<<(std::ostream&, resource_kind);
@@ -83,8 +83,7 @@ std::ostream& operator<<(std::ostream&, resource_kind);
 ///
 /// Resources are entities that users can be granted permissions on.
 ///
-/// Currently, the only known resources are keyspaces and tables. However, we shortly anticipate other kinds of
-/// resources like roles.
+/// There are data (keyspaces and tables) and role resources. There may be other kinds of resources in the future.
 ///
 /// When they are stored as system metadata, resources have the form `root/part_0/part_1/.../part_n`. Each kind of
 /// resource has a specific root prefix, followed by a maximum of `n` parts (where `n` is distinct for each kind of
@@ -104,6 +103,8 @@ public:
 
     static resource data(stdx::string_view keyspace);
     static resource data(stdx::string_view keyspace, stdx::string_view table);
+
+    static resource role(stdx::string_view role);
 
     ///
     /// Parse a resource name.
@@ -133,6 +134,7 @@ private:
 
     friend class std::hash<resource>;
     friend class data_resource_view;
+    friend class role_resource_view;
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
@@ -179,6 +181,25 @@ std::ostream& operator<<(std::ostream&, const data_resource_view&);
 
 bool resource_exists(const data_resource_view&);
 
+///
+/// A "role" view of \ref resource.
+///
+/// If `role` is not present, this is the root resource.
+///
+class role_resource_view final {
+    const resource& _resource;
+
+public:
+    ///
+    /// \throws \ref resource_kind_mismatch if the argument is not a "role" resource.
+    ///
+    explicit role_resource_view(const resource&);
+
+    stdx::optional<stdx::string_view> role() const;
+};
+
+std::ostream& operator<<(std::ostream&, const role_resource_view&);
+
 }
 
 namespace std {
@@ -189,11 +210,16 @@ struct hash<auth::resource> {
         return utils::tuple_hash()(std::make_tuple(auth::resource_kind::data, dv.keyspace(), dv.table()));
     }
 
+    static size_t hash_role(const auth::role_resource_view& rv) {
+        return utils::tuple_hash()(std::make_tuple(auth::resource_kind::role, rv.role()));
+    }
+
     size_t operator()(const auth::resource& r) const {
         std::size_t value;
 
         switch (r._kind) {
         case auth::resource_kind::data: value = hash_data(auth::data_resource_view(r)); break;
+        case auth::resource_kind::role: value = hash_role(auth::role_resource_view(r)); break;
         }
 
         return value;
