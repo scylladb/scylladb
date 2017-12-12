@@ -499,7 +499,7 @@ int main(int ac, char** av) {
             auto prio = get_or_default(ssl_opts, "priority_string", sstring());
             auto clauth = is_true(get_or_default(ssl_opts, "require_client_auth", "false"));
             if (cluster_name.empty()) {
-                cluster_name = "ScyllaDB Cluster";
+                cluster_name = "Test Cluster";
                 startlog.warn("Using default cluster name is not recommended. Using a unique cluster name will reduce the chance of adding nodes to the wrong cluster by mistake");
             }
             init_ms_fd_gossiper(listen_address
