@@ -375,20 +375,17 @@ mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::par
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 mutation_reader make_empty_reader();
 
-/*
-template<typename T>
-concept bool StreamedMutationFilter() {
-    return requires(T t, const streamed_mutation& sm) {
-        { t(sm) } -> bool;
-    };
-}
-*/
 template <typename MutationFilter>
+GCC6_CONCEPT(
+    requires requires(MutationFilter mf, const dht::decorated_key& dk) {
+        { mf(dk) } -> bool;
+    };
+)
 class filtering_reader : public mutation_reader::impl {
     mutation_reader _rd;
     MutationFilter _filter;
     streamed_mutation_opt _current;
-    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const streamed_mutation&)>>::value, "bad MutationFilter signature");
+    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const dht::decorated_key&)>>::value, "bad MutationFilter signature");
 public:
     filtering_reader(mutation_reader rd, MutationFilter&& filter)
             : _rd(std::move(rd)), _filter(std::forward<MutationFilter>(filter)) {
@@ -400,7 +397,7 @@ public:
                     _current = std::move(mo);
                     return stop_iteration::yes;
                 } else {
-                    if (_filter(*mo)) {
+                    if (_filter(mo->decorated_key())) {
                         _current = std::move(mo);
                         return stop_iteration::yes;
                     }

@@ -236,8 +236,8 @@ logalloc::occupancy_stats column_family::occupancy() const {
 }
 
 static
-bool belongs_to_current_shard(const streamed_mutation& m) {
-    return dht::shard_of(m.decorated_key().token()) == engine().cpu_id();
+bool belongs_to_current_shard(const dht::decorated_key& dk) {
+    return dht::shard_of(dk.token()) == engine().cpu_id();
 }
 
 // Stores ranges for all components of the same clustering key, index 0 referring to component
@@ -4269,7 +4269,7 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
         mutation_reader reader = mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr));
         if (sst->is_shared()) {
-            using sig = bool (&)(const streamed_mutation&);
+            using sig = bool (&)(const dht::decorated_key&);
             reader = make_filtering_reader(std::move(reader), sig(belongs_to_current_shard));
         }
         return std::move(reader);
