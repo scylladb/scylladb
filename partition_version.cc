@@ -152,6 +152,10 @@ partition_snapshot::~partition_snapshot() {
     });
 }
 
+void merge_versions(const schema& s, mutation_partition& newer, mutation_partition&& older) {
+    newer.apply_monotonically(s, std::move(older));
+}
+
 void partition_snapshot::merge_partition_versions() {
     if (_version && !_version.is_unique_owner()) {
         auto v = &*_version;
@@ -165,7 +169,7 @@ void partition_snapshot::merge_partition_versions() {
         while (current && !current->is_referenced()) {
             auto next = current->next();
             try {
-                first_used->partition().apply_monotonically(*_schema, std::move(current->partition()));
+                merge_versions(*_schema, first_used->partition(), std::move(current->partition()));
                 current_allocator().destroy(current);
             } catch (...) {
                 // Set _version so that the merge can be retried.
@@ -441,7 +445,11 @@ mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
     mutation_partition mp(to);
     mp.set_static_row_continuous(_version->partition().static_row_continuous());
     for (auto&& v : _version->all_elements()) {
-        mp.apply(*to, v.partition(), *from);
+        auto older = v.partition();
+        if (from->version() != to->version()) {
+            older.upgrade(*from, *to);
+        }
+        merge_versions(*to, mp, std::move(older));
     }
     return mp;
 }
