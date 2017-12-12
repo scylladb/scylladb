@@ -58,6 +58,13 @@ struct service_config final {
     sstring role_manager_java_name;
 };
 
+///
+/// Central interface into access-control for the system.
+///
+/// Access control encompasses user/role management, authentication, and authorization. This class provides access to
+/// the dynamically-loaded implementations of these modules (through the `underlying_*` member functions), but also
+/// builds on their functionality with caching and abstractions for common operations.
+///
 class service final {
     permissions_cache_config _cache_config;
 
@@ -87,6 +94,11 @@ public:
             std::unique_ptr<authenticator>,
             std::unique_ptr<role_manager>);
 
+    ///
+    /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
+    /// arguments must be copyable, which is why we delay construction with instance-construction instructions instead
+    /// of the instances themselves.
+    ///
     service(
             permissions_cache_config,
             cql3::query_processor&,
