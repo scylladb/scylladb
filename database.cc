@@ -473,69 +473,33 @@ public:
     }
 };
 
-class single_key_sstable_reader final : public mutation_reader::impl {
-    column_family* _cf;
-    schema_ptr _schema;
-    const dht::partition_range& _pr;
-    sstables::key _key;
-    std::vector<streamed_mutation> _mutations;
-    bool _done = false;
-    lw_shared_ptr<sstables::sstable_set> _sstables;
-    utils::estimated_histogram& _sstable_histogram;
-    // Use a pointer instead of copying, so we don't need to regenerate the reader if
-    // the priority changes.
-    const io_priority_class& _pc;
-    const query::partition_slice& _slice;
-    reader_resource_tracker _resource_tracker;
-    tracing::trace_state_ptr _trace_state;
-    streamed_mutation::forwarding _fwd;
-public:
-    single_key_sstable_reader(column_family* cf,
-                              schema_ptr schema,
-                              lw_shared_ptr<sstables::sstable_set> sstables,
-                              utils::estimated_histogram& sstable_histogram,
-                              const dht::partition_range& pr, // must be singular
-                              const query::partition_slice& slice,
-                              const io_priority_class& pc,
-                              reader_resource_tracker resource_tracker,
-                              tracing::trace_state_ptr trace_state,
-                              streamed_mutation::forwarding fwd)
-        : _cf(cf)
-        , _schema(std::move(schema))
-        , _pr(pr)
-        , _key(sstables::key::from_partition_key(*_schema, *pr.start()->value().key()))
-        , _sstables(std::move(sstables))
-        , _sstable_histogram(sstable_histogram)
-        , _pc(pc)
-        , _slice(slice)
-        , _resource_tracker(std::move(resource_tracker))
-        , _trace_state(std::move(trace_state))
-        , _fwd(fwd)
-    { }
-
-    virtual future<streamed_mutation_opt> operator()() override {
-        if (_done) {
-            return make_ready_future<streamed_mutation_opt>();
-        }
-        auto candidates = filter_sstable_for_reader(_sstables->select(_pr), *_cf, _schema, _key, _slice);
-        return parallel_for_each(std::move(candidates),
-            [this](const sstables::shared_sstable& sstable) {
-                tracing::trace(_trace_state, "Reading key {} from sstable {}", _pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-                return streamed_mutation_from_flat_mutation_reader(sstable->read_row_flat(_schema, _pr.start()->value(), _slice, _pc, _resource_tracker, _fwd)).then([this](auto smo) {
-                    if (smo) {
-                        _mutations.emplace_back(std::move(*smo));
-                    }
-                });
-        }).then([this] () -> streamed_mutation_opt {
-            _done = true;
-            if (_mutations.empty()) {
-                return { };
-            }
-            _sstable_histogram.add(_mutations.size());
-            return merge_mutations(std::move(_mutations));
-        });
+static flat_mutation_reader
+create_single_key_sstable_reader(column_family* cf,
+                                 schema_ptr schema,
+                                 lw_shared_ptr<sstables::sstable_set> sstables,
+                                 utils::estimated_histogram& sstable_histogram,
+                                 const dht::partition_range& pr, // must be singular
+                                 const query::partition_slice& slice,
+                                 const io_priority_class& pc,
+                                 reader_resource_tracker resource_tracker,
+                                 tracing::trace_state_ptr trace_state,
+                                 streamed_mutation::forwarding fwd,
+                                 mutation_reader::forwarding fwd_mr)
+{
+    auto key = sstables::key::from_partition_key(*schema, *pr.start()->value().key());
+    auto readers = boost::copy_range<std::vector<flat_mutation_reader>>(
+        filter_sstable_for_reader(sstables->select(pr), *cf, schema, key, slice)
+        | boost::adaptors::transformed([&] (const sstables::shared_sstable& sstable) {
+            tracing::trace(trace_state, "Reading key {} from sstable {}", pr, seastar::value_of([&sstable] { return sstable->get_filename(); }));
+            return sstable->read_row_flat(schema, pr.start()->value(), slice, pc, resource_tracker, fwd);
+        })
+    );
+    if (readers.empty()) {
+        return make_empty_flat_reader(schema);
     }
-};
+    sstable_histogram.add(readers.size());
+    return make_combined_reader(schema, std::move(readers), fwd, fwd_mr);
+}
 
 flat_mutation_reader
 column_family::make_sstable_reader(schema_ptr s,
@@ -569,14 +533,13 @@ column_family::make_sstable_reader(schema_ptr s,
                         tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd,
                         mutation_reader::forwarding fwd_mr) {
-                    return make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-                                _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd);
+                    return create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+                                _stats.estimated_sstable_per_read, pr, slice, pc, reader_resource_tracker(config.resources_sem), std::move(trace_state), fwd, fwd_mr);
                 });
             return make_restricted_flat_reader(config, std::move(ms), std::move(s), pr, slice, pc, std::move(trace_state), fwd, fwd_mr);
         } else {
-            auto rd = make_mutation_reader<single_key_sstable_reader>(const_cast<column_family*>(this), std::move(s), std::move(sstables),
-                        _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd);
-            return flat_mutation_reader_from_mutation_reader(s, std::move(rd), fwd);
+            return create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(sstables),
+                        _stats.estimated_sstable_per_read, pr, slice, pc, no_resource_tracking(), std::move(trace_state), fwd, fwd_mr);
         }
     } else {
         if (config.resources_sem) {
