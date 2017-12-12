@@ -635,8 +635,13 @@ future<> parse(random_access_reader& in, summary& s) {
 
             s.entries.resize(s.header.size);
 
-            auto *nr = reinterpret_cast<const pos_type *>(buf.get());
-            s.positions = utils::chunked_vector<pos_type>(nr, nr + s.header.size);
+            // Positions are encoded in little-endian.
+            auto b = buf.get();
+            s.positions = utils::chunked_vector<pos_type>();
+            for (size_t i = 0; i < s.header.size; ++i) {
+                s.positions.push_back(seastar::read_le<pos_type>(b));
+                b += sizeof(pos_type);
+            }
 
             // Since the keys in the index are not sized, we need to calculate
             // the start position of the index i+1 to determine the boundaries
@@ -667,8 +672,9 @@ future<> parse(random_access_reader& in, summary& s) {
                     auto keysize = entrysize - 8;
                     entry.key = bytes(reinterpret_cast<const int8_t*>(buf.get()), keysize);
                     buf.trim_front(keysize);
-                    // FIXME: This is a le read. We should make this explicit
-                    entry.position = *(reinterpret_cast<const net::packed<uint64_t> *>(buf.get()));
+
+                    // position is little-endian encoded
+                    entry.position = seastar::read_le<uint64_t>(buf.get());
                     entry.token = dht::global_partitioner().get_token(entry.get_key());
 
                     return make_ready_future<>();
@@ -686,19 +692,20 @@ inline void write(file_writer& out, const summary_entry& entry) {
     // would prevent portability of summary file between machines of different
     // endianness. We can treat it as little endian to preserve portability.
     write(out, entry.key);
-    auto p = reinterpret_cast<const char*>(&entry.position);
-    out.write(p, sizeof(uint64_t)).get();
+    auto p = seastar::cpu_to_le<uint64_t>(entry.position);
+    out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
 }
 
 inline void write(file_writer& out, const summary& s) {
-    // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
+    // NOTE: positions and entries must be stored in LITTLE-ENDIAN.
     write(out, s.header.min_index_interval,
                   s.header.size,
                   s.header.memory_size,
                   s.header.sampling_level,
                   s.header.size_at_full_sampling);
     for (auto&& e : s.positions) {
-        out.write(reinterpret_cast<const char*>(&e), sizeof(e)).get();
+        auto p = seastar::cpu_to_le(e);
+        out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
     }
     write(out, s.entries);
     write(out, s.first_key, s.last_key);
