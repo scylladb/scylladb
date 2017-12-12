@@ -66,6 +66,8 @@ enum class permission {
 
     // permission management
     AUTHORIZE, // required for GRANT and REVOKE.
+    DESCRIBE, // required on the root-level role resource to list all roles.
+
 };
 
 typedef enum_set<super_enum<permission,
@@ -76,16 +78,15 @@ typedef enum_set<super_enum<permission,
                 permission::DROP,
                 permission::SELECT,
                 permission::MODIFY,
-                permission::AUTHORIZE>> permission_set;
+                permission::AUTHORIZE,
+                permission::DESCRIBE>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 
 namespace permissions {
 
-extern const permission_set ALL_DATA;
 extern const permission_set ALL;
 extern const permission_set NONE;
-extern const permission_set ALTERATIONS;
 
 const sstring& to_string(permission);
 permission from_string(const sstring&);

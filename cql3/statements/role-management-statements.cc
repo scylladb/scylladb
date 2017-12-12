@@ -71,9 +71,13 @@ static future<::shared_ptr<cql_transport::messages::result_message>> void_result
 future<> create_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
-    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
-        if (!super) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to perform CREATE ROLE queries.");
+    return async([this, &state] {
+        state.ensure_has_permission(auth::permission::CREATE, auth::resource::root_of(auth::resource_kind::role)).get0();
+
+        if (*_options.is_superuser) {
+            if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
+                throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
+            }
         }
     });
 }
@@ -115,31 +119,25 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
 
     return async([this, &state] {
         auto& as = *state.get_auth_service();
-        auto& rm = as.underlying_role_manager();
 
         const auto& user = *state.user();
         const bool user_is_superuser = auth::is_super_user(as, user).get0();
 
-        // TODO(jhaberku): Check the roles from the role cache of the authenticated user, once this is available.
-        if (user_is_superuser) {
-            const auto roles = rm.query_granted(user.name(), auth::recursive_role_query::yes).get0();
-            const bool granted_to_user = roles.count(_role) != 0;
+        if (_options.is_superuser) {
+            if (!user_is_superuser) {
+                throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
+            }
 
+            const bool granted_to_user = as.get_roles(user.name()).get0().count(_role) != 0;
             if (granted_to_user) {
                 throw exceptions::unauthorized_exception(
-                        "You are not allowed to alter the superuser status of yourself or of a role granted to you.");
+                        "You are not allowed to alter your own superuser status or that of a role granted to you.");
             }
         }
 
-        if (_options.is_superuser && !user_is_superuser) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
-        }
-
-        if (!user_is_superuser && (user.name() != _role)) {
-            throw exceptions::unauthorized_exception("You are not allowed to alter this role.");
-        }
-
-        if (!user_is_superuser) {
+        if (user.name() != _role) {
+            state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
+        } else {
             // TODO(jhaberku) Once we switch to roles, this is where we would query the authenticator for the set of
             // alterable options it supports (throwing errors as necessary).
         }
@@ -182,9 +180,16 @@ void drop_role_statement::validate(distributed<service::storage_proxy>&, const s
 future<> drop_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
-    return auth::is_super_user(*state.get_auth_service(), *state.user()).then([](bool super) {
-        if (!super) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to perform DROP ROLE queries.");
+    return async([this, &state] {
+        state.ensure_has_permission(auth::permission::DROP, auth::resource::role(_role)).get0();
+
+        auto& as = *state.get_auth_service();
+
+        const bool user_is_superuser = auth::is_super_user(as, *state.user()).get0();
+        const bool role_has_superuser = as.role_has_superuser(_role).get0();
+
+        if (role_has_superuser && !user_is_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can drop a superuser role.");
         }
     });
 }
@@ -216,15 +221,23 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     state.ensure_not_anonymous();
 
     return async([this, &state] {
+        if (state.check_has_permission(
+                    auth::permission::DESCRIBE,
+                    auth::resource::root_of(auth::resource_kind::role)).get0()) {
+            return;
+        }
+
+        //
+        // A user can list all roles of themselves, and list all roles of any roles granted to them.
+        //
+
         const auto user_has_grantee = [this, &state] {
-            auto& rm = state.get_auth_service()->underlying_role_manager();
-            const auto roles = rm.query_granted(state.user()->name(), auth::recursive_role_query::yes).get0();
-            return roles.count(*_grantee) != 0;
+            return state.get_auth_service()->get_roles(state.user()->name()).get0().count(*_grantee) != 0;
         };
 
-        if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0() && _grantee && !user_has_grantee()) {
+        if (_grantee && !user_has_grantee()) {
             throw exceptions::unauthorized_exception(
-                sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
+                    sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
         }
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
@@ -292,12 +305,18 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
         if (!_grantee) {
-            if (super) {
-                return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
-            }
+            // A user with DESCRIBE on the root role resource lists all roles in the system. A user without it lists
+            // only the roles granted to them.
+            return cs.check_has_permission(
+                    auth::permission::DESCRIBE,
+                    auth::resource::root_of(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
+                if (has_describe) {
+                    return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
+                }
 
-            return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
-                return make_results(rm, std::move(roles));
+                return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
+                    return make_results(rm, std::move(roles));
+                });
             });
         }
 
@@ -316,12 +335,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> grant_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-
-    return async([this, &state] {
-        if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to GRANT roles.");
-        }
-    });
+    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
@@ -345,14 +359,7 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> revoke_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-
-    return async([this, &state] {
-        const auto& as = *state.get_auth_service();
-
-        if (!auth::is_super_user(as, *state.user()).get0()) {
-            throw exceptions::unauthorized_exception("Only superusers are allowed to REVOKE roles.");
-        }
-    });
+    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>

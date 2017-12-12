@@ -128,8 +128,11 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
 
     validate_login();
 
+    static const auto alteration_permissions = auth::permission_set::of<
+            auth::permission::CREATE, auth::permission::ALTER, auth::permission::DROP>();
+
     // we only care about schema modification.
-    if (auth::permissions::ALTERATIONS.contains(p)) {
+    if (alteration_permissions.contains(p)) {
         // prevent system keyspace modification
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
@@ -159,7 +162,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     if (p == auth::permission::SELECT && readable_system_resources.count(resource) != 0) {
         return make_ready_future();
     }
-    if (auth::permissions::ALTERATIONS.contains(p)) {
+    if (alteration_permissions.contains(p)) {
         for (auto& s : { _auth_service->underlying_authorizer().protected_resources(),
                         _auth_service->underlying_authorizer().protected_resources() }) {
             if (s.count(resource)) {

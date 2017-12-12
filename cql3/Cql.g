@@ -1035,17 +1035,18 @@ listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     ;
 
 permission returns [auth::permission perm]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
 permissionOrAll returns [auth::permission_set perms]
-    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL_DATA; }
+    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL; }
     | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
 resource returns [uninitialized<auth::resource> res]
-    : r=dataResource { $res = $r.res; }
+    : d=dataResource { $res = std::move(d); }
+    | r=roleResource { $res = std::move(r); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
@@ -1053,6 +1054,11 @@ dataResource returns [uninitialized<auth::resource> res]
     | K_KEYSPACE ks = keyspaceName { $res = auth::resource::data($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
       { $res = auth::resource::data($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+    ;
+
+roleResource returns [uninitialized<auth::resource> res]
+    : K_ALL K_ROLES { $res = auth::resource::root_of(auth::resource_kind::role); }
+    | K_ROLE role = userOrRoleName { $res = auth::resource::role(static_cast<const cql3::role_name&>(role).to_string()); }
     ;
 
 /**
@@ -1720,6 +1726,7 @@ K_OF:          O F;
 K_REVOKE:      R E V O K E;
 K_MODIFY:      M O D I F Y;
 K_AUTHORIZE:   A U T H O R I Z E;
+K_DESCRIBE:    D E S C R I B E;
 K_NORECURSIVE: N O R E C U R S I V E;
 
 K_USER:        U S E R;

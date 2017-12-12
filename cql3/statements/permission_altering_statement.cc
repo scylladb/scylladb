@@ -47,11 +47,23 @@
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
 
+static auth::permission_set filter_applicable_permissions(const auth::permission_set& ps, const auth::resource& r) {
+    auto const filtered_permissions = auth::permission_set::from_mask(ps.mask() & r.applicable_permissions().mask());
+
+    if (!filtered_permissions) {
+        throw exceptions::invalid_request_exception(
+                sprint("Resource %s does not support any of the requested permissions.", r));
+    }
+
+    return filtered_permissions;
+}
+
 cql3::statements::permission_altering_statement::permission_altering_statement(
                 auth::permission_set permissions, auth::resource resource,
                 sstring username)
-                : _permissions(permissions), _resource(std::move(resource)), _username(
-                                std::move(username)) {
+                : _permissions(filter_applicable_permissions(permissions, resource))
+                , _resource(std::move(resource))
+                , _username(std::move(username)) {
 }
 
 void cql3::statements::permission_altering_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {

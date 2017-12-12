@@ -43,17 +43,15 @@
 #include <boost/algorithm/string.hpp>
 #include "permission.hh"
 
-const auth::permission_set auth::permissions::ALL_DATA =
+const auth::permission_set auth::permissions::ALL =
                 auth::permission_set::of<auth::permission::CREATE,
                                 auth::permission::ALTER, auth::permission::DROP,
                                 auth::permission::SELECT,
                                 auth::permission::MODIFY,
-                                auth::permission::AUTHORIZE>();
-const auth::permission_set auth::permissions::ALL = auth::permissions::ALL_DATA;
+                                auth::permission::AUTHORIZE,
+                                auth::permission::DESCRIBE>();
+
 const auth::permission_set auth::permissions::NONE;
-const auth::permission_set auth::permissions::ALTERATIONS =
-                auth::permission_set::of<auth::permission::CREATE,
-                                auth::permission::ALTER, auth::permission::DROP>();
 
 static const std::unordered_map<sstring, auth::permission> permission_names({
     { "READ", auth::permission::READ },
@@ -64,6 +62,7 @@ static const std::unordered_map<sstring, auth::permission> permission_names({
     { "SELECT", auth::permission::SELECT  },
     { "MODIFY", auth::permission::MODIFY   },
     { "AUTHORIZE", auth::permission::AUTHORIZE },
+    { "DESCRIBE", auth::permission::DESCRIBE },
 });
 
 const sstring& auth::permissions::to_string(permission p) {

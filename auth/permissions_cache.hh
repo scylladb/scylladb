@@ -83,10 +83,6 @@ class permissions_cache final {
 public:
     explicit permissions_cache(const permissions_cache_config&, service&, logging::logger&);
 
-    future<> start() {
-        return make_ready_future<>();
-    }
-
     future <> stop() {
         return _cache.stop();
     }

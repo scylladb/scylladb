@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <experimental/string_view>
 #include <memory>
 
 #include <seastar/core/future.hh>
@@ -34,6 +35,7 @@
 #include "auth/role_manager.hh"
 #include "delayed_tasks.hh"
 #include "seastarx.hh"
+#include "stdx.hh"
 
 namespace cql3 {
 class query_processor;
@@ -58,8 +60,16 @@ struct service_config final {
     sstring role_manager_java_name;
 };
 
+///
+/// Central interface into access-control for the system.
+///
+/// Access control encompasses user/role management, authentication, and authorization. This class provides access to
+/// the dynamically-loaded implementations of these modules (through the `underlying_*` member functions), but also
+/// builds on their functionality with caching and abstractions for common operations.
+///
 class service final {
-    permissions_cache_config _cache_config;
+    permissions_cache_config _permissions_cache_config;
+    std::unique_ptr<permissions_cache> _permissions_cache;
 
     cql3::query_processor& _qp;
 
@@ -87,6 +97,11 @@ public:
             std::unique_ptr<authenticator>,
             std::unique_ptr<role_manager>);
 
+    ///
+    /// This constructor is intended to be used when the class is sharded via \ref seastar::sharded. In that case, the
+    /// arguments must be copyable, which is why we delay construction with instance-construction instructions instead
+    /// of the instances themselves.
+    ///
     service(
             permissions_cache_config,
             cql3::query_processor&,
@@ -106,6 +121,21 @@ public:
     future<> delete_user(const sstring& name);
 
     future<permission_set> get_permissions(::shared_ptr<authenticated_user>, resource) const;
+
+    ///
+    /// Query whether the named role has been granted a role that is a superuser.
+    ///
+    /// A role is always granted to itself. Therefore, a role that "is" a superuser also "has" superuser.
+    ///
+    /// \throws \ref nonexistant_role if the role does not exist.
+    ///
+    future<bool> role_has_superuser(stdx::string_view role_name) const;
+
+    ///
+    /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
+    ///
+    /// \throws \ref nonexistent_role if the role does not exist.
+    future<std::unordered_set<sstring>> get_roles(stdx::string_view role_name) const;
 
     authenticator& underlying_authenticator() {
         return *_authenticator;
@@ -136,11 +166,17 @@ private:
 
     future<> create_keyspace_if_missing() const;
 
-    bool should_create_metadata() const;
-
     future<> create_metadata_if_missing();
 };
 
 future<bool> is_super_user(const service&, const authenticated_user&);
+
+///
+/// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
+///
+/// Put differently, when access control is not enforcing, all operations on resources will be allowed and users do not
+/// need to authenticate themselves.
+///
+bool is_enforcing(const service&);
 
 }
