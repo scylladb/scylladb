@@ -587,10 +587,12 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     auto& gossiper = gms::get_local_gossiper();
     if (!db().local().is_replacing()) {
         // if not an existing token then bootstrap
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens)).get();
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens)).get();
+        gossiper.add_local_application_state({
+            { gms::application_state::TOKENS, value_factory.tokens(tokens) },
+            { gms::application_state::STATUS, value_factory.bootstrapping(tokens) },
+        }).get();
         set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", get_ring_delay().count()), true);
-        sleep(get_ring_delay()).get();
+        gossiper.wait_for_range_setup().get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
@@ -1166,8 +1168,10 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
 
 void storage_service::set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens) {
     auto& gossiper = gms::get_local_gossiper();
-    gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
-    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
+    gossiper.add_local_application_state({
+        { gms::application_state::TOKENS, value_factory.tokens(local_tokens) },
+        { gms::application_state::STATUS, value_factory.normal(local_tokens) }
+    }).get();
 }
 
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
@@ -1378,8 +1382,10 @@ future<> storage_service::init_server(int delay) {
             if (!tokens.empty()) {
                 _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
                 // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-                gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens)).get();
-                gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true)).get();
+                gossiper.add_local_application_state({
+                    { gms::application_state::TOKENS, value_factory.tokens(tokens) },
+                    { gms::application_state::STATUS, value_factory.hibernate(true) }
+                }).get();
             }
             slogger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
@@ -1421,8 +1427,9 @@ future<> storage_service::gossip_snitch_info() {
     auto dc = snitch->get_datacenter(addr);
     auto rack = snitch->get_rack(addr);
     auto& gossiper = gms::get_local_gossiper();
-    return gossiper.add_local_application_state(gms::application_state::DC, value_factory.datacenter(dc)).then([this, &gossiper, rack] {
-        return gossiper.add_local_application_state(gms::application_state::RACK, value_factory.rack(rack));
+    return gossiper.add_local_application_state({
+        { gms::application_state::DC, value_factory.datacenter(dc) },
+        { gms::application_state::RACK, value_factory.rack(rack) }
     });
 }
 

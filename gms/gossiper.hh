@@ -50,6 +50,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/feature.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/in.hh"
 #include "message/messaging_service_fwd.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -508,6 +509,17 @@ public:
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
+    /**
+     * Applies all states in set "atomically", as in guaranteed monotonic versions and
+     * inserted into endpoint state together (and assuming same grouping, overwritten together).
+     */
+    future<> add_local_application_state(std::vector<std::pair<application_state, versioned_value>>);
+
+    /**
+     * Intentionally overenginered to avoid very rare string copies.
+     */
+    future<> add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>>);
+
     // Needed by seastar::sharded
     future<> stop();
     future<> do_stop_gossiping();
@@ -540,10 +552,16 @@ public:
     sstring get_gossip_status(const inet_address& endpoint) const;
 public:
     future<> wait_for_gossip_to_settle();
+    future<> wait_for_range_setup();
 private:
+    future<> wait_for_gossip(std::chrono::milliseconds, stdx::optional<int32_t> = {});
+
     uint64_t _nr_run = 0;
+    uint64_t _msg_processing = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+
+    class msg_proc_guard;
 private:
     condition_variable _features_condvar;
     std::unordered_map<sstring, std::vector<feature*>> _registered_features;
