@@ -841,7 +841,7 @@ public:
     friend class distributed_loader;
 };
 
-using sstable_reader_factory_type = std::function<mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
+using sstable_reader_factory_type = std::function<flat_mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
 
 // Filters out mutation that doesn't belong to current shard.
 flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,

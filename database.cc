@@ -389,7 +389,7 @@ class incremental_reader_selector : public reader_selector {
     std::unordered_set<sstables::shared_sstable> _read_sstables;
     sstable_reader_factory_type _fn;
 
-    mutation_reader create_reader(sstables::shared_sstable sst) {
+    flat_mutation_reader create_reader(sstables::shared_sstable sst) {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return _fn(sst, *_pr);
     }
@@ -458,7 +458,7 @@ public:
         return boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
                 | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
                 | boost::adaptors::transformed([this] (auto& sst) {
-                    return flat_mutation_reader_from_mutation_reader(_s, this->create_reader(sst), _fwd);
+                    return this->create_reader(sst);
                 }));
     }
 
@@ -4271,7 +4271,7 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
             using sig = bool (&)(const dht::decorated_key&);
             reader = make_filtering_reader(std::move(reader), sig(belongs_to_current_shard));
         }
-        return mutation_reader_from_flat_mutation_reader(std::move(reader));
+        return reader;
     };
     return make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
@@ -4298,7 +4298,7 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         mutation_reader::forwarding fwd_mr)
 {
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
-        return mutation_reader_from_flat_mutation_reader(sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr));
+        return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr);
     };
     return make_flat_mutation_reader<combined_mutation_reader>(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
