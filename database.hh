@@ -1094,6 +1094,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
+    flush_io_controller _flush_io_controller;
     compaction_io_controller _compaction_io_controller;
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, timeout_clock::time_point timeout);
