@@ -886,7 +886,8 @@ column_family::seal_active_streaming_memtable_immediate() {
                         return old->clear_gently();
                     }
                 });
-            }).handle_exception([old] (auto ep) {
+            }).handle_exception([old, newtab] (auto ep) {
+                newtab->mark_for_deletion();
                 dblog.error("failed to write streamed sstable: {}", ep);
                 return make_exception_future<>(ep);
             });
@@ -924,7 +925,8 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 auto&& priority = service::get_local_streaming_write_priority();
                 return write_memtable_to_sstable(*old, newtab, incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb] {
                     smb.sstables.emplace_back(newtab);
-                }).handle_exception([] (auto ep) {
+                }).handle_exception([newtab] (auto ep) {
+                    newtab->mark_for_deletion();
                     dblog.error("failed to write streamed sstable: {}", ep);
                     return make_exception_future<>(ep);
                 });
