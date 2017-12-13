@@ -461,17 +461,7 @@ mutation_partition partition_entry::squashed(const schema& s)
 
 void partition_entry::upgrade(schema_ptr from, schema_ptr to)
 {
-    auto new_version = current_allocator().construct<partition_version>(mutation_partition(to));
-    new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
-    try {
-        for (auto&& v : _version->all_elements()) {
-            new_version->partition().apply(*to, v.partition(), *from);
-        }
-    } catch (...) {
-        current_allocator().destroy(new_version);
-        throw;
-    }
-
+    auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
     auto old_version = &*_version;
     set_version(new_version);
     remove_or_mark_as_unique_owner(old_version);
