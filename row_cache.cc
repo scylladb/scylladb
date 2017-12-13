@@ -32,7 +32,6 @@
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "stdx.hh"
-#include "cache_streamed_mutation.hh"
 #include "read_context.hh"
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"

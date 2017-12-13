@@ -31,7 +31,6 @@
 #include "partition_version.hh"
 #include "mutation.hh"
 #include "memtable.hh"
-#include "cache_streamed_mutation.hh"
 #include "row_cache.hh"
 
 #include "memtable_snapshot_source.hh"
