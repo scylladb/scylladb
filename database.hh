@@ -503,7 +503,7 @@ private:
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_sstable_reader(schema_ptr schema,
+    flat_mutation_reader make_sstable_reader(schema_ptr schema,
                                         lw_shared_ptr<sstables::sstable_set> sstables,
                                         const dht::partition_range& range,
                                         const query::partition_slice& slice,
@@ -570,7 +570,7 @@ public:
     // Mutations returned by the reader will all have given schema.
     // If I/O needs to be issued to read anything in the specified range, the operations
     // will be scheduled under the priority class given by pc.
-    mutation_reader make_reader(schema_ptr schema,
+    flat_mutation_reader make_reader(schema_ptr schema,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             const io_priority_class& pc = default_priority_class(),
@@ -578,7 +578,7 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
-    mutation_reader make_reader(schema_ptr schema, const dht::partition_range& range = query::full_partition_range) const {
+    flat_mutation_reader make_reader(schema_ptr schema, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
         return make_reader(std::move(schema), range, full_slice);
     }
@@ -841,10 +841,10 @@ public:
     friend class distributed_loader;
 };
 
-using sstable_reader_factory_type = std::function<mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
+using sstable_reader_factory_type = std::function<flat_mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
 
 // Filters out mutation that doesn't belong to current shard.
-mutation_reader make_local_shard_sstable_reader(schema_ptr s,
+flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
@@ -854,7 +854,7 @@ mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr);
 
-mutation_reader make_range_sstable_reader(schema_ptr s,
+flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
         const dht::partition_range& pr,
         const query::partition_slice& slice,

@@ -49,6 +49,7 @@
 #include "tests/test_services.hh"
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 #include "disk-error-handler.hh"
 #include "simple_schema.hh"
