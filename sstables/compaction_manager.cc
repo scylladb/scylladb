@@ -96,6 +96,15 @@ compaction_weight_registration::~compaction_weight_registration() {
     }
 }
 
+void compaction_weight_registration::deregister() {
+    _cm->deregister_weight(_cf, _weight);
+    _cm = nullptr;
+}
+
+int compaction_weight_registration::weight() const {
+    return _weight;
+}
+
 static inline uint64_t get_total_size(const std::vector<sstables::shared_sstable>& sstables) {
     uint64_t total_size = 0;
     for (auto& sst : sstables) {

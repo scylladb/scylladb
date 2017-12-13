@@ -40,4 +40,9 @@ public:
     compaction_weight_registration(compaction_weight_registration&& other) noexcept;
 
     ~compaction_weight_registration();
+
+    // Release immediately the weight hold by this object
+    void deregister();
+
+    int weight() const;
 };
