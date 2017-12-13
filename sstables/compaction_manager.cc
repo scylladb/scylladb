@@ -64,46 +64,37 @@ public:
     }
 };
 
-class compaction_weight_registration {
-    compaction_manager* _cm;
-    column_family* _cf;
-    int _weight;
-public:
-    compaction_weight_registration(compaction_manager* cm, column_family* cf, int weight)
-        : _cm(cm)
-        , _cf(cf)
-        , _weight(weight)
-    {
-        _cm->register_weight(_cf, _weight);
-    }
+compaction_weight_registration::compaction_weight_registration(compaction_manager* cm, column_family* cf, int weight)
+    : _cm(cm)
+    , _cf(cf)
+    , _weight(weight)
+{
+    _cm->register_weight(_cf, _weight);
+}
 
-    compaction_weight_registration& operator=(const compaction_weight_registration&) = delete;
-    compaction_weight_registration(const compaction_weight_registration&) = delete;
-
-    compaction_weight_registration& operator=(compaction_weight_registration&& other) noexcept {
-        if (this != &other) {
-            this->~compaction_weight_registration();
-            new (this) compaction_weight_registration(std::move(other));
-        }
-        return *this;
+compaction_weight_registration& compaction_weight_registration::operator=(compaction_weight_registration&& other) noexcept {
+    if (this != &other) {
+        this->~compaction_weight_registration();
+        new (this) compaction_weight_registration(std::move(other));
     }
+    return *this;
+}
 
-    compaction_weight_registration(compaction_weight_registration&& other) noexcept
-        : _cm(other._cm)
-        , _cf(other._cf)
-        , _weight(other._weight)
-    {
-        other._cm = nullptr;
-        other._cf = nullptr;
-        other._weight = 0;
-    }
+compaction_weight_registration::compaction_weight_registration(compaction_weight_registration&& other) noexcept
+    : _cm(other._cm)
+    , _cf(other._cf)
+    , _weight(other._weight)
+{
+    other._cm = nullptr;
+    other._cf = nullptr;
+    other._weight = 0;
+}
 
-    ~compaction_weight_registration() {
-        if (_cm) {
-            _cm->deregister_weight(_cf, _weight);
-        }
+compaction_weight_registration::~compaction_weight_registration() {
+    if (_cm) {
+        _cm->deregister_weight(_cf, _weight);
     }
-};
+}
 
 static inline uint64_t get_total_size(const std::vector<sstables::shared_sstable>& sstables) {
     uint64_t total_size = 0;

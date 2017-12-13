@@ -34,10 +34,10 @@
 #include <list>
 #include <functional>
 #include "sstables/compaction.hh"
+#include "compaction_weight_registration.hh"
 
 class column_family;
 class compacting_sstable_registration;
-class compaction_weight_registration;
 
 // Compaction manager is a feature used to manage compaction jobs from multiple
 // column families pertaining to the same database.
