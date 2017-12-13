@@ -340,7 +340,6 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     flat_mutation_reader create_underlying_flat_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
     flat_mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
     void on_partition_hit();
