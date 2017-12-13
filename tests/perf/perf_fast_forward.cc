@@ -179,12 +179,12 @@ uint64_t consume_all(mutation_reader& rd) {
 
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
+        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no));
 
     metrics_snapshot before;
 
@@ -227,7 +227,7 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
 
     metrics_snapshot before;
 
@@ -253,12 +253,12 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
 }
 
 static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1) {
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes);
+        streamed_mutation::forwarding::yes));
 
     metrics_snapshot before;
     streamed_mutation_opt smo = rd().get0();
@@ -286,9 +286,9 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     }
 
     auto slice = sb.build();
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
         query::full_partition_range,
-        slice);
+        slice));
 
     return test_reading_all(rd);
 }
@@ -300,13 +300,13 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), pr, slice);
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, slice));
     return test_reading_all(rd);
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
 
     metrics_snapshot before;
     streamed_mutation_opt smo = rd().get0();
@@ -331,7 +331,7 @@ static test_result slice_partitions(column_family& cf, int n, int offset = 0, in
         dht::partition_range::bound(keys[std::min(n, offset + n_read) - 1], true)
     );
 
-    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
     metrics_snapshot before;
 
     uint64_t fragments = consume_all(rd);
@@ -362,12 +362,12 @@ static test_result test_forwarding_with_restriction(column_family& cf, table_con
         .build();
 
     auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
-    auto rd = cf.make_reader(cf.schema(),
+    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
         pr,
         slice,
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes);
+        streamed_mutation::forwarding::yes));
 
     uint64_t fragments = 0;
     metrics_snapshot before;
