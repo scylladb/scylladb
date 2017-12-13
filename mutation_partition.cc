@@ -287,6 +287,7 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
     _tombstone.apply(p._tombstone);
     _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
+    _static_row_continuous = p._static_row_continuous;
 
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
@@ -299,6 +300,8 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
             _rows.insert_before(i, src_e);
         } else {
             i->_row.apply_monotonically(s, std::move(src_e._row));
+            i->set_continuous(src_e.continuous());
+            i->set_dummy(src_e.dummy());
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
     }

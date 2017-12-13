@@ -101,11 +101,12 @@ GCC6_CONCEPT(
 requires Mapper<Map, mutation_partition, Result>() && Reducer<Reduce, Result>()
 )
 inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduce) {
-    Result r = map(v->partition());
-    auto it = v->next();
-    while (it) {
+    const partition_version* this_v = &*v;
+    partition_version* it = v->last();
+    Result r = map(it->partition());
+    while (it != this_v) {
+        it = it->prev();
         reduce(r, map(it->partition()));
-        it = it->next();
     }
     return r;
 }
@@ -153,7 +154,8 @@ partition_snapshot::~partition_snapshot() {
 }
 
 void merge_versions(const schema& s, mutation_partition& newer, mutation_partition&& older) {
-    newer.apply_monotonically(s, std::move(older));
+    older.apply_monotonically(s, std::move(newer));
+    newer = std::move(older);
 }
 
 void partition_snapshot::merge_partition_versions() {
