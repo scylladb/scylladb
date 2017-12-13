@@ -134,7 +134,7 @@ future<> send_mutations(lw_shared_ptr<send_info> si) {
     });
 }
 
-void stream_transfer_task::start() {
+future<> stream_transfer_task::execute() {
     auto plan_id = session->plan_id();
     auto cf_id = this->cf_id;
     auto dst_cpu_id = session->dst_cpu_id;
@@ -143,7 +143,7 @@ void stream_transfer_task::start() {
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
     _shard_ranges = dht::split_ranges_to_shards(_ranges, *schema);
-    parallel_for_each(_shard_ranges, [this, dst_cpu_id, plan_id, cf_id, id] (auto& item) {
+    return parallel_for_each(_shard_ranges, [this, dst_cpu_id, plan_id, cf_id, id] (auto& item) {
         auto& shard = item.first;
         auto& prs = item.second;
         return session->get_db().invoke_on(shard, [plan_id, cf_id, id, dst_cpu_id, prs = std::move(prs)] (database& db) mutable {
@@ -160,10 +160,9 @@ void stream_transfer_task::start() {
     }).then([this, id, plan_id, cf_id] {
         sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
         session->start_keep_alive_timer();
-        session->transfer_task_completed(cf_id);
     }).handle_exception([this, plan_id, id] (auto ep){
         sslog.warn("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
-        this->session->on_error();
+        std::rethrow_exception(ep);
     });
 }
 
