@@ -501,7 +501,7 @@ void row_cache::on_row_insert() {
 
 class range_populating_reader {
     row_cache& _cache;
-    autoupdating_underlying_reader& _reader;
+    autoupdating_underlying_flat_reader& _reader;
     stdx::optional<row_cache::previous_entry_pointer> _last_key;
     read_context& _read_context;
 private:
@@ -538,29 +538,35 @@ private:
 public:
     range_populating_reader(row_cache& cache, read_context& ctx)
         : _cache(cache)
-        , _reader(ctx.underlying())
+        , _reader(ctx.underlying_flat())
         , _read_context(ctx)
     {}
 
-    future<streamed_mutation_opt> operator()() {
-        return _reader().then([this] (streamed_mutation_opt smopt) mutable -> streamed_mutation_opt {
+    future<flat_mutation_reader_opt, mutation_fragment_opt > operator()() {
+        return _reader.move_to_next_partition().then([this] (auto&& mfopt) mutable {
             {
-                if (!smopt) {
+                if (!mfopt) {
                     handle_end_of_stream();
-                    return std::move(smopt);
+                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(stdx::nullopt, stdx::nullopt);
                 }
                 _cache.on_partition_miss();
-                if (_reader.creation_phase() == _cache.phase_of(smopt->decorated_key())) {
+                const partition_start& ps = mfopt->as_partition_start();
+                const dht::decorated_key& key = ps.key();
+                if (_reader.creation_phase() == _cache.phase_of(key)) {
                     return _cache._read_section(_cache._tracker.region(), [&] {
-                        cache_entry& e = _cache.find_or_create(smopt->decorated_key(), smopt->partition_tombstone(), _reader.creation_phase(),
-                            can_set_continuity() ? &*_last_key : nullptr);
-                        _last_key = row_cache::previous_entry_pointer(smopt->decorated_key());
-                        return e.read(_cache, _read_context, std::move(*smopt), _reader.creation_phase());
+                        cache_entry& e = _cache.find_or_create(key,
+                                                               ps.partition_tombstone(),
+                                                               _reader.creation_phase(),
+                                                               can_set_continuity() ? &*_last_key : nullptr);
+                        _last_key = row_cache::previous_entry_pointer(key);
+                        return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
+                            e.read_flat(_cache, _read_context, _reader.creation_phase()), stdx::nullopt);
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
-                    _last_key = row_cache::previous_entry_pointer(smopt->decorated_key());
-                    return read_directly_from_underlying(std::move(*smopt), _read_context);
+                    _last_key = row_cache::previous_entry_pointer(key);
+                    return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
+                        read_directly_from_underlying(_read_context), std::move(mfopt));
                 }
             }
         });
@@ -590,13 +596,13 @@ class scanning_and_populating_reader final : public flat_mutation_reader::impl {
     bool _advance_primary = false;
     stdx::optional<dht::partition_range::bound> _lower_bound;
     dht::partition_range _secondary_range;
-    streamed_mutation_opt _sm;
+    flat_mutation_reader_opt _sm;
 private:
-    streamed_mutation read_from_entry(cache_entry& ce) {
+    flat_mutation_reader read_from_entry(cache_entry& ce) {
         _cache.upgrade_entry(ce);
         _cache._tracker.touch(ce);
         _cache.on_partition_hit();
-        return ce.read(_cache, *_read_context);
+        return ce.read_flat(_cache, *_read_context);
     }
 
     static dht::ring_position_view as_ring_position_view(const stdx::optional<dht::partition_range::bound>& lower_bound) {
@@ -604,9 +610,9 @@ private:
                            : dht::ring_position_view::min();
     }
 
-    streamed_mutation_opt do_read_from_primary() {
+    flat_mutation_reader_opt do_read_from_primary() {
         return _cache._read_section(_cache._tracker.region(), [this] {
-            return with_linearized_managed_bytes([&] () -> streamed_mutation_opt {
+            return with_linearized_managed_bytes([&] () -> flat_mutation_reader_opt {
                 bool not_moved = true;
                 if (!_primary.valid()) {
                     not_moved = _primary.advance_to(as_ring_position_view(_lower_bound));
@@ -623,11 +629,11 @@ private:
                         return stdx::nullopt;
                     }
                     cache_entry& e = _primary.entry();
-                    auto sm = read_from_entry(e);
+                    auto fr = read_from_entry(e);
                     _lower_bound = dht::partition_range::bound{e.key(), false};
                     // Delay the call to next() so that we don't see stale continuity on next invocation.
                     _advance_primary = true;
-                    return streamed_mutation_opt(std::move(sm));
+                    return flat_mutation_reader_opt(std::move(fr));
                 } else {
                     if (_primary.in_range()) {
                         cache_entry& e = _primary.entry();
@@ -652,20 +658,23 @@ private:
         });
     }
 
-    future<streamed_mutation_opt> read_from_primary() {
-        auto smo = do_read_from_primary();
+    future<flat_mutation_reader_opt> read_from_primary() {
+        auto fro = do_read_from_primary();
         if (!_secondary_in_progress) {
-            return make_ready_future<streamed_mutation_opt>(std::move(smo));
+            return make_ready_future<flat_mutation_reader_opt>(std::move(fro));
         }
         return _secondary_reader.fast_forward_to(std::move(_secondary_range)).then([this] {
             return read_from_secondary();
         });
     }
 
-    future<streamed_mutation_opt> read_from_secondary() {
-        return _secondary_reader().then([this] (streamed_mutation_opt smopt) {
-            if (smopt) {
-                return make_ready_future<streamed_mutation_opt>(std::move(smopt));
+    future<flat_mutation_reader_opt> read_from_secondary() {
+        return _secondary_reader().then([this] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
+            if (fropt) {
+                if (ps) {
+                    push_mutation_fragment(std::move(*ps));
+                }
+                return make_ready_future<flat_mutation_reader_opt>(std::move(fropt));
             } else {
                 _secondary_in_progress = false;
                 return read_from_primary();
@@ -673,11 +682,9 @@ private:
         });
     }
     future<> read_next_partition() {
-        return (_secondary_in_progress ? read_from_secondary() : read_from_primary()).then([this] (auto&& sm) {
-            if (bool(sm)) {
-                _sm = std::move(sm);
-                this->push_mutation_fragment(
-                    mutation_fragment(partition_start(_sm->decorated_key(), _sm->partition_tombstone())));
+        return (_secondary_in_progress ? read_from_secondary() : read_from_primary()).then([this] (auto&& fropt) {
+            if (bool(fropt)) {
+                _sm = std::move(fropt);
             } else {
                 _end_of_stream = true;
             }
@@ -687,7 +694,6 @@ private:
         if (_read_context->fwd() == streamed_mutation::forwarding::yes) {
             _end_of_stream = true;
         } else {
-            this->push_mutation_fragment(mutation_fragment(partition_end()));
             _sm = {};
         }
     }
@@ -718,13 +724,15 @@ public:
     }
     virtual void next_partition() override {
         if (_read_context->fwd() == streamed_mutation::forwarding::yes) {
-            clear_buffer();
-            _sm = {};
-            _end_of_stream = false;
+            if (_sm) {
+                clear_buffer();
+                _sm->next_partition();
+                _end_of_stream = false;
+            }
         } else {
             clear_buffer_to_next_partition();
             if (_sm && is_buffer_empty()) {
-                _sm = {};
+                _sm->next_partition();
             }
         }
     }
