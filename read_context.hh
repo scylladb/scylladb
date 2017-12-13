@@ -67,7 +67,7 @@ public:
             }
             auto& snap = _cache.snapshot_for_phase(phase);
             _reader = {}; // See issue #2644
-            _reader = _cache.create_underlying_flat_reader(_read_context, snap, _range);
+            _reader = _cache.create_underlying_reader(_read_context, snap, _range);
             _reader_creation_phase = phase;
         }
         _reader->next_partition();
@@ -100,7 +100,7 @@ public:
                 _reader = {}; // See issue #2644
             }
         }
-        _reader = _cache.create_underlying_flat_reader(_read_context, snapshot, _range);
+        _reader = _cache.create_underlying_reader(_read_context, snapshot, _range);
         _reader_creation_phase = phase;
         return make_ready_future<>();
     }
