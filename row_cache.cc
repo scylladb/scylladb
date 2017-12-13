@@ -355,16 +355,6 @@ future<> read_context::create_underlying_flat(bool skip_first_fragment) {
     });
 }
 
-static streamed_mutation read_directly_from_underlying(streamed_mutation&& sm, read_context& reader) {
-    if (reader.schema()->version() != sm.schema()->version()) {
-        sm = transform(std::move(sm), schema_upgrader(reader.schema()));
-    }
-    if (reader.fwd() == streamed_mutation::forwarding::no) {
-        sm = streamed_mutation_from_forwarding_streamed_mutation(std::move(sm));
-    }
-    return std::move(sm);
-}
-
 static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
     flat_mutation_reader res = make_delegating_reader(reader.underlying_flat().underlying());
     if (reader.schema()->version() != reader.underlying_flat().underlying().schema()->version()) {
