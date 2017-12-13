@@ -471,7 +471,7 @@ void row_cache::on_row_insert() {
 
 class range_populating_reader {
     row_cache& _cache;
-    autoupdating_underlying_flat_reader& _reader;
+    autoupdating_underlying_reader& _reader;
     stdx::optional<row_cache::previous_entry_pointer> _last_key;
     read_context& _read_context;
 private:

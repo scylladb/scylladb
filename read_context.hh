@@ -34,7 +34,7 @@ namespace cache {
 * Represent a flat reader to the underlying source.
 * This reader automatically makes sure that it's up to date with all cache updates
 */
-class autoupdating_underlying_flat_reader final {
+class autoupdating_underlying_reader final {
     row_cache& _cache;
     read_context& _read_context;
     stdx::optional<flat_mutation_reader> _reader;
@@ -43,7 +43,7 @@ class autoupdating_underlying_flat_reader final {
     stdx::optional<dht::decorated_key> _last_key;
     stdx::optional<dht::decorated_key> _new_last_key;
 public:
-    autoupdating_underlying_flat_reader(row_cache& cache, read_context& context)
+    autoupdating_underlying_reader(row_cache& cache, read_context& context)
         : _cache(cache)
         , _read_context(context)
     { }
@@ -136,7 +136,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     //  2) _underlying_flat is before the partition, then _underlying_snapshot and _key
     //     are set so that _underlying_flat can be fast forwarded to the right partition.
     //
-    autoupdating_underlying_flat_reader _underlying_flat;
+    autoupdating_underlying_reader _underlying_flat;
     uint64_t _underlying_created = 0;
 
     mutation_source_opt _underlying_snapshot;
@@ -187,7 +187,7 @@ public:
     streamed_mutation::forwarding fwd() const { return _fwd; }
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
     bool is_range_query() const { return _range_query; }
-    autoupdating_underlying_flat_reader& underlying_flat() { return _underlying_flat; }
+    autoupdating_underlying_reader& underlying_flat() { return _underlying_flat; }
     row_cache::phase_type phase() const { return _phase; }
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }

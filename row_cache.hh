@@ -45,7 +45,7 @@ class memtable_entry;
 
 namespace cache {
 
-class autoupdating_underlying_flat_reader;
+class autoupdating_underlying_reader;
 class cache_streamed_mutation;
 class cache_flat_mutation_reader;
 class read_context;
@@ -191,7 +191,7 @@ public:
 public:
     friend class row_cache;
     friend class cache::read_context;
-    friend class cache::autoupdating_underlying_flat_reader;
+    friend class cache::autoupdating_underlying_reader;
     friend class cache::cache_streamed_mutation;
     friend class cache::cache_flat_mutation_reader;
     struct stats {
@@ -271,7 +271,7 @@ public:
         bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
         bi::compare<cache_entry::compare>>;
-    friend class cache::autoupdating_underlying_flat_reader;
+    friend class cache::autoupdating_underlying_reader;
     friend class single_partition_populating_reader;
     friend class cache_entry;
     friend class cache::cache_streamed_mutation;
