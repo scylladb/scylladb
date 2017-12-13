@@ -382,7 +382,7 @@ private:
             } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                 _reader = _cache._read_section(_cache._tracker.region(), [&] {
                     cache_entry& e = _cache.find_or_create(mfopt->as_partition_start().key(), mfopt->as_partition_start().partition_tombstone(), phase);
-                    return e.read_flat(_cache, *_read_context, phase);
+                    return e.read(_cache, *_read_context, phase);
                 });
             } else {
                 _cache._tracker.on_mispopulate();
@@ -530,7 +530,7 @@ public:
                                                                can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
                         return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
-                            e.read_flat(_cache, _read_context, _reader.creation_phase()), stdx::nullopt);
+                            e.read(_cache, _read_context, _reader.creation_phase()), stdx::nullopt);
                     });
                 } else {
                     _cache._tracker.on_mispopulate();
@@ -572,7 +572,7 @@ private:
         _cache.upgrade_entry(ce);
         _cache._tracker.touch(ce);
         _cache.on_partition_hit();
-        return ce.read_flat(_cache, *_read_context);
+        return ce.read(_cache, *_read_context);
     }
 
     static dht::ring_position_view as_ring_position_view(const stdx::optional<dht::partition_range::bound>& lower_bound) {
@@ -769,7 +769,7 @@ row_cache::make_flat_reader(schema_ptr s,
                     _tracker.touch(e);
                     upgrade_entry(e);
                     on_partition_hit();
-                    return e.read_flat(*this, *ctx);
+                    return e.read(*this, *ctx);
                 } else if (i->continuous()) {
                     return make_empty_flat_reader(std::move(s));
                 } else {
@@ -1178,19 +1178,19 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
 
-flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader) {
+flat_mutation_reader cache_entry::read(row_cache& rc, read_context& reader) {
     auto source_and_phase = rc.snapshot_of(_key);
     reader.enter_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
-    return do_read_flat(rc, reader);
+    return do_read(rc, reader);
 }
 
-flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader, row_cache::phase_type phase) {
+flat_mutation_reader cache_entry::read(row_cache& rc, read_context& reader, row_cache::phase_type phase) {
     reader.enter_partition(_key, phase);
-    return do_read_flat(rc, reader);
+    return do_read(rc, reader);
 }
 
 // Assumes reader is in the corresponding partition
-flat_mutation_reader cache_entry::do_read_flat(row_cache& rc, read_context& reader) {
+flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
     auto snp = _pe.read(rc._tracker.region(), _schema, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
