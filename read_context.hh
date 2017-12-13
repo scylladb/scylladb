@@ -128,15 +128,15 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
-    // When reader enters a flat partition, it must be set up for reading that
-    // partition from the underlying mutation source (_underlying_flat) in one of two ways:
+    // When reader enters a partition, it must be set up for reading that
+    // partition from the underlying mutation source (_underlying) in one of two ways:
     //
-    //  1) either _underlying_flat is already in that partition
+    //  1) either _underlying is already in that partition
     //
-    //  2) _underlying_flat is before the partition, then _underlying_snapshot and _key
+    //  2) _underlying is before the partition, then _underlying_snapshot and _key
     //     are set so that _underlying_flat can be fast forwarded to the right partition.
     //
-    autoupdating_underlying_reader _underlying_flat;
+    autoupdating_underlying_reader _underlying;
     uint64_t _underlying_created = 0;
 
     mutation_source_opt _underlying_snapshot;
@@ -161,7 +161,7 @@ public:
         , _fwd(fwd)
         , _fwd_mr(fwd_mr)
         , _range_query(!range.is_singular() || !range.start()->value().has_key())
-        , _underlying_flat(_cache, *this)
+        , _underlying(_cache, *this)
     {
         ++_cache._tracker._stats.reads;
         if (range.is_singular() && range.start()->value().has_key()) {
@@ -187,19 +187,19 @@ public:
     streamed_mutation::forwarding fwd() const { return _fwd; }
     mutation_reader::forwarding fwd_mr() const { return _fwd_mr; }
     bool is_range_query() const { return _range_query; }
-    autoupdating_underlying_reader& underlying_flat() { return _underlying_flat; }
+    autoupdating_underlying_reader& underlying() { return _underlying; }
     row_cache::phase_type phase() const { return _phase; }
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }
 private:
-    future<> ensure_underlying_flat() {
+    future<> ensure_underlying() {
         if (_underlying_snapshot) {
-            return create_underlying_flat(true);
+            return create_underlying(true);
         }
         return make_ready_future<>();
     }
 public:
-    future<> create_underlying_flat(bool skip_first_fragment);
+    future<> create_underlying(bool skip_first_fragment);
     void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;
@@ -212,14 +212,14 @@ public:
     }
     // Fast forwards the underlying streamed_mutation to given range.
     future<> fast_forward_to(position_range range) {
-        return ensure_underlying_flat().then([this, range = std::move(range)] {
-            return _underlying_flat.underlying().fast_forward_to(std::move(range));
+        return ensure_underlying().then([this, range = std::move(range)] {
+            return _underlying.underlying().fast_forward_to(std::move(range));
         });
     }
     // Gets the next fragment from the underlying reader
     future<mutation_fragment_opt> get_next_fragment() {
-        return ensure_underlying_flat().then([this] {
-            return _underlying_flat.underlying()();
+        return ensure_underlying().then([this] {
+            return _underlying.underlying()();
         });
     }
 };

@@ -317,7 +317,7 @@ public:
     }
 };
 
-future<> read_context::create_underlying_flat(bool skip_first_fragment) {
+future<> read_context::create_underlying(bool skip_first_fragment) {
     if (_range_query) {
         // FIXME: Singular-range mutation readers don't support fast_forward_to(), so need to use a wide range
         // here in case the same reader will need to be fast forwarded later.
@@ -325,10 +325,10 @@ future<> read_context::create_underlying_flat(bool skip_first_fragment) {
     } else {
         _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
     }
-    return _underlying_flat.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase).then([this, skip_first_fragment] {
+    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase).then([this, skip_first_fragment] {
         _underlying_snapshot = {};
         if (skip_first_fragment) {
-            return _underlying_flat.underlying()().then([](auto &&mf) {});
+            return _underlying.underlying()().then([](auto &&mf) {});
         } else {
             return make_ready_future<>();
         }
@@ -336,8 +336,8 @@ future<> read_context::create_underlying_flat(bool skip_first_fragment) {
 }
 
 static flat_mutation_reader read_directly_from_underlying(read_context& reader) {
-    flat_mutation_reader res = make_delegating_reader(reader.underlying_flat().underlying());
-    if (reader.schema()->version() != reader.underlying_flat().underlying().schema()->version()) {
+    flat_mutation_reader res = make_delegating_reader(reader.underlying().underlying());
+    if (reader.schema()->version() != reader.underlying().underlying().schema()->version()) {
         res = transform(std::move(res), schema_upgrader(reader.schema()));
     }
     if (reader.fwd() == streamed_mutation::forwarding::no) {
@@ -356,8 +356,8 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        _read_context->create_underlying_flat(false);
-        return _read_context->underlying_flat().underlying()().then([this, phase] (auto&& mfopt) {
+        _read_context->create_underlying(false);
+        return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
@@ -508,7 +508,7 @@ private:
 public:
     range_populating_reader(row_cache& cache, read_context& ctx)
         : _cache(cache)
-        , _reader(ctx.underlying_flat())
+        , _reader(ctx.underlying())
         , _read_context(ctx)
     {}
 

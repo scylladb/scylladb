@@ -264,7 +264,7 @@ future<> cache_flat_mutation_reader::do_fill_buffer() {
 
 inline
 future<> cache_flat_mutation_reader::read_from_underlying() {
-    return consume_mutation_fragments_until(_read_context->underlying_flat().underlying(),
+    return consume_mutation_fragments_until(_read_context->underlying().underlying(),
         [this] { return _state != state::reading_from_underlying || is_buffer_full(); },
         [this] (mutation_fragment mf) {
             _read_context->cache().on_row_miss();
