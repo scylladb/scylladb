@@ -114,9 +114,8 @@ namespace sstables {
     // If cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<compaction_info> compact_sstables(std::vector<shared_sstable> sstables,
-            column_family& cf, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false,
+    future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor,
+            column_family& cf, std::function<shared_sstable()> creator, bool cleanup = false,
             seastar::thread_scheduling_group* tsg = nullptr);
 
     // Compacts a set of N shared sstables into M sstables. For every shard involved,

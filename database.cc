@@ -1325,8 +1325,6 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
     }
 
     return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] {
-        auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
-
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
                 auto sst = sstables::make_sstable(_schema, _config.datadir, gen,
@@ -1335,10 +1333,11 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
                 sst->set_unshared();
                 return sst;
         };
-        return sstables::compact_sstables(*sstables_to_compact, *this, create_sstable, descriptor.max_sstable_bytes, descriptor.level,
-                cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact] (auto info) {
-            _compaction_strategy.notify_completion(*sstables_to_compact, info.new_sstables);
-            this->rebuild_sstable_list(info.new_sstables, *sstables_to_compact);
+        auto sstables_to_compact = descriptor.sstables;
+        return sstables::compact_sstables(std::move(descriptor), *this, create_sstable,
+                cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact = std::move(sstables_to_compact)] (auto info) {
+            _compaction_strategy.notify_completion(sstables_to_compact, info.new_sstables);
+            this->rebuild_sstable_list(info.new_sstables, sstables_to_compact);
             return info;
         });
     }).then([this] (auto info) {
