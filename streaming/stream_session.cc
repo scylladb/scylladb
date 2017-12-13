@@ -358,6 +358,13 @@ void stream_session::transfer_task_completed(UUID cf_id) {
     maybe_completed();
 }
 
+void stream_session::transfer_task_completed_all() {
+    _transfers.clear();
+    sslog.debug("[Stream #{}] transfer task_completed: all done, stream_receive_task.size={} stream_transfer_task.size={}",
+        plan_id(), _receivers.size(), _transfers.size());
+    maybe_completed();
+}
+
 void stream_session::send_failed_complete_message() {
     auto plan_id = this->plan_id();
     if (_received_failed_complete_message) {
@@ -401,11 +408,15 @@ void stream_session::start_streaming_files() {
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
     }
-    for (auto it = _transfers.begin(); it != _transfers.end();) {
-        stream_transfer_task& task = it->second;
-        it++;
-        task.start();
-    }
+    do_for_each(_transfers.begin(), _transfers.end(), [this] (auto& item) {
+        sslog.debug("[Stream #{}] Start to send cf_id={}", plan_id(), item.first);
+        return item.second.execute();
+    }).then([this] {
+        this->transfer_task_completed_all();
+    }).handle_exception([this] (auto ep) {
+        sslog.warn("[Stream #{}] Failed to send: {}", plan_id(), ep);
+        this->on_error();
+    });
 }
 
 std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {

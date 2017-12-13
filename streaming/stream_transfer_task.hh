@@ -77,7 +77,7 @@ public:
         return _total_size;
     }
 
-    void start();
+    future<> execute();
 
     void append_ranges(const dht::token_range_vector& ranges);
     void sort_and_merge_ranges();
