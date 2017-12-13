@@ -949,7 +949,8 @@ column_family::seal_active_streaming_memtable_immediate() {
             }).then([this, old, newtab] () {
                 add_sstable(newtab, {engine().cpu_id()});
                 trigger_compaction();
-            }).handle_exception([] (auto ep) {
+            }).handle_exception([newtab] (auto ep) {
+                newtab->mark_for_deletion();
                 dblog.error("failed to write streamed sstable: {}", ep);
                 return make_exception_future<>(ep);
             });
@@ -987,7 +988,8 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 auto&& priority = service::get_local_streaming_write_priority();
                 return newtab->write_components(*old, incremental_backups_enabled(), priority, true).then([this, newtab, old, &smb] {
                     smb.sstables.emplace_back(newtab);
-                }).handle_exception([] (auto ep) {
+                }).handle_exception([newtab] (auto ep) {
+                    newtab->mark_for_deletion();
                     dblog.error("failed to write streamed sstable: {}", ep);
                     return make_exception_future<>(ep);
                 });
