@@ -200,12 +200,12 @@ private:
     }
 public:
     future<> create_underlying_flat(bool skip_first_fragment);
-    void enter_flat_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
+    void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;
         _key = dk;
     }
-    void enter_flat_partition(const dht::decorated_key& dk, row_cache::phase_type phase) {
+    void enter_partition(const dht::decorated_key& dk, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = {};
         _key = dk;

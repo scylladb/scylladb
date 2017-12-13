@@ -355,7 +355,7 @@ private:
     future<> create_reader() {
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
-        _read_context->enter_flat_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
+        _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
         _read_context->create_underlying_flat(false);
         return _read_context->underlying_flat().underlying()().then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
@@ -1180,12 +1180,12 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
 
 flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader) {
     auto source_and_phase = rc.snapshot_of(_key);
-    reader.enter_flat_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
+    reader.enter_partition(_key, source_and_phase.snapshot, source_and_phase.phase);
     return do_read_flat(rc, reader);
 }
 
 flat_mutation_reader cache_entry::read_flat(row_cache& rc, read_context& reader, row_cache::phase_type phase) {
-    reader.enter_flat_partition(_key, phase);
+    reader.enter_partition(_key, phase);
     return do_read_flat(rc, reader);
 }
 
