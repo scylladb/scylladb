@@ -332,6 +332,7 @@ public:
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);
+    void transfer_task_completed_all();
 private:
     void send_failed_complete_message();
     bool maybe_completed();
