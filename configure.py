@@ -221,7 +221,7 @@ scylla_tests = [
     'tests/perf/perf_simple_query',
     'tests/perf/perf_fast_forward',
     'tests/perf/perf_cache_eviction',
-    'tests/cache_streamed_mutation_test',
+    'tests/cache_flat_mutation_reader_test',
     'tests/row_cache_stress_test',
     'tests/memory_footprint',
     'tests/perf/perf_sstable',
