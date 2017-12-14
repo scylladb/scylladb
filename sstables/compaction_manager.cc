@@ -65,9 +65,8 @@ public:
     }
 };
 
-compaction_weight_registration::compaction_weight_registration(compaction_manager* cm, column_family* cf, int weight)
+compaction_weight_registration::compaction_weight_registration(compaction_manager* cm, int weight)
     : _cm(cm)
-    , _cf(cf)
     , _weight(weight)
 {
     _cm->register_weight(_weight);
@@ -83,11 +82,9 @@ compaction_weight_registration& compaction_weight_registration::operator=(compac
 
 compaction_weight_registration::compaction_weight_registration(compaction_weight_registration&& other) noexcept
     : _cm(other._cm)
-    , _cf(other._cf)
     , _weight(other._weight)
 {
     other._cm = nullptr;
-    other._cf = nullptr;
     other._weight = 0;
 }
 
@@ -505,7 +502,7 @@ void compaction_manager::submit(column_family* cf) {
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             auto compacting = compacting_sstable_registration(this, descriptor.sstables);
-            descriptor.weight_registration = compaction_weight_registration(this, &cf, weight);
+            descriptor.weight_registration = compaction_weight_registration(this, weight);
             cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
                 descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
 

@@ -27,10 +27,9 @@ class column_family;
 
 class compaction_weight_registration {
     compaction_manager* _cm;
-    column_family* _cf;
     int _weight;
 public:
-    compaction_weight_registration(compaction_manager* cm, column_family* cf, int weight);
+    compaction_weight_registration(compaction_manager* cm, int weight);
 
     compaction_weight_registration& operator=(const compaction_weight_registration&) = delete;
     compaction_weight_registration(const compaction_weight_registration&) = delete;
