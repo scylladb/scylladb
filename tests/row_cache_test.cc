@@ -3107,3 +3107,60 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        memtable_snapshot_source underlying(gen.schema());
+        schema_ptr s = gen.schema();
+
+        auto m1 = gen();
+        auto m2 = gen();
+        auto m3 = gen();
+
+        m1.partition().make_fully_continuous();
+        m2.partition().make_fully_continuous();
+        m3.partition().make_fully_continuous();
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+        auto make_reader = [&] () {
+            auto rd = cache.make_reader(s, query::full_partition_range, s->full_slice());
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
+        };
+
+        {
+            apply(cache, underlying, m1);
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(1));
+
+            auto snap1 = make_reader();
+
+            apply(cache, underlying, m2);
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(1));
+
+            auto snap2 = make_reader();
+
+            apply(cache, underlying, m3);
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(1));
+
+            auto snap3 = make_reader();
+
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(1));
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(2));
+            populate_range(cache, query::full_partition_range, gen.make_random_ranges(3));
+
+            auto snap4 = make_reader();
+
+            snap1.produces(m1);
+            snap2.produces(m1 + m2);
+            snap3.produces(m1 + m2 + m3);
+            snap4.produces(m1 + m2 + m3);
+        }
+
+        // After all readers are gone
+        make_reader().produces(m1 + m2 + m3);
+    });
+}
