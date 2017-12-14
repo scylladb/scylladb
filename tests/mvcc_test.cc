@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             assert_that(table.schema(), e.squashed(s)).is_equal_to(mutation_partition::make_incomplete(s));
         });
 
-        BOOST_TEST_MESSAGE("Check that continuity from latest version wins");
+        BOOST_TEST_MESSAGE("Check that continuity is a union");
         with_allocator(r.allocator(), [&] {
             logalloc::reclaim_lock l(r);
             auto m1 = mutation_with_row(ck2);
@@ -189,9 +189,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             apply(e, m2);
 
             partition_version* latest = &*e.version();
-            partition_version* prev = latest->next();
-
-            for (rows_entry& row : prev->partition().clustered_rows()) {
+            for (rows_entry& row : latest->partition().clustered_rows()) {
                 row.set_continuous(is_continuous::no);
             }
 
@@ -228,8 +226,7 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         auto assert_entry_equal = [&] (schema_ptr e_schema, partition_entry& e, mutation m) {
             auto key = table.make_pkey(0);
             assert_that(mutation(e_schema, key, e.squashed(*e_schema)))
-                .is_equal_to(m)
-                .has_same_continuity(m);
+                .is_equal_to(m);
         };
 
         auto apply = [&] (schema_ptr e_schema, partition_entry& e, const mutation& m) {
@@ -252,12 +249,15 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
 
         auto new_schema = schema_builder(table.schema()).with_column("__new_column", utf8_type).build();
 
+        auto cont_before = e.squashed(*table.schema()).get_continuity(*table.schema());
         e.upgrade(table.schema(), new_schema);
+        auto cont_after = e.squashed(*new_schema).get_continuity(*new_schema);
         rd1 = {};
 
         auto expected = m1 + m2;
         expected.partition().set_static_row_continuous(false); // apply_to_incomplete()
         assert_entry_equal(new_schema, e, expected);
+        BOOST_REQUIRE(cont_after.equals(*new_schema, cont_before));
 
         auto m3 = mutation_with_row(table.make_ckey(2));
         apply(new_schema, e, m3);

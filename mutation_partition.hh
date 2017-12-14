@@ -841,13 +841,9 @@ public:
 // Continuity doesn't affect how the write part is added.
 //
 // Addition of continuity is not commutative in general, but is associative.
-// Continuity flags on objects representing the same thing (e.g. rows_entry
-// with the same key) are merged such that the information stored in the left-
-// hand operand wins. Flags on objects which are present only in one of the
-// operands are transferred as-is. Such merging rules are useful for layering
-// information in MVCC, where newer versions specify continuity with respect
-// to the combined set of rows in all prior versions, not just in their
-// versions.
+// The default continuity merging rules are those required by MVCC to
+// preserve its invariants. For details, refer to "Continuity merging rules" section
+// in the doc in partition_version.hh.
 class mutation_partition final {
 public:
     using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;

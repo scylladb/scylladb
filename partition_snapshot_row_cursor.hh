@@ -22,6 +22,7 @@
 #pragma once
 
 #include "partition_version.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 class partition_snapshot_row_cursor;
 
@@ -126,6 +127,8 @@ class partition_snapshot_row_cursor final {
     std::vector<position_in_version> _heap;
     std::vector<mutation_partition::rows_type::iterator> _iterators;
     std::vector<position_in_version> _current_row;
+    bool _continuous;
+    bool _dummy;
     position_in_partition _position;
     partition_snapshot::change_mark _change_mark;
 
@@ -133,12 +136,23 @@ class partition_snapshot_row_cursor final {
     void recreate_current_row() {
         position_in_version::less_compare heap_less(_schema);
         position_in_partition::equal_compare eq(_schema);
+        _continuous = false;
+        _dummy = true;
         do {
             boost::range::pop_heap(_heap, heap_less);
             memory::on_alloc_point();
+            rows_entry& e = *_heap.back().it;
+            _dummy &= bool(e.dummy());
+            _continuous |= bool(e.continuous());
             _current_row.push_back(_heap.back());
             _heap.pop_back();
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
+
+        if (boost::algorithm::any_of(_heap, [] (auto&& v) { return v.it->continuous(); })) {
+            // FIXME: Optimize by dropping dummy() entries.
+            _continuous = true;
+        }
+
         _position = position_in_partition(_current_row[0].it->position());
     }
 
@@ -271,11 +285,11 @@ public:
         return true;
     }
 
-    // Can be called only when cursor is valid and pointing at a row.
-    bool continuous() const { return bool(_current_row[0].it->continuous()); }
+    // Can be called when cursor is pointing at a row.
+    bool continuous() const { return _continuous; }
 
-    // Can be called only when cursor is valid and pointing at a row.
-    bool dummy() const { return bool(_current_row[0].it->dummy()); }
+    // Can be called when cursor is pointing at a row.
+    bool dummy() const { return _dummy; }
 
     // Can be called only when cursor is valid and pointing at a row, and !dummy().
     const clustering_key& key() const { return _current_row[0].it->key(); }
@@ -301,9 +315,9 @@ public:
     // Doesn't change logical value of mutation_partition or continuity of the snapshot.
     // The cursor doesn't have to be valid.
     // The cursor is invalid after the call.
+    // Assumes the snapshot is evictable.
     rows_entry* ensure_entry_if_complete(position_in_partition_view pos) {
         prepare_heap(pos);
-        bool left_continuous = true;
         if (!_heap.empty()) {
             recreate_current_row();
             position_in_partition::equal_compare eq(_schema);
@@ -314,14 +328,15 @@ public:
                 if (is_in_latest_version()) {
                     return &*get_iterator_in_latest_version();
                 }
-                left_continuous = continuous();
             } else if (!continuous()) {
                 return nullptr;
             }
         }
         auto&& rows = _snp.version()->partition().clustered_rows();
-        auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy::no, is_continuous(left_continuous));
-        rows.insert_before(get_iterator_in_latest_version(), *e);
+        auto latest_i = get_iterator_in_latest_version();
+        auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
+            is_continuous(latest_i != rows.end() && latest_i->continuous()));
+        rows.insert_before(latest_i, *e);
         return e;
     }
 

@@ -109,6 +109,33 @@
 // snapshot on the list is marked as unique owner so that on its destruction
 // it continues removal of the partition versions.
 
+//
+// Continuity merging rules.
+//
+// Non-evictable snapshots contain fully continuous partitions in all versions at all times.
+// For evictable snapshots, that's not the case.
+//
+// Each version has its own continuity, fully specified in that version,
+// independent of continuity of other versions. Continuity of the snapshot is a
+// union of continuities of each version. This rule follows from the fact that we
+// want eviction from older versions to not have to touch newer versions.
+//
+// It is assumed that continuous intervals in different versions are non-
+// overlapping,  with exceptions for points corresponding to complete rows.
+// A row may overlap  with another row, in which case it completely overrides
+// it. A later version may have a row which falls into a continuous interval
+// in the older version. A newer version cannot have a continuous interval
+// which is not a row and covers a row in the older version. We make use of
+// this assumption to make calculation of the union of intervals on merging
+// easier.
+//
+// Continuity after the last entry in a version is assumed to be discontinuous
+// for evictable entries.
+//
+// Snapshots of evictable entries always have a row entry at
+// position_in_partition::after_all_clustered_rows().
+//
+
 class partition_version_ref;
 
 class partition_version : public anchorless_list_base_hook<partition_version> {
@@ -369,9 +396,7 @@ public:
     //
     // The argument must be fully-continuous.
     //
-    // The rules of addition differ from that used by regular
-    // mutation_partition addition with regards to continuity. The continuity
-    // of the result is the same as in this instance. Information from "other"
+    // The continuity of this entry remains unchanged. Information from "other"
     // which is incomplete in this instance is dropped. In other words, this
     // performs set intersection on continuity information, drops information
     // which falls outside of the continuity range, and applies regular merging

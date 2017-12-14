@@ -301,6 +301,7 @@ class partition_entry::rows_iterator final {
     version::compare _version_cmp;
     std::vector<version> _heap;
     std::vector<version> _current_row;
+    bool _current_row_dummy;
 public:
     rows_iterator(partition_version* version, const schema& schema)
         : _schema(schema)
@@ -332,7 +333,7 @@ public:
         return _current_row[0].current_row->position();
     }
     bool is_dummy() const {
-        return bool(_current_row[0].current_row->dummy());
+        return _current_row_dummy;
     }
     template<typename RowConsumer>
     void consume_row(RowConsumer&& consumer) {
@@ -358,11 +359,13 @@ public:
     }
     void move_to_next_row() {
         _current_row.clear();
+        _current_row_dummy = true;
         while (!_heap.empty() &&
                 (_current_row.empty() || _rows_cmp(*_current_row[0].current_row, *_heap[0].current_row) == 0)) {
             boost::range::pop_heap(_heap, _version_cmp);
             auto& curr = _heap.back();
             _current_row.push_back({curr.current_row, curr.rows, curr.can_move});
+            _current_row_dummy &= bool(curr.current_row->dummy());
             ++curr.current_row;
             if (curr.current_row == curr.rows->end()) {
                 _heap.pop_back();

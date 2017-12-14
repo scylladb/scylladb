@@ -1475,15 +1475,15 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 
             left.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
             right.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::no);
-            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(5), is_dummy::yes, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
             right.partition().clustered_row(s, table.make_ckey(6), is_dummy::yes, is_continuous::no);
@@ -1495,7 +1495,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 
             left.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
 
             assert_that(right + left).has_same_continuity(result);
         }
@@ -1507,7 +1507,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
             incomplete.partition().set_static_row_continuous(false);
 
             assert_that(complete + complete).has_same_continuity(complete);
-            assert_that(complete + incomplete).has_same_continuity(incomplete);
+            assert_that(complete + incomplete).has_same_continuity(complete);
             assert_that(incomplete + complete).has_same_continuity(complete);
             assert_that(incomplete + incomplete).has_same_continuity(incomplete);
         }
