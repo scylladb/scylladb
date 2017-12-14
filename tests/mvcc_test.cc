@@ -300,15 +300,8 @@ SEASTAR_TEST_CASE(test_full_eviction_marks_affected_range_as_discontinuous) {
 
             e.evict();
 
-            BOOST_REQUIRE(snap1->squashed().fully_discontinuous(s, position_range(
-                position_in_partition::before_all_clustered_rows(),
-                position_in_partition::after_key(ck2)
-            )));
-
-            BOOST_REQUIRE(snap2->squashed().fully_discontinuous(s, position_range(
-                position_in_partition::before_all_clustered_rows(),
-                position_in_partition::after_key(ck2)
-            )));
+            BOOST_REQUIRE(snap1->squashed().fully_discontinuous(s, position_range::all_clustered_rows()));
+            BOOST_REQUIRE(snap2->squashed().fully_discontinuous(s, position_range::all_clustered_rows()));
 
             BOOST_REQUIRE(!snap1->squashed().static_row_continuous());
             BOOST_REQUIRE(!snap2->squashed().static_row_continuous());
