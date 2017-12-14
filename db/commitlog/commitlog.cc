@@ -114,29 +114,30 @@ public:
 
 db::commitlog::config::config(const db::config& cfg)
     : commit_log_location(cfg.commitlog_directory())
+    , metrics_category_name("commitlog")
     , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (memory::stats().total_memory() * smp::count) >> 20)
     , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
     , commitlog_sync_period_in_ms(cfg.commitlog_sync_period_in_ms())
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
 {}
 
-db::commitlog::descriptor::descriptor(segment_id_type i, uint32_t v)
-        : id(i), ver(v) {
+db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v)
+        : id(i), ver(v), filename_prefix(fname_prefix) {
 }
 
-db::commitlog::descriptor::descriptor(replay_position p)
-        : descriptor(p.id) {
+db::commitlog::descriptor::descriptor(replay_position p, const std::string& fname_prefix)
+        : descriptor(p.id, fname_prefix) {
 }
 
-db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p)
-        : descriptor(p.first, p.second) {
+db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p, const std::string& fname_prefix)
+        : descriptor(p.first, fname_prefix, p.second) {
 }
 
-db::commitlog::descriptor::descriptor(sstring filename)
-        : descriptor([filename]() {
+db::commitlog::descriptor::descriptor(const sstring& filename, const std::string& fname_prefix)
+        : descriptor([&filename, &fname_prefix]() {
             std::smatch m;
             // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:.*/)?" + FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                std::regex rx("(?:.*/)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
                 std::string sfilename = filename;
                 if (!std::regex_match(sfilename, m, rx)) {
                     throw std::domain_error("Cannot parse the version of the file: " + filename);
@@ -150,11 +151,11 @@ db::commitlog::descriptor::descriptor(sstring filename)
                 uint32_t ver = std::stoul(m[2].str());
 
                 return std::make_pair(id, ver);
-            }()) {
+            }(), fname_prefix) {
 }
 
 sstring db::commitlog::descriptor::filename() const {
-    return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
+    return filename_prefix + std::to_string(ver) + SEPARATOR
             + std::to_string(id) + FILENAME_EXTENSION;
 }
 
@@ -271,7 +272,7 @@ public:
     future<> sync_all_segments(bool shutdown = false);
     future<> shutdown();
 
-    void create_counters();
+    void create_counters(const sstring& metrics_category_name);
 
     future<> orphan_all();
 
@@ -515,7 +516,9 @@ public:
                 return me->sync().finally([me] {
                     // When we get here, nothing should add ops,
                     // and we should have waited out all pending.
-                    return me->_pending_ops.close();
+                    return me->_pending_ops.close().finally([me] {
+                        return me->_file.truncate(me->_flush_pos);
+                    });
                 });
             });
         }
@@ -959,7 +962,9 @@ db::commitlog::segment_manager::segment_manager(config c)
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
 
-    create_counters();
+    if (!cfg.metrics_category_name.empty()) {
+        create_counters(cfg.metrics_category_name);
+    }
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -993,12 +998,13 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
     struct helper {
         sstring _dirname;
         file _file;
+        sstring _fname_prefix;
         subscription<directory_entry> _list;
         std::vector<db::commitlog::descriptor> _result;
 
         helper(helper&&) = default;
-        helper(sstring n, file && f)
-                : _dirname(std::move(n)), _file(std::move(f)), _list(
+        helper(sstring n, sstring fname_prefix, file && f)
+                : _dirname(std::move(n)), _file(std::move(f)), _fname_prefix(std::move(fname_prefix)), _list(
                         _file.list_directory(
                                 std::bind(&helper::process, this,
                                         std::placeholders::_1))) {
@@ -1014,7 +1020,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
             return entry_type(de).then([this, de](std::experimental::optional<directory_entry_type> type) {
                 if (type == directory_entry_type::regular && de.name[0] != '.' && !is_cassandra_segment(de.name)) {
                     try {
-                        _result.emplace_back(de.name);
+                        _result.emplace_back(de.name, _fname_prefix);
                     } catch (std::domain_error& e) {
                         clogger.warn(e.what());
                     }
@@ -1038,7 +1044,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
     };
 
     return open_checked_directory(commit_error_handler, dirname).then([this, dirname](file dir) {
-        auto h = make_lw_shared<helper>(std::move(dirname), std::move(dir));
+        auto h = make_lw_shared<helper>(std::move(dirname), cfg.fname_prefix, std::move(dir));
         return h->done().then([h]() {
             return make_ready_future<std::vector<db::commitlog::descriptor>>(std::move(h->_result));
         }).finally([h] {});
@@ -1067,10 +1073,10 @@ future<> db::commitlog::segment_manager::init() {
     });
 }
 
-void db::commitlog::segment_manager::create_counters() {
+void db::commitlog::segment_manager::create_counters(const sstring& metrics_category_name) {
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("commitlog", {
+    _metrics.add_group(metrics_category_name, {
         sm::make_gauge("segments", [this] { return _segments.size(); },
                        sm::description("Holds the current number of segments.")),
 
@@ -1165,7 +1171,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
-    descriptor d(next_id());
+    descriptor d(next_id(), cfg.fname_prefix);
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {

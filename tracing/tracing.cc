@@ -107,7 +107,7 @@ future<> tracing::start_tracing() {
     });
 }
 
-trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) {
+trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set props) noexcept {
     if (!started()) {
         return nullptr;
     }
@@ -126,7 +126,7 @@ trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set p
     }
 }
 
-trace_state_ptr tracing::create_session(const trace_info& secondary_session_info) {
+trace_state_ptr tracing::create_session(const trace_info& secondary_session_info) noexcept {
     if (!started()) {
         return nullptr;
     }

@@ -470,7 +470,7 @@ public:
      *
      * @return tracing state handle
      */
-    trace_state_ptr create_session(trace_type type, trace_state_props_set props);
+    trace_state_ptr create_session(trace_type type, trace_state_props_set props) noexcept;
 
     /**
      * Create a new secondary tracing session.
@@ -479,7 +479,7 @@ public:
      *
      * @return tracing state handle
      */
-    trace_state_ptr create_session(const trace_info& secondary_session_info);
+    trace_state_ptr create_session(const trace_info& secondary_session_info) noexcept;
 
     void write_maybe() {
         if (_pending_for_write_records_count >= write_event_records_threshold || _pending_for_write_records_bulk.size() >= write_event_sessions_threshold) {

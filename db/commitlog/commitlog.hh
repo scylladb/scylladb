@@ -113,6 +113,7 @@ public:
         config(const db::config&);
 
         sstring commit_log_location;
+        sstring metrics_category_name;
         uint64_t commitlog_total_space_in_mb = 0;
         uint64_t commitlog_segment_size_in_mb = 32;
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
@@ -125,11 +126,12 @@ public:
         uint64_t max_active_flushes = 0;
 
         sync_mode mode = sync_mode::PERIODIC;
+        std::string fname_prefix = descriptor::FILENAME_PREFIX;
     };
 
     struct descriptor {
     private:
-        descriptor(std::pair<uint64_t, uint32_t> p);
+        descriptor(std::pair<uint64_t, uint32_t> p, const std::string& fname_prefix);
     public:
         static const std::string SEPARATOR;
         static const std::string FILENAME_PREFIX;
@@ -137,15 +139,16 @@ public:
 
         descriptor(descriptor&&) = default;
         descriptor(const descriptor&) = default;
-        descriptor(segment_id_type i, uint32_t v = 1);
-        descriptor(replay_position p);
-        descriptor(sstring filename);
+        descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1);
+        descriptor(replay_position p, const std::string& fname_prefix);
+        descriptor(const sstring& filename, const std::string& fname_prefix);
 
         sstring filename() const;
         operator replay_position() const;
 
         const segment_id_type id;
         const uint32_t ver;
+        const std::string filename_prefix = FILENAME_PREFIX;
     };
 
     commitlog(commitlog&&) noexcept;

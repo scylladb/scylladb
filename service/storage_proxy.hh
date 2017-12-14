@@ -48,6 +48,7 @@
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
 #include "db/write_type.hh"
+#include "db/hints/manager.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
@@ -216,9 +217,7 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
-    constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
-    size_t _total_hints_in_progress = 0;
-    std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
+    stdx::optional<db::hints::manager> _hints_manager;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
@@ -240,12 +239,10 @@ private:
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
-    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept;
+    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
     bool cannot_hint(gms::inet_address target);
-    size_t get_hints_in_progress_for(gms::inet_address target);
-    bool should_hint(gms::inet_address ep) noexcept;
-    bool submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target);
+    bool hints_enabled() noexcept;
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
@@ -298,7 +295,7 @@ private:
     future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool);
     friend class mutate_executor;
 public:
-    storage_proxy(distributed<database>& db);
+    storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled);
     ~storage_proxy();
     distributed<database>& get_db() {
         return _db;
@@ -398,6 +395,8 @@ public:
 
 
     future<> stop();
+    future<> stop_hints_manager();
+    future<> start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr);
 
     const stats& get_stats() const {
         return _stats;
