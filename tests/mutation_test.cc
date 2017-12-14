@@ -1450,6 +1450,20 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     });
 }
 
+SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+    mutation m1 = gen();
+    m1.partition().make_fully_continuous();
+    mutation m2 = gen();
+    m2.partition().make_fully_continuous();
+    mutation m3 = m1 + m2;
+
+    assert_that(m3).is_continuous(position_range::all_clustered_rows(), is_continuous::yes);
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_continuity_merging) {
     return seastar::async([] {
         simple_schema table;

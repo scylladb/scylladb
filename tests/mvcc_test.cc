@@ -460,6 +460,86 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
     });
 }
 
+SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging_for_nonevictable) {
+    // Tests that reading many versions using a cursor gives the logical mutation back.
+    return seastar::async([] {
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            auto s = gen.schema();
+
+            mutation m1 = gen();
+            mutation m2 = gen();
+            mutation m3 = gen();
+
+            m1.partition().make_fully_continuous();
+            m2.partition().make_fully_continuous();
+            m3.partition().make_fully_continuous();
+
+            {
+                logalloc::reclaim_lock rl(r);
+                auto e = partition_entry(m3.partition());
+                auto snap1 = e.read(r, s);
+                e.apply(*s, m2.partition(), *s);
+                auto snap2 = e.read(r, s);
+                e.apply(*s, m1.partition(), *s);
+
+                auto expected = e.squashed(*s);
+                auto snap = e.read(r, s);
+                auto actual = read_using_cursor(*snap);
+
+                BOOST_REQUIRE(expected.is_fully_continuous());
+                BOOST_REQUIRE(actual.is_fully_continuous());
+
+                assert_that(s, actual)
+                    .is_equal_to(expected);
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_continuity_merging_in_evictable) {
+    // Tests that reading many versions using a cursor gives the logical mutation back.
+    return seastar::async([] {
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            simple_schema ss;
+            auto s = ss.schema();
+
+            auto base_m = mutation(s, ss.make_pkey(0));
+
+            auto m1 = base_m; // continuous in [-inf, 0]
+            m1.partition().clustered_row(*s, ss.make_ckey(0), is_dummy::no, is_continuous::no);
+            m1.partition().clustered_row(*s, position_in_partition::after_all_clustered_rows(), is_dummy::no, is_continuous::no);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                auto e = partition_entry::make_evictable(*s, m1.partition());
+                auto snap1 = e.read(r, s);
+                e.add_version(*s).partition()
+                    .clustered_row(*s, ss.make_ckey(1), is_dummy::no, is_continuous::no);
+                e.add_version(*s).partition()
+                    .clustered_row(*s, ss.make_ckey(2), is_dummy::no, is_continuous::no);
+
+                auto expected = m1.partition();
+                expected.clustered_row(*s, ss.make_ckey(1), is_dummy::no, is_continuous::no);
+                expected.clustered_row(*s, ss.make_ckey(2), is_dummy::no, is_continuous::no);
+
+                auto snap = e.read(r, s);
+                auto actual = read_using_cursor(*snap);
+                auto actual2 = e.squashed(*s);
+
+                assert_that(s, actual)
+                    .has_same_continuity(expected)
+                    .is_equal_to(expected);
+                assert_that(s, actual2)
+                    .has_same_continuity(expected)
+                    .is_equal_to(expected);
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
     return seastar::async([] {
         logalloc::region r;
