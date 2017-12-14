@@ -2411,13 +2411,13 @@ SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
     });
 }
 
-static void populate_range(row_cache& cache, dht::partition_range& pr, const query::clustering_row_ranges& ranges) {
+static void populate_range(row_cache& cache, const dht::partition_range& pr, const query::clustering_row_ranges& ranges) {
     for (auto&& r : ranges) {
         populate_range(cache, pr, r);
     }
 }
 
-static void check_continuous(row_cache& cache, dht::partition_range& pr, query::clustering_range r = query::full_clustering_range) {
+static void check_continuous(row_cache& cache, const dht::partition_range& pr, const query::clustering_range& r = query::full_clustering_range) {
     auto s0 = cache.get_cache_tracker().get_stats();
     populate_range(cache, pr, r);
     auto s1 = cache.get_cache_tracker().get_stats();
