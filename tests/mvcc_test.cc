@@ -284,7 +284,7 @@ SEASTAR_TEST_CASE(test_full_eviction_marks_affected_range_as_discontinuous) {
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey(2);
 
-            auto e = partition_entry(mutation_partition(table.schema()));
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
 
             auto t = table.new_tombstone();
             auto&& p1 = e.open_version(s).partition();
@@ -328,7 +328,7 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey(2);
 
-            auto e = partition_entry(mutation_partition(table.schema()));
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
 
             auto&& p1 = e.open_version(s).partition();
             p1.clustered_row(s, ck2);
@@ -386,7 +386,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
             // Without active reader
             auto test = [&] (bool with_active_reader) {
                 logalloc::reclaim_lock rl(r);
-                auto e = partition_entry(m3.partition());
+                auto e = partition_entry::make_evictable(*s, m3.partition());
                 partition_version& v2 = e.add_version(*s);
                 v2.partition() = m2.partition();
                 partition_version& v3 = e.add_version(*s);
@@ -466,7 +466,7 @@ SEASTAR_TEST_CASE(test_partition_snapshot_row_cursor) {
             simple_schema table;
             auto&& s = *table.schema();
 
-            auto e = partition_entry(mutation_partition(table.schema()));
+            auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
             auto snap1 = e.read(r, table.schema());
 
             {
