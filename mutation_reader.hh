@@ -379,7 +379,7 @@ template <typename MutationFilter>
 GCC6_CONCEPT(
     requires requires(MutationFilter mf, const dht::decorated_key& dk) {
         { mf(dk) } -> bool;
-    };
+    }
 )
 class filtering_reader : public flat_mutation_reader::impl {
     flat_mutation_reader _rd;
