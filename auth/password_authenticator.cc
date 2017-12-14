@@ -216,12 +216,12 @@ bool auth::password_authenticator::require_authentication() const {
     return true;
 }
 
-auth::authenticator::option_set auth::password_authenticator::supported_options() const {
-    return option_set::of<option::PASSWORD>();
+auth::authentication_option_set auth::password_authenticator::supported_options() const {
+    return authentication_option_set{authentication_option::password};
 }
 
-auth::authenticator::option_set auth::password_authenticator::alterable_options() const {
-    return option_set::of<option::PASSWORD>();
+auth::authentication_option_set auth::password_authenticator::alterable_options() const {
+    return authentication_option_set{authentication_option::password};
 }
 
 future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::authenticate(
@@ -263,27 +263,25 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
 }
 
 future<> auth::password_authenticator::create(sstring username,
-                const option_map& options) {
-    try {
-        auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
-        auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
-                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
-        return _qp.process(query, consistency_for_user(username), { username, hashpw(password) }).discard_result();
-    } catch (std::out_of_range&) {
+                const authentication_options& options) {
+    if (!options.password) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
     }
+
+    auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
+                    meta::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
+    return _qp.process(query, consistency_for_user(username), { username, hashpw(*options.password) }).discard_result();
 }
 
 future<> auth::password_authenticator::alter(sstring username,
-                const option_map& options) {
-    try {
-        auto password = boost::any_cast<sstring>(options.at(option::PASSWORD));
-        auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
-                        meta::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
-        return _qp.process(query, consistency_for_user(username), { hashpw(password), username }).discard_result();
-    } catch (std::out_of_range&) {
+                const authentication_options& options) {
+    if (!options.password) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
     }
+
+    auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
+                    meta::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
+    return _qp.process(query, consistency_for_user(username), { hashpw(*options.password), username }).discard_result();
 }
 
 future<> auth::password_authenticator::drop(sstring username) {

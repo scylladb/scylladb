@@ -102,7 +102,6 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         sstring password("notter");
 
         using namespace auth;
-        using option = authenticator::option;
         using user_ptr = ::shared_ptr<authenticated_user>;
 
         auto USERNAME_KEY = authenticator::USERNAME_KEY;
@@ -119,7 +118,10 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
                 // ok
             }
         }).then([=, &a] {
-            return a.create(username, { { option::PASSWORD, password} }).then([=, &a] {
+            authentication_options options;
+            options.password = password;
+
+            return a.create(username, std::move(options)).then([=, &a] {
                 return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
                     BOOST_REQUIRE_EQUAL(user->name(), username);
                     BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);

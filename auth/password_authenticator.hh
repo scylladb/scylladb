@@ -69,11 +69,11 @@ public:
 
     const sstring& qualified_java_name() const override;
     bool require_authentication() const override;
-    option_set supported_options() const override;
-    option_set alterable_options() const override;
+    authentication_option_set supported_options() const override;
+    authentication_option_set alterable_options() const override;
     future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override;
-    future<> create(sstring username, const option_map& options) override;
-    future<> alter(sstring username, const option_map& options) override;
+    future<> create(sstring username, const authentication_options& options) override;
+    future<> alter(sstring username, const authentication_options& options) override;
     future<> drop(sstring username) override;
     const resource_set& protected_resources() const override;
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;

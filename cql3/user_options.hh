@@ -40,7 +40,10 @@
 
 #pragma once
 
-#include "auth/authenticator.hh"
+#include <experimental/string_view>
+
+#include "auth/authentication_options.hh"
+#include "stdx.hh"
 
 namespace auth {
 class authenticator;
@@ -50,15 +53,28 @@ namespace cql3 {
 
 class user_options {
 private:
-    auth::authenticator::option_map _options;
+    auth::authentication_options _options;
 public:
-    void put(const sstring&, const sstring&);
+    void put_password(stdx::string_view);
 
     bool empty() const {
-        return _options.empty();
+        return !_options.password && !_options.options;
     }
-    const auth::authenticator::option_map& options() const {
+    const auth::authentication_options& options() const {
         return _options;
+    }
+    auth::authentication_option_set options_as_set() const {
+        auth::authentication_option_set options;
+
+        if (_options.password) {
+            options.insert(auth::authentication_option::password);
+        }
+
+        if (_options.options) {
+            options.insert(auth::authentication_option::options);
+        }
+
+        return options;
     }
     void validate(const auth::authenticator&) const;
 };

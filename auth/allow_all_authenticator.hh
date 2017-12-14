@@ -60,23 +60,23 @@ public:
         return false;
     }
 
-    option_set supported_options() const override {
-        return option_set();
+    authentication_option_set supported_options() const override {
+        return authentication_option_set();
     }
 
-    option_set alterable_options() const override {
-        return option_set();
+    authentication_option_set alterable_options() const override {
+        return authentication_option_set();
     }
 
     future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
         return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
     }
 
-    future<> create(sstring username, const option_map& options) override {
+    future<> create(sstring username, const authentication_options& options) override {
         return make_ready_future();
     }
 
-    future<> alter(sstring username, const option_map& options) override {
+    future<> alter(sstring username, const authentication_options& options) override {
         return make_ready_future();
     }
 

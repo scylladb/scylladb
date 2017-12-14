@@ -1110,7 +1110,7 @@ userOptions[::shared_ptr<cql3::user_options> opts]
     ;
 
 userOption[::shared_ptr<cql3::user_options> opts]
-    : k=K_PASSWORD v=STRING_LITERAL { opts->put($k.text, $v.text); }
+    : K_PASSWORD v=STRING_LITERAL { opts->put_password($v.text); }
     ;
 
 /**

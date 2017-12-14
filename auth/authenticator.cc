@@ -49,19 +49,3 @@
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
-
-auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
-    if (strcasecmp(name.c_str(), "password") == 0) {
-        return option::PASSWORD;
-    }
-    throw std::invalid_argument(name);
-}
-
-sstring auth::authenticator::option_to_string(option opt) {
-    switch (opt) {
-    case option::PASSWORD:
-        return "PASSWORD";
-    default:
-        throw std::invalid_argument(sprint("Unknown option {}", opt));
-    }
-}

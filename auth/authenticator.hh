@@ -52,6 +52,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/enum.hh>
 
+#include "auth/authentication_options.hh"
 #include "bytes.hh"
 #include "enum_set.hh"
 #include "exceptions/exceptions.hh"
@@ -70,19 +71,6 @@ public:
     static const sstring USERNAME_KEY;
     static const sstring PASSWORD_KEY;
 
-    /**
-     * Supported CREATE USER/ALTER USER options.
-     * Currently only PASSWORD is available.
-     */
-    enum class option {
-        PASSWORD
-    };
-
-    static option string_to_option(const sstring&);
-    static sstring option_to_string(option);
-
-    using option_set = enum_set<super_enum<option, option::PASSWORD>>;
-    using option_map = std::unordered_map<option, boost::any, enum_hash<option>>;
     using credentials_map = std::unordered_map<sstring, sstring>;
 
     virtual ~authenticator()
@@ -104,13 +92,13 @@ public:
      * Set of options supported by CREATE USER and ALTER USER queries.
      * Should never return null - always return an empty set instead.
      */
-    virtual option_set supported_options() const = 0;
+    virtual authentication_option_set supported_options() const = 0;
 
     /**
      * Subset of supportedOptions that users are allowed to alter when performing ALTER USER [themselves].
      * Should never return null - always return an empty set instead.
      */
-    virtual option_set alterable_options() const = 0;
+    virtual authentication_option_set alterable_options() const = 0;
 
     /**
      * Authenticates a user given a Map<String, String> of credentials.
@@ -131,7 +119,7 @@ public:
      * @throws exceptions::request_validation_exception
      * @throws exceptions::request_execution_exception
      */
-    virtual future<> create(sstring username, const option_map& options) = 0;
+    virtual future<> create(sstring username, const authentication_options& options) = 0;
 
     /**
      * Called during execution of ALTER USER query.
@@ -144,7 +132,7 @@ public:
      * @throws exceptions::request_validation_exception
      * @throws exceptions::request_execution_exception
      */
-    virtual future<> alter(sstring username, const option_map& options) = 0;
+    virtual future<> alter(sstring username, const authentication_options& options) = 0;
 
 
     /**
@@ -181,10 +169,6 @@ public:
      */
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 };
-
-inline std::ostream& operator<<(std::ostream& os, authenticator::option opt) {
-    return os << authenticator::option_to_string(opt);
-}
 
 }
 

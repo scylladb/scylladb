@@ -40,23 +40,32 @@
 
 #include <string.h>
 
-#include <boost/range/adaptor/map.hpp>
+#include <seastar/core/print.hh>
+#include <seastar/core/sstring.hh>
 
 #include "auth/authenticator.hh"
 #include "user_options.hh"
 
-void cql3::user_options::put(const sstring& name, const sstring& value) {
-    _options[auth::authenticator::string_to_option(name)] = value;
+void cql3::user_options::put_password(stdx::string_view password) {
+    _options.password = sstring(password);
 }
 
 void cql3::user_options::validate(const auth::authenticator& a) const {
-    for (auto o : _options | boost::adaptors::map_keys) {
-        if (!a.supported_options().contains(o)) {
+    const auto supported_options = a.supported_options();
+
+    const auto check = [&a, &supported_options](auth::authentication_option ao) {
+        if (supported_options.count(ao) == 0) {
             throw exceptions::invalid_request_exception(
-                            sprint("%s doesn't support %s option",
-                                            a.qualified_java_name(),
-                                            a.option_to_string(o)));
+                    sprint("%s doesn't support %s option", a.qualified_java_name(), ao));
         }
+    };
+
+    if (_options.password) {
+        check(auth::authentication_option::password);
+    }
+
+    if (_options.options) {
+        check(auth::authentication_option::options);
     }
 }
 

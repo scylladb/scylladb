@@ -86,8 +86,10 @@ future<> cql3::statements::alter_user_statement::check_access(const service::cli
         }
 
         if (!is_super) {
-            for (auto o : _opts->options() | boost::adaptors::map_keys) {
-                if (!auth_service.underlying_authenticator().alterable_options().contains(o)) {
+            const auto alterable_options = auth_service.underlying_authenticator().alterable_options();
+
+            for (auto o : _opts->options_as_set()) {
+                if (alterable_options.count(o) == 0) {
                     throw exceptions::unauthorized_exception(sprint("You aren't allowed to alter {} option", o));
                 }
             }
@@ -104,7 +106,7 @@ cql3::statements::alter_user_statement::execute(distributed<service::storage_pro
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
-        auto f = _opts->options().empty() ? make_ready_future() : auth_service.underlying_authenticator().alter(_username, _opts->options());
+        auto f = _opts->empty() ? make_ready_future() : auth_service.underlying_authenticator().alter(_username, _opts->options());
         if (_superuser) {
             f = f.then([this, &auth_service] {
                 return auth_service.insert_user(_username, *_superuser);
