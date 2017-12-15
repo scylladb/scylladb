@@ -370,3 +370,17 @@ template<typename FlattenedConsumer, typename... Args>
 stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
     return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }
+
+/// Make a foreign_reader.
+///
+/// foreign_reader is a local representant of a reader located on a remote
+/// shard. Manages its lifecycle and takes care of seamlessly transferring
+/// produced fragments. Fragments are *copied* between the shards, a
+/// bufferful at a time.
+/// To maximize throughput read-ahead is used. After each fill_buffer() or
+/// fast_forward_to() a read-ahead (a fill_buffer() on the remote reader) is
+/// issued. This read-ahead runs in the background and is brough back to
+/// foreground on the next fill_buffer() or fast_forward_to() call.
+flat_mutation_reader make_foreign_reader(schema_ptr schema,
+        foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
