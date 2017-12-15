@@ -149,6 +149,22 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(original);
 }
 
+future<bool> flat_mutation_reader::impl::fill_buffer_from_streamed_mutation(streamed_mutation& sm) {
+    if (sm.is_buffer_empty()) {
+        if (sm.is_end_of_stream()) {
+            return make_ready_future<bool>(true);
+        }
+        return sm.fill_buffer().then([this, &sm] {
+            return fill_buffer_from_streamed_mutation(sm);
+        });
+    } else {
+        while (!sm.is_buffer_empty() && !is_buffer_full()) {
+            push_mutation_fragment(sm.pop_mutation_fragment());
+        }
+        return make_ready_future<bool>(sm.is_end_of_stream() && sm.is_buffer_empty());
+    }
+}
+
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mutation_reader&& legacy_reader, streamed_mutation::forwarding fwd) {
     class converting_reader final : public flat_mutation_reader::impl {
         mutation_reader _legacy_reader;
@@ -183,21 +199,11 @@ flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr s, mut
                 if (!_sm) {
                     return get_next_sm();
                 } else {
-                    if (_sm->is_buffer_empty()) {
-                        if (_sm->is_end_of_stream()) {
-                            on_sm_finished();
-                            return make_ready_future<>();
-                        }
-                        return _sm->fill_buffer();
-                    } else {
-                        while (!_sm->is_buffer_empty() && !is_buffer_full()) {
-                            this->push_mutation_fragment(_sm->pop_mutation_fragment());
-                        }
-                        if (_sm->is_end_of_stream() && _sm->is_buffer_empty()) {
+                    return fill_buffer_from_streamed_mutation(*_sm).then([this] (bool sm_finished) {
+                        if (sm_finished) {
                             on_sm_finished();
                         }
-                        return make_ready_future<>();
-                    }
+                    });
                 }
             });
         }

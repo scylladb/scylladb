@@ -91,6 +91,7 @@ public:
         bool _end_of_stream = false;
         schema_ptr _schema;
         friend class flat_mutation_reader;
+        friend future<bool> fill_buffer_from_streamed_mutation(flat_mutation_reader::impl&, streamed_mutation&);
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -103,6 +104,7 @@ public:
         }
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
+        future<bool> fill_buffer_from_streamed_mutation(streamed_mutation&);
     private:
         static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
