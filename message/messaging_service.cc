@@ -514,7 +514,6 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }();
 
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
-    auto local_addr = ipv4_addr{_listen_address.raw_addr(), 0};
 
     rpc::client_options opts;
     // send keepalive messages each minute if connection is idle, drop connection after 10 failures
@@ -526,9 +525,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
     auto client = must_encrypt ?
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
-                                    remote_addr, local_addr, _credentials) :
+                                    remote_addr, ipv4_addr(), _credentials) :
                     ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
-                                    remote_addr, local_addr);
+                                    remote_addr);
 
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
     uint32_t src_cpu_id = engine().cpu_id();
