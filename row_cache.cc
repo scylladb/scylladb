@@ -435,7 +435,7 @@ public:
             });
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return fill_buffer_from_streamed_mutation(*this, *_sm).then([this] (bool sm_finished) {
+            return fill_buffer_from(*_sm).then([this] (bool sm_finished) {
                 if (sm_finished) {
                     if (_read_context->fwd() == streamed_mutation::forwarding::no) {
                         push_mutation_fragment(partition_end());
@@ -707,7 +707,7 @@ public:
             if (!_sm) {
                 return read_next_partition();
             } else {
-                return fill_buffer_from_streamed_mutation(*this, *_sm).then([this] (bool sm_finished) {
+                return fill_buffer_from(*_sm).then([this] (bool sm_finished) {
                     if (sm_finished) {
                         on_end_of_stream();
                     }
