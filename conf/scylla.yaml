@@ -87,6 +87,13 @@ listen_address: localhost
 # Leaving this blank will set it to the same value as listen_address
 # broadcast_address: 1.2.3.4
 
+
+# When using multiple physical network interfaces, set this to true to listen on broadcast_address
+# in addition to the listen_address, allowing nodes to communicate in both interfaces.
+# Ignore this property if the network configuration automatically routes between the public and private networks such as EC2.
+#
+# listen_on_broadcast_address: false
+
 # port for the CQL native transport to listen for clients on
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
 native_transport_port: 9042
