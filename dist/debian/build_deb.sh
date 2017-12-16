@@ -214,8 +214,10 @@ else
 fi
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
-cp dist/common/systemd/scylla-housekeeping-daily.service debian/scylla-server.scylla-housekeeping-daily.service
-cp dist/common/systemd/scylla-housekeeping-restart.service debian/scylla-server.scylla-housekeeping-restart.service
+cp dist/common/systemd/scylla-housekeeping-daily.service.in debian/scylla-server.scylla-housekeeping-daily.service
+sed -i -e "s#@@REPOFILES@@#'/etc/apt/sources.list.d/scylla*.list'#g" debian/scylla-server.scylla-housekeeping-daily.service
+cp dist/common/systemd/scylla-housekeeping-restart.service.in debian/scylla-server.scylla-housekeeping-restart.service
+sed -i -e "s#@@REPOFILES@@#'/etc/apt/sources.list.d/scylla*.list'#g" debian/scylla-server.scylla-housekeeping-restart.service
 cp dist/common/systemd/scylla-fstrim.service debian/scylla-server.scylla-fstrim.service
 cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 

@@ -78,6 +78,10 @@ python3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/sysconfig#g" build/scylla-server.service
+cp dist/common/systemd/scylla-housekeeping-restart.service.in build/scylla-housekeeping-restart.service
+sed -i -e "s#@@REPOFILES@@#'/etc/yum.repos.d/scylla*.repo'#g" build/scylla-housekeeping-restart.service
+cp dist/common/systemd/scylla-housekeeping-daily.service.in build/scylla-housekeeping-daily.service
+sed -i -e "s#@@REPOFILES@@#'/etc/yum.repos.d/scylla*.repo'#g" build/scylla-housekeeping-daily.service
 
 %install
 rm -rf $RPM_BUILD_ROOT
