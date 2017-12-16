@@ -36,40 +36,6 @@ namespace cache {
 
 extern logging::logger clogger;
 
-class lsa_manager {
-    row_cache& _cache;
-public:
-    lsa_manager(row_cache& cache) : _cache(cache) { }
-    template<typename Func>
-    decltype(auto) run_in_read_section(const Func& func) {
-        return _cache._read_section(_cache._tracker.region(), [&func] () {
-            return with_linearized_managed_bytes([&func] () {
-                return func();
-            });
-        });
-    }
-    template<typename Func>
-    decltype(auto) run_in_update_section(const Func& func) {
-        return _cache._update_section(_cache._tracker.region(), [&func] () {
-            return with_linearized_managed_bytes([&func] () {
-                return func();
-            });
-        });
-    }
-    template<typename Func>
-    void run_in_update_section_with_allocator(Func&& func) {
-        return _cache._update_section(_cache._tracker.region(), [this, &func] () {
-            return with_linearized_managed_bytes([this, &func] () {
-                return with_allocator(_cache._tracker.region().allocator(), [this, &func] () mutable {
-                    return func();
-                });
-            });
-        });
-    }
-    logalloc::region& region() { return _cache._tracker.region(); }
-    logalloc::allocating_section& read_section() { return _cache._read_section; }
-};
-
 class cache_streamed_mutation final : public streamed_mutation::impl {
     enum class state {
         before_static_row,
