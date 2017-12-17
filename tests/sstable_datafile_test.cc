@@ -4454,3 +4454,46 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(summary_rebuild_sanity) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", utf8_type);
+        builder.set_compressor_params(compression_parameters({ }));
+        auto s = builder.build(schema_builder::compact_storage::no);
+        const column_definition& col = *s->get_column_definition("value");
+
+        auto make_insert = [&] (partition_key key) {
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(bytes(1024, 'a')));
+            return m;
+        };
+
+        std::vector<mutation> mutations;
+        for (auto i = 0; i < s->min_index_interval()*2; i++) {
+            auto key = to_bytes("key" + to_sstring(i));
+            mutations.push_back(make_insert(partition_key::from_exploded(*s, {std::move(key)})));
+        }
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_sstable(s, tmp->path, (*gen)++, la, big);
+        };
+        auto sst = make_sstable_containing(sst_gen, mutations);
+
+        summary s1 = sstables::test(sst).get_summary();
+        BOOST_REQUIRE(s1.entries.size() > 1);
+
+        sstables::test(sst).remove_component(sstable::component_type::Summary).get();
+        sst = reusable_sst(s, tmp->path, 1).get0();
+        summary s2 = sstables::test(sst).get_summary();
+
+        BOOST_REQUIRE(::memcmp(&s1.header, &s2.header, sizeof(summary::header)) == 0);
+        BOOST_REQUIRE(s1.positions == s2.positions);
+        BOOST_REQUIRE(s1.entries == s2.entries);
+        BOOST_REQUIRE(s1.first_key.value == s2.first_key.value);
+        BOOST_REQUIRE(s1.last_key.value == s2.last_key.value);
+    });
+}

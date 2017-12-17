@@ -194,6 +194,10 @@ public:
         _sst->write_toc(default_priority_class());
         _sst->seal_sstable().get();
     }
+
+    future<> remove_component(sstable::component_type c) {
+        return remove_file(_sst->filename(c));
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
