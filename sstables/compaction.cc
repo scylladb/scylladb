@@ -356,6 +356,7 @@ class regular_compaction : public compaction {
     // sstable being currently written.
     shared_sstable _sst;
     stdx::optional<sstable_writer> _writer;
+    stdx::optional<compaction_weight_registration> _weight_registration;
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator,
             seastar::thread_scheduling_group* tsg)
@@ -363,6 +364,7 @@ public:
         , _creator(std::move(creator))
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
+        , _weight_registration(std::move(descriptor.weight_registration))
     {
     }
 
@@ -405,8 +407,15 @@ public:
     }
 
     virtual void finish_sstable_writer() override {
+        on_end_of_stream();
         if (_writer) {
             stop_sstable_writer();
+        }
+    }
+private:
+    void on_end_of_stream() {
+        if (_weight_registration) {
+            _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
         }
     }
 };

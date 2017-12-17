@@ -1324,7 +1324,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         return make_ready_future<>();
     }
 
-    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] {
+    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] () mutable {
         auto create_sstable = [this] {
                 auto gen = this->calculate_generation_for_new_table();
                 auto sst = sstables::make_sstable(_schema, _config.datadir, gen,

@@ -25,6 +25,7 @@
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"
 #include <cmath>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 static logging::logger cmlog("compaction_manager");
 
@@ -69,7 +70,7 @@ compaction_weight_registration::compaction_weight_registration(compaction_manage
     , _cf(cf)
     , _weight(weight)
 {
-    _cm->register_weight(_cf, _weight);
+    _cm->register_weight(_weight);
 }
 
 compaction_weight_registration& compaction_weight_registration::operator=(compaction_weight_registration&& other) noexcept {
@@ -92,12 +93,12 @@ compaction_weight_registration::compaction_weight_registration(compaction_weight
 
 compaction_weight_registration::~compaction_weight_registration() {
     if (_cm) {
-        _cm->deregister_weight(_cf, _weight);
+        _cm->deregister_weight(_weight);
     }
 }
 
 void compaction_weight_registration::deregister() {
-    _cm->deregister_weight(_cf, _weight);
+    _cm->deregister_weight(_weight);
     _cm = nullptr;
 }
 
@@ -140,17 +141,12 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     if (descriptor.level != 0 || descriptor.sstables.empty()) {
         return weight;
     }
-    auto it = _weight_tracker.find(cf);
-    if (it == _weight_tracker.end()) {
-        return weight;
-    }
 
-    std::unordered_set<int>& s = it->second;
     uint64_t total_size = get_total_size(descriptor.sstables);
     int min_threshold = cf->schema()->min_compaction_threshold();
 
     while (descriptor.sstables.size() > size_t(min_threshold)) {
-        if (s.count(weight)) {
+        if (_weight_tracker.count(weight)) {
             total_size -= descriptor.sstables.back()->data_size();
             descriptor.sstables.pop_back();
             weight = calculate_weight(total_size);
@@ -161,20 +157,25 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
     return weight;
 }
 
-bool compaction_manager::can_register_weight(column_family* cf, int weight, bool parallel_compaction) {
-    auto it = _weight_tracker.find(cf);
-    if (it == _weight_tracker.end()) {
+bool compaction_manager::can_register_weight(column_family* cf, int weight) {
+    if (_weight_tracker.empty()) {
         return true;
     }
-    std::unordered_set<int>& s = it->second;
+
+    auto has_cf_ongoing_compaction = [&] {
+        return boost::algorithm::any_of(_tasks, [&] (const lw_shared_ptr<task>& task) {
+            return task->compacting_cf == cf;
+        });
+    };
+
     // Only one weight is allowed if parallel compaction is disabled.
-    if (!parallel_compaction && !s.empty()) {
+    if (!cf->get_compaction_strategy().parallel_compaction() && has_cf_ongoing_compaction()) {
         return false;
     }
     // TODO: Maybe allow only *smaller* compactions to start? That can be done
     // by returning true only if weight is not in the set and is lower than any
     // entry in the set.
-    if (s.count(weight)) {
+    if (_weight_tracker.count(weight)) {
         // If reached this point, it means that there is an ongoing compaction
         // with the weight of the compaction job.
         return false;
@@ -182,19 +183,13 @@ bool compaction_manager::can_register_weight(column_family* cf, int weight, bool
     return true;
 }
 
-void compaction_manager::register_weight(column_family* cf, int weight) {
-    auto it = _weight_tracker.find(cf);
-    if (it == _weight_tracker.end()) {
-        _weight_tracker.insert({cf, {weight}});
-    } else {
-        it->second.insert(weight);
-    }
+void compaction_manager::register_weight(int weight) {
+    _weight_tracker.insert(weight);
 }
 
-void compaction_manager::deregister_weight(column_family* cf, int weight) {
-    auto it = _weight_tracker.find(cf);
-    assert(it != _weight_tracker.end());
-    it->second.erase(weight);
+void compaction_manager::deregister_weight(int weight) {
+    _weight_tracker.erase(weight);
+    reevalute_postponed_compactions();
 }
 
 std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const column_family& cf) {
@@ -381,6 +376,7 @@ void compaction_manager::start() {
     _stopped = false;
     register_metrics();
     _compaction_submission_timer.arm(periodic_compaction_submission_interval());
+    postponed_compactions_reevaluation();
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
@@ -389,6 +385,34 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
             submit(e.first);
         }
     };
+}
+
+void compaction_manager::postponed_compactions_reevaluation() {
+    _waiting_reevalution = repeat([this] {
+        return _postponed_reevaluation.wait().then([this] {
+            if (_stopped) {
+                _postponed.clear();
+                return stop_iteration::yes;
+            }
+            auto postponed = std::move(_postponed);
+            try {
+                for (auto& cf : postponed) {
+                    submit(cf);
+                }
+            } catch (...) {
+                _postponed = std::move(postponed);
+            }
+            return stop_iteration::no;
+        });
+    });
+}
+
+void compaction_manager::reevalute_postponed_compactions() {
+    _postponed_reevaluation.signal();
+}
+
+void compaction_manager::postpone_compaction_for_column_family(column_family* cf) {
+    _postponed.push_back(cf);
 }
 
 future<> compaction_manager::stop() {
@@ -410,6 +434,9 @@ future<> compaction_manager::stop() {
         return parallel_for_each(tasks, [this] (auto& task) {
             return this->task_stop(task);
         });
+    }).then([this] () mutable {
+        reevalute_postponed_compactions();
+        return std::move(_waiting_reevalution);
     }).then([this] {
         _weight_tracker.clear();
         _compaction_submission_timer.cancel();
@@ -466,22 +493,25 @@ void compaction_manager::submit(column_family* cf) {
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
             int weight = trim_to_compact(&cf, descriptor);
 
-            // Stop compaction task immediately if strategy is satisfied or job cannot run in parallel.
-            if (descriptor.sstables.empty() || !can_register_weight(&cf, weight, cs.parallel_compaction())) {
+            if (descriptor.sstables.empty() || !can_proceed(task)) {
                 _stats.pending_tasks--;
-                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}",
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            if (!can_register_weight(&cf, weight)) {
+                _stats.pending_tasks--;
+                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}.{}, postponing it...",
                     descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
+                postpone_compaction_for_column_family(&cf);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
             auto compacting = compacting_sstable_registration(this, descriptor.sstables);
-            auto c_weight = compaction_weight_registration(this, &cf, weight);
+            descriptor.weight_registration = compaction_weight_registration(this, &cf, weight);
             cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
                 descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
-            return cf.run_compaction(std::move(descriptor))
-                    .then_wrapped([this, task, compacting = std::move(compacting), c_weight = std::move(c_weight)] (future<> f) mutable {
+            return cf.run_compaction(std::move(descriptor)).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
                 _stats.active_tasks--;
 
                 if (!can_proceed(task)) {
@@ -579,11 +609,12 @@ future<> compaction_manager::remove(column_family* cf) {
             task->stopping = true;
         }
     }
+    _postponed.erase(boost::remove(_postponed, cf), _postponed.end());
+
     // Wait for the termination of an ongoing compaction on cf, if any.
     return do_for_each(*tasks_to_stop, [this, cf] (auto& task) {
         return this->task_stop(task);
     }).then([this, cf, tasks_to_stop] {
-        _weight_tracker.erase(cf);
         _compaction_locks.erase(cf);
     });
 }
@@ -604,4 +635,9 @@ void compaction_manager::stop_compaction(sstring type) {
             info->stop("user request");
         }
     }
+}
+
+void compaction_manager::on_compaction_complete(compaction_weight_registration& weight_registration) {
+    weight_registration.deregister();
+    reevalute_postponed_compactions();
 }

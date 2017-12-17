@@ -25,6 +25,7 @@
 #include "database_fwd.hh"
 #include "shared_sstable.hh"
 #include "gc_clock.hh"
+#include "compaction_weight_registration.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
@@ -37,6 +38,8 @@ namespace sstables {
         int level;
         // Threshold size for sstable(s) to be created.
         uint64_t max_sstable_bytes;
+        // Holds ownership of a weight assigned to this compaction iff it's a regular one.
+        stdx::optional<compaction_weight_registration> weight_registration;
 
         compaction_descriptor() = default;
 

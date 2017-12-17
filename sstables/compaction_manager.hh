@@ -73,9 +73,13 @@ private:
     // a sstable from being compacted twice.
     std::unordered_set<sstables::shared_sstable> _compacting_sstables;
 
-    // Keep track of weight of ongoing compaction for each column family.
-    // That's used to allow parallel compaction on the same column family.
-    std::unordered_map<column_family*, std::unordered_set<int>> _weight_tracker;
+    future<> _waiting_reevalution = make_ready_future<>();
+    condition_variable _postponed_reevaluation;
+    // column families that wait for compaction but had its submission postponed due to ongoing compaction.
+    std::vector<column_family*> _postponed;
+    // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
+    // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
+    std::unordered_set<int> _weight_tracker;
 
     // Purpose is to serialize major compaction across all column families, so as to
     // reduce disk space requirement.
@@ -93,14 +97,13 @@ private:
 private:
     future<> task_stop(lw_shared_ptr<task> task);
 
-    // Return true if weight is not registered. If parallel_compaction is not
-    // true, only one weight is allowed to be registered.
-    bool can_register_weight(column_family* cf, int weight, bool parallel_compaction);
+    // Return true if weight is not registered.
+    bool can_register_weight(column_family* cf, int weight);
     // Register weight for a column family. Do that only if can_register_weight()
     // returned true.
-    void register_weight(column_family* cf, int weight);
+    void register_weight(int weight);
     // Deregister weight for a column family.
-    void deregister_weight(column_family* cf, int weight);
+    void deregister_weight(int weight);
 
     // If weight of compaction job is taken, it will be trimmed until its new
     // weight is not taken or its size is equal to minimum threshold.
@@ -125,6 +128,12 @@ private:
     // stop of transportation services. It cannot make progress anyway.
     // Returns true if error is judged not fatal, and compaction can be retried.
     inline bool maybe_stop_on_error(future<> f);
+
+    void postponed_compactions_reevaluation();
+    void reevalute_postponed_compactions();
+    // Postpone compaction for a column family that couldn't be executed due to ongoing
+    // similar-sized compaction.
+    void postpone_compaction_for_column_family(column_family* cf);
 public:
     compaction_manager();
     ~compaction_manager();
@@ -187,6 +196,11 @@ public:
 
     // Stops ongoing compaction of a given type.
     void stop_compaction(sstring type);
+
+    // Called by compaction procedure to release the weight lock assigned to it, such that
+    // another compaction waiting on same weight can start as soon as possible. That's usually
+    // called before compaction seals sstable and such and after all compaction work is done.
+    void on_compaction_complete(compaction_weight_registration& weight_registration);
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
