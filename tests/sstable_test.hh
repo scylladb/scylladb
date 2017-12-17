@@ -185,6 +185,10 @@ public:
         _sst->set_first_and_last_keys();
         _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>();
     }
+
+    future<> remove_component(sstable::component_type c) {
+        return remove_file(_sst->filename(c));
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
