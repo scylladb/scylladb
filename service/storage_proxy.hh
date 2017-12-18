@@ -295,7 +295,7 @@ private:
     future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool);
     friend class mutate_executor;
 public:
-    storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled);
+    storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled = {});
     ~storage_proxy();
     distributed<database>& get_db() {
         return _db;
