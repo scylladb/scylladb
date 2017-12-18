@@ -140,8 +140,8 @@ public:
         descriptor(descriptor&&) = default;
         descriptor(const descriptor&) = default;
         descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v = 1);
-        descriptor(replay_position p, const std::string& fname_prefix);
-        descriptor(const sstring& filename, const std::string& fname_prefix);
+        descriptor(replay_position p, const std::string& fname_prefix = FILENAME_PREFIX);
+        descriptor(const sstring& filename, const std::string& fname_prefix = FILENAME_PREFIX);
 
         sstring filename() const;
         operator replay_position() const;
