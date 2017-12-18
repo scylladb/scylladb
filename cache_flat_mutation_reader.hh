@@ -31,46 +31,13 @@
 #include "partition_snapshot_reader.hh"
 #include "partition_snapshot_row_cursor.hh"
 #include "read_context.hh"
+#include "flat_mutation_reader.hh"
 
 namespace cache {
 
 extern logging::logger clogger;
 
-class lsa_manager {
-    row_cache& _cache;
-public:
-    lsa_manager(row_cache& cache) : _cache(cache) { }
-    template<typename Func>
-    decltype(auto) run_in_read_section(const Func& func) {
-        return _cache._read_section(_cache._tracker.region(), [&func] () {
-            return with_linearized_managed_bytes([&func] () {
-                return func();
-            });
-        });
-    }
-    template<typename Func>
-    decltype(auto) run_in_update_section(const Func& func) {
-        return _cache._update_section(_cache._tracker.region(), [&func] () {
-            return with_linearized_managed_bytes([&func] () {
-                return func();
-            });
-        });
-    }
-    template<typename Func>
-    void run_in_update_section_with_allocator(Func&& func) {
-        return _cache._update_section(_cache._tracker.region(), [this, &func] () {
-            return with_linearized_managed_bytes([this, &func] () {
-                return with_allocator(_cache._tracker.region().allocator(), [this, &func] () mutable {
-                    return func();
-                });
-            });
-        });
-    }
-    logalloc::region& region() { return _cache._tracker.region(); }
-    logalloc::allocating_section& read_section() { return _cache._read_section; }
-};
-
-class cache_streamed_mutation final : public streamed_mutation::impl {
+class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     enum class state {
         before_static_row,
 
@@ -154,14 +121,19 @@ class cache_streamed_mutation final : public streamed_mutation::impl {
     void maybe_add_to_cache(const range_tombstone& rt);
     void maybe_add_to_cache(const static_row& sr);
     void maybe_set_static_row_continuous();
+    void finish_reader() {
+        push_mutation_fragment(partition_end());
+        _end_of_stream = true;
+        _state = state::end_of_stream;
+    }
 public:
-    cache_streamed_mutation(schema_ptr s,
-                            dht::decorated_key dk,
-                            query::clustering_key_filter_ranges&& crr,
-                            lw_shared_ptr<read_context> ctx,
-                            lw_shared_ptr<partition_snapshot> snp,
-                            row_cache& cache)
-        : streamed_mutation::impl(std::move(s), std::move(dk), snp->partition_tombstone())
+    cache_flat_mutation_reader(schema_ptr s,
+                               dht::decorated_key dk,
+                               query::clustering_key_filter_ranges&& crr,
+                               lw_shared_ptr<read_context> ctx,
+                               lw_shared_ptr<partition_snapshot> snp,
+                               row_cache& cache)
+        : flat_mutation_reader::impl(std::move(s))
         , _snp(std::move(snp))
         , _position_cmp(*_schema)
         , _ck_ranges(std::move(crr))
@@ -175,17 +147,32 @@ public:
         , _next_row(*_schema, *_snp)
     {
         clogger.trace("csm {}: table={}.{}", this, _schema->ks_name(), _schema->cf_name());
+        push_mutation_fragment(partition_start(std::move(dk), _snp->partition_tombstone()));
     }
-    cache_streamed_mutation(const cache_streamed_mutation&) = delete;
-    cache_streamed_mutation(cache_streamed_mutation&&) = delete;
+    cache_flat_mutation_reader(const cache_flat_mutation_reader&) = delete;
+    cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
     virtual future<> fill_buffer() override;
-    virtual ~cache_streamed_mutation() {
+    virtual ~cache_flat_mutation_reader() {
         maybe_merge_versions(_snp, _lsa_manager.region(), _lsa_manager.read_section());
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = true;
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&) override {
+        clear_buffer();
+        _end_of_stream = true;
+        return make_ready_future<>();
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        throw std::bad_function_call();
     }
 };
 
 inline
-future<> cache_streamed_mutation::process_static_row() {
+future<> cache_flat_mutation_reader::process_static_row() {
     if (_snp->static_row_continuous()) {
         _read_context->cache().on_row_hit();
         row sr = _lsa_manager.run_in_read_section([this] {
@@ -209,12 +196,11 @@ future<> cache_streamed_mutation::process_static_row() {
 }
 
 inline
-future<> cache_streamed_mutation::fill_buffer() {
+future<> cache_flat_mutation_reader::fill_buffer() {
     if (_state == state::before_static_row) {
         auto after_static_row = [this] {
             if (_ck_ranges_curr == _ck_ranges_end) {
-                _end_of_stream = true;
-                _state = state::end_of_stream;
+                finish_reader();
                 return make_ready_future<>();
             }
             _state = state::reading_from_cache;
@@ -236,7 +222,7 @@ future<> cache_streamed_mutation::fill_buffer() {
 }
 
 inline
-future<> cache_streamed_mutation::do_fill_buffer() {
+future<> cache_flat_mutation_reader::do_fill_buffer() {
     if (_state == state::move_to_underlying) {
         _state = state::reading_from_underlying;
         auto end = _next_row_in_range ? position_in_partition(_next_row.position())
@@ -277,8 +263,8 @@ future<> cache_streamed_mutation::do_fill_buffer() {
 }
 
 inline
-future<> cache_streamed_mutation::read_from_underlying() {
-    return consume_mutation_fragments_until(_read_context->get_streamed_mutation(),
+future<> cache_flat_mutation_reader::read_from_underlying() {
+    return consume_mutation_fragments_until(_read_context->underlying().underlying(),
         [this] { return _state != state::reading_from_underlying || is_buffer_full(); },
         [this] (mutation_fragment mf) {
             _read_context->cache().on_row_miss();
@@ -361,7 +347,7 @@ future<> cache_streamed_mutation::read_from_underlying() {
 }
 
 inline
-void cache_streamed_mutation::maybe_update_continuity() {
+void cache_flat_mutation_reader::maybe_update_continuity() {
     if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
             if (_next_row.is_in_latest_version()) {
                 clogger.trace("csm {}: mark {} continuous", this, _next_row.get_iterator_in_latest_version()->position());
@@ -387,7 +373,7 @@ void cache_streamed_mutation::maybe_update_continuity() {
 }
 
 inline
-void cache_streamed_mutation::maybe_add_to_cache(const mutation_fragment& mf) {
+void cache_flat_mutation_reader::maybe_add_to_cache(const mutation_fragment& mf) {
     if (mf.is_range_tombstone()) {
         maybe_add_to_cache(mf.as_range_tombstone());
     } else {
@@ -398,7 +384,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const mutation_fragment& mf) {
 }
 
 inline
-void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
+void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
         _last_row = nullptr;
         _read_context->cache().on_mispopulate();
@@ -435,18 +421,18 @@ void cache_streamed_mutation::maybe_add_to_cache(const clustering_row& cr) {
 }
 
 inline
-bool cache_streamed_mutation::after_current_range(position_in_partition_view p) {
+bool cache_flat_mutation_reader::after_current_range(position_in_partition_view p) {
     return _position_cmp(p, _upper_bound) >= 0;
 }
 
 inline
-void cache_streamed_mutation::start_reading_from_underlying() {
+void cache_flat_mutation_reader::start_reading_from_underlying() {
     clogger.trace("csm {}: start_reading_from_underlying(), range=[{}, {})", this, _lower_bound, _next_row_in_range ? _next_row.position() : _upper_bound);
     _state = state::move_to_underlying;
 }
 
 inline
-void cache_streamed_mutation::copy_from_cache_to_buffer() {
+void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", this, _next_row.position(), _next_row_in_range);
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
     for (auto&& rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
@@ -465,15 +451,14 @@ void cache_streamed_mutation::copy_from_cache_to_buffer() {
 }
 
 inline
-void cache_streamed_mutation::move_to_end() {
+void cache_flat_mutation_reader::move_to_end() {
     drain_tombstones();
-    _end_of_stream = true;
-    _state = state::end_of_stream;
+    finish_reader();
     clogger.trace("csm {}: eos", this);
 }
 
 inline
-void cache_streamed_mutation::move_to_next_range() {
+void cache_flat_mutation_reader::move_to_next_range() {
     auto next_it = std::next(_ck_ranges_curr);
     if (next_it == _ck_ranges_end) {
         move_to_end();
@@ -484,7 +469,7 @@ void cache_streamed_mutation::move_to_next_range() {
 }
 
 inline
-void cache_streamed_mutation::move_to_range(query::clustering_row_ranges::const_iterator next_it) {
+void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::const_iterator next_it) {
     auto lb = position_in_partition::for_range_start(*next_it);
     auto ub = position_in_partition_view::for_range_end(*next_it);
     _last_row = nullptr;
@@ -520,7 +505,7 @@ void cache_streamed_mutation::move_to_range(query::clustering_row_ranges::const_
 
 // _next_row must be inside the range.
 inline
-void cache_streamed_mutation::move_to_next_entry() {
+void cache_flat_mutation_reader::move_to_next_entry() {
     clogger.trace("csm {}: move_to_next_entry(), curr={}", this, _next_row.position());
     if (no_clustering_row_between(*_schema, _next_row.position(), _upper_bound)) {
         move_to_next_range();
@@ -538,7 +523,7 @@ void cache_streamed_mutation::move_to_next_entry() {
 }
 
 inline
-void cache_streamed_mutation::drain_tombstones(position_in_partition_view pos) {
+void cache_flat_mutation_reader::drain_tombstones(position_in_partition_view pos) {
     while (true) {
         reserve_one();
         auto mfo = _tombstones.get_next(pos);
@@ -550,7 +535,7 @@ void cache_streamed_mutation::drain_tombstones(position_in_partition_view pos) {
 }
 
 inline
-void cache_streamed_mutation::drain_tombstones() {
+void cache_flat_mutation_reader::drain_tombstones() {
     while (true) {
         reserve_one();
         auto mfo = _tombstones.get_next();
@@ -562,7 +547,7 @@ void cache_streamed_mutation::drain_tombstones() {
 }
 
 inline
-void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
+void cache_flat_mutation_reader::add_to_buffer(mutation_fragment&& mf) {
     clogger.trace("csm {}: add_to_buffer({})", this, mf);
     if (mf.is_clustering_row()) {
         add_clustering_row_to_buffer(std::move(mf));
@@ -573,7 +558,7 @@ void cache_streamed_mutation::add_to_buffer(mutation_fragment&& mf) {
 }
 
 inline
-void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor& row) {
+void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
         add_clustering_row_to_buffer(row.row());
@@ -584,7 +569,7 @@ void cache_streamed_mutation::add_to_buffer(const partition_snapshot_row_cursor&
 //   (1) no fragment with position >= _lower_bound was pushed yet
 //   (2) If _lower_bound > mf.position(), mf was emitted
 inline
-void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& mf) {
+void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&& mf) {
     clogger.trace("csm {}: add_clustering_row_to_buffer({})", this, mf);
     auto& row = mf.as_clustering_row();
     auto key = row.key();
@@ -600,7 +585,7 @@ void cache_streamed_mutation::add_clustering_row_to_buffer(mutation_fragment&& m
 }
 
 inline
-void cache_streamed_mutation::add_to_buffer(range_tombstone&& rt) {
+void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
     clogger.trace("csm {}: add_to_buffer({})", this, rt);
     // This guarantees that rt starts after any emitted clustering_row
     if (!rt.trim_front(*_schema, _lower_bound)) {
@@ -612,7 +597,7 @@ void cache_streamed_mutation::add_to_buffer(range_tombstone&& rt) {
 }
 
 inline
-void cache_streamed_mutation::maybe_add_to_cache(const range_tombstone& rt) {
+void cache_flat_mutation_reader::maybe_add_to_cache(const range_tombstone& rt) {
     if (can_populate()) {
         clogger.trace("csm {}: maybe_add_to_cache({})", this, rt);
         _lsa_manager.run_in_update_section_with_allocator([&] {
@@ -624,7 +609,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const range_tombstone& rt) {
 }
 
 inline
-void cache_streamed_mutation::maybe_add_to_cache(const static_row& sr) {
+void cache_flat_mutation_reader::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
         clogger.trace("csm {}: populate({})", this, sr);
         _read_context->cache().on_row_insert();
@@ -637,7 +622,7 @@ void cache_streamed_mutation::maybe_add_to_cache(const static_row& sr) {
 }
 
 inline
-void cache_streamed_mutation::maybe_set_static_row_continuous() {
+void cache_flat_mutation_reader::maybe_set_static_row_continuous() {
     if (can_populate()) {
         clogger.trace("csm {}: set static row continuous", this);
         _snp->version()->partition().set_static_row_continuous(true);
@@ -647,19 +632,19 @@ void cache_streamed_mutation::maybe_set_static_row_continuous() {
 }
 
 inline
-bool cache_streamed_mutation::can_populate() const {
+bool cache_flat_mutation_reader::can_populate() const {
     return _snp->at_latest_version() && _read_context->cache().phase_of(_read_context->key()) == _read_context->phase();
 }
 
 } // namespace cache
 
-inline streamed_mutation make_cache_streamed_mutation(schema_ptr s,
-                                                      dht::decorated_key dk,
-                                                      query::clustering_key_filter_ranges crr,
-                                                      row_cache& cache,
-                                                      lw_shared_ptr<cache::read_context> ctx,
-                                                      lw_shared_ptr<partition_snapshot> snp)
+inline flat_mutation_reader make_cache_flat_mutation_reader(schema_ptr s,
+                                                            dht::decorated_key dk,
+                                                            query::clustering_key_filter_ranges crr,
+                                                            row_cache& cache,
+                                                            lw_shared_ptr<cache::read_context> ctx,
+                                                            lw_shared_ptr<partition_snapshot> snp)
 {
-    return make_streamed_mutation<cache::cache_streamed_mutation>(
+    return make_flat_mutation_reader<cache::cache_flat_mutation_reader>(
         std::move(s), std::move(dk), std::move(crr), std::move(ctx), std::move(snp), cache);
 }
