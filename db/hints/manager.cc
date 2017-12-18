@@ -128,7 +128,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
 
                     manager_logger.trace("Hint to {} was stored", end_point_key());
                     tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
-                }).handle_exception([this, tr_state] (auto eptr) {
+                }).handle_exception([this, tr_state] (std::exception_ptr eptr) {
                     ++shard_stats().errors;
 
                     manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
@@ -651,7 +651,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                mutation m = get_mutation(ctx_ptr, buf);
+                mutation m = this->get_mutation(ctx_ptr, buf);
                 gc_clock::duration gc_grace_sec = m.schema()->gc_grace_seconds();
 
                 // The hint is too old - drop it.
@@ -662,9 +662,9 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                return send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
+                return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
                     ctx_ptr->rps_set.erase(rp);
-                    ++shard_stats().sent;
+                    ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
                     ctx_ptr->state.set(send_state::segment_replay_failed);
                 });

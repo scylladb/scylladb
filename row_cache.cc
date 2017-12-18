@@ -381,7 +381,7 @@ private:
             } else {
                 _cache._tracker.on_mispopulate();
                 _reader = read_directly_from_underlying(*_read_context);
-                push_mutation_fragment(std::move(*mfopt));
+                this->push_mutation_fragment(std::move(*mfopt));
             }
         });
     }
@@ -510,7 +510,7 @@ public:
         return _reader.move_to_next_partition().then([this] (auto&& mfopt) mutable {
             {
                 if (!mfopt) {
-                    handle_end_of_stream();
+                    this->handle_end_of_stream();
                     return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(stdx::nullopt, stdx::nullopt);
                 }
                 _cache.on_partition_miss();
@@ -521,7 +521,7 @@ public:
                         cache_entry& e = _cache.find_or_create(key,
                                                                ps.partition_tombstone(),
                                                                _reader.creation_phase(),
-                                                               can_set_continuity() ? &*_last_key : nullptr);
+                                                               this->can_set_continuity() ? &*_last_key : nullptr);
                         _last_key = row_cache::previous_entry_pointer(key);
                         return make_ready_future<flat_mutation_reader_opt, mutation_fragment_opt>(
                             e.read(_cache, _read_context, _reader.creation_phase()), stdx::nullopt);
