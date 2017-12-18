@@ -91,6 +91,8 @@ public:
         bool _end_of_stream = false;
         schema_ptr _schema;
         friend class flat_mutation_reader;
+        template <typename Source>
+        friend future<bool> fill_buffer_from(flat_mutation_reader::impl&, Source&);
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -103,6 +105,14 @@ public:
         }
         void forward_buffer_to(const position_in_partition& pos);
         void clear_buffer_to_next_partition();
+        template<typename Source>
+        future<bool> fill_buffer_from(Source&);
+        // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
+        void reserve_one() {
+            if (_buffer.capacity() == _buffer.size()) {
+                _buffer.reserve(_buffer.size() * 2 + 1);
+            }
+        }
     private:
         static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
@@ -378,9 +388,88 @@ flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
 
 class mutation_reader;
 
+// Consumes mutation fragments until StopCondition is true.
+// The consumer will stop iff StopCondition returns true, in particular
+// reaching the end of stream alone won't stop the reader.
+template<typename StopCondition, typename ConsumeMutationFragment, typename ConsumeEndOfStream>
+GCC6_CONCEPT(requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
+    { stop() } -> bool;
+    { consume_mf(std::move(mf)) } -> void;
+    { consume_eos() } -> future<>;
+})
+future<> consume_mutation_fragments_until(flat_mutation_reader& r, StopCondition&& stop,
+                                          ConsumeMutationFragment&& consume_mf, ConsumeEndOfStream&& consume_eos) {
+    return do_until([stop] { return stop(); }, [&r, stop, consume_mf, consume_eos] {
+        while (!r.is_buffer_empty()) {
+            consume_mf(r.pop_mutation_fragment());
+            if (stop()) {
+                return make_ready_future<>();
+            }
+        }
+        if (r.is_end_of_stream()) {
+            return consume_eos();
+        }
+        return r.fill_buffer();
+    });
+}
+
+// Creates a stream which is like r but with transformation applied to the elements.
+template<typename T>
+GCC6_CONCEPT(
+    requires StreamedMutationTranformer<T>()
+)
+flat_mutation_reader transform(flat_mutation_reader r, T t) {
+    class transforming_reader : public flat_mutation_reader::impl {
+        flat_mutation_reader _reader;
+        T _t;
+        struct consumer {
+            transforming_reader* _owner;
+            stop_iteration operator()(mutation_fragment&& mf) {
+                _owner->push_mutation_fragment(_owner->_t(std::move(mf)));
+                return stop_iteration(_owner->is_buffer_full());
+            }
+        };
+    public:
+        transforming_reader(flat_mutation_reader&& r, T&& t)
+            : impl(t(r.schema()))
+            , _reader(std::move(r))
+            , _t(std::move(t))
+        {}
+        virtual future<> fill_buffer() override {
+            if (_end_of_stream) {
+                return make_ready_future<>();
+            }
+            return _reader.consume_pausable(consumer{this}).then([this] {
+                if (_reader.is_end_of_stream() && _reader.is_buffer_empty()) {
+                    _end_of_stream = true;
+                }
+            });
+        }
+        virtual void next_partition() override {
+            clear_buffer_to_next_partition();
+            if (is_buffer_empty()) {
+                _reader.next_partition();
+            }
+        }
+        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+            clear_buffer();
+            _end_of_stream = false;
+            return _reader.fast_forward_to(pr);
+        }
+        virtual future<> fast_forward_to(position_range pr) override {
+            throw std::bad_function_call();
+        }
+    };
+    return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
+}
+
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
+flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
+
 flat_mutation_reader make_forwardable(flat_mutation_reader m);
+
+flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 

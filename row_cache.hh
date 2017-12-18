@@ -36,6 +36,7 @@
 #include "utils/estimated_histogram.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
+#include "flat_mutation_reader.hh"
 
 namespace bi = boost::intrusive;
 
@@ -46,6 +47,7 @@ namespace cache {
 
 class autoupdating_underlying_reader;
 class cache_streamed_mutation;
+class cache_flat_mutation_reader;
 class read_context;
 class lsa_manager;
 
@@ -76,7 +78,7 @@ class cache_entry {
     cache_link_type _cache_link;
     friend class size_calculator;
 
-    streamed_mutation do_read(row_cache&, cache::read_context& reader);
+    flat_mutation_reader do_read(row_cache&, cache::read_context& reader);
 public:
     friend class row_cache;
     friend class cache_tracker;
@@ -138,8 +140,8 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    streamed_mutation read(row_cache&, cache::read_context& reader);
-    streamed_mutation read(row_cache&, cache::read_context& reader, streamed_mutation&& underlying, utils::phased_barrier::phase_type);
+    flat_mutation_reader read(row_cache&, cache::read_context&);
+    flat_mutation_reader read(row_cache&, cache::read_context&, utils::phased_barrier::phase_type);
     bool continuous() const { return _flags._continuous; }
     void set_continuous(bool value) { _flags._continuous = value; }
 
@@ -191,6 +193,7 @@ public:
     friend class cache::read_context;
     friend class cache::autoupdating_underlying_reader;
     friend class cache::cache_streamed_mutation;
+    friend class cache::cache_flat_mutation_reader;
     struct stats {
         uint64_t partition_hits;
         uint64_t partition_misses;
@@ -272,6 +275,7 @@ public:
     friend class single_partition_populating_reader;
     friend class cache_entry;
     friend class cache::cache_streamed_mutation;
+    friend class cache::cache_flat_mutation_reader;
     friend class cache::lsa_manager;
     friend class cache::read_context;
     friend class partition_range_cursor;
@@ -336,8 +340,8 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
-    mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
+    flat_mutation_reader create_underlying_reader(cache::read_context&, mutation_source&, const dht::partition_range&);
+    flat_mutation_reader make_scanning_reader(const dht::partition_range&, lw_shared_ptr<cache::read_context>);
     void on_partition_hit();
     void on_partition_miss();
     void on_row_hit();
@@ -452,6 +456,19 @@ public:
         return make_reader(std::move(s), range, full_slice);
     }
 
+    flat_mutation_reader make_flat_reader(schema_ptr,
+                                          const dht::partition_range&,
+                                          const query::partition_slice&,
+                                          const io_priority_class& = default_priority_class(),
+                                          tracing::trace_state_ptr trace_state = nullptr,
+                                          streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                                          mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+
+    flat_mutation_reader make_flat_reader(schema_ptr s, const dht::partition_range& range = query::full_partition_range) {
+        auto& full_slice = s->full_slice();
+        return make_flat_reader(std::move(s), range, full_slice);
+    }
+
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation, which must be fully continuous.
@@ -523,3 +540,46 @@ public:
     friend class cache_tracker;
     friend class mark_end_as_continuous;
 };
+
+namespace cache {
+
+class lsa_manager {
+    row_cache &_cache;
+public:
+    lsa_manager(row_cache &cache) : _cache(cache) {}
+
+    template<typename Func>
+    decltype(auto) run_in_read_section(const Func &func) {
+        return _cache._read_section(_cache._tracker.region(), [&func]() {
+            return with_linearized_managed_bytes([&func]() {
+                return func();
+            });
+        });
+    }
+
+    template<typename Func>
+    decltype(auto) run_in_update_section(const Func &func) {
+        return _cache._update_section(_cache._tracker.region(), [&func]() {
+            return with_linearized_managed_bytes([&func]() {
+                return func();
+            });
+        });
+    }
+
+    template<typename Func>
+    void run_in_update_section_with_allocator(Func &&func) {
+        return _cache._update_section(_cache._tracker.region(), [this, &func]() {
+            return with_linearized_managed_bytes([this, &func]() {
+                return with_allocator(_cache._tracker.region().allocator(), [this, &func]() mutable {
+                    return func();
+                });
+            });
+        });
+    }
+
+    logalloc::region &region() { return _cache._tracker.region(); }
+
+    logalloc::allocating_section &read_section() { return _cache._read_section; }
+};
+
+}
