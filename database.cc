@@ -680,15 +680,13 @@ column_family::for_all_partitions(schema_ptr s, Func&& func) const {
 
     struct iteration_state {
         flat_mutation_reader reader;
-        schema_ptr schema;
         Func func;
         bool ok = true;
         bool empty = false;
     public:
         bool done() const { return !ok || empty; }
         iteration_state(schema_ptr s, const column_family& cf, Func&& func)
-            : reader(cf.make_reader(s))
-            , schema(s)
+            : reader(cf.make_reader(std::move(s)))
             , func(std::move(func))
         { }
     };
