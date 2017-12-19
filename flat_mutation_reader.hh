@@ -484,3 +484,25 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
                              const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
                              tracing::trace_state_ptr trace_state = nullptr,
                              flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
+
+// Calls the consumer for each element of the reader's stream until end of stream
+// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
+// The consumer should accept mutation as the argument and return stop_iteration.
+// The returned future<> resolves when consumption ends.
+template <typename Consumer>
+inline
+future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer) {
+    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
+    using futurator = futurize<std::result_of_t<Consumer(mutation&&)>>;
+
+    return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
+        return repeat([&reader, &c] () {
+            return read_mutation_from_flat_mutation_reader(reader).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
+                if (!mo) {
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+                }
+                return futurator::apply(c, std::move(*mo));
+            });
+        });
+    });
+}
