@@ -47,7 +47,7 @@
 
 namespace auth {
 
-class authenticated_user {
+class authenticated_user final {
 public:
     static const sstring ANONYMOUS_USERNAME;
 
