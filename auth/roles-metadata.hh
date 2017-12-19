@@ -23,6 +23,8 @@
 
 #include <experimental/string_view>
 
+#include "stdx.hh"
+
 namespace auth {
 
 namespace meta {
