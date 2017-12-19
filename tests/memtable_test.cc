@@ -166,8 +166,8 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
             mt->apply(m);
         }
 
-        auto check_rd_s1 = assert_that(mt->make_reader(s1));
-        auto check_rd_s2 = assert_that(mt->make_reader(s2));
+        auto check_rd_s1 = assert_that(mt->make_flat_reader(s1));
+        auto check_rd_s2 = assert_that(mt->make_flat_reader(s2));
         check_rd_s1.next_mutation().has_schema(s1).is_equal_to(ring[0]);
         check_rd_s2.next_mutation().has_schema(s2).is_equal_to(ring[0]);
         mt->set_schema(s2);
@@ -178,13 +178,13 @@ SEASTAR_TEST_CASE(test_adding_a_column_during_reading_doesnt_affect_read_result)
         check_rd_s1.produces_end_of_stream();
         check_rd_s2.produces_end_of_stream();
 
-        assert_that(mt->make_reader(s1))
+        assert_that(mt->make_flat_reader(s1))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
             .produces_end_of_stream();
 
-        assert_that(mt->make_reader(s2))
+        assert_that(mt->make_flat_reader(s2))
             .produces(ring[0])
             .produces(ring[1])
             .produces(ring[2])
