@@ -351,19 +351,17 @@ future<permission_set> service::get_permissions(::shared_ptr<authenticated_user>
 }
 
 future<bool> service::role_has_superuser(stdx::string_view role_name) const {
-    return this->get_roles(std::move(role_name)).then([this](const std::unordered_set<sstring>& roles) {
+    return this->get_roles(std::move(role_name)).then([this](std::unordered_set<sstring> roles) {
         return do_with(std::move(roles), [this](const std::unordered_set<sstring>& roles) {
-            return do_with(roles.begin(), [this, &roles](auto& iter) {
-                return repeat([this, &roles, &iter] {
-                    return _role_manager->is_superuser(*iter++).then([&roles, &iter](bool super) {
-                        if (super || (iter == roles.end())) {
-                            return stop_iteration::yes;
-                        }
-
-                        return stop_iteration::no;
+            return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
+                return do_until(
+                        [&roles, &any_super, &iter] { return any_super || (iter == roles.end()); },
+                        [this, &any_super, &iter] {
+                    return _role_manager->is_superuser(*iter++).then([&any_super](bool super) {
+                        any_super = super;
                     });
-                }).then([&roles, &iter] {
-                    return iter != roles.end();
+                }).then([&any_super] {
+                    return any_super;
                 });
             });
         });
