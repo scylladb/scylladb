@@ -33,6 +33,7 @@
 #include "mutation_reader_assertions.hh"
 #include "mutation_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "flat_mutation_reader.hh"
 
 static api::timestamp_type next_timestamp() {
     static thread_local api::timestamp_type next_timestamp = 1;
@@ -277,41 +278,44 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        auto rd1 = mt->make_reader(s);
-        streamed_mutation_opt stream1 = rd1().get0();
+        stdx::optional<flat_reader_assertions> rd1 = assert_that(mt->make_flat_reader(s));
+        rd1->set_max_buffer_size(1);
+        rd1->fill_buffer().get();
 
         mt->apply(m2);
-        auto rd2 = mt->make_reader(s);
-        streamed_mutation_opt stream2 = rd2().get0();
+        stdx::optional<flat_reader_assertions> rd2 = assert_that(mt->make_flat_reader(s));
+        rd2->set_max_buffer_size(1);
+        rd2->fill_buffer().get();
 
         mt->apply(m3);
-        auto rd3 = mt->make_reader(s);
-        streamed_mutation_opt stream3 = rd3().get0();
+        stdx::optional<flat_reader_assertions> rd3 = assert_that(mt->make_flat_reader(s));
+        rd3->set_max_buffer_size(1);
+        rd3->fill_buffer().get();
 
         logalloc::shard_tracker().full_compaction();
 
-        auto rd4 = mt->make_reader(s);
-        streamed_mutation_opt stream4 = rd4().get0();
-        auto rd5 = mt->make_reader(s);
-        streamed_mutation_opt stream5 = rd5().get0();
-        auto rd6 = mt->make_reader(s);
-        streamed_mutation_opt stream6 = rd6().get0();
+        auto rd4 = assert_that(mt->make_flat_reader(s));
+        rd4.set_max_buffer_size(1);
+        rd4.fill_buffer().get();
+        auto rd5 = assert_that(mt->make_flat_reader(s));
+        rd5.set_max_buffer_size(1);
+        rd5.fill_buffer().get();
+        auto rd6 = assert_that(mt->make_flat_reader(s));
+        rd6.set_max_buffer_size(1);
+        rd6.fill_buffer().get();
 
-        assert_that(mutation_from_streamed_mutation(std::move(stream1)).get0()).has_mutation().is_equal_to(m1);
-        assert_that(mutation_from_streamed_mutation(std::move(stream2)).get0()).has_mutation().is_equal_to(m1 + m2);
-        assert_that(mutation_from_streamed_mutation(std::move(stream3)).get0()).has_mutation().is_equal_to(m1 + m2 + m3);
-
+        rd1->next_mutation().is_equal_to(m1);
+        rd2->next_mutation().is_equal_to(m1 + m2);
+        rd3->next_mutation().is_equal_to(m1 + m2 + m3);
         rd3 = {};
 
-        assert_that(mutation_from_streamed_mutation(std::move(stream4)).get0()).has_mutation().is_equal_to(m1 + m2 + m3);
-
+        rd4.next_mutation().is_equal_to(m1 + m2 + m3);
         rd1 = {};
 
-        assert_that(mutation_from_streamed_mutation(std::move(stream5)).get0()).has_mutation().is_equal_to(m1 + m2 + m3);
-
+        rd5.next_mutation().is_equal_to(m1 + m2 + m3);
         rd2 = {};
 
-        assert_that(mutation_from_streamed_mutation(std::move(stream6)).get0()).has_mutation().is_equal_to(m1 + m2 + m3);
+        rd6.next_mutation().is_equal_to(m1 + m2 + m3);
     });
 }
 

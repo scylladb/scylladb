@@ -219,6 +219,14 @@ public:
         BOOST_REQUIRE(bool(mo));
         return mutation_assertion(std::move(*mo));
     }
+
+    future<> fill_buffer() {
+        return _reader.fill_buffer();
+    }
+
+    void set_max_buffer_size(size_t size) {
+        _reader.set_max_buffer_size(size);
+    }
 };
 
 inline

@@ -83,6 +83,7 @@ public:
     using consume_reversed_partitions = seastar::bool_class<class consume_reversed_partitions_tag>;
 
     class impl {
+    private:
         circular_buffer<mutation_fragment> _buffer;
         size_t _buffer_size = 0;
         bool _consume_done = false;
