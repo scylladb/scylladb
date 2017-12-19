@@ -561,8 +561,8 @@ memtable::update(db::rp_handle&& h) {
 
 future<>
 memtable::apply(memtable& mt) {
-    return do_with(mt.make_reader(_schema), [this] (auto&& rd) mutable {
-        return consume(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
+    return do_with(mt.make_flat_reader(_schema), [this] (auto&& rd) mutable {
+        return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
             return stop_iteration::no;
         });
