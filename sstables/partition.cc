@@ -856,6 +856,7 @@ public:
                 sstable::disk_read_range drr{_lh_index->data_file_position(),
                                              _rh_index->data_file_position()};
                 auto last_end = fwd_mr ? _sst->data_size() : drr.end;
+                _read_enabled = bool(drr);
                 _context = _sst->data_consume_rows(_consumer, std::move(drr), last_end);
                 _index_in_current_partition = true;
                 _will_likely_slice = will_likely_slice(slice);
@@ -888,6 +889,7 @@ public:
                 _rh_index = std::make_unique<index_reader>(*_lh_index);
                 auto f = advance_to_upper_bound(*_rh_index, *_schema, slice, key);
                 return f.then([this, &slice, &pc] () mutable {
+                    _read_enabled = _lh_index->data_file_position() != _rh_index->data_file_position();
                     _context = _sst->data_consume_single_partition(_consumer,
                             { _lh_index->data_file_position(), _rh_index->data_file_position() });
                     _will_likely_slice = will_likely_slice(slice);
