@@ -215,8 +215,9 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         }
 
         // Create a reader which will cause many partition versions to be created
-        auto rd1 = mt->make_reader(s);
-        streamed_mutation_opt part0_stream = rd1().get0();
+        flat_mutation_reader_opt rd1 = mt->make_flat_reader(s);
+        rd1->set_max_buffer_size(1);
+        rd1->fill_buffer().get();
 
         // Override large cell value with a short one
         {
@@ -236,9 +237,8 @@ SEASTAR_TEST_CASE(test_virtual_dirty_accounting_on_flush) {
         flush_reader_check.produces_partition(current_ring[1]);
         virtual_dirty_values.push_back(mgr.virtual_dirty_memory());
 
-        part0_stream = {};
-
-        while (rd1().get0()) ;
+        while ((*rd1)().get0()) ;
+        rd1 = {};
 
         logalloc::shard_tracker().full_compaction();
 
