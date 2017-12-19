@@ -64,7 +64,7 @@ pkg_install() {
 
 case "$TARGET" in
     "centos")
-        AMI=ami-46bf8a51
+        AMI=ami-ae7bfdb8
         REGION=us-east-1
         SSH_USERNAME=centos
         ;;
