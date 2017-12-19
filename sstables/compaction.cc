@@ -356,13 +356,15 @@ class regular_compaction : public compaction {
     // sstable being currently written.
     shared_sstable _sst;
     stdx::optional<sstable_writer> _writer;
+    stdx::optional<compaction_weight_registration> _weight_registration;
 public:
-    regular_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
-        : compaction(cf, std::move(sstables), max_sstable_size, sstable_level, tsg)
+    regular_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator,
+            seastar::thread_scheduling_group* tsg)
+        : compaction(cf, std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level, tsg)
         , _creator(std::move(creator))
         , _set(cf.get_sstable_set())
         , _selector(_set.make_incremental_selector())
+        , _weight_registration(std::move(descriptor.weight_registration))
     {
     }
 
@@ -405,17 +407,24 @@ public:
     }
 
     virtual void finish_sstable_writer() override {
+        on_end_of_stream();
         if (_writer) {
             stop_sstable_writer();
+        }
+    }
+private:
+    void on_end_of_stream() {
+        if (_weight_registration) {
+            _cf.get_compaction_manager().on_compaction_complete(*_weight_registration);
         }
     }
 };
 
 class cleanup_compaction final : public regular_compaction {
 public:
-    cleanup_compaction(column_family& cf, std::vector<shared_sstable> sstables, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level, seastar::thread_scheduling_group* tsg)
-        : regular_compaction(cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level, tsg)
+    cleanup_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator,
+            seastar::thread_scheduling_group* tsg)
+        : regular_compaction(cf, std::move(descriptor), std::move(creator), tsg)
     {
         _info->type = compaction_type::Cleanup;
     }
@@ -545,12 +554,12 @@ static std::unique_ptr<compaction> make_compaction(bool cleanup, Params&&... par
 }
 
 future<compaction_info>
-compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup, seastar::thread_scheduling_group *tsg) {
-    if (sstables.empty()) {
+compact_sstables(sstables::compaction_descriptor descriptor, column_family& cf, std::function<shared_sstable()> creator,
+        bool cleanup, seastar::thread_scheduling_group *tsg) {
+    if (descriptor.sstables.empty()) {
         throw std::runtime_error(sprint("Called compaction with empty set on behalf of {}.{}", cf.schema()->ks_name(), cf.schema()->cf_name()));
     }
-    auto c = make_compaction(cleanup, cf, std::move(sstables), std::move(creator), max_sstable_size, sstable_level, tsg);
+    auto c = make_compaction(cleanup, cf, std::move(descriptor), std::move(creator), tsg);
     return compaction::run(std::move(c));
 }
 
