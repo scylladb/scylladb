@@ -381,7 +381,10 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
         virtual future<> fill_buffer() override {
             return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
                 return fill_buffer_from(_underlying).then([this] (bool underlying_finished) {
-                   return on_end_of_underlying_stream();
+                    if (underlying_finished) {
+                        return on_end_of_underlying_stream();
+                    }
+                    return make_ready_future<>();
                 });
             });
         }
