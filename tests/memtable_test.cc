@@ -382,24 +382,12 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
             mt2->apply(m);
         }
 
-        auto rd = mt->make_reader(s);
-
-        auto sm_opt = rd().get0();
-        BOOST_REQUIRE(sm_opt);
-        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[0].key()));
+        auto rd = assert_that(mt->make_flat_reader(s));
+        rd.produces(ring[0]);
         mt->mark_flushed(mt2->as_data_source());
-        sm_opt = rd().get0();
-        BOOST_REQUIRE(sm_opt);
-        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[1].key()));
-
+        rd.produces(ring[1]);
         auto range = dht::partition_range::make_starting_with(dht::ring_position(ring[3].decorated_key()));
         rd.fast_forward_to(range);
-        sm_opt = rd().get0();
-        BOOST_REQUIRE(sm_opt);
-        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[3].key()));
-        sm_opt = rd().get0();
-        BOOST_REQUIRE(sm_opt);
-        BOOST_REQUIRE(sm_opt->key().equal(*s, ring[4].key()));
-        BOOST_REQUIRE(!rd().get0());
+        rd.produces(ring[3]).produces(ring[4]).produces_end_of_stream();
     });
 }
