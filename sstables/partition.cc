@@ -873,6 +873,7 @@ public:
         : impl(std::move(schema))
         , _sst(std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
+        , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
             _lh_index = _sst->get_index_reader(pc);
             auto f = _lh_index->advance_and_check_if_present(key);
