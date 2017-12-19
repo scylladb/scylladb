@@ -154,13 +154,6 @@ public:
     // Submit a column family to be cleaned up and wait for its termination.
     future<> perform_cleanup(column_family* cf);
 
-    // Submit a specific sstable to be rewritten, while dropping data which
-    // does not belong to this shard. Meant to be used on startup when an
-    // sstable is shared by multiple shards, and we want to split it to a
-    // separate sstable for each shard.
-    void submit_sstable_rewrite(column_family* cf,
-            sstables::shared_sstable s);
-
     // Submit a column family for major compaction.
     future<> submit_major_compaction(column_family* cf);
 
