@@ -350,8 +350,8 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        _read_context->create_underlying(false);
-        return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
+        return _read_context->create_underlying(false).then([this, phase] {
+          return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
@@ -383,6 +383,7 @@ private:
                 _reader = read_directly_from_underlying(*_read_context);
                 push_mutation_fragment(std::move(*mfopt));
             }
+          });
         });
     }
 public:
