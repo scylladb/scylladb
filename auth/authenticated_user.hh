@@ -56,9 +56,6 @@ public:
 
     const sstring& name() const;
 
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
     bool is_anonymous() const {
         return _anon;
     }
