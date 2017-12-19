@@ -1357,12 +1357,11 @@ SEASTAR_TEST_CASE(test_mvcc) {
 
             auto m12 = m1 + m2;
 
-            stdx::optional<mutation_reader> mt1_reader_opt;
-            stdx::optional<streamed_mutation_opt> mt1_reader_sm_opt;
+            stdx::optional<flat_mutation_reader> mt1_reader_opt;
             if (with_active_memtable_reader) {
-                mt1_reader_opt = mt1->make_reader(s);
-                mt1_reader_sm_opt = (*mt1_reader_opt)().get0();
-                BOOST_REQUIRE(*mt1_reader_sm_opt);
+                mt1_reader_opt = mt1->make_flat_reader(s);
+                mt1_reader_opt->set_max_buffer_size(1);
+                mt1_reader_opt->fill_buffer().get();
             }
 
             auto mt1_copy = make_lw_shared<memtable>(s);
@@ -1384,8 +1383,8 @@ SEASTAR_TEST_CASE(test_mvcc) {
             assert_that_stream(std::move(*sm3)).has_monotonic_positions();
 
             if (with_active_memtable_reader) {
-                assert(mt1_reader_sm_opt);
-                auto mt1_reader_mutation = mutation_from_streamed_mutation(std::move(*mt1_reader_sm_opt)).get0();
+                assert(mt1_reader_opt);
+                auto mt1_reader_mutation = read_mutation_from_flat_mutation_reader(*mt1_reader_opt).get0();
                 BOOST_REQUIRE(mt1_reader_mutation);
                 assert_that(*mt1_reader_mutation).is_equal_to(m2);
             }
