@@ -35,12 +35,14 @@
 #include "tests/sstable_utils.hh"
 #include "tests/simple_schema.hh"
 #include "tests/test_services.hh"
+#include "tests/mutation_source_test.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "partition_slice_builder.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -742,6 +744,14 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
         , mutations);
 }
 
+static
+sstables::shared_sstable create_sstable(schema_ptr s, std::vector<mutation> mutations) {
+    static auto tmp = make_lw_shared<tmpdir>();
+    static int gen = 0;
+    return make_sstable_containing([&] {
+        return make_lw_shared<sstables::sstable>(s, tmp->path, gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+    }, mutations);
+}
 
 class tracking_reader : public flat_mutation_reader::impl {
     flat_mutation_reader _reader;
@@ -1107,5 +1117,86 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
         }
 
         REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+    });
+}
+
+static mutation compacted(const mutation& m) {
+    auto result = m;
+    result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicing) {
+    return async([&] {
+        storage_service_for_tests ssft;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+
+        const int n_readers = 10;
+        auto keys = gen.make_partition_keys(3);
+        std::vector<mutation> combined;
+        std::vector<flat_mutation_reader> readers;
+        for (int i = 0; i < n_readers; ++i) {
+            std::vector<mutation> muts;
+            for (auto&& key : keys) {
+                mutation m = compacted(gen());
+                muts.push_back(mutation(s, key, std::move(m.partition())));
+            }
+            if (combined.empty()) {
+                combined = muts;
+            } else {
+                int j = 0;
+                for (auto&& m : muts) {
+                    combined[j++].apply(m);
+                }
+            }
+            mutation_source ds = create_sstable(s, muts)->as_mutation_source();
+            readers.push_back(ds.make_flat_mutation_reader(s,
+                dht::partition_range::make({keys[0]}, {keys[0]}),
+                s->full_slice(), default_priority_class(), nullptr,
+                streamed_mutation::forwarding::yes,
+                mutation_reader::forwarding::yes));
+        }
+
+        flat_mutation_reader rd = make_combined_reader(s, std::move(readers),
+            streamed_mutation::forwarding::yes,
+            mutation_reader::forwarding::yes);
+
+        std::vector<query::clustering_range> ranges = gen.make_random_ranges(3);
+
+        auto check_next_partition = [&] (const mutation& expected) {
+            mutation result(expected.decorated_key(), expected.schema());
+
+            rd.consume_pausable([&](mutation_fragment&& mf) {
+                position_in_partition::less_compare less(*s);
+                if (!less(mf.position(), position_in_partition_view::before_all_clustered_rows())) {
+                    BOOST_FAIL(sprint("Received clustering fragment: %s", mf));
+                }
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            for (auto&& range : ranges) {
+                auto prange = position_range(range);
+                rd.fast_forward_to(prange).get();
+                rd.consume_pausable([&](mutation_fragment&& mf) {
+                    if (!mf.relevant_for_range(*s, prange.start())) {
+                        BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mf, prange));
+                    }
+                    position_in_partition::less_compare less(*s);
+                    if (!less(mf.position(), prange.end())) {
+                        BOOST_FAIL(sprint("Received fragment is out of range: %s, range: %s", mf, prange));
+                    }
+                    result.partition().apply(*s, std::move(mf));
+                    return stop_iteration::no;
+                }).get();
+            }
+
+            assert_that(result).is_equal_to(expected, ranges);
+        };
+
+        check_next_partition(combined[0]);
+        rd.fast_forward_to(dht::partition_range::make_singular(keys[2])).get();
+        check_next_partition(combined[2]);
     });
 }
