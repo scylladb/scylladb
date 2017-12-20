@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
         mutation m2(partition_key::from_single_value(*s, "key1"), s);
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
-        assert_that(make_combined_reader(s, make_reader_returning(m1), make_reader_returning(m2)))
+        assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2})))
             .produces(m2)
             .produces_end_of_stream();
     });
