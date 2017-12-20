@@ -225,9 +225,9 @@ cp ./dist/debian/pbuilderrc ~/.pbuilderrc
 if [ $NO_CLEAN -eq 0 ]; then
     sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
     sudo -E DIST=$TARGET /usr/sbin/pbuilder clean
-    sudo -E DIST=$TARGET /usr/sbin/pbuilder create
+    sudo -E DIST=$TARGET /usr/sbin/pbuilder create --allow-untrusted
 fi
-sudo -E DIST=$TARGET /usr/sbin/pbuilder update
+sudo -E DIST=$TARGET /usr/sbin/pbuilder update --allow-untrusted
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ] || [ "$TARGET" = "bionic" ]; then
     sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
 elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
