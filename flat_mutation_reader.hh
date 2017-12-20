@@ -87,7 +87,7 @@ public:
         size_t _buffer_size = 0;
         bool _consume_done = false;
     protected:
-        static constexpr size_t max_buffer_size_in_bytes = 8 * 1024;
+        size_t max_buffer_size_in_bytes = 8 * 1024;
         bool _end_of_stream = false;
         schema_ptr _schema;
         friend class flat_mutation_reader;
@@ -373,6 +373,9 @@ public:
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
     const schema_ptr& schema() const { return _impl->_schema; }
+    void set_max_buffer_size(size_t size) {
+        _impl->max_buffer_size_in_bytes = size;
+    }
 };
 
 template<>
