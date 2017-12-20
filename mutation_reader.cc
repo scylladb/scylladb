@@ -690,10 +690,10 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd) {
-        std::vector<mutation_reader> rd;
+        std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_flat_mutation_reader(s, pr, slice, pc, tr, fwd));
         }
         return make_combined_reader(s, std::move(rd), fwd);
     });
