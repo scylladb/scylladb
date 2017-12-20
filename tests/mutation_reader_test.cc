@@ -810,7 +810,7 @@ public:
             const restricted_mutation_reader_config& config,
             schema_ptr schema,
             lw_shared_ptr<sstables::sstable> sst) : _reader(make_empty_flat_reader(schema)) {
-        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&, auto&&...) {
+        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
             auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
             _tracker = tracker_ptr.get();
             return flat_mutation_reader(std::move(tracker_ptr));

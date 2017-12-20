@@ -604,6 +604,25 @@ public:
             assert(!fwd);
             return fn(s, range);
         }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        return fn(s, range, slice, pc, std::move(tr), fwd);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range, slice, pc);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range, slice);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range range)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range);
+    }) {}
 
     mutation_source(const mutation_source& other) = default;
     mutation_source& operator=(const mutation_source& other) = default;
