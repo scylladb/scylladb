@@ -666,8 +666,8 @@ future<> cql_server::connection::process_request() {
             with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
-                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested] () mutable {
-                    return process_request_stage(this, bv, op, stream, std::move(client_state), tracing_requested).then([] (auto&& response) {
+                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
+                    return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested).then([] (auto&& response) {
                         return std::make_pair(make_foreign(response.first), response.second);
                     });
                 }).then([this, flags] (auto&& response) {
