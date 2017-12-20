@@ -636,8 +636,10 @@ future<stop_iteration> view_update_builder::on_results() {
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
-    if (_update && _update->is_clustering_row()) {
-        generate_update(std::move(*_update).as_clustering_row(), { });
+    if (_update) {
+        if (_update->is_clustering_row()) {
+            generate_update(std::move(*_update).as_clustering_row(), { });
+        }
         return advance_updates();
     }
 
