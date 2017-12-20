@@ -213,6 +213,12 @@ public:
         _reader.fast_forward_to(std::move(pr)).get();
         return *this;
     }
+
+    mutation_assertion next_mutation() {
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        BOOST_REQUIRE(bool(mo));
+        return mutation_assertion(std::move(*mo));
+    }
 };
 
 inline
