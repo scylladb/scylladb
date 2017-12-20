@@ -118,8 +118,8 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
-        std::vector<mutation_reader> v;
-        v.push_back(make_reader_returning_many({m1, m2, m3}));
+        std::vector<flat_mutation_reader> v;
+        v.push_back(flat_mutation_reader_from_mutations({m1, m2, m3}));
         assert_that(make_combined_reader(s, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces(m1)
             .produces(m2)
