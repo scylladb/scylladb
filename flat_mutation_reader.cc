@@ -625,7 +625,10 @@ public:
     }
 
     virtual void next_partition() override {
-        return _reader.next_partition();
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty() && !is_end_of_stream()) {
+            _reader.next_partition();
+        }
     }
 };
 
