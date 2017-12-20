@@ -62,7 +62,6 @@ class client_state {
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
-    lw_shared_ptr<utils::UUID> _tracing_session_id;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -108,13 +107,6 @@ public:
 
     void create_tracing_session(tracing::trace_type type, tracing::trace_state_props_set props) {
         _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
-        // store a session ID separately because its lifetime is not always
-        // coupled with the trace_state because the trace_state may already be
-        // destroyed when we need a session ID for a response to a client (e.g.
-        // in case of errors).
-        if (_trace_state_ptr) {
-            _tracing_session_id = make_lw_shared<utils::UUID>(_trace_state_ptr->session_id());
-        }
     }
 
     tracing::trace_state_ptr& get_trace_state() {
