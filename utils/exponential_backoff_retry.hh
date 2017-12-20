@@ -61,5 +61,31 @@ private:
         // calculating sleep time seconds for the next retry.
         return std::exchange(_sleep_time, std::min(_sleep_time * 2, _max_sleep_time));
     }
-};
+
+    template <typename T>
+    struct retry_type_helper;
+
+    template <typename T>
+    struct retry_type_helper<future<stdx::optional<T>>> {
+        using optional_type = stdx::optional<T>;
+        using future_type = future<optional_type>;
+    };
+
+public:
+    template<typename Func>
+    static auto do_until_value(std::chrono::milliseconds base_sleep_time, std::chrono::milliseconds max_sleep_time, seastar::abort_source& as, Func f) {
+        using type_helper = retry_type_helper<std::result_of_t<Func()>>;
+
+        auto r = exponential_backoff_retry(base_sleep_time, max_sleep_time);
+        return seastar::repeat_until_value([r = std::move(r), &as, f = std::move(f)] () mutable {
+            return f().then([&] (auto&& opt) -> typename type_helper::future_type {
+                if (opt) {
+                    return make_ready_future<typename type_helper::optional_type>(std::move(opt));
+                }
+                return r.retry(as).then([] () -> typename type_helper::optional_type {
+                    return { };
+                });
+            });
+        });
+    }
 };
