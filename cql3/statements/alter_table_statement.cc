@@ -322,7 +322,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             throw exceptions::invalid_request_exception("ALTER COLUMNFAMILY WITH invoked, but no parameters found");
         }
 
-        _properties->validate();
+        _properties->validate(db.get_config().extensions());
 
         if (!cf.views().empty() && _properties->get_gc_grace_seconds() == 0) {
             throw exceptions::invalid_request_exception(
@@ -337,7 +337,7 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
 
-        _properties->apply_to_builder(cfm);
+        _properties->apply_to_builder(cfm, db.get_config().extensions());
         break;
 
     case alter_table_statement::type::rename:

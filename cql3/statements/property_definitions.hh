@@ -75,7 +75,7 @@ public:
 
     void add_property(const sstring& name, const std::map<sstring, sstring>& value);
 
-    void validate(const std::set<sstring>& keywords, const std::set<sstring>& obsolete);
+    void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {});
 
 protected:
     std::experimental::optional<sstring> get_simple(const sstring& name) const;

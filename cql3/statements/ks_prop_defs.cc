@@ -53,7 +53,7 @@ void ks_prop_defs::validate() {
     }
 
     static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION) });
-    property_definitions::validate(keywords, std::set<sstring>());
+    property_definitions::validate(keywords);
 
     auto replication_options = get_replication_options();
     if (replication_options.count(REPLICATION_STRATEGY_CLASS_KEY)) {

@@ -40,6 +40,7 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "db/extensions.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -71,7 +72,7 @@ const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
-void cf_prop_defs::validate() {
+void cf_prop_defs::validate(const db::extensions& exts) {
     // Skip validation if the comapction strategy class is already set as it means we've alreayd
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
     if (_compaction_strategy_class) {
@@ -90,7 +91,7 @@ void cf_prop_defs::validate() {
         sstring("replicate_on_write"),
         sstring("populate_io_cache_on_flush"),
     });
-    property_definitions::validate(keywords, obsolete_keywords);
+    property_definitions::validate(keywords, exts.schema_extension_keywords(), obsolete_keywords);
 
     try {
         get_id();
@@ -171,7 +172,7 @@ stdx::optional<utils::UUID> cf_prop_defs::get_id() const {
     return stdx::nullopt;
 }
 
-void cf_prop_defs::apply_to_builder(schema_builder& builder) {
+void cf_prop_defs::apply_to_builder(schema_builder& builder, const db::extensions& exts) {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
     }
@@ -249,6 +250,15 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     if (cachingOptions != null)
         cfm.caching(cachingOptions);
 #endif
+
+    schema::extensions_map er;
+    for (auto& p : exts.schema_extensions()) {
+        auto i = _properties.find(p.first);
+        if (i != _properties.end()) {
+            std::visit([&](auto& v) { er.emplace(p.first, p.second(v)); }, i->second);
+        }
+    }
+    builder.set_extensions(std::move(er));
 }
 
 void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const

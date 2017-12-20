@@ -65,10 +65,10 @@ void property_definitions::add_property(const sstring& name, const std::map<sstr
     _properties.emplace(name, value);
 }
 
-void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& obsolete) {
+void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& exts, const std::set<sstring>& obsolete) {
     for (auto&& kv : _properties) {
         auto&& name = kv.first;
-        if (keywords.count(name)) {
+        if (keywords.count(name) || exts.count(name)) {
             continue;
         }
         if (obsolete.count(name)) {

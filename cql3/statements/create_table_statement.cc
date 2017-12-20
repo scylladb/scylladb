@@ -62,6 +62,7 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
                                                column_set_type static_columns,
                                                const stdx::optional<utils::UUID>& id)
     : schema_altering_statement{name}
+    , _use_compact_storage(false)
     , _static_columns{static_columns}
     , _properties{properties}
     , _if_not_exists{if_not_exists}
@@ -92,8 +93,8 @@ std::vector<column_definition> create_table_statement::get_columns()
 }
 
 future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
-    return make_ready_future<>().then([this, is_local_only] {
-        return service::get_local_migration_manager().announce_new_column_family(get_cf_meta_data(), is_local_only);
+    return make_ready_future<>().then([this, is_local_only, &proxy] {
+        return service::get_local_migration_manager().announce_new_column_family(get_cf_meta_data(proxy.local().get_db().local()), is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
@@ -119,13 +120,13 @@ future<shared_ptr<cql_transport::event::schema_change>> create_table_statement::
  * @return a CFMetaData instance corresponding to the values parsed from this statement
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
-schema_ptr create_table_statement::get_cf_meta_data() {
+schema_ptr create_table_statement::get_cf_meta_data(const database& db) {
     schema_builder builder{keyspace(), column_family(), _id};
-    apply_properties_to(builder);
+    apply_properties_to(builder, db);
     return builder.build(_use_compact_storage ? schema_builder::compact_storage::yes : schema_builder::compact_storage::no);
 }
 
-void create_table_statement::apply_properties_to(schema_builder& builder) {
+void create_table_statement::apply_properties_to(schema_builder& builder, const database& db) {
     auto&& columns = get_columns();
     for (auto&& column : columns) {
         builder.with_column(column);
@@ -141,7 +142,7 @@ void create_table_statement::apply_properties_to(schema_builder& builder) {
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
 
-    _properties->apply_to_builder(builder);
+    _properties->apply_to_builder(builder, db.get_config().extensions());
 }
 
 void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind)
@@ -186,7 +187,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         throw exceptions::invalid_request_exception(sprint("Multiple definition of identifier %s", (*i)->text()));
     }
 
-    _properties.validate();
+    _properties.validate(db.get_config().extensions());
 
     auto stmt = ::make_shared<create_table_statement>(_cf_name, _properties.properties(), _if_not_exists, _static_columns, _properties.properties()->get_id());
 

@@ -46,7 +46,7 @@
 void cql3::statements::index_prop_defs::validate() {
     static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
 
-    property_definitions::validate(keywords, std::set<sstring>());
+    property_definitions::validate(keywords);
 
     if (is_custom && !custom_class) {
         throw exceptions::invalid_request_exception("CUSTOM index requires specifiying the index class");
