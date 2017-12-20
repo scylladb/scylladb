@@ -478,20 +478,20 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
         auto sstables = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
 
-        std::vector<mutation_reader> sstable_mutation_readers;
+        std::vector<flat_mutation_reader> sstable_mutation_readers;
 
         for (auto table : tables) {
             sstables->insert(table);
 
             sstable_mutation_readers.emplace_back(
-                mutation_reader_from_flat_mutation_reader(table->read_range_rows_flat(
+                table->read_range_rows_flat(
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes)));
+                    mutation_reader::forwarding::yes));
         }
 
         auto list_reader = make_combined_reader(s.schema(),
