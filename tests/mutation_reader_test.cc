@@ -771,9 +771,9 @@ public:
     }
 
 
-    virtual future<> fill_buffer() override {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         ++_call_count;
-        return _reader.fill_buffer().then([this] {
+        return _reader.fill_buffer(timeout).then([this] {
             _end_of_stream = _reader.is_end_of_stream();
             while (!_reader.is_buffer_empty()) {
                 push_mutation_fragment(_reader.pop_mutation_fragment());
@@ -832,7 +832,7 @@ public:
         while (!_reader.is_buffer_empty()) {
             _reader.pop_mutation_fragment();
         }
-        return _reader.fill_buffer();
+        return _reader.fill_buffer(db::no_timeout);
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {

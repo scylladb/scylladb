@@ -265,7 +265,7 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
             return { };
         }
     private:
-        void do_fill_buffer() {
+        void do_fill_buffer(db::timeout_clock::time_point timeout = db::no_timeout) {
             if (!_static_row_done) {
                 _static_row_done = true;
                 if (!_mutation.partition().static_row().empty()) {
@@ -322,8 +322,8 @@ streamed_mutation streamed_mutation_from_mutation(mutation m, streamed_mutation:
             destroy_mutation();
         }
 
-        virtual future<> fill_buffer() override {
-            do_fill_buffer();
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            do_fill_buffer(timeout);
             return make_ready_future<>();
         }
     };
@@ -346,15 +346,15 @@ streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_m
             , _sm(std::move(sm))
         { }
 
-        virtual future<> fill_buffer() override {
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
             if (!_static_row_done) {
                 _static_row_done = true;
-                return _sm().then([this] (auto&& mf) {
+                return _sm().then([this, timeout] (auto&& mf) {
                     if (mf) {
                         this->push_mutation_fragment(std::move(*mf));
                     }
-                    return _sm.fast_forward_to(query::clustering_range{}).then([this] {
-                        return this->fill_buffer();
+                    return _sm.fast_forward_to(query::clustering_range{}).then([this, timeout] {
+                        return this->fill_buffer(timeout);
                     });
                 });
             }
@@ -397,7 +397,7 @@ streamed_mutation make_forwardable(streamed_mutation m) {
             , _sm(std::move(sm))
         { }
 
-        virtual future<> fill_buffer() override {
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
             return repeat([this] {
                 if (is_buffer_full()) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -470,7 +470,7 @@ private:
         push_mutation_fragment(std::move(result));
     }
 
-    void do_fill_buffer() {
+    void do_fill_buffer(db::timeout_clock::time_point timeout = db::no_timeout) {
         position_in_partition::less_compare cmp(*_schema);
         auto heap_compare = [&] (auto& a, auto& b) { return cmp(b.row.position(), a.row.position()); };
 
@@ -505,21 +505,23 @@ private:
         return t;
     }
 protected:
-    virtual future<> fill_buffer() override  {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override  {
         while (!is_end_of_stream() && !is_buffer_full()) {
             std::vector<future<>> more_data;
             for (auto& rd : _next_readers) {
                 if (rd->is_buffer_empty() && !rd->is_end_of_stream()) {
-                    auto f = rd->fill_buffer();
+                    auto f = rd->fill_buffer(timeout);
                     if (!f.available() || f.failed()) {
                         more_data.emplace_back(std::move(f));
                     }
                 }
             }
             if (!more_data.empty()) {
-                return parallel_for_each(std::move(more_data), [] (auto& f) { return std::move(f); }).then([this] { return fill_buffer(); });
+                return parallel_for_each(std::move(more_data), [] (auto& f) {
+                    return std::move(f);
+                }).then([this, timeout] { return fill_buffer(timeout); });
             }
-            do_fill_buffer();
+            do_fill_buffer(timeout);
         }
         return make_ready_future<>();
     }

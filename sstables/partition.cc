@@ -1117,17 +1117,17 @@ public:
             }
         });
     }
-    virtual future<> fill_buffer() override {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         if (_end_of_stream) {
             return make_ready_future<>();
         }
         if (!is_initialized()) {
-            return _initialize().then([this] {
+            return _initialize().then([this, timeout] {
                 if (!is_initialized()) {
                     _end_of_stream = true;
                     return make_ready_future<>();
                 } else {
-                    return fill_buffer();
+                    return fill_buffer(timeout);
                 }
             });
         }

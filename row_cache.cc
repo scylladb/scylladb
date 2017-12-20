@@ -345,7 +345,7 @@ class single_partition_populating_reader final : public flat_mutation_reader::im
     lw_shared_ptr<read_context> _read_context;
     flat_mutation_reader_opt _reader;
 private:
-    future<> create_reader() {
+    future<> create_reader(db::timeout_clock::time_point timeout) {
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
@@ -393,17 +393,17 @@ public:
         , _read_context(std::move(context))
     { }
 
-    virtual future<> fill_buffer() override {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         if (!_reader) {
-            return create_reader().then([this] {
+            return create_reader(timeout).then([this, timeout] {
                 if (_end_of_stream) {
                     return make_ready_future<>();
                 }
-                return fill_buffer();
+                return fill_buffer(timeout);
             });
         }
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
-            return fill_buffer_from(*_reader).then([this] (bool reader_finished) {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
+            return fill_buffer_from(*_reader, timeout).then([this] (bool reader_finished) {
                 if (reader_finished) {
                     _end_of_stream = true;
                 }
@@ -673,12 +673,12 @@ public:
         , _secondary_reader(cache, *_read_context)
         , _lower_bound(range.start())
     { }
-    virtual future<> fill_buffer() override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (!_reader) {
                 return read_next_partition();
             } else {
-                return fill_buffer_from(*_reader).then([this] (bool reader_finished) {
+                return fill_buffer_from(*_reader, timeout).then([this] (bool reader_finished) {
                     if (reader_finished) {
                         on_end_of_stream();
                     }

@@ -37,6 +37,7 @@
 #include "stdx.hh"
 #include "streamed_mutation.hh"
 #include "sstables/sstables.hh"
+#include "db/timeout_clock.hh"
 
 namespace db {
 
@@ -86,15 +87,15 @@ private:
         });
     }
 public:
-    virtual future<> fill_buffer() override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        return do_until([this, timeout] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (!_partition_reader) {
                 return get_next_partition();
             }
             return _partition_reader->consume_pausable([this] (mutation_fragment mf) {
                 push_mutation_fragment(std::move(mf));
                 return stop_iteration(is_buffer_full());
-            }).then([this] {
+            }, timeout).then([this] {
                 if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
                     _partition_reader = stdx::nullopt;
                 }

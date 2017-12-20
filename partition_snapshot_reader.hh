@@ -195,7 +195,7 @@ private:
         push_mutation_fragment(std::move(mfopt));
     }
 
-    void do_fill_buffer() {
+    void do_fill_buffer(db::timeout_clock::time_point timeout) {
         if (!_last_entry) {
             auto mfopt = read_static_row();
             if (mfopt) {
@@ -251,17 +251,17 @@ public:
         , _lsa_region(region)
         , _read_section(read_section) {
         push_mutation_fragment(partition_start(std::move(dk), tomb(*snp)));
-        do_fill_buffer();
+        do_fill_buffer(db::no_timeout);
     }
 
     ~partition_snapshot_flat_reader() {
         maybe_merge_versions(_snapshot, _lsa_region, _read_section);
     }
 
-    virtual future<> fill_buffer() override {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         return _read_section(_lsa_region, [&] {
             return with_linearized_managed_bytes([&] {
-                do_fill_buffer();
+                do_fill_buffer(timeout);
                 return make_ready_future<>();
             });
         });
