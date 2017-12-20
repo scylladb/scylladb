@@ -1864,7 +1864,8 @@ future<> data_query(
         uint32_t partition_limit,
         gc_clock::time_point query_time,
         query::result::builder& builder,
-        tracing::trace_state_ptr trace_ptr)
+        tracing::trace_state_ptr trace_ptr,
+        db::timeout_clock::time_point timeout)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<>();
@@ -1971,7 +1972,8 @@ static do_mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                query::result_memory_accounter&& accounter,
-               tracing::trace_state_ptr trace_ptr)
+               tracing::trace_state_ptr trace_ptr,
+               db::timeout_clock::time_point timeout)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
@@ -2001,10 +2003,11 @@ mutation_query(schema_ptr s,
                uint32_t partition_limit,
                gc_clock::time_point query_time,
                query::result_memory_accounter&& accounter,
-               tracing::trace_state_ptr trace_ptr)
+               tracing::trace_state_ptr trace_ptr,
+               db::timeout_clock::time_point timeout)
 {
     return mutation_query_stage(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
-                                row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr));
+                                row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr), timeout);
 }
 
 deletable_row::deletable_row(clustering_row&& cr)
