@@ -124,6 +124,7 @@ void range_tombstone_list::insert_from(const schema& s,
             if (less(end_bound, it->end_bound())) {
                 end = it->end;
                 end_kind = it->end_kind;
+                end_bound = bound_view(end, end_kind);
             }
             it = rev.erase(it);
         } else if (c > 0) {

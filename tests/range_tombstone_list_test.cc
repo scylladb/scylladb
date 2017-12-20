@@ -587,6 +587,24 @@ BOOST_AUTO_TEST_CASE(test_add_overlapping_range_to_range_with_empty_end) {
     BOOST_REQUIRE(it == l.end());
 }
 
+// Reproduces https://github.com/scylladb/scylla/issues/3083
+BOOST_AUTO_TEST_CASE(test_coalescing_with_end_bound_inclusiveness_change_with_prefix_bound) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = rtie(4, 8, 4);
+    auto rt2 = range_tombstone(key({8, 1}), bound_kind::incl_start, key({10}), bound_kind::excl_end, {1, gc_now});
+
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+
+    l.apply(*s, rt(1, 5, 4));
+
+    auto it = l.begin();
+    assert_rt(rtie(1, 8, 4), *it++);
+    assert_rt(rt2, *it++);
+    BOOST_REQUIRE(it == l.end());
+}
+
 BOOST_AUTO_TEST_CASE(test_search_with_empty_start) {
     range_tombstone_list l(*s);
 
