@@ -62,6 +62,7 @@
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "md5_hasher.hh"
 
 #include <seastar/util/noncopyable_function.hh>
@@ -1237,7 +1238,7 @@ make_map_mutation(const Map& map,
 
         for (auto&& entry : map) {
             auto te = f(entry);
-            mut.cells.emplace_back(ktyp->decompose(te.first), atomic_cell::make_live(timestamp, vtyp->decompose(te.second)));
+            mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(timestamp, vtyp->decompose(data_value(te.second))));
         }
 
         auto col_mut = column_type->serialize_mutation_form(std::move(mut));
@@ -1256,7 +1257,9 @@ make_map_mutation(const Map& map,
                   const column_definition& column,
                   api::timestamp_type timestamp)
 {
-    return make_map_mutation(map, column, timestamp, [](auto&& p) { return std::forward<decltype(p)>(p); });
+    return make_map_mutation(map, column, timestamp, [](auto&& p) {
+        return std::make_pair(data_value(p.first), data_value(p.second));
+    });
 }
 
 template<typename K, typename Map>
@@ -1497,7 +1500,16 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
     }
 
     store_map(m, ckey, "compression", timestamp, table->get_compressor_params().get_options());
-    store_map(m, ckey, "extensions", timestamp, std::map<data_value, data_value>());
+
+    std::map<sstring, bytes> map;
+
+    if (!table->extensions().empty()) {
+        for (auto& p : table->extensions()) {
+            map.emplace(p.first, p.second->serialize());
+        }
+    }
+
+    store_map(m, ckey, "extensions", timestamp, map);
 }
 
 static data_type expand_user_type(data_type);
@@ -1924,7 +1936,37 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
 
     if (table_row.has("extensions")) {
         auto map = get_map<sstring, bytes>(table_row, "extensions");
-        // TODO: extensions
+        schema::extensions_map result;
+        auto& exts = ctxt.extensions().schema_extensions();
+        for (auto&p : map) {
+            auto i = exts.find(p.first);
+            if (i != exts.end()) {
+                try {
+                    result.emplace(p.first, i->second(p.second));
+                    continue;
+                } catch (...) {
+                    slogger.warn("Error parsing extension {}: {}", p.first, std::current_exception());
+                }
+            }
+
+            // unknown. we should still preserve it.
+            class placeholder : public schema_extension {
+                bytes _bytes;
+            public:
+                placeholder(bytes bytes)
+                                : _bytes(std::move(bytes)) {
+                }
+                bytes serialize() const override {
+                    return _bytes;
+                }
+                bool is_placeholder() const {
+                    return true;
+                }
+            };
+
+            result.emplace(p.first, ::make_shared<placeholder>(p.second));
+        }
+        builder.set_extensions(std::move(result));
     }
 
     if (table_row.has("gc_grace_seconds")) {
