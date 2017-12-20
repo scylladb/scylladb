@@ -86,7 +86,6 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
 SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
     return seastar::async([] {
         auto s = make_schema();
-        auto& slice = s->full_slice();
 
         mutation m1(partition_key::from_single_value(*s, "keyA"), s);
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
@@ -97,7 +96,7 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
-        assert_that(make_combined_reader(s, make_reader_returning_many({m1, m2}, slice), make_reader_returning_many({m2, m3}, slice)))
+        assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1, m2}), flat_mutation_reader_from_mutations({m2, m3})))
             .produces(m1)
             .produces(m2)
             .produces(m3)
