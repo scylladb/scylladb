@@ -30,6 +30,7 @@
 #include "tracing/trace_state.hh"
 
 #include <seastar/util/gcc6-concepts.hh>
+#include "db/timeout_clock.hh"
 
 using seastar::future;
 
@@ -149,7 +150,7 @@ public:
         )
         // Stops when consumer returns stop_iteration::yes or end of stream is reached.
         // Next call will start from the next mutation_fragment in the stream.
-        future<> consume_pausable(Consumer consumer) {
+        future<> consume_pausable(Consumer consumer, db::timeout_clock::time_point timeout = db::no_timeout) {
             _consume_done = false;
             return do_until([this] { return (is_end_of_stream() && is_buffer_empty()) || _consume_done; }, [this, consumer = std::move(consumer)] () mutable {
                 if (is_buffer_empty()) {
@@ -170,7 +171,7 @@ public:
         // a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
-        void consume_pausable_in_thread(Consumer consumer, Filter filter) {
+        void consume_pausable_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout = db::no_timeout) {
             while (true) {
                 if (is_buffer_empty()) {
                     if (is_end_of_stream()) {
@@ -251,9 +252,9 @@ public:
         //
         //
         // This method returns whatever is returned from Consumer::consume_end_of_stream().S
-        auto consume(Consumer consumer) {
-            return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this] (consumer_adapter<Consumer>& adapter) {
-                return consume_pausable(std::ref(adapter)).then([this, &adapter] {
+        auto consume(Consumer consumer, db::timeout_clock::time_point timeout = db::no_timeout) {
+            return do_with(consumer_adapter<Consumer>(*this, std::move(consumer)), [this, timeout] (consumer_adapter<Consumer>& adapter) {
+                return consume_pausable(std::ref(adapter), timeout).then([this, &adapter] {
                     return adapter._consumer.consume_end_of_stream();
                 });
             });
@@ -266,9 +267,9 @@ public:
         // A variant of consumee() that expects to be run in a seastar::thread.
         // Partitions for which filter(decorated_key) returns false are skipped
         // entirely and never reach the consumer.
-        auto consume_in_thread(Consumer consumer, Filter filter) {
+        auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout = db::no_timeout) {
             auto adapter = consumer_adapter<Consumer>(*this, std::move(consumer));
-            consume_pausable_in_thread(std::ref(adapter), std::move(filter));
+            consume_pausable_in_thread(std::ref(adapter), std::move(filter), timeout);
             return adapter._consumer.consume_end_of_stream();
         };
 
@@ -307,29 +308,31 @@ public:
     GCC6_CONCEPT(
         requires FlattenedConsumer<Consumer>()
     )
-    auto consume(Consumer consumer, consume_reversed_partitions reversed = consume_reversed_partitions::no) {
+    auto consume(Consumer consumer,
+                 consume_reversed_partitions reversed = consume_reversed_partitions::no,
+                 db::timeout_clock::time_point timeout = db::no_timeout) {
         if (reversed) {
             return do_with(impl::reverse_partitions(*_impl), [&] (auto& reversed_partition_stream) {
-                return reversed_partition_stream._impl->consume(std::move(consumer));
+                return reversed_partition_stream._impl->consume(std::move(consumer), timeout);
             });
         }
-        return _impl->consume(std::move(consumer));
+        return _impl->consume(std::move(consumer), timeout);
     }
 
     template<typename Consumer, typename Filter>
     GCC6_CONCEPT(
         requires FlattenedConsumer<Consumer>() && PartitionFilter<Filter>
     )
-    auto consume_in_thread(Consumer consumer, Filter filter) {
-        return _impl->consume_in_thread(std::move(consumer), std::move(filter));
+    auto consume_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->consume_in_thread(std::move(consumer), std::move(filter), timeout);
     }
 
     template<typename Consumer>
     GCC6_CONCEPT(
         requires FlattenedConsumer<Consumer>()
     )
-    auto consume_in_thread(Consumer consumer) {
-        return consume_in_thread(std::move(consumer), [] (const dht::decorated_key&) { return true; });
+    auto consume_in_thread(Consumer consumer, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return consume_in_thread(std::move(consumer), [] (const dht::decorated_key&) { return true; }, timeout);
     }
 
     void next_partition() { _impl->next_partition(); }

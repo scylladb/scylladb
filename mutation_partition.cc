@@ -1879,8 +1879,8 @@ future<> data_query(
 
     return do_with(source.make_flat_mutation_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
                                                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
-                   [cfq = std::move(cfq), is_reversed] (flat_mutation_reader& reader) mutable {
-        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed));
+                   [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
+        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
     });
 }
 
@@ -1987,8 +1987,8 @@ static do_mutation_query(schema_ptr s,
 
     return do_with(source.make_flat_mutation_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
                                                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
-                   [cfq = std::move(cfq), is_reversed] (flat_mutation_reader& reader) mutable {
-        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed));
+                   [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
+        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
     });
 }
 
