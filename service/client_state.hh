@@ -62,6 +62,7 @@ class client_state {
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
+    unsigned _cpu_of_origin;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -101,9 +102,14 @@ private:
 
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
+
+    // Only set for "request copy"
+    stdx::optional<api::timestamp_type> _request_ts;
+
 public:
     struct internal_tag {};
     struct external_tag {};
+    struct request_copy_tag {};
 
     void create_tracing_session(tracing::trace_type type, tracing::trace_state_props_set props) {
         _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
@@ -117,8 +123,22 @@ public:
         return _trace_state_ptr;
     }
 
+    /// \brief A cross-shard copy-constructor.
+    /// Copies everything that may be copied on the remote shard (e.g. _user is out since it's a shared_ptr).
+    /// The created copy of the original client state that may be safely used in the specific request handling flow.
+    /// The given timestamp is going to be used in the context of the corresponding query instead of being generated.
+    /// The caller must ensure that the given timestamps are monotonic in the context of a specific client/connection.
+    ///
+    /// \note May not be called if the Tracing state has already been initialized.
+    ///
+    /// \param request_copy_tag
+    /// \param orig The client_state that should be copied.
+    /// \param ts A timestamp to use during the request handling
+    client_state(request_copy_tag, const client_state& orig, api::timestamp_type ts);
+
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
-            : _is_internal(false)
+            : _cpu_of_origin(engine().cpu_id())
+            , _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
             , _auth_service(&auth_service) {
@@ -131,7 +151,12 @@ public:
         return gms::inet_address(_remote_address);
     }
 
-    client_state(internal_tag) : _keyspace("system"), _is_internal(true), _is_thrift(false) {}
+    client_state(internal_tag)
+            : _keyspace("system")
+            , _cpu_of_origin(engine().cpu_id())
+            , _is_internal(true)
+            , _is_thrift(false)
+    {}
 
     // `nullptr` for internal instances.
     auth::service* get_auth_service() {
@@ -177,6 +202,10 @@ public:
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
     api::timestamp_type get_timestamp() {
+        if (_request_ts) {
+            return *_request_ts;
+        }
+
         auto current = api::new_timestamp();
         auto last = _last_timestamp_micros;
         auto result = last >= current ? last + 1 : current;
@@ -212,6 +241,16 @@ public:
     }
 
 public:
+    /// \brief Get a local copy of the orig._auth_service.
+    /// \param orig The original client_state.
+    /// \return The pointer to the local auth_service instance or nullptr if orig._auth_serice == nullptr.
+    auth::service* local_auth_service_copy(const service::client_state& orig) const;
+
+    /// \brief Get a local copy of the orig._user.
+    /// \param orig The original client_state.
+    /// \return The shared_ptr created on a local shard pointing to the auth::authenticated_user object equal to the *orig._user.
+    ::shared_ptr<auth::authenticated_user> local_user_copy(const service::client_state& orig) const;
+
     void set_keyspace(seastar::sharded<database>& db, sstring keyspace) {
         // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
         // call set_keyspace() before calling login(), and we have to handle that.
