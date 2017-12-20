@@ -477,7 +477,10 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader, bool);
 
 flat_mutation_reader make_empty_flat_reader(schema_ptr s);
 
-flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, const dht::partition_range& pr = query::full_partition_range, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+inline flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
+    return flat_mutation_reader_from_mutations(std::move(ms), query::full_partition_range, fwd);
+}
 
 flat_mutation_reader
 make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
