@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
         mutation m2(partition_key::from_single_value(*s, "keyA"), s);
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
-        auto cr = make_combined_reader(s, make_reader_returning(m1), make_reader_returning(m2));
+        auto cr = make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2}));
         assert_that(std::move(cr))
             .produces(m2)
             .produces(m1)
