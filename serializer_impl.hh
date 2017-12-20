@@ -255,6 +255,38 @@ struct serializer<std::map<K, V>> {
     }
 };
 
+template<typename K, typename V>
+struct serializer<std::unordered_map<K, V>> {
+    template<typename Input>
+    static std::unordered_map<K, V> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::unordered_map<K, V> m;
+        m.reserve(sz);
+        while (sz--) {
+            auto k = deserialize(in, boost::type<K>());
+            auto v = deserialize(in, boost::type<V>());
+            m.emplace(std::move(k), std::move(v));
+        }
+        return m;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::unordered_map<K, V>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        for (auto&& e : v) {
+            serialize(out, e.first);
+            serialize(out, e.second);
+        }
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        while (sz--) {
+            serializer<K>::skip(in);
+            serializer<V>::skip(in);
+        }
+    }
+};
+
 template<typename Tag>
 struct serializer<bool_class<Tag>> {
     template<typename Input>
