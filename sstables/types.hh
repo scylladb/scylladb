@@ -350,17 +350,32 @@ enum class metadata_type : uint32_t {
 enum class scylla_metadata_type : uint32_t {
     Sharding = 1,
     Features = 2,
+    ExtensionAttributes = 3,
 };
 
 struct scylla_metadata {
+    using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
+
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Features, sstable_enabled_features>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtensionAttributes, extension_attributes>
             > data;
 
     bool has_feature(sstable_feature f) const {
         auto features = data.get<scylla_metadata_type::Features, sstable_enabled_features>();
         return features && features->is_enabled(f);
+    }
+    const extension_attributes* get_extension_attributes() const {
+        return data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
+    }
+    extension_attributes& get_or_create_extension_attributes() {
+        auto* ext = data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
+        if (ext == nullptr) {
+            data.set<scylla_metadata_type::ExtensionAttributes>(extension_attributes{});
+            ext = data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
+        }
+        return *ext;
     }
 
     template <typename Describer>
