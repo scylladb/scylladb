@@ -317,19 +317,6 @@ make_combined_reader(schema_ptr schema,
                     fwd_mr));
 }
 
-mutation_reader
-make_combined_reader(schema_ptr schema,
-        mutation_reader&& a,
-        mutation_reader&& b,
-        streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
-    std::vector<mutation_reader> v;
-    v.reserve(2);
-    v.push_back(std::move(a));
-    v.push_back(std::move(b));
-    return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
-}
-
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
