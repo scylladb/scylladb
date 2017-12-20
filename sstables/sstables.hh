@@ -936,4 +936,10 @@ struct sstable_open_info {
 
 future<> init_metrics();
 
+class file_io_extension {
+public:
+    virtual ~file_io_extension() {}
+    virtual future<file> wrap_file(sstable&, sstable::component_type, file, open_flags flags) = 0;
+};
+
 }
