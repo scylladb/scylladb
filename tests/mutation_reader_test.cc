@@ -280,9 +280,9 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
         };
 
         auto make_reader = [&] (const dht::partition_range& pr) {
-            std::vector<mutation_reader> readers;
+            std::vector<flat_mutation_reader> readers;
             boost::range::transform(mutations, std::back_inserter(readers), [&pr] (auto& ms) {
-                return make_reader_returning_many(ms, pr);
+                return flat_mutation_reader_from_mutations({ms}, pr);
             });
             return make_combined_reader(s, std::move(readers));
         };
