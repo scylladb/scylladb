@@ -80,7 +80,8 @@ auth::password_authenticator::~password_authenticator()
 
 auth::password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
     : _qp(qp)
-    , _migration_manager(mm) {
+    , _migration_manager(mm)
+    , _stopped(make_ready_future<>()) {
 }
 
 // TODO: blowfish
@@ -173,7 +174,7 @@ future<> auth::password_authenticator::start() {
                 _qp,
                 create_table,
                 _migration_manager).then([this] {
-            auth::delay_until_system_ready(_delayed, [this] {
+            _stopped = auth::do_after_system_ready(_as, [this] {
                 return has_existing_users().then([this](bool existing) {
                     if (!existing) {
                         return _qp.process(
@@ -196,7 +197,8 @@ future<> auth::password_authenticator::start() {
 }
 
 future<> auth::password_authenticator::stop() {
-    return make_ready_future<>();
+    _as.request_abort();
+    return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
 db::consistency_level auth::password_authenticator::consistency_for_user(const sstring& username) {

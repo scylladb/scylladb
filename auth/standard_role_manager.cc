@@ -28,6 +28,7 @@
 #include <boost/algorithm/string/join.hpp>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/print.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
 
@@ -208,7 +209,7 @@ bool standard_role_manager::has_existing_roles() const {
 future<> standard_role_manager::start() {
     return once_among_shards([this] {
         return this->create_metadata_tables_if_missing().then([this] {
-            delay_until_system_ready(_delayed, [this] {
+            _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
                     try {
                         if (this->has_existing_roles()) {
@@ -224,13 +225,18 @@ future<> standard_role_manager::start() {
                                 {meta::DEFAULT_SUPERUSER_NAME}).get();
                         log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
                     } catch (const exceptions::unavailable_exception& e) {
-                        log.warn("Skipped default role setup: some nodes were ready; will retry");
+                        log.warn("Skipped default role setup: some nodes were not ready; will retry");
                         throw e;
                     }
                 });
             });
         });
     });
+}
+
+future<> standard_role_manager::stop() {
+    _as.request_abort();
+    return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
 future<>

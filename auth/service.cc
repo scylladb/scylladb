@@ -138,7 +138,8 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer)) {
+            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer))
+            , _stopped(make_ready_future<>()) {
 }
 
 service::service(
@@ -193,7 +194,7 @@ future<> service::create_metadata_if_missing() {
             _qp,
             users_table_query,
             _migration_manager).then([this] {
-        delay_until_system_ready(_delayed, [this] {
+        _stopped = auth::do_after_system_ready(_as, [this] {
             return has_existing_users().then([this](bool existing) {
                 if (!existing) {
                     //
@@ -212,12 +213,6 @@ future<> service::create_metadata_if_missing() {
                             db::consistency_level::ONE,
                             { meta::DEFAULT_SUPERUSER_NAME, true }).then([](auto&&) {
                         log.info("Created default superuser '{}'", meta::DEFAULT_SUPERUSER_NAME);
-                    }).handle_exception([](auto exn) {
-                        try {
-                            std::rethrow_exception(exn);
-                        } catch (const exceptions::request_execution_exception&) {
-                            log.warn("Skipped default superuser setup: some nodes were not ready");
-                        }
                     }).discard_result();
                 }
 
@@ -253,10 +248,10 @@ future<> service::start() {
 }
 
 future<> service::stop() {
-    _delayed.cancel_all();
-
+    _as.request_abort();
     return _permissions_cache->stop().then([this] {
-        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
+        auto s = _stopped.handle_exception_type([] (const sleep_aborted&) { });
+        return when_all_succeed(std::move(s), _role_manager->stop(), _authorizer->stop(), _authenticator->stop());
     });
 }
 
