@@ -227,9 +227,10 @@ SEASTAR_TEST_CASE(test_combining_two_empty_readers) {
 
 SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     return seastar::async([] {
-        std::vector<mutation_reader> v;
-        v.push_back(make_empty_reader());
-        assert_that(make_combined_reader(make_schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        std::vector<flat_mutation_reader> v;
+        auto s = make_schema();
+        v.push_back(make_empty_flat_reader(s));
+        assert_that(make_combined_reader(s, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces_end_of_stream();
     });
 }
