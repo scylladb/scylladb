@@ -478,5 +478,5 @@ flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, 
 flat_mutation_reader
 make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,
                              const query::partition_slice& slice, const io_priority_class& pc = default_priority_class(),
-                             tracing::trace_state_ptr trace_state = nullptr, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+                             tracing::trace_state_ptr trace_state = nullptr,
                              flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
