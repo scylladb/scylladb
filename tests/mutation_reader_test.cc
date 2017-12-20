@@ -219,7 +219,8 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
 
 SEASTAR_TEST_CASE(test_combining_two_empty_readers) {
     return seastar::async([] {
-        assert_that(make_combined_reader(make_schema(), make_empty_reader(), make_empty_reader()))
+        auto s = make_schema();
+        assert_that(make_combined_reader(s, make_empty_flat_reader(s), make_empty_flat_reader(s)))
             .produces_end_of_stream();
     });
 }
