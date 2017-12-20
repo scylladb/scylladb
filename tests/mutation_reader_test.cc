@@ -348,9 +348,7 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
 
         std::vector<flat_mutation_reader> readers;
         for (auto& mutations : readers_mutations) {
-            readers.emplace_back(flat_mutation_reader_from_mutation_reader(s.schema(),
-                    make_reader_returning_many(mutations, s.schema()->full_slice(), streamed_mutation::forwarding::yes),
-                    streamed_mutation::forwarding::yes));
+            readers.emplace_back(flat_mutation_reader_from_mutations(mutations, streamed_mutation::forwarding::yes));
         }
 
         assert_that(make_combined_reader(s.schema(), std::move(readers), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no))
