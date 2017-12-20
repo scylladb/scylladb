@@ -347,10 +347,6 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-mutation_reader make_combined_reader(schema_ptr schema,
-        std::vector<mutation_reader> readers,
-        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
