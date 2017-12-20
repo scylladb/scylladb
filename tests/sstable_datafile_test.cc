@@ -3671,7 +3671,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable(dir.path,  flat_mutation_reader_from_mutations({ std::move(mut) }, streamed_mutation::forwarding::no), cfg);
+        auto sst = make_sstable(dir.path,  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -3732,7 +3732,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        auto sst = make_sstable(dir.path, flat_mutation_reader_from_mutations(partitions, streamed_mutation::forwarding::no), cfg);
+        auto sst = make_sstable(dir.path, flat_mutation_reader_from_mutations(partitions), cfg);
 
         auto ms = as_mutation_source(sst);
         auto rd = ms.make_flat_mutation_reader(table.schema(),
