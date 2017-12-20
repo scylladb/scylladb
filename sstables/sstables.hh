@@ -543,6 +543,7 @@ private:
     const bool has_component(component_type f) const;
 
     const sstring filename(component_type f) const;
+    future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <sstable::component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
@@ -648,6 +649,16 @@ public:
     std::unique_ptr<index_reader> get_index_reader(const io_priority_class& pc);
 
     future<> read_toc();
+
+    shareable_components& get_shared_components() {
+        return *_components;
+    }
+    const shareable_components& get_shared_components() const {
+        return *_components;
+    }
+    schema_ptr get_schema() const {
+        return _schema;
+    }
 
     bool has_scylla_component() const {
         return has_component(component_type::Scylla);
