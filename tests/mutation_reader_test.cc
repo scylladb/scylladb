@@ -1287,3 +1287,37 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
+    return seastar::async([] {
+        // Creates a mutation source which combines N mutation sources with mutation fragments spread
+        // among them in a round robin fashion.
+        auto make_combined_populator = [] (int n_sources) {
+            return [=] (schema_ptr s, const std::vector<mutation>& muts) {
+                std::vector<lw_shared_ptr<memtable>> memtables;
+                for (int i = 0; i < n_sources; ++i) {
+                    memtables.push_back(make_lw_shared<memtable>(s));
+                }
+
+                int source_index = 0;
+                for (auto&& m : muts) {
+                    flat_mutation_reader_from_mutations({m}).consume_pausable([&] (mutation_fragment&& mf) {
+                        mutation mf_m(m.decorated_key(), m.schema());
+                        mf_m.partition().apply(*s, mf);
+                        memtables[source_index++ % memtables.size()]->apply(mf_m);
+                        return stop_iteration::no;
+                    }).get();
+                }
+
+                std::vector<mutation_source> sources;
+                for (auto&& mt : memtables) {
+                    sources.push_back(mt->as_data_source());
+                }
+                return make_combined_mutation_source(std::move(sources));
+            };
+        };
+        run_mutation_source_tests(make_combined_populator(1));
+        run_mutation_source_tests(make_combined_populator(2));
+        run_mutation_source_tests(make_combined_populator(3));
+    });
+}
