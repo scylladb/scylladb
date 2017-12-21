@@ -402,6 +402,22 @@ public:
     }
 };
 
+static std::vector<gms::inet_address>
+replica_ids_to_endpoints(const std::vector<utils::UUID>& replica_ids) {
+    const auto& tm = get_local_storage_service().get_token_metadata();
+
+    std::vector<gms::inet_address> endpoints;
+    endpoints.reserve(replica_ids.size());
+
+    for (const auto& replica_id : replica_ids) {
+        if (auto endpoint_opt = tm.get_endpoint_for_host_id(replica_id)) {
+            endpoints.push_back(*endpoint_opt);
+        }
+    }
+
+    return endpoints;
+}
+
 bool storage_proxy::need_throttle_writes() const {
     return _stats.background_write_bytes > memory::stats().total_memory() / 10 || _stats.queued_write_bytes > 6*1024*1024;
 }
@@ -2845,7 +2861,11 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     return db::read_repair_decision::NONE;
 }
 
-::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state) {
+::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range pr,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state,
+        const std::vector<gms::inet_address>& preferred_endpoints) {
     const dht::token& token = pr.start()->value().token();
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
@@ -2855,7 +2875,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision,
+    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
@@ -2969,7 +2989,12 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         if (!pr.is_singular()) {
             throw std::runtime_error("mixed singular and non singular range are not supported");
         }
-        exec.push_back(get_read_executor(cmd, std::move(pr), cl, trace_state));
+
+        auto token_range = nonwrapping_range<dht::token>::make_singular(pr.start()->value().token());
+        auto it = preferred_replicas.find(token_range);
+        const auto replicas = it == preferred_replicas.end() ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
+
+        exec.push_back(get_read_executor(cmd, std::move(pr), cl, trace_state, replicas));
     }
 
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);

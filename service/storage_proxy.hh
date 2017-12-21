@@ -254,7 +254,11 @@ private:
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
-    ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, tracing::trace_state_ptr trace_state);
+    ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range pr,
+            db::consistency_level cl,
+            tracing::trace_state_ptr trace_state,
+            const std::vector<gms::inet_address>& preferred_endpoints);
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                                                            query::result_options opts,
                                                                            tracing::trace_state_ptr trace_state,

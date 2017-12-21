@@ -157,7 +157,10 @@ std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
-                 read_repair_decision read_repair, gms::inet_address* extra, column_family* cf) {
+                 const std::vector<gms::inet_address>& preferred_endpoints,
+                 read_repair_decision read_repair,
+                 gms::inet_address* extra,
+                 column_family* cf) {
     size_t local_count;
 
     if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
@@ -181,6 +184,30 @@ filter_for_query(consistency_level cl,
     if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
         return std::move(live_endpoints);
     }
+
+    std::vector<gms::inet_address> selected_endpoints;
+
+    // Pre-select endpoints based on client preference. If the endpoints
+    // selected this way aren't enough to satisfy CL requirements select the
+    // remaining ones according to the load-balancing strategy as before.
+    if (!preferred_endpoints.empty()) {
+        const auto it = boost::stable_partition(live_endpoints, [&preferred_endpoints] (const gms::inet_address& a) {
+            return std::find(preferred_endpoints.cbegin(), preferred_endpoints.cend(), a) == preferred_endpoints.end();
+        });
+        const size_t selected = std::distance(it, live_endpoints.end());
+        if (selected >= bf) {
+             if (extra) {
+                 *extra = selected == bf ? live_endpoints.front() : *(it + bf);
+             }
+             return std::vector<gms::inet_address>(it, it + bf);
+        } else if (selected) {
+             selected_endpoints.reserve(bf);
+             std::move(it, live_endpoints.end(), std::back_inserter(selected_endpoints));
+             live_endpoints.erase(it, live_endpoints.end());
+        }
+    }
+
+    const auto remaining_bf = bf - selected_endpoints.size();
 
     if (cf) {
         auto get_hit_rate = [cf] (gms::inet_address ep) -> float {
@@ -213,21 +240,21 @@ filter_for_query(consistency_level cl,
         if (!old_node && ht_max - ht_min > 0.01) { // if there is old node or hit rates are close skip calculations
             // local node is always first if present (see storage_proxy::get_live_sorted_endpoints)
             unsigned local_idx = epi[0].first == utils::fb_utilities::get_broadcast_address() ? 0 : epi.size() + 1;
-            live_endpoints = miss_equalizing_combination(epi, local_idx, bf, bool(extra));
+            live_endpoints = miss_equalizing_combination(epi, local_idx, remaining_bf, bool(extra));
         }
     }
 
     if (extra) {
-        *extra = live_endpoints[bf]; // extra replica for speculation
+        *extra = live_endpoints[remaining_bf]; // extra replica for speculation
     }
 
-    live_endpoints.erase(live_endpoints.begin() + bf, live_endpoints.end());
+    std::move(live_endpoints.begin(), live_endpoints.begin() + remaining_bf, std::back_inserter(selected_endpoints));
 
-    return std::move(live_endpoints);
+    return selected_endpoints;
 }
 
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf) {
-    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE, nullptr, cf);
+    return filter_for_query(cl, ks, live_endpoints, {}, read_repair_decision::NONE, nullptr, cf);
 }
 
 bool
