@@ -276,6 +276,10 @@ standard_role_manager::alter(const authenticated_user&, stdx::string_view role_n
     };
 
     return require_record(_qp, role_name).then([this, role_name, &u](record) {
+        if (!u.is_superuser && !u.can_login) {
+            return make_ready_future<>();
+        }
+
         return _qp.process(
                 sprint(
                         "UPDATE %s SET %s WHERE %s = ?",
