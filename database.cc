@@ -663,7 +663,7 @@ column_family::make_streaming_reader(schema_ptr s,
         return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     });
 
-    return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+    return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
 future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, timeout_clock::time_point timeout) {
