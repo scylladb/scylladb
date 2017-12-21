@@ -453,12 +453,20 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         auto keys = s.make_pkeys(10);
         auto ring = s.to_ring_positions(keys);
 
-        auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&s] (auto& key) {
-            return mutation(key, s.schema());
+        auto crs = boost::copy_range<std::vector<mutation_fragment>>(boost::irange(0, 3) | boost::adaptors::transformed([&] (auto n) {
+            return s.make_row(s.make_ckey(n), "value");
+        }));
+
+        auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&] (auto& key) {
+            auto m = mutation(key, s.schema());
+            for (auto& mf : crs) {
+                m.apply(mf);
+            }
+            return m;
         }));
 
         auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
-            return make_reader_returning_many(std::move(ms), range);
+            return make_reader_returning_many(ms, range);
         });
 
         auto ranges = dht::partition_range_vector {
@@ -468,18 +476,32 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         };
         auto fft_range = dht::partition_range::make_starting_with(ring[9]);
 
-        assert_that(make_flat_multi_range_reader(s.schema(), std::move(source), ranges, s.schema()->full_slice()))
-                .produces_partition_start(keys[1])
-                .produces_partition_end()
-                .produces_partition_start(keys[2])
-                .produces_partition_end()
-                .produces_partition_start(keys[4])
-                .produces_partition_end()
-                .produces_partition_start(keys[6])
-                .produces_partition_end()
+        BOOST_TEST_MESSAGE("read full partitions and fast forward");
+        assert_that(make_flat_multi_range_reader(s.schema(), source, ranges, s.schema()->full_slice()))
+                .produces(ms[1])
+                .produces(ms[2])
+                .produces(ms[4])
+                .produces(ms[6])
                 .fast_forward_to(fft_range)
+                .produces(ms[9])
+                .produces_end_of_stream();
+
+        BOOST_TEST_MESSAGE("read, skip partitions and fast forward");
+        assert_that(make_flat_multi_range_reader(s.schema(), source, ranges, s.schema()->full_slice()))
+                .produces_partition_start(keys[1])
+                .next_partition()
+                .produces_partition_start(keys[2])
+                .produces_row_with_key(crs[0].as_clustering_row().key())
+                .next_partition()
+                .produces(ms[4])
+                .next_partition()
+                .produces_partition_start(keys[6])
+                .produces_row_with_key(crs[0].as_clustering_row().key())
+                .produces_row_with_key(crs[1].as_clustering_row().key())
+                .fast_forward_to(fft_range)
+                .next_partition()
                 .produces_partition_start(keys[9])
-                .produces_partition_end()
+                .next_partition()
                 .produces_end_of_stream();
     });
 }
