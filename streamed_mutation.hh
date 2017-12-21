@@ -493,6 +493,11 @@ public:
         abort();
     }
 
+    // Fragments which have the same position() and are mergeable can be
+    // merged into one fragment with apply() which represents the sum of
+    // writes represented by each of the fragments.
+    // Fragments which have the same position() but are not mergeable
+    // can be emitted one after the other in the stream.
     bool mergeable_with(const mutation_fragment& mf) const {
         return _kind == mf._kind && _kind != kind::range_tombstone;
     }

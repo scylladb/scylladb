@@ -328,7 +328,7 @@ public:
                 break;
             }
             if (prev) {
-                if (!less(prev->position(), mfo->position())) {
+                if (less(mfo->position(), prev->position())) {
                     BOOST_FAIL(sprint("previous fragment has greater position: prev=%s, current=%s", *prev, *mfo));
                 }
             }

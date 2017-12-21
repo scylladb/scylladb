@@ -40,7 +40,7 @@ void check_order_of_fragments(streamed_mutation sm)
     auto mf = sm().get0();
     while (mf) {
         if (previous) {
-            BOOST_REQUIRE(cmp(*previous, mf->position()));
+            BOOST_REQUIRE(!cmp(mf->position(), *previous));
         }
         previous = position_in_partition(mf->position());
         mf = sm().get0();

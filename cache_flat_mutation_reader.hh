@@ -75,19 +75,9 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
 
     partition_snapshot_row_weakref _last_row;
 
-    // We need to be prepared that we may get overlapping and out of order
-    // range tombstones. We must emit fragments with strictly monotonic positions,
-    // so we can't just trim such tombstones to the position of the last fragment.
-    // To solve that, range tombstones are accumulated first in a range_tombstone_stream
-    // and emitted once we have a fragment with a larger position.
-    range_tombstone_stream _tombstones;
-
     // Holds the lower bound of a position range which hasn't been processed yet.
-    // Only fragments with positions < _lower_bound have been emitted.
-    //
-    // It is assumed that !_lower_bound.is_clustering_row(). We depend on this when
-    // calling range_tombstone::trim_front() and when inserting dummy entries. Dummy
-    // entries are assumed to be only at !is_clustering_row() positions.
+    // Only rows with positions < _lower_bound have been emitted, and only
+    // range_tombstones with positions <= _lower_bound.
     position_in_partition _lower_bound;
     position_in_partition_view _upper_bound;
 
@@ -103,10 +93,6 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void move_to_next_range();
     void move_to_range(query::clustering_row_ranges::const_iterator);
     void move_to_next_entry();
-    // Emits all delayed range tombstones with positions smaller than upper_bound.
-    void drain_tombstones(position_in_partition_view upper_bound);
-    // Emits all delayed range tombstones.
-    void drain_tombstones();
     void add_to_buffer(const partition_snapshot_row_cursor&);
     void add_clustering_row_to_buffer(mutation_fragment&&);
     void add_to_buffer(range_tombstone&&);
@@ -140,7 +126,6 @@ public:
         , _ck_ranges_curr(_ck_ranges.begin())
         , _ck_ranges_end(_ck_ranges.end())
         , _lsa_manager(cache)
-        , _tombstones(*_schema)
         , _lower_bound(position_in_partition::before_all_clustered_rows())
         , _upper_bound(position_in_partition_view::before_all_clustered_rows())
         , _read_context(std::move(ctx))
@@ -452,7 +437,6 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
 
 inline
 void cache_flat_mutation_reader::move_to_end() {
-    drain_tombstones();
     finish_reader();
     clogger.trace("csm {}: eos", this);
 }
@@ -523,30 +507,6 @@ void cache_flat_mutation_reader::move_to_next_entry() {
 }
 
 inline
-void cache_flat_mutation_reader::drain_tombstones(position_in_partition_view pos) {
-    while (true) {
-        reserve_one();
-        auto mfo = _tombstones.get_next(pos);
-        if (!mfo) {
-            break;
-        }
-        push_mutation_fragment(std::move(*mfo));
-    }
-}
-
-inline
-void cache_flat_mutation_reader::drain_tombstones() {
-    while (true) {
-        reserve_one();
-        auto mfo = _tombstones.get_next();
-        if (!mfo) {
-            break;
-        }
-        push_mutation_fragment(std::move(*mfo));
-    }
-}
-
-inline
 void cache_flat_mutation_reader::add_to_buffer(mutation_fragment&& mf) {
     clogger.trace("csm {}: add_to_buffer({})", this, mf);
     if (mf.is_clustering_row()) {
@@ -574,7 +534,6 @@ void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&
     auto& row = mf.as_clustering_row();
     auto key = row.key();
     try {
-        drain_tombstones(row.position());
         push_mutation_fragment(std::move(mf));
         _lower_bound = position_in_partition::after_key(std::move(key));
     } catch (...) {
@@ -588,12 +547,12 @@ inline
 void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
     clogger.trace("csm {}: add_to_buffer({})", this, rt);
     // This guarantees that rt starts after any emitted clustering_row
+    // and not before any emitted range tombstone.
     if (!rt.trim_front(*_schema, _lower_bound)) {
         return;
     }
     _lower_bound = position_in_partition(rt.position());
-    _tombstones.apply(std::move(rt));
-    drain_tombstones(_lower_bound);
+    push_mutation_fragment(std::move(rt));
 }
 
 inline

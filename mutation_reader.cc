@@ -69,20 +69,8 @@ class mutation_fragment_merger {
 
     const schema_ptr _schema;
     Producer _producer;
-    range_tombstone_stream _deferred_tombstones;
     iterator _it;
     iterator _end;
-    bool _end_of_stream = false;
-
-    void apply(mutation_fragment& to, mutation_fragment&& frag) {
-        if (to.is_range_tombstone()) {
-            if (auto remainder = to.as_mutable_range_tombstone().apply(*_schema, std::move(frag).as_range_tombstone())) {
-                _deferred_tombstones.apply(std::move(*remainder));
-            }
-        } else {
-            to.apply(*_schema, std::move(frag));
-        }
-    }
 
     future<> fetch() {
         if (!empty()) {
@@ -92,9 +80,6 @@ class mutation_fragment_merger {
         return _producer().then([this] (boost::iterator_range<iterator> fragments) {
             _it = fragments.begin();
             _end = fragments.end();
-            if (empty()) {
-                _end_of_stream = true;
-            }
         });
     }
 
@@ -113,57 +98,31 @@ class mutation_fragment_merger {
 public:
     mutation_fragment_merger(schema_ptr schema, Producer&& producer)
         : _schema(std::move(schema))
-        , _producer(std::move(producer))
-        , _deferred_tombstones(*_schema) {
+        , _producer(std::move(producer)) {
     }
 
     future<mutation_fragment_opt> operator()() {
-        if (_end_of_stream) {
-            return make_ready_future<mutation_fragment_opt>(_deferred_tombstones.get_next());
-        }
-
         return fetch().then([this] () -> mutation_fragment_opt {
             if (empty()) {
-                return _deferred_tombstones.get_next();
+                return mutation_fragment_opt();
             }
-
-            auto current = [&] {
-                if (auto rt = _deferred_tombstones.get_next(top())) {
-                    return std::move(*rt);
-                }
-                return pop();
-            }();
-
-            const auto equal = position_in_partition::equal_compare(*_schema);
-
-            // Position of current is always either < or == than those
-            // of the batch. In the former case there is nothing further
-            // to do.
-            if (empty() || !equal(current.position(), top().position())) {
-                return current;
-            }
-            while (!empty()) {
-                apply(current, pop());
+            auto current = pop();
+            while (!empty() && current.mergeable_with(top())) {
+                current.apply(*_schema, pop());
             }
             return current;
         });
     }
 
     void next_partition() {
-        _deferred_tombstones.reset();
-        _end_of_stream = false;
         _producer.next_partition();
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
-        _deferred_tombstones.reset();
-        _end_of_stream = false;
         return _producer.fast_forward_to(pr);
     }
 
     future<> fast_forward_to(position_range pr) {
-        _deferred_tombstones.forward_to(pr.start());
-        _end_of_stream = false;
         return _producer.fast_forward_to(std::move(pr));
     }
 };

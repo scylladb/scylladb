@@ -193,7 +193,7 @@ private:
             _last_entry = position_in_partition(result.position());
             return mutation_fragment(std::move(result));
         }
-        return _range_tombstones.get_next();
+        return _range_tombstones.get_next(position_in_partition_view::for_range_end(*_current_ck_range));
     }
 
     void emplace_mutation_fragment(mutation_fragment&& mfopt) {
