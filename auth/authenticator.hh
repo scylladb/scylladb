@@ -66,9 +66,19 @@ namespace auth {
 
 class authenticated_user;
 
+///
+/// Abstract interface for authenticating users.
+///
 class authenticator {
 public:
+    ///
+    /// The name of the key to be used for the user-name part of password authentication with \ref authenticate.
+    ///
     static const sstring USERNAME_KEY;
+
+    ///
+    /// The name of the key to be used for the password part of password authentication with \ref authenticate.
+    ///
     static const sstring PASSWORD_KEY;
 
     using credentials_map = std::unordered_map<sstring, sstring>;
@@ -80,78 +90,59 @@ public:
 
     virtual future<> stop() = 0;
 
+    ///
+    /// A fully-qualified (class with package) Java-like name for this implementation.
+    ///
     virtual const sstring& qualified_java_name() const = 0;
 
-    /**
-     * Whether or not the authenticator requires explicit login.
-     * If false will instantiate user with AuthenticatedUser.ANONYMOUS_USER.
-     */
     virtual bool require_authentication() const = 0;
 
-    /**
-     * Set of options supported by CREATE USER and ALTER USER queries.
-     * Should never return null - always return an empty set instead.
-     */
     virtual authentication_option_set supported_options() const = 0;
 
-    /**
-     * Subset of supportedOptions that users are allowed to alter when performing ALTER USER [themselves].
-     * Should never return null - always return an empty set instead.
-     */
+    ///
+    /// A subset of `supported_options()` that users are permitted to alter for themselves.
+    ///
     virtual authentication_option_set alterable_options() const = 0;
 
-    /**
-     * Authenticates a user given a Map<String, String> of credentials.
-     * Should never return null - always throw AuthenticationException instead.
-     * Returning AuthenticatedUser.ANONYMOUS_USER is an option as well if authentication is not required.
-     *
-     * @throws authentication_exception if credentials don't match any known user.
-     */
+    ///
+    /// Authenticate a user given implementation-specific credentials.
+    ///
+    /// If this implementation does not require authentication (\ref require_authentication), an anonymous user may
+    /// result.
+    ///
+    /// \returns an exceptional future with \ref exceptions::authentication_exception if given invalid credentials.
+    ///
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const = 0;
 
-    /**
-     * Called during execution of CREATE USER query (also may be called on startup, see seedSuperuserOptions method).
-     * If authenticator is static then the body of the method should be left blank, but don't throw an exception.
-     * options are guaranteed to be a subset of supportedOptions().
-     *
-     * @param username Username of the user to create.
-     * @param options Options the user will be created with.
-     * @throws exceptions::request_validation_exception
-     * @throws exceptions::request_execution_exception
-     */
+    ///
+    /// Create an authentication record for a new user. This is required before the user can log-in.
+    ///
+    /// The options provided must be a subset of `supported_options()`.
+    ///
     virtual future<> create(sstring username, const authentication_options& options) = 0;
 
-    /**
-     * Called during execution of ALTER USER query.
-     * options are always guaranteed to be a subset of supportedOptions(). Furthermore, if the user performing the query
-     * is not a superuser and is altering himself, then options are guaranteed to be a subset of alterableOptions().
-     * Keep the body of the method blank if your implementation doesn't support any options.
-     *
-     * @param username Username of the user that will be altered.
-     * @param options Options to alter.
-     * @throws exceptions::request_validation_exception
-     * @throws exceptions::request_execution_exception
-     */
+    ///
+    /// Alter the authentication record of an existing user.
+    ///
+    /// The options provided must be a subset of `supported_options()`.
+    ///
+    /// Callers must ensure that the specification of `alterable_options()` is adhered to.
+    ///
     virtual future<> alter(sstring username, const authentication_options& options) = 0;
 
-
-    /**
-     * Called during execution of DROP USER query.
-     *
-     * @param username Username of the user that will be dropped.
-     * @throws exceptions::request_validation_exception
-     * @throws exceptions::request_execution_exception
-     */
+    ///
+    /// Delete the authentication record for a user. This will disallow the user from logging in.
+    ///
     virtual future<> drop(sstring username) = 0;
 
-     /**
-     * Set of resources that should be made inaccessible to users and only accessible internally.
-     *
-     * @return Keyspaces, column families that will be unmodifiable by users; other resources.
-     * @see resource_set
-     */
+    ///
+    /// System resources used internally as part of the implementation. These are made inaccessible to users.
+    ///
     virtual const resource_set& protected_resources() const = 0;
 
+    ///
+    /// A stateful SASL challenge which supports many authentication schemes (depending on the implementation).
+    ///
     class sasl_challenge {
     public:
         virtual ~sasl_challenge() {
@@ -164,13 +155,6 @@ public:
         virtual future<authenticated_user> get_authenticated_user() const = 0;
     };
 
-    /**
-     * Provide a sasl_challenge to be used by the CQL binary protocol server. If
-     * the configured authenticator requires authentication but does not implement this
-     * interface we refuse to start the binary protocol server as it will have no way
-     * of authenticating clients.
-     * @return sasl_challenge implementation
-     */
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 };
 
