@@ -352,6 +352,9 @@ public:
 
     position_in_partition_view position() const;
 
+    // Returns the range of positions for which this fragment holds relevant information.
+    position_range range() const;
+
     // Checks if this fragment may be relevant for any range starting at given position.
     bool relevant_for_range(const schema& s, position_in_partition_view pos) const;
 

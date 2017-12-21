@@ -174,6 +174,23 @@ position_in_partition_view mutation_fragment::position() const
     return visit([] (auto& mf) -> position_in_partition_view { return mf.position(); });
 }
 
+position_range mutation_fragment::range() const {
+    switch (_kind) {
+    case kind::static_row:
+        return position_range::for_static_row();
+    case kind::clustering_row:
+        return position_range(position_in_partition(position()), position_in_partition::after_key(key()));
+    case kind::partition_start:
+        return position_range(position_in_partition(position()), position_in_partition::for_static_row());
+    case kind::partition_end:
+        return position_range(position_in_partition(position()), position_in_partition::after_all_clustered_rows());
+    case kind::range_tombstone:
+        auto&& rt = as_range_tombstone();
+        return position_range(position_in_partition(rt.position()), position_in_partition(rt.end_position()));
+    }
+    abort();
+}
+
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
     auto& s = *sm.schema();
     fprint(os, "{%s.%s key %s streamed mutation}", s.ks_name(), s.cf_name(), sm.decorated_key());
