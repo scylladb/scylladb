@@ -1,0 +1,125 @@
+/*
+ * Copyright (C) 2018 ScyllaDB
+ */
+
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "querier.hh"
+
+#include "schema.hh"
+
+querier::position querier::current_position() const {
+    const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
+    const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
+    return {dk, clustering_key};
+}
+
+bool querier::ring_position_matches(const dht::partition_range& range, const querier::position& pos) const {
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+
+    const auto expected_start = dht::ring_position_view(*pos.partition_key);
+    // If there are no clustering columns or the select is distinct we don't
+    // have clustering rows at all. In this case we can be sure we won't have
+    // anything more in the last page's partition and thus the start bound is
+    // exclusive. Otherwise there migh be clustering rows still and it is
+    // inclusive.
+    const auto expected_inclusiveness = _schema->clustering_key_size() > 0 &&
+        !_slice->options.contains<query::partition_slice::option::distinct>() &&
+        pos.clustering_key;
+    const auto comparator = dht::ring_position_comparator(*_schema);
+
+    if (is_reversed && !range.is_singular()) {
+        const auto& end = range.end();
+        return end && comparator(end->value(), expected_start) == 0 && end->is_inclusive() == expected_inclusiveness;
+    }
+
+    const auto& start = range.start();
+    return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
+}
+
+bool querier::clustering_position_matches(const query::partition_slice& slice, const querier::position& pos) const {
+    const auto& row_ranges = slice.row_ranges(*_schema, pos.partition_key->key());
+
+    if (row_ranges.empty()) {
+        // This is a valid slice on the last page of a query with
+        // clustering restrictions. It simply means the query is
+        // effectively over, no further results are expected. We
+        // can assume the clustering position matches.
+        return true;
+    }
+
+    if (!pos.clustering_key) {
+        // We stopped at a non-clustering position so the partition's clustering
+        // row ranges should be the default row ranges.
+        return &row_ranges == &slice.default_row_ranges();
+    }
+
+    clustering_key_prefix::equality eq(*_schema);
+
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+
+    // If the page ended mid-partition the first partition range should start
+    // with the last clustering key (exclusive).
+    const auto& first_row_range = row_ranges.front();
+    const auto& start = is_reversed ? first_row_range.end() : first_row_range.start();
+    if (!start) {
+        return false;
+    }
+    return !start->is_inclusive() && eq(start->value(), *pos.clustering_key);
+}
+
+bool querier::matches(const dht::partition_range& range) const {
+    const auto& qr = *_range;
+    if (qr.is_singular() != range.is_singular()) {
+        return false;
+    }
+
+    const auto cmp = dht::ring_position_comparator(*_schema);
+    const auto bound_eq = [&] (const stdx::optional<dht::partition_range::bound>& a, const stdx::optional<dht::partition_range::bound>& b) {
+        return bool(a) == bool(b) && (!a || a->equal(*b, cmp));
+    };
+
+    return qr.is_singular() ?
+        bound_eq(qr.start(), range.start()) :
+        bound_eq(qr.start(), range.start()) || bound_eq(qr.end(), range.end());
+}
+
+querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const schema& s,
+        const dht::partition_range& range, const query::partition_slice& slice) const {
+    if (only_live != emit_only_live_rows(std::holds_alternative<lw_shared_ptr<compact_for_data_query_state>>(_compaction_state))) {
+        return can_use::no_emit_only_live_rows_mismatch;
+    }
+    if (s.version() != _schema->version()) {
+        return can_use::no_schema_version_mismatch;
+    }
+
+    const auto pos = current_position();
+
+    if (!pos.partition_key) {
+        // There was nothing read so far so we assume we are ok.
+        return can_use::yes;
+    }
+
+    if (!ring_position_matches(range, pos)) {
+        return can_use::no_ring_pos_mismatch;
+    }
+    if (!clustering_position_matches(slice, pos)) {
+        return can_use::no_clustering_pos_mismatch;
+    }
+    return can_use::yes;
+}

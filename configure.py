@@ -601,6 +601,7 @@ scylla_core = (['database.cc',
                  'duration.cc',
                  'vint-serialization.cc',
                  'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
+                 'querier.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
