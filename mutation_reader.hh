@@ -347,15 +347,6 @@ public:
 // Creates a mutation reader which combines data return by supplied readers.
 // Returns mutation of the same schema only when all readers return mutations
 // of the same schema.
-mutation_reader make_combined_reader(schema_ptr schema,
-        std::vector<mutation_reader> readers,
-        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-mutation_reader make_combined_reader(schema_ptr schema,
-        mutation_reader&& a,
-        mutation_reader&& b,
-        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader>,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
@@ -604,6 +595,25 @@ public:
             assert(!fwd);
             return fn(s, range);
         }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        return fn(s, range, slice, pc, std::move(tr), fwd);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range, const query::partition_slice&, io_priority)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range, slice, pc);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range, const query::partition_slice&)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range, slice);
+    }) {}
+    mutation_source(std::function<flat_mutation_reader(schema_ptr, partition_range range)> fn)
+        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice&, io_priority, tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
+        assert(!fwd);
+        return fn(s, range);
+    }) {}
 
     mutation_source(const mutation_source& other) = default;
     mutation_source& operator=(const mutation_source& other) = default;

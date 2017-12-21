@@ -92,7 +92,7 @@ static void test_conversion_to_flat_mutation_reader_through_mutation_reader(cons
 
 static void test_conversion(const std::vector<mutation>& mutations) {
     BOOST_REQUIRE(!mutations.empty());
-    auto flat_reader = flat_mutation_reader_from_mutations(std::vector<mutation>(mutations), streamed_mutation::forwarding::no);
+    auto flat_reader = flat_mutation_reader_from_mutations(std::vector<mutation>(mutations));
     for (auto& m : mutations) {
         mutation_opt m2 = read_mutation_from_flat_mutation_reader(flat_reader).get0();
         BOOST_REQUIRE(m2);
@@ -197,7 +197,7 @@ struct mock_consumer {
 };
 
 static size_t count_fragments(mutation m) {
-    auto r = flat_mutation_reader_from_mutations({m}, streamed_mutation::forwarding::no);
+    auto r = flat_mutation_reader_from_mutations({m});
     size_t res = 0;
     auto mfopt = r().get0();
     while (bool(mfopt)) {
@@ -212,13 +212,13 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
         for_each_mutation([&] (const mutation& m) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations({m}, streamed_mutation::forwarding::no);
+                auto r = flat_mutation_reader_from_mutations({m});
                 auto result = r.consume(mock_consumer(depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations({m}, streamed_mutation::forwarding::no);
+                auto r2 = flat_mutation_reader_from_mutations({m});
                 auto start = r2().get0();
                 BOOST_REQUIRE(start);
                 BOOST_REQUIRE(start->is_partition_start());
@@ -238,13 +238,13 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
             size_t fragments_in_m1 = count_fragments(m1);
             size_t fragments_in_m2 = count_fragments(m2);
             for (size_t depth = 1; depth < fragments_in_m1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations({m1, m2}, streamed_mutation::forwarding::no);
+                auto r = flat_mutation_reader_from_mutations({m1, m2});
                 auto result = r.consume(mock_consumer(depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations({m1, m2}, streamed_mutation::forwarding::no);
+                auto r2 = flat_mutation_reader_from_mutations({m1, m2});
                 auto start = r2().get0();
                 BOOST_REQUIRE(start);
                 BOOST_REQUIRE(start->is_partition_start());
@@ -255,7 +255,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 }
             }
             for (size_t depth = fragments_in_m1; depth < fragments_in_m1 + fragments_in_m2 + 1; ++depth) {
-                auto r = flat_mutation_reader_from_mutations({m1, m2}, streamed_mutation::forwarding::no);
+                auto r = flat_mutation_reader_from_mutations({m1, m2});
                 auto result = r.consume(mock_consumer(depth)).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(2, result._consume_new_partition_call_count);
@@ -268,7 +268,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                     ++tombstones_count;
                 }
                 BOOST_REQUIRE_EQUAL(tombstones_count, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations({m1, m2}, streamed_mutation::forwarding::no);
+                auto r2 = flat_mutation_reader_from_mutations({m1, m2});
                 auto start = r2().get0();
                 BOOST_REQUIRE(start);
                 BOOST_REQUIRE(start->is_partition_start());
@@ -395,7 +395,7 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
     return seastar::async([] {
         for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
             auto get_hash = [] (mutation m) {
-                return partition_checksum::compute(flat_mutation_reader_from_mutations({ m }, streamed_mutation::forwarding::no),
+                return partition_checksum::compute(flat_mutation_reader_from_mutations({ m }),
                                                    repair_checksum::streamed).get0();
             };
             auto h1 = get_hash(m1);
@@ -418,7 +418,7 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
                 auto muts2 = muts;
                 std::vector<partition_checksum> checksum;
                 while (!muts2.empty()) {
-                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations(muts2, streamed_mutation::forwarding::no),
+                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations(muts2),
                                                            repair_checksum::streamed).get0();
                     BOOST_REQUIRE(boost::count(checksum, chk) == 0);
                     checksum.emplace_back(chk);
@@ -426,7 +426,7 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
                 }
                 std::vector<partition_checksum> individually_computed_checksums(muts.size());
                 for (auto k = 0u; k < muts.size(); k++) {
-                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations({ muts[k] }, streamed_mutation::forwarding::no),
+                    auto chk = partition_checksum::compute(flat_mutation_reader_from_mutations({ muts[k] }),
                                                            repair_checksum::streamed).get0();
                     for (auto j = 0u; j < (muts.size() - k); j++) {
                         individually_computed_checksums[j].add(chk);
@@ -598,12 +598,12 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
     };
 
     BOOST_TEST_MESSAGE(sprint("Consume all%s", reversed_msg));
-    auto fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    auto fmr = flat_mutation_reader_from_mutations(muts);
     auto muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed));
     BOOST_REQUIRE_EQUAL(muts, muts2);
 
     BOOST_TEST_MESSAGE(sprint("Consume first fragment from partition%s", reversed_msg));
-    fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::yes));
     BOOST_REQUIRE_EQUAL(muts.size(), muts2.size());
     for (auto j = 0u; j < muts.size(); j++) {
@@ -616,7 +616,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
     }
 
     BOOST_TEST_MESSAGE(sprint("Consume first partition%s", reversed_msg));
-    fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+    fmr = flat_mutation_reader_from_mutations(muts);
     muts2 = consume_fn(fmr, flat_stream_consumer(s, reversed, skip_after_first_fragment::no,
                                              skip_after_first_partition::yes));
     BOOST_REQUIRE_EQUAL(muts2.size(), 1);
@@ -632,7 +632,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
             return true;
         };
         BOOST_TEST_MESSAGE("Consume all, filtered");
-        fmr = flat_mutation_reader_from_mutations(muts, streamed_mutation::forwarding::no);
+        fmr = flat_mutation_reader_from_mutations(muts);
         muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter));
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
         for (auto j = 1; j < muts.size(); j += 2) {

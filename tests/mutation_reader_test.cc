@@ -59,7 +59,7 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
         mutation m2(partition_key::from_single_value(*s, "key1"), s);
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
-        assert_that(make_combined_reader(s, make_reader_returning(m1), make_reader_returning(m2)))
+        assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2})))
             .produces(m2)
             .produces_end_of_stream();
     });
@@ -75,7 +75,7 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
         mutation m2(partition_key::from_single_value(*s, "keyA"), s);
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
-        auto cr = make_combined_reader(s, make_reader_returning(m1), make_reader_returning(m2));
+        auto cr = make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2}));
         assert_that(std::move(cr))
             .produces(m2)
             .produces(m1)
@@ -86,7 +86,6 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
 SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
     return seastar::async([] {
         auto s = make_schema();
-        auto& slice = s->full_slice();
 
         mutation m1(partition_key::from_single_value(*s, "keyA"), s);
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
@@ -97,7 +96,7 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
-        assert_that(make_combined_reader(s, make_reader_returning_many({m1, m2}, slice), make_reader_returning_many({m2, m3}, slice)))
+        assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1, m2}), flat_mutation_reader_from_mutations({m2, m3})))
             .produces(m1)
             .produces(m2)
             .produces(m3)
@@ -118,8 +117,8 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
-        std::vector<mutation_reader> v;
-        v.push_back(make_reader_returning_many({m1, m2, m3}));
+        std::vector<flat_mutation_reader> v;
+        v.push_back(flat_mutation_reader_from_mutations({m1, m2, m3}));
         assert_that(make_combined_reader(s, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces(m1)
             .produces(m2)
@@ -211,7 +210,7 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        assert_that(make_combined_reader(s, make_reader_returning(m1), make_empty_reader()))
+        assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), make_empty_flat_reader(s)))
             .produces(m1)
             .produces_end_of_stream();
     });
@@ -219,16 +218,18 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
 
 SEASTAR_TEST_CASE(test_combining_two_empty_readers) {
     return seastar::async([] {
-        assert_that(make_combined_reader(make_schema(), make_empty_reader(), make_empty_reader()))
+        auto s = make_schema();
+        assert_that(make_combined_reader(s, make_empty_flat_reader(s), make_empty_flat_reader(s)))
             .produces_end_of_stream();
     });
 }
 
 SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
     return seastar::async([] {
-        std::vector<mutation_reader> v;
-        v.push_back(make_empty_reader());
-        assert_that(make_combined_reader(make_schema(), std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        std::vector<flat_mutation_reader> v;
+        auto s = make_schema();
+        v.push_back(make_empty_flat_reader(s));
+        assert_that(make_combined_reader(s, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces_end_of_stream();
     });
 }
@@ -279,9 +280,9 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combining_reader) {
         };
 
         auto make_reader = [&] (const dht::partition_range& pr) {
-            std::vector<mutation_reader> readers;
+            std::vector<flat_mutation_reader> readers;
             boost::range::transform(mutations, std::back_inserter(readers), [&pr] (auto& ms) {
-                return make_reader_returning_many(ms, pr);
+                return flat_mutation_reader_from_mutations({ms}, pr);
             });
             return make_combined_reader(s, std::move(readers));
         };
@@ -346,9 +347,7 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
 
         std::vector<flat_mutation_reader> readers;
         for (auto& mutations : readers_mutations) {
-            readers.emplace_back(flat_mutation_reader_from_mutation_reader(s.schema(),
-                    make_reader_returning_many(mutations, s.schema()->full_slice(), streamed_mutation::forwarding::yes),
-                    streamed_mutation::forwarding::yes));
+            readers.emplace_back(flat_mutation_reader_from_mutations(mutations, streamed_mutation::forwarding::yes));
         }
 
         assert_that(make_combined_reader(s.schema(), std::move(readers), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no))
@@ -478,20 +477,20 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
         auto sstables = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
 
-        std::vector<mutation_reader> sstable_mutation_readers;
+        std::vector<flat_mutation_reader> sstable_mutation_readers;
 
         for (auto table : tables) {
             sstables->insert(table);
 
             sstable_mutation_readers.emplace_back(
-                mutation_reader_from_flat_mutation_reader(table->read_range_rows_flat(
+                table->read_range_rows_flat(
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
                     seastar::default_priority_class(),
                     no_resource_tracking(),
                     streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes)));
+                    mutation_reader::forwarding::yes));
         }
 
         auto list_reader = make_combined_reader(s.schema(),
@@ -810,7 +809,7 @@ public:
             const restricted_mutation_reader_config& config,
             schema_ptr schema,
             lw_shared_ptr<sstables::sstable> sst) : _reader(make_empty_flat_reader(schema)) {
-        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&, auto&&...) {
+        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
             auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
             _tracker = tracker_ptr.get();
             return flat_mutation_reader(std::move(tracker_ptr));

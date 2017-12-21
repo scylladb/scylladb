@@ -299,37 +299,6 @@ future<> combined_mutation_reader::fast_forward_to(position_range pr) {
     return _producer.fast_forward_to(std::move(pr));
 }
 
-mutation_reader
-make_combined_reader(schema_ptr schema,
-        std::vector<mutation_reader> readers,
-        streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
-    std::vector<flat_mutation_reader> flat_readers;
-    flat_readers.reserve(readers.size());
-    for (auto& reader : readers) {
-        flat_readers.emplace_back(flat_mutation_reader_from_mutation_reader(schema, std::move(reader), fwd_sm));
-    }
-
-    return mutation_reader_from_flat_mutation_reader(make_flat_mutation_reader<combined_mutation_reader>(
-                    schema,
-                    std::make_unique<list_reader_selector>(std::move(flat_readers)),
-                    fwd_sm,
-                    fwd_mr));
-}
-
-mutation_reader
-make_combined_reader(schema_ptr schema,
-        mutation_reader&& a,
-        mutation_reader&& b,
-        streamed_mutation::forwarding fwd_sm,
-        mutation_reader::forwarding fwd_mr) {
-    std::vector<mutation_reader> v;
-    v.reserve(2);
-    v.push_back(std::move(a));
-    v.push_back(std::move(b));
-    return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
-}
-
 flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
@@ -690,10 +659,10 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd) {
-        std::vector<mutation_reader> rd;
+        std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_flat_mutation_reader(s, pr, slice, pc, tr, fwd));
         }
         return make_combined_reader(s, std::move(rd), fwd);
     });

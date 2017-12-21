@@ -421,7 +421,7 @@ flat_mutation_reader make_empty_flat_reader(schema_ptr s) {
 }
 
 flat_mutation_reader
-flat_mutation_reader_from_mutations(std::vector<mutation> mutations, streamed_mutation::forwarding fwd) {
+flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
     class reader final : public flat_mutation_reader::impl {
         std::vector<mutation> _mutations;
         std::vector<mutation>::iterator _cur;
@@ -511,20 +511,59 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, streamed_mu
                 rt = rts.unlink_leftmost_without_rebalance();
             }
         }
+        struct cmp {
+            bool operator()(const mutation& m, const dht::ring_position& p) const {
+                return m.decorated_key().tri_compare(*m.schema(), p) < 0;
+            }
+            bool operator()(const dht::ring_position& p, const mutation& m) const {
+                return m.decorated_key().tri_compare(*m.schema(), p) > 0;
+            }
+        };
+        static std::vector<mutation>::iterator find_first_partition(std::vector<mutation>& ms, const dht::partition_range& pr) {
+            if (!pr.start()) {
+                return std::begin(ms);
+            }
+            if (pr.is_singular()) {
+                return std::lower_bound(std::begin(ms), std::end(ms), pr.start()->value(), cmp{});
+            } else {
+                if (pr.start()->is_inclusive()) {
+                    return std::lower_bound(std::begin(ms), std::end(ms), pr.start()->value(), cmp{});
+                } else {
+                    return std::upper_bound(std::begin(ms), std::end(ms), pr.start()->value(), cmp{});
+                }
+            }
+        }
+        static std::vector<mutation>::iterator find_last_partition(std::vector<mutation>& ms, const dht::partition_range& pr) {
+            if (!pr.end()) {
+                return std::end(ms);
+            }
+            if (pr.is_singular()) {
+                return std::upper_bound(std::begin(ms), std::end(ms), pr.start()->value(), cmp{});
+            } else {
+                if (pr.end()->is_inclusive()) {
+                    return std::upper_bound(std::begin(ms), std::end(ms), pr.end()->value(), cmp{});
+                } else {
+                    return std::lower_bound(std::begin(ms), std::end(ms), pr.end()->value(), cmp{});
+                }
+            }
+        }
     public:
-        reader(schema_ptr s, std::vector<mutation>&& mutations)
+        reader(schema_ptr s, std::vector<mutation>&& mutations, const dht::partition_range& pr)
             : impl(std::move(s))
             , _mutations(std::move(mutations))
-            , _cur(_mutations.begin())
-            , _end(_mutations.end())
+            , _cur(find_first_partition(_mutations, pr))
+            , _end(find_last_partition(_mutations, pr))
             , _cmp(*_cur->schema())
         {
-            auto mutation_destroyer = defer([this] { destroy_mutations(); });
-            start_new_partition();
+            _end_of_stream = _cur == _end;
+            if (!_end_of_stream) {
+                auto mutation_destroyer = defer([this] { destroy_mutations(); });
+                start_new_partition();
 
-            do_fill_buffer();
+                do_fill_buffer();
 
-            mutation_destroyer.cancel();
+                mutation_destroyer.cancel();
+            }
         }
         void destroy_mutations() noexcept {
             // After unlink_leftmost_without_rebalance() was called on a bi::set
@@ -557,7 +596,17 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, streamed_mu
             }
         }
         virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-            throw std::runtime_error("This reader can't be fast forwarded to another partition.");
+            clear_buffer();
+            _cur = find_first_partition(_mutations, pr);
+            _end = find_last_partition(_mutations, pr);
+            _static_row_done = false;
+            _cr = {};
+            _rt = {};
+            _end_of_stream = _cur == _end;
+            if (!_end_of_stream) {
+                start_new_partition();
+            }
+            return make_ready_future<>();
         };
         virtual future<> fast_forward_to(position_range cr) override {
             throw std::runtime_error("This reader can't be fast forwarded to another position.");
@@ -565,7 +614,7 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, streamed_mu
     };
     assert(!mutations.empty());
     schema_ptr s = mutations[0].schema();
-    auto res = make_flat_mutation_reader<reader>(std::move(s), std::move(mutations));
+    auto res = make_flat_mutation_reader<reader>(std::move(s), std::move(mutations), pr);
     if (fwd) {
         return make_forwardable(std::move(res));
     }
