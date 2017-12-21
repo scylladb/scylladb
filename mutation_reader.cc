@@ -648,7 +648,7 @@ mutation_source make_empty_mutation_source() {
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
             streamed_mutation::forwarding fwd) {
-        return make_empty_reader();
+        return make_empty_flat_reader(s);
     });
 }
 
