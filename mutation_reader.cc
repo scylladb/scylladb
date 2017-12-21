@@ -646,13 +646,13 @@ mutation_reader make_empty_reader() {
 // operations.
 class tracking_file_impl : public file_impl {
     file _tracked_file;
-    semaphore* _semaphore;
+    db::timeout_semaphore* _semaphore;
 
     // Shouldn't be called if semaphore is NULL.
     temporary_buffer<uint8_t> make_tracked_buf(temporary_buffer<uint8_t> buf) {
         return seastar::temporary_buffer<uint8_t>(buf.get_write(),
                 buf.size(),
-                make_deleter(buf.release(), std::bind(&semaphore::signal, _semaphore, buf.size())));
+                make_deleter(buf.release(), std::bind(&db::timeout_semaphore::signal, _semaphore, buf.size())));
     }
 
 public:
@@ -756,9 +756,9 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
 
     static const std::size_t new_reader_base_cost{16 * 1024};
 
-    future<> create_reader() {
-        auto f = _config.timeout.count() != 0
-                ? _config.resources_sem->wait(_config.timeout, new_reader_base_cost)
+    future<> create_reader(db::timeout_clock::time_point timeout) {
+        auto f = timeout != db::no_timeout
+                ? _config.resources_sem->wait(timeout, new_reader_base_cost)
                 : _config.resources_sem->wait(new_reader_base_cost);
 
         return f.then([this] {
@@ -780,11 +780,11 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
                 fn(reader);
             }
     )
-    decltype(auto) with_reader(Function fn) {
+    decltype(auto) with_reader(Function fn, db::timeout_clock::time_point timeout) {
         if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
             return fn(*reader);
         }
-        return create_reader().then([this, fn = std::move(fn)] () mutable {
+        return create_reader(timeout).then([this, fn = std::move(fn)] () mutable {
             return fn(boost::get<flat_mutation_reader>(_reader_or_mutation_source));
         });
     }
@@ -823,7 +823,7 @@ public:
                     push_mutation_fragment(reader.pop_mutation_fragment());
                 }
             });
-        });
+        }, timeout);
     }
     virtual void next_partition() override {
         clear_buffer_to_next_partition();
@@ -840,14 +840,14 @@ public:
         _end_of_stream = false;
         return with_reader([&pr, timeout] (flat_mutation_reader& reader) {
             return reader.fast_forward_to(pr, timeout);
-        });
+        }, timeout);
     }
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
         return with_reader([pr = std::move(pr), timeout] (flat_mutation_reader& reader) mutable {
             return reader.fast_forward_to(std::move(pr), timeout);
-        });
+        }, timeout);
     }
 };
 

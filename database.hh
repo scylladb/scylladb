@@ -641,7 +641,8 @@ public:
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
-        uint64_t max_result_size);
+        uint64_t max_result_size,
+        db::timeout_clock::time_point timeout = db::no_timeout);
 
     void start();
     future<> stop();
@@ -838,6 +839,14 @@ public:
     friend class column_family_test;
 
     friend class distributed_loader;
+
+    db::timeout_clock::time_point read_request_timeout() const {
+        auto timeout = _config.read_concurrency_config.timeout;
+        if (timeout.count() == 0) {
+            return db::no_timeout;
+        }
+        return db::timeout_clock::now() + timeout;
+    }
 };
 
 using sstable_reader_factory_type = std::function<flat_mutation_reader(sstables::shared_sstable&, const dht::partition_range& pr)>;
@@ -1072,10 +1081,10 @@ private:
     seastar::thread_scheduling_group _background_writer_scheduling_group;
     flush_cpu_controller _memtable_cpu_controller;
 
-    semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
-    semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
+    db::timeout_semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
+    db::timeout_semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
     restricted_mutation_reader_config _read_concurrency_config;
-    semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
+    db::timeout_semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
     restricted_mutation_reader_config _system_read_concurrency_config;
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
@@ -1246,7 +1255,7 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::experimental::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    semaphore& system_keyspace_read_concurrency_sem() {
+    db::timeout_semaphore& system_keyspace_read_concurrency_sem() {
         return _system_read_concurrency_sem;
     }
     semaphore& sstable_load_concurrency_sem() {

@@ -23,12 +23,13 @@
 
 #include <core/file.hh>
 #include <core/semaphore.hh>
+#include "db/timeout_clock.hh"
 
 class reader_resource_tracker {
-    seastar::semaphore* _sem = nullptr;
+    db::timeout_semaphore* _sem = nullptr;
 public:
     reader_resource_tracker() = default;
-    explicit reader_resource_tracker(seastar::semaphore* sem)
+    explicit reader_resource_tracker(db::timeout_semaphore* sem)
         : _sem(sem) {
     }
 
@@ -38,7 +39,7 @@ public:
 
     file track(file f) const;
 
-    semaphore* get_semaphore() const {
+    db::timeout_semaphore* get_semaphore() const {
         return _sem;
     }
 };

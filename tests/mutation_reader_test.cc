@@ -758,7 +758,7 @@ class tracking_reader : public flat_mutation_reader::impl {
     std::size_t _call_count{0};
     std::size_t _ff_count{0};
 public:
-    tracking_reader(semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
+    tracking_reader(db::timeout_semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
         : impl(schema)
         , _reader(sst->read_range_rows_flat(
                         schema,
@@ -813,12 +813,16 @@ public:
 class reader_wrapper {
     flat_mutation_reader _reader;
     tracking_reader* _tracker{nullptr};
-
+    db::timeout_clock::time_point _timeout;
 public:
     reader_wrapper(
             const restricted_mutation_reader_config& config,
             schema_ptr schema,
-            lw_shared_ptr<sstables::sstable> sst) : _reader(make_empty_flat_reader(schema)) {
+            lw_shared_ptr<sstables::sstable> sst,
+            db::timeout_clock::duration timeout_duration = {})
+        : _reader(make_empty_flat_reader(schema))
+        , _timeout(db::timeout_clock::now() + timeout_duration)
+    {
         auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
             auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
             _tracker = tracker_ptr.get();
@@ -832,7 +836,7 @@ public:
         while (!_reader.is_buffer_empty()) {
             _reader.pop_mutation_fragment();
         }
-        return _reader.fill_buffer(db::no_timeout);
+        return _reader.fill_buffer(_timeout);
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
@@ -853,15 +857,13 @@ public:
 };
 
 struct restriction_data {
-    std::unique_ptr<semaphore> reader_semaphore;
+    std::unique_ptr<db::timeout_semaphore> reader_semaphore;
     restricted_mutation_reader_config config;
 
     restriction_data(std::size_t units,
-            std::chrono::nanoseconds timeout = {},
             std::size_t max_queue_length = std::numeric_limits<std::size_t>::max())
-        : reader_semaphore(std::make_unique<semaphore>(units)) {
+        : reader_semaphore(std::make_unique<db::timeout_semaphore>(units)) {
         config.resources_sem = reader_semaphore.get();
-        config.timeout = timeout;
         config.max_queue_length = max_queue_length;
     }
 };
@@ -1033,24 +1035,25 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds{10}));
-
+        restriction_data rd(new_reader_base_cost);
         {
             simple_schema s;
             auto tmp = make_lw_shared<tmpdir>();
             auto sst = create_sstable(s, tmp->path);
 
-            auto reader1 = reader_wrapper(rd.config, s.schema(), sst);
+            auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{10});
+            auto reader1 = reader_wrapper(rd.config, s.schema(), sst, timeout);
+
             reader1().get();
 
-            auto reader2 = reader_wrapper(rd.config, s.schema(), sst);
+            auto reader2 = reader_wrapper(rd.config, s.schema(), sst, timeout);
             auto read_fut = reader2();
 
             seastar::sleep(std::chrono::milliseconds(20)).get();
 
             // The read should have timed out.
             BOOST_REQUIRE(read_fut.failed());
-            BOOST_REQUIRE_THROW(std::rethrow_exception(read_fut.get_exception()), semaphore_timed_out);
+            BOOST_REQUIRE_THROW(std::rethrow_exception(read_fut.get_exception()), timed_out_error);
         }
 
         // All units should have been deposited back.
@@ -1061,7 +1064,7 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
 SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost, {}, 1);
+        restriction_data rd(new_reader_base_cost, 1);
 
         {
             simple_schema s;

@@ -2946,18 +2946,19 @@ future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
                      const dht::partition_range_vector& partition_ranges,
                      tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter,
-                     uint64_t max_size) {
+                     uint64_t max_size, db::timeout_clock::time_point timeout) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
-    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state)] (query::result_memory_accounter accounter) mutable {
+    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;
-        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state)] {
+        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout] {
             auto&& range = *qs.current_partition_range++;
             return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
-                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state);
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state,
+                              timeout);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
@@ -3005,7 +3006,8 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
     column_family& cf = find_column_family(cmd.cf_id);
     return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
-                            max_result_size).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+                            max_result_size,
+                            cf.read_request_timeout()).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
@@ -3023,7 +3025,8 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+            cmd.timestamp, std::move(accounter), std::move(trace_state),
+            cf.read_request_timeout()).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
