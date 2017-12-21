@@ -269,13 +269,13 @@ future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
     });
 }
 
-future<mutation_opt> read_mutation_from_flat_mutation_reader(schema_ptr s, flat_mutation_reader& r) {
+future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& r) {
     if (r.is_buffer_empty()) {
         if (r.is_end_of_stream()) {
             return make_ready_future<mutation_opt>();
         }
-        return r.fill_buffer().then([&r, s = std::move(s)] {
-            return read_mutation_from_flat_mutation_reader(std::move(s), r);
+        return r.fill_buffer().then([&r] {
+            return read_mutation_from_flat_mutation_reader(r);
         });
     }
     // r.is_buffer_empty() is always false at this point
@@ -320,7 +320,7 @@ future<mutation_opt> read_mutation_from_flat_mutation_reader(schema_ptr s, flat_
             return _builder->consume_end_of_stream();
         }
     };
-    return r.consume(adapter(std::move(s)));
+    return r.consume(adapter(r.schema()));
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {

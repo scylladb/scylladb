@@ -130,14 +130,13 @@ struct table {
     std::unique_ptr<reader> make_reader(dht::partition_range pr, query::partition_slice slice) {
         test_log.trace("making reader, pk={} ck={}", pr, slice);
         auto r = std::make_unique<reader>(reader{std::move(pr), std::move(slice), make_empty_flat_reader(s.schema())});
-        std::vector<mutation_reader> rd;
+        std::vector<flat_mutation_reader> rd;
         if (prev_mt) {
-            rd.push_back(prev_mt->make_reader(s.schema(), r->pr, r->slice));
+            rd.push_back(prev_mt->make_flat_reader(s.schema(), r->pr, r->slice));
         }
-        rd.push_back(mt->make_reader(s.schema(), r->pr, r->slice));
-        rd.push_back(cache.make_reader(s.schema(), r->pr, r->slice));
-        auto crd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
-        r->rd = flat_mutation_reader_from_mutation_reader(s.schema(), std::move(crd), streamed_mutation::forwarding::no);
+        rd.push_back(mt->make_flat_reader(s.schema(), r->pr, r->slice));
+        rd.push_back(cache.make_flat_reader(s.schema(), r->pr, r->slice));
+        r->rd = make_combined_reader(s.schema(), std::move(rd), streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
         return r;
     }
 

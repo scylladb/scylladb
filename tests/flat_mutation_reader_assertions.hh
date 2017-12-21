@@ -131,21 +131,10 @@ public:
     }
 
     flat_reader_assertions& produces(const mutation& m) {
-        BOOST_TEST_MESSAGE(sprint("Expecting a partition with key %s", m));
-        produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
-        auto produced_m = mutation(m.decorated_key(), m.schema());
-        produced_m.partition().apply(m.partition().partition_tombstone());
-        auto mfopt = read_next();
-        while (mfopt && !mfopt->is_end_of_partition()) {
-            produced_m.apply(*mfopt);
-            mfopt = read_next();
-        }
-        if (!mfopt) {
-            BOOST_FAIL("Expected a partition end before the end of stream");
-        }
-        if (m != produced_m) {
-            BOOST_FAIL(sprint("Expected: partition %s, got: %s", m, produced_m));
-        }
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        BOOST_REQUIRE(bool(mo));
+        memory::disable_failure_guard dfg;
+        assert_that(*mo).is_equal_to(m);
         return *this;
     }
 
@@ -212,6 +201,20 @@ public:
     flat_reader_assertions& fast_forward_to(position_range pr) {
         _reader.fast_forward_to(std::move(pr)).get();
         return *this;
+    }
+
+    mutation_assertion next_mutation() {
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        BOOST_REQUIRE(bool(mo));
+        return mutation_assertion(std::move(*mo));
+    }
+
+    future<> fill_buffer() {
+        return _reader.fill_buffer();
+    }
+
+    void set_max_buffer_size(size_t size) {
+        _reader.set_max_buffer_size(size);
     }
 };
 

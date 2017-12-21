@@ -96,14 +96,13 @@ static void test_conversion_to_flat_mutation_reader_through_mutation_reader(cons
 
 static void test_conversion(const std::vector<mutation>& mutations) {
     BOOST_REQUIRE(!mutations.empty());
-    auto schema = mutations[0].schema();
     auto flat_reader = flat_mutation_reader_from_mutations(std::vector<mutation>(mutations), streamed_mutation::forwarding::no);
     for (auto& m : mutations) {
-        mutation_opt m2 = read_mutation_from_flat_mutation_reader(schema, flat_reader).get0();
+        mutation_opt m2 = read_mutation_from_flat_mutation_reader(flat_reader).get0();
         BOOST_REQUIRE(m2);
         BOOST_REQUIRE_EQUAL(m, *m2);
     }
-    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(schema, flat_reader).get0());
+    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(flat_reader).get0());
 }
 
 /*

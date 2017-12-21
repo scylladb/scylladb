@@ -885,7 +885,7 @@ SEASTAR_TEST_CASE(wrong_range) {
         return do_with(make_dkey(uncompressed_schema(), "todata"), [sstp] (auto& key) {
             auto s = columns_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
-            return read_mutation_from_flat_mutation_reader(s, *rd).then([sstp, s, &key, rd] (auto mutation) {
+            return read_mutation_from_flat_mutation_reader(*rd).then([sstp, s, &key, rd] (auto mutation) {
                 return make_ready_future<>();
             });
         });
