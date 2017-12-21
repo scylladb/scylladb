@@ -89,10 +89,6 @@ public:
         static const resource_set resources;
         return resources;
     }
-
-    virtual future<> validate_configuration() const override {
-        return make_ready_future();
-    }
 };
 
 }

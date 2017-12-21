@@ -340,7 +340,3 @@ const auth::resource_set& auth::default_authorizer::protected_resources() {
     static const resource_set resources({ resource::data(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
 }
-
-future<> auth::default_authorizer::validate_configuration() const {
-    return make_ready_future();
-}

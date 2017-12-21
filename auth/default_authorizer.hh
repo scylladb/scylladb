@@ -84,8 +84,6 @@ public:
 
     virtual const resource_set& protected_resources() override;
 
-    virtual future<> validate_configuration() const override;
-
 private:
     future<> modify(const authenticated_user& performer, permission_set, resource, sstring, sstring);
 

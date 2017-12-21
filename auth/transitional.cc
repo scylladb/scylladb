@@ -247,10 +247,6 @@ public:
     virtual const resource_set& protected_resources() override {
         return _authorizer->protected_resources();
     }
-
-    virtual future<> validate_configuration() const override {
-        return _authorizer->validate_configuration();
-    }
 };
 
 }

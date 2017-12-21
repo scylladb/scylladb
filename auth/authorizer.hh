@@ -137,11 +137,6 @@ public:
     /// System resources used internally as part of the implementation. These are made inaccessible to users.
     ///
     virtual const resource_set& protected_resources() = 0;
-
-    ///
-    /// Validate configuration, if applicable.
-    ///
-    virtual future<> validate_configuration() const = 0;
 };
 
 }
