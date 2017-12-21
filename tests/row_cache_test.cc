@@ -105,7 +105,7 @@ snapshot_source make_decorated_snapshot_source(snapshot_source src, std::functio
 mutation_source make_source_with(mutation m) {
     return mutation_source([m] (schema_ptr s, const dht::partition_range&, const query::partition_slice&, const io_priority_class&, tracing::trace_state_ptr, streamed_mutation::forwarding fwd) {
         assert(m.schema() == s);
-        return make_reader_returning(m, std::move(fwd));
+        return flat_mutation_reader_from_mutations({m}, std::move(fwd));
     });
 }
 
