@@ -1200,3 +1200,90 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
         check_next_partition(combined[2]);
     });
 }
+
+SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones) {
+    return async([&] {
+        storage_service_for_tests ssft;
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
+        auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
+
+        mutation m1 = ss.new_mutation("pk");
+        m1.partition().apply_delete(*s, rt1);
+        mutation m2 = m1;
+        m2.partition().apply_delete(*s, rt2);
+        ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
+
+        std::vector<flat_mutation_reader> readers;
+
+        mutation_source ds1 = create_sstable(s, {m1})->as_mutation_source();
+        mutation_source ds2 = create_sstable(s, {m2})->as_mutation_source();
+
+        // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
+        auto range = ss.make_ckey_range(0, 3);
+
+        {
+            auto slice = partition_slice_builder(*s).with_range(range).build();
+            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, slice));
+            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, slice));
+
+            auto rd = make_combined_reader(s, std::move(readers),
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+
+            auto prange = position_range(range);
+            mutation result(m1.decorated_key(), m1.schema());
+
+            rd.consume_pausable([&] (mutation_fragment&& mf) {
+                if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
+                    BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mf, range));
+                }
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
+        }
+
+        // Check fast_forward_to()
+        {
+
+            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+                nullptr, streamed_mutation::forwarding::yes));
+            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+                nullptr, streamed_mutation::forwarding::yes));
+
+            auto rd = make_combined_reader(s, std::move(readers),
+                streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+
+            auto prange = position_range(range);
+            mutation result(m1.decorated_key(), m1.schema());
+
+            rd.consume_pausable([&](mutation_fragment&& mf) {
+                BOOST_REQUIRE(!mf.position().has_clustering_key());
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            rd.fast_forward_to(prange).get();
+
+            position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
+            auto consume_clustered = [&] (mutation_fragment&& mf) {
+                position_in_partition::less_compare less(*s);
+                if (less(mf.position(), last_pos)) {
+                    BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mf, last_pos));
+                }
+                last_pos = position_in_partition(mf.position());
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            };
+
+            rd.consume_pausable(consume_clustered).get();
+            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
+            rd.consume_pausable(consume_clustered).get();
+
+            assert_that(result).is_equal_to(m1 + m2);
+        }
+    });
+}
