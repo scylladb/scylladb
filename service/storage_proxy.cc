@@ -2955,10 +2955,13 @@ void storage_proxy::handle_read_error(std::exception_ptr eptr, bool range) {
     }
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, db::consistency_level cl,
-                              tracing::trace_state_ptr trace_state,
-                              clock_type::time_point timeout) {
+future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>
+storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector&& partition_ranges,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state,
+        clock_type::time_point timeout,
+        replicas_per_token_range preferred_replicas) {
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     exec.reserve(partition_ranges.size());
 
@@ -2982,10 +2985,14 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, dht::parti
         });
     }, std::move(merger));
 
-    return f.handle_exception([exec = std::move(exec), p = shared_from_this()] (std::exception_ptr eptr) {
-        // hold onto exec until read is complete
-        p->handle_read_error(eptr, false);
-        return make_exception_future<foreign_ptr<lw_shared_ptr<query::result>>>(eptr);
+    return f.then_wrapped([exec = std::move(exec), p = shared_from_this()] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+        if (f.failed()) {
+            auto eptr = f.get_exception();
+            // hold onto exec until read is complete
+            p->handle_read_error(eptr, false);
+            return make_exception_future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>(eptr);
+        }
+        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>(std::move(f.get0()), replicas_per_token_range{});
     });
 }
 
@@ -3108,10 +3115,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     });
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges, db::consistency_level cl,
-                                         tracing::trace_state_ptr trace_state,
-                                         clock_type::time_point timeout) {
+future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>
+storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+        dht::partition_range_vector partition_ranges,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state,
+        clock_type::time_point timeout,
+        replicas_per_token_range preferred_replicas) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     dht::partition_range_vector ranges;
@@ -3156,23 +3166,26 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             merger(std::move(r));
         }
 
-        return merger.get();
+        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>(merger.get(), replicas_per_token_range{});
     });
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
+future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>
 storage_proxy::query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
-    db::consistency_level cl, tracing::trace_state_ptr trace_state,
-    clock_type::time_point timeout)
+    db::consistency_level cl,
+    tracing::trace_state_ptr trace_state,
+    clock_type::time_point timeout,
+    replicas_per_token_range preferred_replicas)
 {
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
         slogger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
-        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout)).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
+        return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout), std::move(preferred_replicas)).then(
+                [query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res, replicas_per_token_range&& preferred_replicas) {
             if (res->buf().is_linearized()) {
                 res->ensure_counts();
                 slogger.trace("query_result id={}, size={}, rows={}, partitions={}", query_id, res->buf().size(), *res->row_count(), *res->partition_count());
@@ -3180,23 +3193,26 @@ storage_proxy::query(schema_ptr s,
                 slogger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
             qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
-            return std::move(res);
+            return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>(
+                    std::move(res), std::move(preferred_replicas));
         });
     }
 
-    return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout));
+    return do_query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout), std::move(preferred_replicas));
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
+future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>
 storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     tracing::trace_state_ptr trace_state,
-    clock_type::time_point timeout)
+    clock_type::time_point timeout,
+    replicas_per_token_range preferred_replicas)
 {
     static auto make_empty = [] {
-        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
+        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range>(
+                make_foreign(make_lw_shared<query::result>()), replicas_per_token_range{});
     };
 
     auto& slice = cmd->slice;
@@ -3210,11 +3226,16 @@ storage_proxy::do_query(schema_ptr s,
 
     if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
         try {
-            return query_singular(cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout)).finally([lc, p] () mutable {
-                    p->_stats.read.mark(lc.stop().latency());
-                    if (lc.is_start()) {
-                        p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
-                    }
+            return query_singular(cmd,
+                    std::move(partition_ranges),
+                    cl,
+                    std::move(trace_state),
+                    std::move(timeout),
+                    std::move(preferred_replicas)).finally([lc, p] () mutable {
+                p->_stats.read.mark(lc.stop().latency());
+                if (lc.is_start()) {
+                    p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
+                }
             });
         } catch (const no_such_column_family&) {
             _stats.read.mark(lc.stop().latency());
@@ -3222,7 +3243,12 @@ storage_proxy::do_query(schema_ptr s,
         }
     }
 
-    return query_partition_key_range(cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout)).finally([lc, p] () mutable {
+    return query_partition_key_range(cmd,
+            std::move(partition_ranges),
+            cl,
+            std::move(trace_state),
+            std::move(timeout),
+            std::move(preferred_replicas)).finally([lc, p] () mutable {
         p->_stats.range.mark(lc.stop().latency());
         if (lc.is_start()) {
             p->_stats.estimated_range.add(lc.latency(), p->_stats.range.hist.count);

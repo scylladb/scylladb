@@ -68,6 +68,8 @@ class abstract_write_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 
+using replicas_per_token_range = std::unordered_map<nonwrapping_range<dht::token>, std::vector<utils::UUID>>;
+
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
@@ -227,11 +229,12 @@ private:
     seastar::metrics::metric_groups _metrics;
 private:
     void uninit_messaging_service();
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd,
-                                                                     dht::partition_range_vector&& partition_ranges,
-                                                                     db::consistency_level cl,
-                                                                     tracing::trace_state_ptr trace_state,
-                                                                     clock_type::time_point timeout);
+    future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range> query_singular(lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector&& partition_ranges,
+            db::consistency_level cl,
+            tracing::trace_state_ptr trace_state,
+            clock_type::time_point timeout,
+            replicas_per_token_range preferred_replicas);
     response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
@@ -262,12 +265,12 @@ private:
                                                                                                    clock_type::time_point timeout,
                                                                                                    query::digest_algorithm da,
                                                                                                    uint64_t max_size  = query::result_memory_limiter::maximum_result_size);
-    future<foreign_ptr<lw_shared_ptr<query::result>>>
-    query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
-                              dht::partition_range_vector partition_ranges,
-                              db::consistency_level cl,
-                              tracing::trace_state_ptr trace_state,
-                              clock_type::time_point timeout);
+    future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range> query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
+            dht::partition_range_vector partition_ranges,
+            db::consistency_level cl,
+            tracing::trace_state_ptr trace_state,
+            clock_type::time_point timeout,
+            replicas_per_token_range preferred_replicas);
     dht::partition_range_vector get_restricted_ranges(const schema& s, dht::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
@@ -276,11 +279,13 @@ private:
             dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
             uint32_t remaining_row_count, uint32_t remaining_partition_count);
 
-    future<foreign_ptr<lw_shared_ptr<query::result>>> do_query(schema_ptr,
+    future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
-        db::consistency_level cl, tracing::trace_state_ptr trace_state,
-        clock_type::time_point timeout);
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state,
+        clock_type::time_point timeout,
+        replicas_per_token_range preferred_replicas);
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
@@ -313,6 +318,9 @@ private:
 public:
     storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled = {});
     ~storage_proxy();
+    const distributed<database>& get_db() const {
+        return _db;
+    }
     distributed<database>& get_db() {
         return _db;
     }
@@ -378,30 +386,48 @@ public:
      */
     future<> truncate_blocking(sstring keyspace, sstring cfname);
 
+    /**
+     * Default query timeout as defined by the configuration.
+     */
+    clock_type::time_point default_query_timeout() const {
+        return clock_type::now() + std::chrono::milliseconds(get_db().local().get_config().read_request_timeout_in_ms());
+    }
+
     /*
      * Executes data query on the whole cluster.
      *
      * Partitions for each range will be ordered according to decorated_key ordering. Results for
      * each range from "partition_ranges" may appear in any order.
      *
+     * Will consider the preferred_replicas provided by the caller when selecting the replicas to
+     * send read requests to. However this is merely a hint and it is not guaranteed that the read
+     * requests will be sent to all or any of the listed replicas. After the query is done the list
+     * of replicas that served it is also returned.
+     *
      * IMPORTANT: Not all fibers started by this method have to be done by the time it returns so no
      * parameter can be changed after being passed to this method.
      */
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
+    future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range> query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
-        clock_type::time_point timeout);
+        clock_type::time_point timeout,
+        replicas_per_token_range preferred_replicas = {});
 
-    // helper method that uses the default timeout for this query (as specified in the config file)
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr s,
+    /**
+     * query() overload without the preferred_replicas and timeout.
+     *
+     * Convenience overload for code that doesn't care about them.
+     * As timeout the default one is used as defined by the configuration.
+     */
+    future<foreign_ptr<lw_shared_ptr<query::result>>, replicas_per_token_range> query(schema_ptr s,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         tracing::trace_state_ptr trace_state) {
-        auto timeout = clock_type::now() + std::chrono::milliseconds(get_db().local().get_config().read_request_timeout_in_ms());
-        return query(s, cmd, std::move(partition_ranges), cl, std::move(trace_state), std::move(timeout));
+        return query(std::move(s), std::move(cmd), std::move(partition_ranges), std::move(cl),
+                std::move(trace_state), default_query_timeout(), {});
     }
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(

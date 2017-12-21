@@ -215,7 +215,7 @@ private:
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
         return get_local_storage_proxy().query(_schema, std::move(command), std::move(ranges),
                 _options.get_consistency(), _state.get_trace_state()).then(
-                [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
+                [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results, paging_state::replicas_per_token_range) {
                     handle_result(builder, std::move(results), page_size, now);
                 });
     }
