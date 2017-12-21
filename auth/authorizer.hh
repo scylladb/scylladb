@@ -74,8 +74,7 @@ using std::experimental::optional;
 ///
 class authorizer {
 public:
-    virtual ~authorizer() {
-    }
+    virtual ~authorizer() = default;
 
     virtual future<> start() = 0;
 
