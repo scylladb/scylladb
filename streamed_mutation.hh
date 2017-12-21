@@ -670,6 +670,21 @@ public:
         return _impl->operator()();
     }
 
+    // Resolves with a pointer to the next fragment in the stream without consuming it from the stream,
+    // or nullptr if there are no more fragments.
+    // The returned pointer is invalidated by any other call to this object.
+    future<mutation_fragment*> peek() {
+        if (!is_buffer_empty()) {
+            return make_ready_future<mutation_fragment*>(&_impl->_buffer.front());
+        }
+        if (is_end_of_stream()) {
+            return make_ready_future<mutation_fragment*>(nullptr);
+        }
+        return fill_buffer().then([this] {
+            return peek();
+        });
+    }
+
     void set_max_buffer_size(size_t size) {
         _impl->max_buffer_size_in_bytes = size;
     }
