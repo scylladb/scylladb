@@ -92,8 +92,6 @@ public:
         bool _end_of_stream = false;
         schema_ptr _schema;
         friend class flat_mutation_reader;
-        template <typename Source>
-        friend future<bool> fill_buffer_from(flat_mutation_reader::impl&, Source&);
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
