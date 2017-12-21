@@ -276,20 +276,24 @@ public:
         if (!mfo->is_range_tombstone()) {
             BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
         }
-        auto& actual = mfo->as_range_tombstone();
         const schema& s = *_sm.schema();
-        if (!ck_ranges.empty()) {
-            range_tombstone_list actual_list(s);
+        range_tombstone_list actual_list(s);
+        position_in_partition::equal_compare eq(s);
+        while (mutation_fragment* next = _sm.peek().get0()) {
+            if (!next->is_range_tombstone() || !eq(next->position(), mfo->position())) {
+                break;
+            }
+            actual_list.apply(s, _sm().get0()->as_range_tombstone());
+        }
+        actual_list.apply(s, mfo->as_range_tombstone());
+        {
             range_tombstone_list expected_list(s);
-            actual_list.apply(s, actual);
             expected_list.apply(s, rt);
             actual_list.trim(s, ck_ranges);
             expected_list.trim(s, ck_ranges);
             if (!actual_list.equal(s, expected_list)) {
                 BOOST_FAIL(sprint("Expected %s, but got %s", expected_list, actual_list));
             }
-        } else if (!actual.equal(s, rt)) {
-            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, actual));
         }
         return *this;
     }
