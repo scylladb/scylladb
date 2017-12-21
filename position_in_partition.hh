@@ -605,6 +605,11 @@ public:
         // FIXME: Avoid copy
         return _set.find(position_in_partition_with_schema(s.shared_from_this(), position_in_partition(pos))) != _set.end();
     }
+    bool overlaps(const schema& s, const position_range& range) const {
+        // FIXME: Avoid copy
+        auto r = _set.equal_range(make_interval(s, range));
+        return r.first != r.second;
+    }
     // Adds given clustering range to this interval set.
     // The range may overlap with this set.
     void add(const schema& s, const position_range& r) {
