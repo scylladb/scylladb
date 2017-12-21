@@ -2209,13 +2209,14 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
  */
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
-    auto views = make_lw_shared<std::vector<view_ptr>>();
-    return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, views = std::move(views)] (auto&& row) {
-        return create_view_from_table_row(proxy, row).then([views] (auto&& v) {
-            views->push_back(std::move(v));
+    return do_with(std::vector<view_ptr>(), [&] (auto& views) {
+        return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, &views] (auto&& row) {
+            return create_view_from_table_row(proxy, row).then([&views] (auto&& v) {
+                views.push_back(std::move(v));
+            });
+        }).then([&views] {
+            return std::move(views);
         });
-    }).then([views] {
-        return std::move(*views);
     });
 }
 
