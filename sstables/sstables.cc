@@ -2466,11 +2466,10 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 file_input_stream_options options;
                 options.buffer_size = sstable_buffer_size;
                 options.io_priority_class = pc;
-                auto stream = make_file_input_stream(index_file, 0, index_size, std::move(options));
                 return do_with(summary_generator(_components->summary),
-                        [this, &pc, stream = std::move(stream), index_size] (summary_generator& s) mutable {
+                        [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            s, trust_promoted_index::yes, std::move(stream), 0, index_size);
+                            s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size);
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {

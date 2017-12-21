@@ -1027,7 +1027,7 @@ SEASTAR_TEST_CASE(promoted_index_read) {
         schema_ptr s = large_partition_schema();
         return sstables::test(sstp).read_indexes().then([sstp] (index_list vec) {
             BOOST_REQUIRE(vec.size() == 1);
-            BOOST_REQUIRE(vec.front().get_promoted_index_bytes().size() == 468);
+            BOOST_REQUIRE(vec.front().get_promoted_index_size() == 452);
         });
     });
 }

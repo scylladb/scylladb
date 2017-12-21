@@ -79,7 +79,7 @@ public:
         auto l = make_lw_shared<index_list>();
         return do_with(_sst->get_index_reader(default_priority_class()), [l] (auto& ir) {
             return ir->read_partition_data().then([&, l] {
-                l->push_back(ir->current_partition_entry());
+                l->push_back(std::move(ir->current_partition_entry()));
             }).then([&, l] {
                 return repeat([&, l] {
                     return ir->advance_to_next_partition().then([&, l] {
@@ -87,13 +87,13 @@ public:
                             return stop_iteration::yes;
                         }
 
-                        l->push_back(ir->current_partition_entry());
+                        l->push_back(std::move(ir->current_partition_entry()));
                         return stop_iteration::no;
                     });
                 });
             });
         }).then([l] {
-            return *l;
+            return std::move(*l);
         });
     }
 
