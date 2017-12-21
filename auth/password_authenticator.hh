@@ -61,6 +61,8 @@ class password_authenticator : public authenticator {
     seastar::abort_source _as;
 
 public:
+    static db::consistency_level consistency_for_user(const sstring& username);
+
     password_authenticator(cql3::query_processor&, ::service::migration_manager&);
 
     ~password_authenticator();
@@ -88,8 +90,6 @@ public:
     virtual const resource_set& protected_resources() const override;
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
-
-    static db::consistency_level consistency_for_user(const sstring& username);
 
 private:
     future<bool> has_existing_users() const;
