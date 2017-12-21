@@ -404,7 +404,7 @@ public:
     const partition_start& as_partition_start() const & { return _data->_partition_start; }
     const partition_end& as_end_of_partition() const & { return _data->_partition_end; }
 
-    // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
+    // Requirements: mergeable_with(mf)
     void apply(const schema& s, mutation_fragment&& mf);
 
     template<typename Consumer>
@@ -491,6 +491,10 @@ public:
             return as_end_of_partition().equal(s, other.as_end_of_partition());
         }
         abort();
+    }
+
+    bool mergeable_with(const mutation_fragment& mf) const {
+        return _kind == mf._kind && _kind != kind::range_tombstone;
     }
 
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);

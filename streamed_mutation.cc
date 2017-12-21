@@ -145,8 +145,7 @@ const clustering_key_prefix& mutation_fragment::key() const
 
 void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 {
-    assert(_kind == mf._kind);
-    assert(!is_range_tombstone());
+    assert(mergeable_with(mf));
     _data->_size_in_bytes = stdx::nullopt;
     switch (_kind) {
     case mutation_fragment::kind::partition_start:
