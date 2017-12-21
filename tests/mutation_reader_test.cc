@@ -607,7 +607,7 @@ SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
             {mut3}
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
                 streamed_mutation::forwarding::no,
                 mutation_reader::forwarding::no);
@@ -643,7 +643,7 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
             {mut3c}
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
                 streamed_mutation::forwarding::no,
                 mutation_reader::forwarding::no);
@@ -678,7 +678,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
             {mut3d},
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(),
                         std::move(readers_mutations),
                         dht::partition_range::make_ending_with(dht::partition_range::bound(pkeys[1], false))),

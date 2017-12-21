@@ -352,6 +352,10 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        std::unique_ptr<reader_selector>,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding);
+flat_mutation_reader make_combined_reader(schema_ptr schema,
         flat_mutation_reader&& a,
         flat_mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,

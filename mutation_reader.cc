@@ -300,6 +300,16 @@ future<> combined_mutation_reader::fast_forward_to(position_range pr) {
 }
 
 flat_mutation_reader make_combined_reader(schema_ptr schema,
+        std::unique_ptr<reader_selector> selectors,
+        streamed_mutation::forwarding fwd_sm,
+        mutation_reader::forwarding fwd_mr) {
+    return make_flat_mutation_reader<combined_mutation_reader>(schema,
+            std::move(selectors),
+            fwd_sm,
+            fwd_mr);
+}
+
+flat_mutation_reader make_combined_reader(schema_ptr schema,
         std::vector<flat_mutation_reader> readers,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
