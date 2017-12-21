@@ -1316,6 +1316,10 @@ public:
         return *_stats;
     }
 
+    void set_querier_cache_entry_ttl(std::chrono::seconds entry_ttl) {
+        _querier_cache.set_entry_ttl(entry_ttl);
+    }
+
     friend class distributed_loader;
 };
 

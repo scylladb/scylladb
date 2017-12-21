@@ -142,6 +142,19 @@ querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, co
     return can_use::yes;
 }
 
+// The time-to-live of a cache-entry.
+const std::chrono::seconds querier_cache::default_entry_ttl{10};
+
+void querier_cache::scan_cache_entries() {
+    const auto now = lowres_clock::now();
+
+    auto it = _meta_entries.begin();
+    const auto end = _meta_entries.end();
+    while (it != end && it->is_expired(now)) {
+        it = _meta_entries.erase(it);
+    }
+}
+
 querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state) {
     const auto queriers = _entries.equal_range(key);
 
@@ -150,8 +163,8 @@ querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, co
         return _entries.end();
     }
 
-    const auto it = std::find_if(queriers.first, queriers.second, [&] (const std::pair<const utils::UUID, querier>& elem) {
-        return elem.second.matches(range);
+    const auto it = std::find_if(queriers.first, queriers.second, [&] (const std::pair<const utils::UUID, entry>& elem) {
+        return elem.second.get().matches(range);
     });
 
     if (it == queriers.second) {
@@ -159,6 +172,12 @@ querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, co
     }
     tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
     return it;
+}
+
+querier_cache::querier_cache(std::chrono::seconds entry_ttl)
+    : _expiry_timer([this] { scan_cache_entries(); })
+    , _entry_ttl(entry_ttl) {
+    _expiry_timer.arm_periodic(entry_ttl / 2);
 }
 
 void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
@@ -171,7 +190,8 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     }
 
     tracing::trace(trace_state, "Caching querier with key {}", key);
-    _entries.emplace(key, std::move(q));
+    const auto it = _entries.emplace(key, entry::param{std::move(q), _entry_ttl}).first;
+    _meta_entries.emplace_back(_entries, it);
 }
 
 querier querier_cache::lookup(utils::UUID key,
@@ -186,7 +206,7 @@ querier querier_cache::lookup(utils::UUID key,
         return create_fun();
     }
 
-    auto q = std::move(it->second);
+    auto q = std::move(it->second).get();
     _entries.erase(it);
 
     const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
@@ -197,6 +217,11 @@ querier querier_cache::lookup(utils::UUID key,
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     return create_fun();
+}
+
+void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
+    _entry_ttl = entry_ttl;
+    _expiry_timer.rearm(lowres_clock::now() + _entry_ttl / 2, _entry_ttl / 2);
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)

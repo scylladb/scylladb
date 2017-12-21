@@ -24,6 +24,7 @@
 #include "mutation_compactor.hh"
 #include "mutation_reader.hh"
 
+#include <seastar/core/weak_ptr.hh>
 #include <variant>
 
 /// One-stop object for serving queries.
@@ -219,18 +220,88 @@ public:
 ///     page will have a different schema version or will start from a position
 ///     that is before the end position of the previous page. lookup() will
 ///     recognize these cases and drop the previous querier and create a new one.
+///
+/// Inserted queriers will have a TTL. When this expires the querier is
+/// evicted. This is to avoid excess and unnecessary resource usage due to
+/// abandoned queriers.
 class querier_cache {
-    using entries = std::unordered_map<utils::UUID, querier>;
+public:
+    static const std::chrono::seconds default_entry_ttl;
+
+private:
+    class entry : public weakly_referencable<entry> {
+        querier _querier;
+        lowres_clock::time_point _expires;
+    public:
+        // Since entry cannot be moved and unordered_map::emplace can pass only
+        // a single param to it's mapped-type we need to force a single-param
+        // constructor for entry. Oh C++...
+        struct param {
+            querier q;
+            std::chrono::seconds ttl;
+        };
+
+        explicit entry(param p)
+            : _querier(std::move(p.q))
+            , _expires(lowres_clock::now() + p.ttl) {
+        }
+
+        bool is_expired(const lowres_clock::time_point& now) const {
+            return _expires <= now;
+        }
+
+        const querier& get() const & {
+            return _querier;
+        }
+
+        querier&& get() && {
+            return std::move(_querier);
+        }
+    };
+
+    using entries = std::unordered_map<utils::UUID, entry>;
+
+    class meta_entry {
+        entries& _entries;
+        weak_ptr<entry> _entry_ptr;
+        entries::iterator _entry_it;
+
+    public:
+        meta_entry(entries& e, entries::iterator it)
+            : _entries(e)
+            , _entry_ptr(it->second.weak_from_this())
+            , _entry_it(it) {
+        }
+
+        ~meta_entry() {
+            if (_entry_ptr) {
+                _entries.erase(_entry_it);
+            }
+        }
+
+        bool is_expired(const lowres_clock::time_point& now) const {
+            return !_entry_ptr || _entry_ptr->is_expired(now);
+        }
+    };
 
     entries _entries;
+    std::list<meta_entry> _meta_entries;
+    timer<lowres_clock> _expiry_timer;
+    std::chrono::seconds _entry_ttl;
 
     entries::iterator find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state);
 
+    void scan_cache_entries();
+
 public:
-    querier_cache() = default;
+    querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;
+
+    // this is captured
+    querier_cache(querier_cache&&) = delete;
+    querier_cache& operator=(querier_cache&&) = delete;
 
     void insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
 
@@ -257,6 +328,9 @@ public:
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state,
             const noncopyable_function<querier()>& create_fun);
+
+
+    void set_entry_ttl(std::chrono::seconds entry_ttl);
 };
 
 class querier_cache_context {
