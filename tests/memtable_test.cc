@@ -81,6 +81,28 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
     });
 }
 
+SEASTAR_TEST_CASE(test_memtable_with_many_versions_conforms_to_mutation_source) {
+    return seastar::async([] {
+        lw_shared_ptr<memtable> mt;
+        std::vector<flat_mutation_reader> readers;
+        run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& muts) {
+            readers.clear();
+            mt = make_lw_shared<memtable>(s);
+
+            for (auto&& m : muts) {
+                mt->apply(m);
+                // Create reader so that each mutation is in a separate version
+                flat_mutation_reader rd = mt->make_flat_reader(s, dht::partition_range::make_singular(m.decorated_key()));
+                rd.set_max_buffer_size(1);
+                rd.fill_buffer().get();
+                readers.push_back(std::move(rd));
+            }
+
+            return mt->as_data_source();
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_memtable_flush_reader) {
     // Memtable flush reader is severly limited, it always assumes that
     // the full partition range is being read and that
