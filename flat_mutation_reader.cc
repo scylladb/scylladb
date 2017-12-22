@@ -398,6 +398,19 @@ flat_mutation_reader make_empty_flat_reader(schema_ptr s) {
 }
 
 flat_mutation_reader
+flat_mutation_reader_from_mutations(std::vector<mutation> ms,
+                                    const query::partition_slice& slice,
+                                    streamed_mutation::forwarding fwd) {
+    std::vector<mutation> sliced_ms;
+    for (auto& m : ms) {
+        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*m.schema(), slice, m.key());
+        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
+        sliced_ms.emplace_back(m.schema(), m.decorated_key(), std::move(mp));
+    }
+    return flat_mutation_reader_from_mutations(sliced_ms, query::full_partition_range, fwd);
+}
+
+flat_mutation_reader
 flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
     class reader final : public flat_mutation_reader::impl {
         std::vector<mutation> _mutations;
