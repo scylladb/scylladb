@@ -467,6 +467,34 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
 
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
+template <typename Underlying>
+class delegating_reader : public flat_mutation_reader::impl {
+    Underlying _underlying;
+public:
+    delegating_reader(Underlying&& r) : impl(to_reference(r).schema()), _underlying(std::forward<Underlying>(r)) { }
+    virtual future<> fill_buffer() override {
+        return fill_buffer_from(to_reference(_underlying)).then([this] (bool underlying_finished) {
+            _end_of_stream = underlying_finished;
+        });
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        _end_of_stream = false;
+        forward_buffer_to(pr.start());
+        return to_reference(_underlying).fast_forward_to(std::move(pr));
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            to_reference(_underlying).next_partition();
+        }
+        _end_of_stream = to_reference(_underlying).is_end_of_stream() && to_reference(_underlying).is_buffer_empty();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        _end_of_stream = false;
+        clear_buffer();
+        return to_reference(_underlying).fast_forward_to(pr);
+    }
+};
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m);
