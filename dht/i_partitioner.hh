@@ -567,6 +567,12 @@ public:
         , _weight(weight)
     { }
 
+    explicit ring_position_view(const dht::token& token, int8_t weight = -1)
+        : _token(&token)
+        , _key(nullptr)
+        , _weight(weight)
+    { }
+
     const partition_key* key() const { return _key; }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
