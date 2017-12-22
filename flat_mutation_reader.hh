@@ -467,6 +467,8 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
 
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
+inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
+
 template <typename Underlying>
 class delegating_reader : public flat_mutation_reader::impl {
     Underlying _underlying;

@@ -1021,23 +1021,17 @@ private:
         mutation_source _underlying;
         ::throttle& _throttle;
     private:
-        class reader : public mutation_reader::impl {
+        class reader : public delegating_reader<flat_mutation_reader> {
             throttle& _throttle;
-            mutation_reader _reader;
         public:
-            reader(throttle& t, mutation_reader r)
-                    : _throttle(t)
-                    , _reader(std::move(r))
+            reader(throttle& t, flat_mutation_reader r)
+                    : delegating_reader<flat_mutation_reader>(std::move(r))
+                    , _throttle(t)
             {}
-
-            virtual future<streamed_mutation_opt> operator()() override {
-                return _reader().finally([this] () {
+            virtual future<> fill_buffer() override {
+                return delegating_reader<flat_mutation_reader>::fill_buffer().finally([this] () {
                     return _throttle.enter();
                 });
-            }
-
-            virtual future<> fast_forward_to(const dht::partition_range& pr) override {
-                return _reader.fast_forward_to(pr);
             }
         };
     public:
@@ -1046,9 +1040,9 @@ private:
             , _throttle(t)
         { }
 
-        mutation_reader make_reader(schema_ptr s, const dht::partition_range& pr,
+        flat_mutation_reader make_reader(schema_ptr s, const dht::partition_range& pr,
                 const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-            return make_mutation_reader<reader>(_throttle, _underlying(s, pr, slice, pc, std::move(trace), std::move(fwd)));
+            return make_flat_mutation_reader<reader>(_throttle, _underlying.make_flat_mutation_reader(s, pr, slice, pc, std::move(trace), std::move(fwd)));
         }
     };
     lw_shared_ptr<impl> _impl;
