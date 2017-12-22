@@ -60,8 +60,11 @@ namespace cql3 {
 
 namespace statements {
 
-static future<::shared_ptr<cql_transport::messages::result_message>> void_result_message() {
-    return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(nullptr);
+using result_message = cql_transport::messages::result_message;
+using result_message_ptr = ::shared_ptr<result_message>;
+
+static future<result_message_ptr> void_result_message() {
+    return make_ready_future<result_message_ptr>(nullptr);
 }
 
 //
@@ -82,7 +85,7 @@ future<> create_role_statement::check_access(const service::client_state& state)
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 create_role_statement::execute(distributed<service::storage_proxy>&,
                                service::query_state& state,
                                const query_options&) {
@@ -144,7 +147,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 alter_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
@@ -194,7 +197,7 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 drop_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
@@ -244,7 +247,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 list_roles_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
@@ -265,13 +268,11 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     make_column_spec("login", boolean_type)});
 
     static const auto make_results = [](auth::role_manager& rm, std::unordered_set<sstring>&& roles)
-            -> future<::shared_ptr<cql_transport::messages::result_message>> {
-        using cql_transport::messages::result_message;
-
+            -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
 
         if (roles.empty()) {
-            return make_ready_future<::shared_ptr<result_message>>(
+            return make_ready_future<result_message_ptr>(
                 ::make_shared<result_message::rows>(std::move(results)));
         }
 
@@ -291,8 +292,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     results->add_column_value(boolean_type->decompose(login));
                 });
             }).then([&results] {
-                return make_ready_future<::shared_ptr<result_message>>(
-                        ::make_shared<result_message::rows>(std::move(results)));
+                return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(std::move(results)));
             });
         });
     };
@@ -338,7 +338,7 @@ future<> grant_role_statement::check_access(const service::client_state& state) 
     return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 grant_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
