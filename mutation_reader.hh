@@ -576,10 +576,6 @@ public:
         , _presence_checker_factory(make_lw_shared(std::move(pcf)))
     { }
     // For sources which don't care about the mutation_reader::forwarding flag (always fast forwardable)
-    mutation_source(std::function<mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
-        : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
-            return fn(s, range, slice, pc, std::move(tr), fwd);
-        }) {}
     mutation_source(std::function<flat_mutation_reader(schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr, streamed_mutation::forwarding)> fn)
         : mutation_source([fn = std::move(fn)] (schema_ptr s, partition_range range, const query::partition_slice& slice, io_priority pc, tracing::trace_state_ptr tr, streamed_mutation::forwarding fwd, mutation_reader::forwarding) {
         return fn(s, range, slice, pc, std::move(tr), fwd);
