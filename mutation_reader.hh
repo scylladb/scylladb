@@ -476,14 +476,6 @@ mutation_reader mutation_reader_from_flat_mutation_reader(flat_mutation_reader&&
 class mutation_source {
     using partition_range = const dht::partition_range&;
     using io_priority = const io_priority_class&;
-    using func_type = std::function<mutation_reader(schema_ptr,
-        partition_range,
-        const query::partition_slice&,
-        io_priority,
-        tracing::trace_state_ptr,
-        streamed_mutation::forwarding,
-        mutation_reader::forwarding
-    )>;
     using flat_reader_factory_type = std::function<flat_mutation_reader(schema_ptr,
                                                                         partition_range,
                                                                         const query::partition_slice&,
@@ -508,31 +500,6 @@ class mutation_source {
                                                                tracing::trace_state_ptr trace_state,
                                                                streamed_mutation::forwarding fwd,
                                                                mutation_reader::forwarding fwd_mr) = 0;
-    };
-    class mutation_reader_mutation_source : public impl {
-        func_type _fn;
-    public:
-        mutation_reader_mutation_source(func_type&& fn) : _fn(std::move(fn)) { }
-        virtual mutation_reader make_mutation_reader(schema_ptr s,
-                                                     partition_range range,
-                                                     const query::partition_slice& slice,
-                                                     io_priority pc,
-                                                     tracing::trace_state_ptr trace_state,
-                                                     streamed_mutation::forwarding fwd,
-                                                     mutation_reader::forwarding fwd_mr) override {
-            return _fn(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-        }
-        virtual flat_mutation_reader make_flat_mutation_reader(schema_ptr s,
-                                                               partition_range range,
-                                                               const query::partition_slice& slice,
-                                                               io_priority pc,
-                                                               tracing::trace_state_ptr trace_state,
-                                                               streamed_mutation::forwarding fwd,
-                                                               mutation_reader::forwarding fwd_mr) override {
-            return flat_mutation_reader_from_mutation_reader(s,
-                                                             _fn(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr),
-                                                             fwd);
-        }
     };
     class flat_mutation_reader_mutation_source : public impl {
         flat_reader_factory_type _fn;
