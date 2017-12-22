@@ -39,6 +39,7 @@
 #include "tests/sstable_assertions.hh"
 #include "tests/test_services.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "simple_schema.hh"
 
 using namespace sstables;
 
@@ -1123,5 +1124,51 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                     .produces(m)
                     .produces_end_of_stream();
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto dir = make_lw_shared<tmpdir>();
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
+        auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
+
+        mutation m1 = ss.new_mutation("pk");
+        ss.add_row(m1, ss.make_ckey(0), "v0"); // So that we don't hit workaround for #1203, which would cover up bugs
+        m1.partition().apply_delete(*s, rt1);
+        m1.partition().apply_delete(*s, ss.make_ckey(4), ss.new_tombstone());
+
+        auto rt3 = ss.make_range_tombstone(ss.make_ckey_range(20, 21));
+        m1.partition().apply_delete(*s, ss.make_ckey(20), ss.new_tombstone());
+        m1.partition().apply_delete(*s, rt3);
+
+        mutation m2 = ss.new_mutation("pk");
+        m2.partition().apply_delete(*s, rt2);
+        ss.add_row(m2, ss.make_ckey(4), "v2"); // position inside rt2
+
+        auto mt1 = make_lw_shared<memtable>(s);
+        mt1->apply(m1);
+
+        auto mt2 = make_lw_shared<memtable>(s);
+        mt2->apply(m2);
+
+        auto sst = sstables::make_sstable(s,
+                                          dir->path,
+                                          1 /* generation */,
+                                          sstables::sstable::version_types::ka,
+                                          sstables::sstable::format_types::big);
+        sstable_writer_config cfg;
+        sst->write_components(make_combined_reader(s,
+            mt1->make_flat_reader(s),
+            mt2->make_flat_reader(s)), 1, s, cfg).get();
+        sst->load().get();
+
+        assert_that(sst->as_mutation_source()(s))
+            .produces(m1 + m2)
+            .produces_end_of_stream();
     });
 }
