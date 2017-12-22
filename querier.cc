@@ -155,7 +155,11 @@ void querier_cache::scan_cache_entries() {
     auto it = _meta_entries.begin();
     const auto end = _meta_entries.end();
     while (it != end && it->is_expired(now)) {
+        if (*it) {
+            ++_stats.time_based_evictions;
+        }
         it = _meta_entries.erase(it);
+        _stats.population = _entries.size();
     }
 }
 
@@ -210,6 +214,7 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
         const auto end = _meta_entries.end();
         while (it != end && memory_usage >= max_queriers_memory_usage) {
             if (*it) {
+                ++_stats.memory_based_evictions;
                 memory_usage -= it->get_entry().memory_usage();
             }
             it = _meta_entries.erase(it);
@@ -218,6 +223,7 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
 
     const auto it = _entries.emplace(key, entry::param{std::move(q), _entry_ttl}).first;
     _meta_entries.emplace_back(_entries, it);
+    _stats.population = _entries.size();
 }
 
 querier querier_cache::lookup(utils::UUID key,
@@ -228,12 +234,15 @@ querier querier_cache::lookup(utils::UUID key,
         tracing::trace_state_ptr trace_state,
         const noncopyable_function<querier()>& create_fun) {
     auto it = find_querier(key, range, trace_state);
+    ++_stats.lookups;
     if (it == _entries.end()) {
+        ++_stats.misses;
         return create_fun();
     }
 
     auto q = std::move(it->second).get();
     _entries.erase(it);
+    _stats.population = _entries.size();
 
     const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
     if (can_be_used == querier::can_use::yes) {
@@ -242,6 +251,7 @@ querier querier_cache::lookup(utils::UUID key,
     }
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
+    ++_stats.drops;
     return create_fun();
 }
 
@@ -260,7 +270,9 @@ bool querier_cache::evict_one() {
     while (it != end) {
         const auto is_live = bool(*it);
         it = _meta_entries.erase(it);
+        _stats.population = _entries.size();
         if (is_live) {
+            ++_stats.resource_based_evictions;
             return true;
         }
     }

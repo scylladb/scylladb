@@ -2262,6 +2262,29 @@ database::setup_metrics() {
                        sm::description("Counts the total number of failed read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard.")),
 
+        sm::make_derive("querier_cache_lookups", _querier_cache.get_stats().lookups,
+                       sm::description("Counts querier cache lookups (paging queries)")),
+
+        sm::make_derive("querier_cache_misses", _querier_cache.get_stats().misses,
+                       sm::description("Counts querier cache lookups that failed to find a cached querier")),
+
+        sm::make_derive("querier_cache_drops", _querier_cache.get_stats().drops,
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to position mismatch")),
+
+        sm::make_derive("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
+                       sm::description("Counts querier cache entries that timed out and were evicted.")),
+
+        sm::make_derive("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
+                       sm::description("Counts querier cache entries that were evicted to free up resources "
+                                       "(limited by reader concurency limits) necessary to create new readers.")),
+
+        sm::make_derive("querier_cache_memory_based_evictions", _querier_cache.get_stats().memory_based_evictions,
+                       sm::description("Counts querier cache entries that were evicted because the memory usage "
+                                       "of the cached queriers were above the limit.")),
+
+        sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
+                       sm::description("The number of entries currently in the querier cache.")),
+
         sm::make_derive("sstable_read_queue_overloads", _stats->sstable_read_queue_overloaded,
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
                                        "A non-zero value indicates that we have to drop read requests because they arrive faster than we can serve them.")),

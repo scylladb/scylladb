@@ -240,6 +240,26 @@ public:
     static const std::chrono::seconds default_entry_ttl;
     static const size_t max_queriers_memory_usage;
 
+    struct stats {
+        // The number of cache lookups.
+        uint64_t lookups = 0;
+        // The subset of lookups that missed.
+        uint64_t misses = 0;
+        // The subset of lookups that hit but the looked up querier had to be
+        // dropped due to position mismatch.
+        uint64_t drops = 0;
+        // The number of queriers evicted due to their TTL expiring.
+        uint64_t time_based_evictions = 0;
+        // The number of queriers evicted to free up resources to be able to
+        // create new readers.
+        uint64_t resource_based_evictions = 0;
+        // The number of queriers evicted to because the maximum memory usage
+        // was reached.
+        uint64_t memory_based_evictions = 0;
+        // The number of queriers currently in the cache.
+        uint64_t population = 0;
+    };
+
 private:
     class entry : public weakly_referencable<entry> {
         querier _querier;
@@ -312,6 +332,7 @@ private:
     std::list<meta_entry> _meta_entries;
     timer<lowres_clock> _expiry_timer;
     std::chrono::seconds _entry_ttl;
+    stats _stats;
 
     entries::iterator find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state);
 
@@ -360,6 +381,10 @@ public:
     /// Return true if a querier was evicted and false otherwise (if the cache
     /// is empty).
     bool evict_one();
+
+    const stats& get_stats() const {
+        return _stats;
+    }
 };
 
 class querier_cache_context {
