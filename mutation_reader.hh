@@ -567,10 +567,6 @@ private:
     explicit operator bool() const { return bool(_impl); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(func_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
-        : _impl(seastar::make_shared<mutation_reader_mutation_source>(std::move(fn)))
-        , _presence_checker_factory(make_lw_shared(std::move(pcf)))
-    { }
     mutation_source(flat_reader_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
         : _impl(seastar::make_shared<flat_mutation_reader_mutation_source>(std::move(fn)))
         , _presence_checker_factory(make_lw_shared(std::move(pcf)))
