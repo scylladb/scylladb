@@ -4346,11 +4346,12 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
         auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
             auto sst = make_sstable(s, tmp->path, (*gen)++, la, big);
             sst->set_unshared();
-            sst->set_sstable_level(1); // NEEDED for partitioned_sstable_set to actually have an effect
             return sst;
         };
 
         auto compact = [&, s] (std::vector<shared_sstable> all) -> std::vector<shared_sstable> {
+            // NEEDED for partitioned_sstable_set to actually have an effect
+            std::for_each(all.begin(), all.end(), [] (auto& sst) { sst->set_sstable_level(1); });
             auto cm = make_lw_shared<compaction_manager>();
             auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
             cf->mark_ready_for_writes();
@@ -4371,26 +4372,77 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
         auto mut2 = make_insert(tokens[1]);
         auto mut3 = make_insert(tokens[2]);
         auto mut4 = make_insert(tokens[3]);
-        std::vector<shared_sstable> sstables = {
-                make_sstable_containing(sst_gen, {mut1, mut2}),
-                make_sstable_containing(sst_gen, {mut3, mut4})
-        };
 
-        auto result = compact(std::move(sstables));
-        BOOST_REQUIRE_EQUAL(4, result.size());
+        {
+            std::vector<shared_sstable> sstables = {
+                    make_sstable_containing(sst_gen, {mut1, mut2}),
+                    make_sstable_containing(sst_gen, {mut3, mut4})
+            };
 
-        assert_that(sstable_reader(result[0], s))
-                .produces(mut1)
-                .produces_end_of_stream();
-        assert_that(sstable_reader(result[1], s))
-                .produces(mut2)
-                .produces_end_of_stream();
-        assert_that(sstable_reader(result[2], s))
-                .produces(mut3)
-                .produces_end_of_stream();
-        assert_that(sstable_reader(result[3], s))
-                .produces(mut4)
-                .produces_end_of_stream();
+            auto result = compact(std::move(sstables));
+            BOOST_REQUIRE_EQUAL(4, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut1)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[1], s))
+                    .produces(mut2)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[2], s))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[3], s))
+                    .produces(mut4)
+                    .produces_end_of_stream();
+        }
+
+        {
+            // with partitioned_sstable_set having an interval with exclusive lower boundary, example:
+            // [mut1, mut2]
+            // (mut2, mut3]
+            std::vector<shared_sstable> sstables = {
+                    make_sstable_containing(sst_gen, {mut1, mut2}),
+                    make_sstable_containing(sst_gen, {mut2, mut3}),
+                    make_sstable_containing(sst_gen, {mut3, mut4})
+            };
+
+            auto result = compact(std::move(sstables));
+            BOOST_REQUIRE_EQUAL(4, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut1)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[1], s))
+                    .produces(mut2)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[2], s))
+                    .produces(mut3)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[3], s))
+                    .produces(mut4)
+                    .produces_end_of_stream();
+        }
+
+        {
+            // with gap between tables
+            std::vector<shared_sstable> sstables = {
+                    make_sstable_containing(sst_gen, {mut1, mut2}),
+                    make_sstable_containing(sst_gen, {mut4, mut4})
+            };
+
+            auto result = compact(std::move(sstables));
+            BOOST_REQUIRE_EQUAL(3, result.size());
+
+            assert_that(sstable_reader(result[0], s))
+                    .produces(mut1)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[1], s))
+                    .produces(mut2)
+                    .produces_end_of_stream();
+            assert_that(sstable_reader(result[2], s))
+                    .produces(mut4)
+                    .produces_end_of_stream();
+        }
     });
 }
 
