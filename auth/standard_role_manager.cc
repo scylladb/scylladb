@@ -469,14 +469,16 @@ static future<> collect_roles(
         bool recurse,
         std::unordered_set<sstring>& roles) {
     return require_record(qp, grantee_name).then([&qp, &roles, recurse](record r) {
-        return do_for_each(r.member_of, [&qp, &roles, recurse](const sstring& role_name) {
-            roles.insert(role_name);
+        return do_with(std::move(r.member_of), [&qp, &roles, recurse](const std::unordered_set<sstring>& memberships) {
+            return do_for_each(memberships.begin(), memberships.end(), [&qp, &roles, recurse](const sstring& role_name) {
+                roles.insert(role_name);
 
-            if (recurse) {
-                return collect_roles(qp, role_name, true, roles);
-            }
+                if (recurse) {
+                    return collect_roles(qp, role_name, true, roles);
+                }
 
-            return make_ready_future<>();
+                return make_ready_future<>();
+            });
         });
     });
 }
