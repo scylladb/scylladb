@@ -26,6 +26,10 @@
 #include "database.hh"
 #include "memtable-sstable.hh"
 #include "mutation_reader_assertions.hh"
+#include "dht/i_partitioner.hh"
+#include <boost/range/irange.hpp>
+#include <boost/range/adaptor/map.hpp>
+#include "flat_mutation_reader_assertions.hh"
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     auto sst = sst_factory();
@@ -57,7 +61,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     }
 
     // validate the sstable
-    auto rd = assert_that(sst->as_mutation_source()(s));
+    auto rd = assert_that(sst->as_mutation_source().make_flat_mutation_reader(s));
     for (auto&& m : merged) {
         rd.produces(m);
     }
