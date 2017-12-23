@@ -2973,7 +2973,7 @@ sstable::compute_shards_for_this_sstable() const {
     const auto* sm = _components->scylla_metadata
             ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
-    if (!sm) {
+    if (!sm || sm->token_ranges.elements.empty()) {
         token_ranges.push_back(dht::partition_range::make(
                 dht::ring_position::starting_at(get_first_decorated_key().token()),
                 dht::ring_position::ending_at(get_last_decorated_key().token())));
