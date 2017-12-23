@@ -16,6 +16,7 @@
 #include "tmpdir.hh"
 #include "cell_locking.hh"
 #include "mutation_reader_assertions.hh"
+#include "flat_mutation_reader_assertions.hh"
 #include "memtable-sstable.hh"
 
 using namespace sstables;
@@ -117,7 +118,7 @@ void run_sstable_resharding_test() {
         auto shard = shards.front();
         BOOST_REQUIRE(column_family_test::calculate_shard_from_sstable_generation(new_sst->generation()) == shard);
 
-        assert_that(new_sst->as_mutation_source()(s))
+        assert_that(new_sst->as_mutation_source().make_flat_mutation_reader(s))
             .produces(muts.at(shard))
             .produces_end_of_stream();
     }
