@@ -549,7 +549,7 @@ class dummy_incremental_selector : public reader_selector {
     flat_mutation_reader pop_reader() {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
-        _selector_position = _readers_mutations.empty() ? dht::maximum_token() : position();
+        _selector_position = _readers_mutations.empty() ? dht::ring_position::max() : dht::ring_position::starting_at(position());
         return flat_mutation_reader_from_mutation_reader(_s, make_reader_returning_many(std::move(muts), _pr), _fwd);
     }
 public:
@@ -561,13 +561,13 @@ public:
             std::vector<std::vector<mutation>> reader_mutations,
             dht::partition_range pr = query::full_partition_range,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
-        : _s(std::move(s))
+        : reader_selector(s, dht::ring_position::min())
         , _readers_mutations(std::move(reader_mutations))
         , _fwd(fwd)
         , _pr(std::move(pr)) {
         // So we can pop the next reader off the back
         boost::reverse(_readers_mutations);
-        _selector_position = position();
+        _selector_position = dht::ring_position::starting_at(position());
     }
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
         if (_readers_mutations.empty()) {
@@ -581,7 +581,7 @@ public:
             return readers;
         }
 
-        while (!_readers_mutations.empty() && *t >= _selector_position) {
+        while (!_readers_mutations.empty() && *t >= _selector_position.token()) {
             readers.emplace_back(pop_reader());
         }
         return readers;
