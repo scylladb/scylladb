@@ -2250,6 +2250,11 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
+    // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
+    // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
+    if (sm.token_ranges.elements.empty()) {
+        throw std::runtime_error(sprint("Failed to generate sharding metadata for %s", get_filename()));
+    }
     _components->scylla_metadata.emplace();
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
