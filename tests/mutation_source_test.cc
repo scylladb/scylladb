@@ -555,7 +555,7 @@ static void test_range_queries(populate_fn populate) {
 
     auto test_slice = [&] (dht::partition_range r) {
         BOOST_TEST_MESSAGE(sprint("Testing range %s", r));
-        assert_that(ds(s, r))
+        assert_that(ds.make_flat_mutation_reader(s, r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
     };
