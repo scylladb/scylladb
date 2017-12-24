@@ -55,70 +55,32 @@ public:
 };
 
 class role_already_exists : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name;
-
 public:
     explicit role_already_exists(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The '%s' role already exists.", role_name))
-            , _role_name(std::make_shared<sstring>(role_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
+            : roles_argument_exception(sprint("The '%s' role already exists.", role_name)) {
     }
 };
 
 class nonexistant_role : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name;
-
 public:
     explicit nonexistant_role(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The role '%s' does not exist.", role_name))
-            , _role_name(std::make_shared<sstring>(role_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
+            : roles_argument_exception(sprint("The role '%s' does not exist.", role_name)) {
     }
 };
 
 class role_already_included : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name, _grantee_name;
-
 public:
     role_already_included(stdx::string_view grantee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' already includes role '%s'.", grantee_name, role_name))
-            , _role_name(std::make_shared<sstring>(role_name))
-            , _grantee_name(std::make_shared<sstring>(grantee_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
-    }
-
-    stdx::string_view grantee_name() const noexcept {
-        return *_grantee_name;
+                      sprint("'%s' already includes role '%s'.", grantee_name, role_name)) {
     }
 };
 
 class revoke_ungranted_role : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name, _revokee_name;
-
 public:
     revoke_ungranted_role(stdx::string_view revokee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' was not granted role '%s', so it cannot be revoked.", revokee_name, role_name))
-            , _role_name(std::make_shared<sstring>(role_name))
-            , _revokee_name(std::make_shared<sstring>(revokee_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
-    }
-
-    stdx::string_view revokee_name() const noexcept {
-        return *_revokee_name;
+                      sprint("'%s' was not granted role '%s', so it cannot be revoked.", revokee_name, role_name)) {
     }
 };
 
