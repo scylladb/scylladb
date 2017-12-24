@@ -56,7 +56,6 @@ enum class cause {
     STORAGE_SERVICE,
     SCHEMA_CHANGE,
     MIXED_CF,
-    VIEWS,
     ROLES,
 };
 
