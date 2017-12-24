@@ -42,13 +42,17 @@ struct role_config final {
     bool can_login{false};
 };
 
-// Differential update for altering existing roles.
+///
+/// Differential update for altering existing roles.
+///
 struct role_config_update final {
     std::optional<bool> is_superuser{};
     std::optional<bool> can_login{};
 };
 
-// A logical argument error for a role-management operation.
+///
+/// A logical argument error for a role-management operation.
+///
 class roles_argument_exception : public std::invalid_argument {
 public:
     using std::invalid_argument::invalid_argument;
@@ -86,10 +90,12 @@ public:
 
 enum class recursive_role_query { yes, no };
 
-// Abstract role manager.
-//
-// All implementations should throw role-related exceptions as documented, but authorization-related checking is
-// handled by the CQL layer, and not here.
+///
+/// Abstract role manager.
+///
+/// All implementations should throw role-related exceptions as documented, but authorization-related checking is
+/// handled by the CQL layer, and not here.
+///
 class role_manager {
 public:
     virtual ~role_manager() = default;
@@ -100,40 +106,57 @@ public:
 
     virtual future<> stop() = 0;
 
-    // Must throw `role_already_exists` for a role that has previously been created.
+    ///
+    /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
+    ///
     virtual future<> create(stdx::string_view role_name, const role_config&) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<> drop(stdx::string_view role_name) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<> alter(stdx::string_view role_name, const role_config_update&) = 0;
 
-    // Grant `role_name` to `grantee_name`.
-    //
-    // Must throw `nonexistant_role` if either the role or the grantee do not exist.
-    //
-    // Must throw `role_already_included` if granting the role would be redundant, or create a cycle.
+    ///
+    /// Grant `role_name` to `grantee_name`.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if either the role or the grantee do not exist.
+    ///
+    /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
+    /// create a cycle.
+    ///
     virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) = 0;
 
-    // Revoke `role_name` from `revokee_name`.
-    //
-    // Must throw `nonexistant_role` if either the role or the revokee do not exist.
-    //
-    // Must throw `revoke_ungranted_role` if the role was not granted.
+    ///
+    /// Revoke `role_name` from `revokee_name`.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if either the role or the revokee do not exist.
+    ///
+    /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
+    ///
     virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<std::unordered_set<sstring>> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
 
     virtual future<std::unordered_set<sstring>> query_all() const = 0;
 
     virtual future<bool> exists(stdx::string_view role_name) const = 0;
 
-    /// Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<bool> is_superuser(stdx::string_view role_name) const = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<bool> can_login(stdx::string_view role_name) const = 0;
 };
 
