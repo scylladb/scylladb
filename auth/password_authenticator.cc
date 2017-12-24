@@ -288,17 +288,13 @@ future<> auth::password_authenticator::alter(sstring username,
 }
 
 future<> auth::password_authenticator::drop(sstring username) {
-    try {
-        auto query = sprint(
-                "DELETE %s FROM %s WHERE %s = ?",
-                SALTED_HASH,
-                meta::roles_table::qualified_name(),
-                meta::roles_table::role_col_name);
+    auto query = sprint(
+            "DELETE %s FROM %s WHERE %s = ?",
+            SALTED_HASH,
+            meta::roles_table::qualified_name(),
+            meta::roles_table::role_col_name);
 
-        return _qp.process(query, consistency_for_user(username), {username}).discard_result();
-    } catch (std::out_of_range&) {
-        throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
-    }
+    return _qp.process(query, consistency_for_user(username), {username}).discard_result();
 }
 
 const auth::resource_set& auth::password_authenticator::protected_resources() const {
