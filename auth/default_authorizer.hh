@@ -82,7 +82,7 @@ public:
 
     virtual future<> revoke_all(resource) override;
 
-    virtual const resource_set& protected_resources() override;
+    virtual const resource_set& protected_resources() const override;
 
 private:
     future<> modify(permission_set, resource, sstring, sstring);

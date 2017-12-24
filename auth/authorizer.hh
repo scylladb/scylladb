@@ -125,7 +125,7 @@ public:
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.
     ///
-    virtual const resource_set& protected_resources() = 0;
+    virtual const resource_set& protected_resources() const = 0;
 };
 
 }

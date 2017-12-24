@@ -84,7 +84,7 @@ public:
         return make_ready_future();
     }
 
-    virtual const resource_set& protected_resources() override {
+    virtual const resource_set& protected_resources() const override {
         static const resource_set resources;
         return resources;
     }

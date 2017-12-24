@@ -310,7 +310,7 @@ future<> auth::default_authorizer::revoke_all(resource resource) {
     });
 }
 
-const auth::resource_set& auth::default_authorizer::protected_resources() {
+const auth::resource_set& auth::default_authorizer::protected_resources() const {
     static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
 }

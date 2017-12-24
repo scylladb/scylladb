@@ -243,7 +243,7 @@ public:
         return _authorizer->revoke_all(std::move(r));
     }
 
-    virtual const resource_set& protected_resources() override {
+    virtual const resource_set& protected_resources() const override {
         return _authorizer->protected_resources();
     }
 };
