@@ -732,10 +732,6 @@ inline flat_mutation_reader make_restricted_flat_reader(const restricted_mutatio
     return make_restricted_flat_reader(config, std::move(ms), std::move(s), range, full_slice);
 }
 
-template<>
-struct move_constructor_disengages<mutation_source> {
-    enum { value = true };
-};
 using mutation_source_opt = optimized_optional<mutation_source>;
 
 template<typename Consumer>

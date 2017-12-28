@@ -455,11 +455,11 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
         }
         mutation_fragment_opt read_next() {
             if (_cr && (!_rt || _cmp(_cr->position(), _rt->position()))) {
-                auto cr = move_and_disengage(_cr);
+                auto cr = std::exchange(_cr, { });
                 prepare_next_clustering_row();
                 return cr;
             } else if (_rt) {
-                auto rt = move_and_disengage(_rt);
+                auto rt = std::exchange(_rt, { });
                 prepare_next_range_tombstone();
                 return rt;
             }

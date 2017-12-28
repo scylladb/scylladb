@@ -379,10 +379,6 @@ public:
     }
 };
 
-template<>
-struct move_constructor_disengages<flat_mutation_reader> {
-    enum { value = true };
-};
 using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
 
 template<typename Impl, typename... Args>

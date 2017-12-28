@@ -43,7 +43,6 @@
 #include "schema.hh"
 #include "mutation.hh"
 #include "utils/i_filter.hh"
-#include "utils/optimized_optional.hh"
 #include "core/stream.hh"
 #include "writer.hh"
 #include "metadata_collector.hh"
@@ -58,6 +57,8 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "flat_mutation_reader.hh"
+
+#include <seastar/util/optimized_optional.hh>
 
 namespace seastar {
 class thread_scheduling_group;

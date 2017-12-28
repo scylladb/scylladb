@@ -350,7 +350,7 @@ public:
         // was not called, and below we will lose one clustering row!
         assert(!_ready);
         if (!_skip_in_progress) {
-            _ready = move_and_disengage(_in_progress);
+            _ready = std::exchange(_in_progress, { });
             return push_ready_fragments_with_ready_set();
         } else {
             _in_progress = { };
@@ -690,7 +690,7 @@ public:
     }
 
     stdx::optional<new_mutation> get_mutation() {
-        return move_and_disengage(_mutation);
+        return std::exchange(_mutation, { });
     }
 
     // Pushes ready fragments into the streamed_mutation's buffer.
