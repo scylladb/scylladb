@@ -25,7 +25,6 @@
 
 #include "mutation.hh"
 #include "streamed_mutation.hh"
-#include "utils/move.hh"
 
 std::ostream&
 operator<<(std::ostream& os, const clustering_row& row) {
