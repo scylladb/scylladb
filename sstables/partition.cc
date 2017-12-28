@@ -26,7 +26,6 @@
 #include "keys.hh"
 #include "core/do_with.hh"
 #include "unimplemented.hh"
-#include "utils/move.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"

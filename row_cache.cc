@@ -28,7 +28,6 @@
 #include "memtable.hh"
 #include "partition_snapshot_reader.hh"
 #include <chrono>
-#include "utils/move.hh"
 #include <boost/version.hpp>
 #include <sys/sdt.h>
 #include "stdx.hh"
