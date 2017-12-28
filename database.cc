@@ -31,7 +31,6 @@
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
-#include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
 #include "core/seastar.hh"
 #include <seastar/core/sleep.hh>
