@@ -102,6 +102,15 @@ public:
         return r;
     }
 
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
+        std::vector<bytes_opt> r;
+        for (auto&& e : _restrictions) {
+            auto&& value = e.second->value(options);
+            r.emplace_back(value);
+        }
+        return r;
+    }
+
     /**
      * Returns the restriction associated to the specified column.
      *

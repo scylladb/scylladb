@@ -66,6 +66,8 @@ public:
      */
     virtual std::vector<const column_definition*> get_column_defs() const = 0;
 
+    virtual std::vector<bytes_opt> values(const query_options& options) const = 0;
+
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
      *
