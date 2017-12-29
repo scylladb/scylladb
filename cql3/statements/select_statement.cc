@@ -518,8 +518,8 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
     auto& db = proxy.local().get_db().local();
     const auto& view = db.find_column_family(_schema->ks_name(), index_table_name);
     dht::partition_range_vector partition_ranges;
-    for (const auto& entry : _restrictions->get_non_pk_restriction()) {
-        auto pk = partition_key::from_optional_exploded(*view.schema(), entry.second->values(options));
+    for (const auto& restriction : _restrictions->index_restrictions()) {
+        auto pk = partition_key::from_optional_exploded(*view.schema(), restriction->values(options));
         auto dk = dht::global_partitioner().decorate_key(*view.schema(), pk);
         auto range = dht::partition_range::make_singular(dk);
         partition_ranges.emplace_back(range);
