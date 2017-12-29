@@ -305,10 +305,11 @@ public:
     std::vector<bytes_opt> values(const query_options& options) const override {
         auto src = values_as_keys(options);
         std::vector<bytes_opt> res;
-        std::transform(src.begin(), src.end(), std::back_inserter(res), [this](const ValueType & r) {
-            auto view = r.representation();
-            return bytes(view.begin(), view.end());
-        });
+        for (const ValueType& r : src) {
+            for (const auto& component : r.components()) {
+                res.emplace_back(component);
+            }
+        }
         return res;
     }
     std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
