@@ -26,12 +26,10 @@
 
 namespace utils {
 
-template<typename Transform>
-size_t dynamic_bitset::do_find_first(Transform&& transform) const
+size_t dynamic_bitset::find_first_set() const
 {
     size_t pos = 0;
     for (auto v : _bits) {
-        v = transform(v);
         if (v) {
             pos += count_trailing_zeros(v);
             break;
@@ -41,12 +39,11 @@ size_t dynamic_bitset::do_find_first(Transform&& transform) const
     return pos < _bits_count ? pos : npos;
 }
 
-template<typename Transform>
-size_t dynamic_bitset::do_find_next(size_t n, Transform&& transform) const
+size_t dynamic_bitset::find_next_set(size_t n) const
 {
     size_t pos = align_down(++n, bits_per_int);
     auto it = _bits.begin() + n / bits_per_int;
-    auto v = transform(*it);
+    auto v = *it;
     v &= ~mask_lower_bits(n % bits_per_int);
     if (v) {
         pos += count_trailing_zeros(v);
@@ -54,7 +51,7 @@ size_t dynamic_bitset::do_find_next(size_t n, Transform&& transform) const
     }
     pos += bits_per_int;
     for (++it; it != _bits.end(); ++it) {
-        auto v = transform(*it);
+        auto v = *it;
         if (v) {
             pos += count_trailing_zeros(v);
             return pos < _bits_count ? pos : npos;
@@ -64,11 +61,10 @@ size_t dynamic_bitset::do_find_next(size_t n, Transform&& transform) const
     return npos;
 }
 
-template<typename Transform>
-size_t dynamic_bitset::do_find_last(Transform&& transform) const
+size_t dynamic_bitset::find_last_set() const
 {
     auto it = _bits.rbegin();
-    auto v = transform(*it);
+    auto v = *it;
     auto d = align_up(_bits_count, bits_per_int) - _bits_count;
     v &= ~mask_higher_bits(d);
     auto pos = (_bits.size() - 1) * bits_per_int;
@@ -77,76 +73,12 @@ size_t dynamic_bitset::do_find_last(Transform&& transform) const
     }
     for (++it; it != _bits.rend(); ++it) {
         pos -= bits_per_int;
-        v = transform(*it);
+        v = *it;
         if (v) {
             return pos + bits_per_int - count_leading_zeros(v) - 1;
         }
     }
     return npos;
-}
-
-template<typename Transform>
-size_t dynamic_bitset::do_find_previous(size_t n, Transform&& transform) const
-{
-    if (!n) {
-        return npos;
-    }
-    auto it = _bits.begin() + n / bits_per_int;
-    auto v = transform(*it);
-    v &= mask_lower_bits(n % bits_per_int);
-    auto pos = (std::distance(_bits.begin(), it)) * bits_per_int;
-    if (v) {
-        return pos + bits_per_int - count_leading_zeros(v) - 1;
-    }
-    while (it != _bits.begin()) {
-        --it;
-        pos -= bits_per_int;
-        v = transform(*it);
-        if (v) {
-            return pos + bits_per_int - count_leading_zeros(v) - 1;
-        }
-    }
-    return npos;
-}
-
-size_t dynamic_bitset::find_first_set() const
-{
-    return do_find_first([] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_first_clear() const
-{
-    return do_find_first([] (auto x) { return ~x; });
-}
-
-size_t dynamic_bitset::find_next_set(size_t n) const
-{
-    return do_find_next(n, [] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_next_clear(size_t n) const
-{
-    return do_find_next(n, [] (auto x) { return ~x; });
-}
-
-size_t dynamic_bitset::find_last_set() const
-{
-    return do_find_last([] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_previous_set(size_t n) const
-{
-    return do_find_previous(n, [] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_last_clear() const
-{
-    return do_find_last([] (auto x) { return ~x; });
-}
-
-size_t dynamic_bitset::find_previous_clear(size_t n) const
-{
-    return do_find_previous(n, [] (auto x) { return ~x; });
 }
 
 void dynamic_bitset::resize(size_t n, bool set)

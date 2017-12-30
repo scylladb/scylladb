@@ -78,15 +78,6 @@ BOOST_AUTO_TEST_CASE(test_find_first_next) {
     } while (i < 176);
     BOOST_REQUIRE_EQUAL(bits.find_next_set(i), utils::dynamic_bitset::npos);
 
-    i = bits.find_first_clear();
-    BOOST_REQUIRE_EQUAL(i, 1);
-    do {
-        auto j = bits.find_next_clear(i);
-        BOOST_REQUIRE_EQUAL(i + 2, j);
-        i = j;
-    } while (i < 177);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(i), utils::dynamic_bitset::npos);
-
     for (size_t i = 0; i < 178; i += 4) {
         bits.clear(i);
     }
@@ -99,19 +90,6 @@ BOOST_AUTO_TEST_CASE(test_find_first_next) {
         i = j;
     } while (i < 174);
     BOOST_REQUIRE_EQUAL(bits.find_next_set(i), utils::dynamic_bitset::npos);
-
-    i = bits.find_first_clear();
-    BOOST_REQUIRE_EQUAL(i, 0);
-    do {
-        auto j = bits.find_next_clear(i);
-        if (i % 4 == 1) {
-            BOOST_REQUIRE_EQUAL(i + 2, j);
-        } else {
-            BOOST_REQUIRE_EQUAL(i + 1, j);
-        }
-        i = j;
-    } while (i < 177);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(i), utils::dynamic_bitset::npos);
 
     bits.resize(0);
     bits.resize(222);
@@ -139,21 +117,6 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     size_t i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 176);
-    do {
-        auto j = bits.find_previous_set(i);
-        BOOST_REQUIRE_EQUAL(i - 2, j);
-        i = j;
-    } while (i > 0);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(i), utils::dynamic_bitset::npos);
-
-    i = bits.find_last_clear();
-    BOOST_REQUIRE_EQUAL(i, 177);
-    do {
-        auto j = bits.find_previous_clear(i);
-        BOOST_REQUIRE_EQUAL(i - 2, j);
-        i = j;
-    } while (i > 1);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_clear(i), utils::dynamic_bitset::npos);
 
     for (size_t i = 0; i < 178; i += 4) {
         bits.clear(i);
@@ -161,25 +124,6 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 174);
-    do {
-        auto j = bits.find_previous_set(i);
-        BOOST_REQUIRE_EQUAL(i - 4, j);
-        i = j;
-    } while (i > 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(i), utils::dynamic_bitset::npos);
-
-    i = bits.find_last_clear();
-    BOOST_REQUIRE_EQUAL(i, 177);
-    do {
-        auto j = bits.find_previous_clear(i);
-        if (i % 4 == 3) {
-            BOOST_REQUIRE_EQUAL(i - 2, j);
-        } else {
-            BOOST_REQUIRE_EQUAL(i - 1, j);
-        }
-        i = j;
-    } while (i > 0);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_clear(i), utils::dynamic_bitset::npos);
 
     bits.resize(0);
     bits.resize(222);
@@ -187,10 +131,6 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
     bits.set(201);
 
     BOOST_REQUIRE_EQUAL(bits.find_last_set(), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(202), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(201), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(5), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(4), utils::dynamic_bitset::npos);
 }
 
 BOOST_AUTO_TEST_CASE(test_resize_grow) {
@@ -215,6 +155,5 @@ BOOST_AUTO_TEST_CASE(test_resize_grow) {
     BOOST_REQUIRE(bits.test(3));
 
     bits.resize(124, true);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(3), utils::dynamic_bitset::npos);
     BOOST_REQUIRE_EQUAL(bits.find_last_set(), 123);
 }

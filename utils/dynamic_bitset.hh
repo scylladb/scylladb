@@ -46,14 +46,6 @@ private:
     static int_type mask_higher_bits(size_t n) {
         return ~mask_lower_bits(bits_per_int - n);
     }
-    template<typename Transform>
-    size_t do_find_first(Transform&& transform) const;
-    template<typename Transform>
-    size_t do_find_next(size_t n, Transform&& transform) const;
-    template<typename Transform>
-    size_t do_find_last(Transform&& transform) const;
-    template<typename Transform>
-    size_t do_find_previous(size_t n, Transform&& transform) const;
 public:
     enum : size_t {
         npos = std::numeric_limits<size_t>::max()
@@ -75,13 +67,8 @@ public:
     size_t size() const { return _bits_count; }
 
     size_t find_first_set() const;
-    size_t find_first_clear() const;
     size_t find_next_set(size_t n) const;
-    size_t find_next_clear(size_t n) const;
     size_t find_last_set() const;
-    size_t find_previous_set(size_t n) const;
-    size_t find_last_clear() const;
-    size_t find_previous_clear(size_t n) const;
 
     void resize(size_t n, bool set = false);
 };
