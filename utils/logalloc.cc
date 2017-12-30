@@ -391,13 +391,13 @@ static inline bool can_allocate_more_memory(size_t size)
 // We prefer using high-address segments, and returning low-address segments to the seastar
 // allocator in order to segregate lsa and non-lsa memory, to reduce fragmentation.
 class segment_pool {
-    std::vector<segment_descriptor> _segments;
+    memory::memory_layout _layout;
     uintptr_t _segments_base; // The address of the first segment
+    std::vector<segment_descriptor> _segments;
     size_t _segments_in_use{};
     utils::dynamic_bitset _lsa_owned_segments_bitmap; // owned by this
     utils::dynamic_bitset _lsa_free_segments_bitmap;  // owned by this, but not in use
     size_t _free_segments = 0;
-    memory::memory_layout _layout;
     size_t _current_emergency_reserve_goal = 1;
     size_t _emergency_reserve_max = 30;
     bool _allocation_failure_flag = false;
@@ -426,6 +426,9 @@ private:
     }
     size_t idx_from_segment(segment* seg) const {
         return seg - reinterpret_cast<segment*>(_segments_base);
+    }
+    size_t max_segments() const {
+        return (_layout.end - _segments_base) / segment::size;
     }
 public:
     segment_pool();
@@ -639,12 +642,11 @@ void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept
 
 segment_pool::segment_pool()
     : _layout(memory::get_memory_layout())
+    , _segments_base(align_down(_layout.start, (uintptr_t)segment::size))
+    , _segments(max_segments())
+    , _lsa_owned_segments_bitmap(max_segments())
+    , _lsa_free_segments_bitmap(max_segments())
 {
-    _segments_base = align_down(_layout.start, (uintptr_t)segment::size);
-    auto max_segments = (_layout.end - _segments_base) / segment::size;
-    _segments.resize(max_segments);
-    _lsa_owned_segments_bitmap.resize(max_segments);
-    _lsa_free_segments_bitmap.resize(max_segments);
     refill_emergency_reserve();
 }
 

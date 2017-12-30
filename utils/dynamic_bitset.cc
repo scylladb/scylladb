@@ -81,18 +81,10 @@ size_t dynamic_bitset::find_last_set() const
     return npos;
 }
 
-void dynamic_bitset::resize(size_t n, bool set)
+dynamic_bitset::dynamic_bitset(size_t nr_bits)
+    : _bits(align_up(nr_bits, bits_per_int) / bits_per_int)
+    , _bits_count(nr_bits)
 {
-    if (_bits_count && _bits_count < n) {
-        auto d = align_up(_bits_count, bits_per_int) - _bits_count;
-        if (set) {
-            _bits.back() |= mask_higher_bits(d);
-        } else {
-            _bits.back() &= ~mask_higher_bits(d);
-        }
-    }
-    _bits.resize(align_up(n, bits_per_int) / bits_per_int, set ? all_set : 0);
-    _bits_count = n;
 }
 
 }

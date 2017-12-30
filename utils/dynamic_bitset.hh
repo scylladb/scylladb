@@ -51,6 +51,8 @@ public:
         npos = std::numeric_limits<size_t>::max()
     };
 public:
+    explicit dynamic_bitset(size_t nr_bits);
+
     bool test(size_t n) const {
         auto idx = n / bits_per_int;
         return _bits[idx] & (int_type(1u) << (n % bits_per_int));
@@ -69,8 +71,6 @@ public:
     size_t find_first_set() const;
     size_t find_next_set(size_t n) const;
     size_t find_last_set() const;
-
-    void resize(size_t n, bool set = false);
 };
 
 }

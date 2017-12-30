@@ -26,8 +26,7 @@
 #include "utils/dynamic_bitset.hh"
 
 BOOST_AUTO_TEST_CASE(test_set_clear_test) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -58,8 +57,7 @@ BOOST_AUTO_TEST_CASE(test_set_clear_test) {
 }
 
 BOOST_AUTO_TEST_CASE(test_find_first_next) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -91,21 +89,10 @@ BOOST_AUTO_TEST_CASE(test_find_first_next) {
     } while (i < 174);
     BOOST_REQUIRE_EQUAL(bits.find_next_set(i), utils::dynamic_bitset::npos);
 
-    bits.resize(0);
-    bits.resize(222);
-    bits.set(4);
-    bits.set(201);
-
-    BOOST_REQUIRE_EQUAL(bits.find_first_set(), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(3), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(4), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(200), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(201), utils::dynamic_bitset::npos);
 }
 
 BOOST_AUTO_TEST_CASE(test_find_last_prev) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -124,36 +111,4 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 174);
-
-    bits.resize(0);
-    bits.resize(222);
-    bits.set(4);
-    bits.set(201);
-
-    BOOST_REQUIRE_EQUAL(bits.find_last_set(), 201);
-}
-
-BOOST_AUTO_TEST_CASE(test_resize_grow) {
-    utils::dynamic_bitset bits;
-
-    bits.resize(1);
-    BOOST_REQUIRE(!bits.test(0));
-
-    bits.resize(2, true);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
-
-    bits.resize(3);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
-    BOOST_REQUIRE(!bits.test(2));
-
-    bits.resize(4, true);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
-    BOOST_REQUIRE(!bits.test(2));
-    BOOST_REQUIRE(bits.test(3));
-
-    bits.resize(124, true);
-    BOOST_REQUIRE_EQUAL(bits.find_last_set(), 123);
 }
