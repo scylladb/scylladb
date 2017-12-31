@@ -1305,7 +1305,9 @@ future<> sstable::open_data() {
         _data_file  = std::get<file>(std::get<1>(files).get());
         return this->update_info_for_opened_data();
     }).then([this] {
-        _shards = compute_shards_for_this_sstable();
+        if (_shards.empty()) {
+            _shards = compute_shards_for_this_sstable();
+        }
     });
 }
 
@@ -2318,6 +2320,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
     prepare_file_writer();
     _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
+    _sst._shards = { shard };
 }
 
 static sstable_enabled_features all_features() {
