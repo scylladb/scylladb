@@ -110,18 +110,6 @@ public:
             return _c(rt1.start_bound(), rt2.start_bound());
         }
     };
-    template<typename Hasher>
-    void feed_hash(Hasher& h, const schema& s) const {
-        start.feed_hash(h, s);
-        // For backward compatibility, don't consider new fields if
-        // this could be an old-style, overlapping, range tombstone.
-        if (!start.equal(s, end) || start_kind != bound_kind::incl_start || end_kind != bound_kind::incl_end) {
-            ::feed_hash(h, start_kind);
-            end.feed_hash(h, s);
-            ::feed_hash(h, end_kind);
-        }
-        ::feed_hash(h, tomb);
-    }
     friend void swap(range_tombstone& rt1, range_tombstone& rt2) {
         range_tombstone tmp(std::move(rt2), without_link());
         rt2.move_assign(std::move(rt1));
@@ -190,6 +178,22 @@ private:
             container_type::node_algorithms::replace_node(other_link.this_ptr(), _link.this_ptr());
             container_type::node_algorithms::init(other_link.this_ptr());
         }
+    }
+};
+
+template<>
+struct appending_hash<range_tombstone>  {
+    template<typename Hasher>
+    void operator()(Hasher& h, const range_tombstone& value, const schema& s) const {
+        feed_hash(h, value.start, s);
+        // For backward compatibility, don't consider new fields if
+        // this could be an old-style, overlapping, range tombstone.
+        if (!value.start.equal(s, value.end) || value.start_kind != bound_kind::incl_start || value.end_kind != bound_kind::incl_end) {
+            feed_hash(h, value.start_kind);
+            feed_hash(h, value.end, s);
+            feed_hash(h, value.end_kind);
+        }
+        feed_hash(h, value.tomb);
     }
 };
 

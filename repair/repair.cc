@@ -471,13 +471,13 @@ private:
     }
 
     void consume_range_tombstone_start(const range_tombstone& rt) {
-        rt.start.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.start, _schema);
         feed_hash(_hasher, rt.start_kind);
         feed_hash(_hasher, rt.tomb);
     }
 
     void consume_range_tombstone_end(const range_tombstone& rt) {
-        rt.end.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.end, _schema);
         feed_hash(_hasher, rt.end_kind);
     }
 

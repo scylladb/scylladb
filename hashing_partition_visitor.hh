@@ -60,7 +60,7 @@ public:
     }
 
     virtual void accept_row_tombstone(const range_tombstone& rt) {
-        rt.feed_hash(_h, _s);
+        feed_hash(_h, rt, _s);
     }
 
     virtual void accept_row(position_in_partition_view pos, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override {
