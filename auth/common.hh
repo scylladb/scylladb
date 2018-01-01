@@ -24,11 +24,12 @@
 #include <chrono>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/resource.hh>
 #include <seastar/core/sstring.hh>
 
-#include "delayed_tasks.hh"
 #include "log.hh"
 #include "seastarx.hh"
 #include "utils/exponential_backoff_retry.hh"
@@ -54,8 +55,6 @@ extern const sstring AUTH_PACKAGE_NAME;
 
 }
 
-extern logging::logger auth_log;
-
 template <class Task>
 future<> once_among_shards(Task&& f) {
     if (engine().cpu_id() == 0u) {
@@ -65,25 +64,12 @@ future<> once_among_shards(Task&& f) {
     return make_ready_future<>();
 }
 
-template <class Task>
-static future<> do_execute_task(Task&& t, exponential_backoff_retry r) {
-    auto f = t();
-    return f.handle_exception([t = std::move(t), r = std::move(r)] (auto ep) mutable {
-        auth_log.warn("Task failed with error, rescheduling: {}", ep);
-        auto delay = r.retry();
-        return delay.then([t = std::move(t), r = std::move(r)] () mutable {
-            return do_execute_task(std::move(t), std::move(r));
-        });
-    });
+inline future<> delay_until_system_ready(seastar::abort_source& as) {
+    return sleep_abortable(10s, as);
 }
 
-// Task must support being invoked more than once.
-template <class Task, class Clock>
-void delay_until_system_ready(delayed_tasks<Clock>& ts, Task t) {
-    ts.schedule_after(10s, [t = std::move(t)] () mutable {
-        return do_execute_task(std::move(t), exponential_backoff_retry(1s, 1min));
-    });
-}
+// Func must support being invoked more than once.
+future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func);
 
 future<> create_metadata_table_if_missing(
         const sstring& table_name,

@@ -39,7 +39,23 @@ const sstring AUTH_PACKAGE_NAME("org.apache.cassandra.auth.");
 
 }
 
-logging::logger auth_log("auth");
+static logging::logger auth_log("auth");
+
+// Func must support being invoked more than once.
+future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func) {
+    struct empty_state { };
+    return delay_until_system_ready(as).then([&as, func = std::move(func)] () mutable {
+        return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
+            return func().then_wrapped([] (auto&& f) -> stdx::optional<empty_state> {
+                if (f.failed()) {
+                    auth_log.warn("Auth task failed with error, rescheduling: {}", f.get_exception());
+                    return { };
+                }
+                return { empty_state() };
+            });
+        });
+    }).discard_result();
+}
 
 future<> create_metadata_table_if_missing(
         const sstring& table_name,

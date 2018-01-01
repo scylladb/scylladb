@@ -26,10 +26,10 @@
 #include <experimental/string_view>
 #include <unordered_set>
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
-#include "delayed_tasks.hh"
 #include "stdx.hh"
 #include "seastarx.hh"
 
@@ -47,23 +47,22 @@ stdx::string_view standard_role_manager_name() noexcept;
 
 class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
-
     ::service::migration_manager& _migration_manager;
-
-    delayed_tasks<> _delayed{};
+    future<> _stopped;
+    seastar::abort_source _as;
 
 public:
     standard_role_manager(cql3::query_processor& qp, ::service::migration_manager& mm)
-            : _qp(qp), _migration_manager(mm) {
+            : _qp(qp)
+            , _migration_manager(mm)
+            , _stopped(make_ready_future<>()) {
     }
 
     virtual stdx::string_view qualified_java_name() const noexcept override;
 
     virtual future<> start() override;
 
-    virtual future<> stop() override {
-        return make_ready_future();
-    }
+    virtual future<> stop() override;
 
     virtual future<>
     create(const authenticated_user& performer, stdx::string_view role_name, const role_config&) override;

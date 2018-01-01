@@ -24,6 +24,7 @@
 #include <experimental/string_view>
 #include <memory>
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
@@ -33,7 +34,6 @@
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
-#include "delayed_tasks.hh"
 #include "seastarx.hh"
 #include "stdx.hh"
 
@@ -86,7 +86,8 @@ class service final {
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
 
-    delayed_tasks<> _delayed{};
+    future<> _stopped;
+    seastar::abort_source _as;
 
 public:
     service(
