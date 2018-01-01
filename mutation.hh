@@ -157,7 +157,7 @@ struct appending_hash<mutation> {
     template<typename Hasher>
     void operator()(Hasher& h, const mutation& m) const {
         const schema& s = *m.schema();
-        m.key().feed_hash(h, s);
+        feed_hash(h, m.key(), s);
         m.partition().feed_hash(h, s);
     }
 };

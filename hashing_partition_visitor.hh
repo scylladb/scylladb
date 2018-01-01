@@ -67,7 +67,7 @@ public:
         if (dummy) {
             return;
         }
-        pos.key().feed_hash(_h, _s);
+        feed_hash(_h, pos.key(), _s);
         feed_hash(_h, deleted_at);
         feed_hash(_h, rm);
     }

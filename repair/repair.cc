@@ -526,7 +526,7 @@ public:
         : _schema(s), _cmp(s), _rt_list(s) { }
 
     void consume_new_partition(const dht::decorated_key& dk) {
-        dk.key().feed_hash(_hasher, _schema);
+        feed_hash(_hasher, dk.key(), _schema);
     }
 
     stop_iteration consume(tombstone t) {
@@ -545,7 +545,7 @@ public:
     stop_iteration consume(const clustering_row& cr) {
         consume_range_tombstones_until(cr);
 
-        cr.key().feed_hash(_hasher, _schema);
+        feed_hash(_hasher, cr.key(), _schema);
         feed_hash(_hasher, cr.tomb());
         feed_hash(_hasher, cr.marker());
         cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
