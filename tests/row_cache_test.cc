@@ -24,6 +24,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/alloc_failure_injector.hh>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -2731,5 +2732,102 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
         assert_that(cache.make_reader(s.schema()))
             .produces(m1 + m2)
             .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        memtable_snapshot_source underlying(gen.schema());
+        schema_ptr s = gen.schema();
+
+        auto m0 = gen();
+        m0.partition().make_fully_continuous();
+        circular_buffer<mutation> versions;
+        size_t last_generation = 0;
+        underlying.apply(m0);
+        versions.emplace_back(m0);
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+        auto pr = dht::partition_range::make_singular(m0.decorated_key());
+        auto make_reader = [&] (const query::partition_slice& slice) {
+            auto rd = cache.make_reader(s, pr, slice);
+            auto smo = rd().get0();
+            BOOST_REQUIRE(smo);
+            streamed_mutation& sm = *smo;
+            sm.set_max_buffer_size(3);
+            return std::move(sm);
+        };
+
+        const int n_readers = 3;
+        std::vector<size_t> generations(n_readers);
+        auto gc_versions = [&] {
+            auto n_live = last_generation - *boost::min_element(generations) + 1;
+            while (versions.size() > n_live) {
+                versions.pop_front();
+            }
+        };
+
+        bool done = false;
+        auto readers = parallel_for_each(boost::irange(0, n_readers), [&] (auto id) {
+            generations[id] = last_generation;
+            return seastar::async([&, id] {
+                while (!done) {
+                    auto oldest_generation = last_generation;
+                    generations[id] = oldest_generation;
+                    gc_versions();
+
+                    auto slice = partition_slice_builder(*s)
+                        .with_ranges(gen.make_random_ranges(1))
+                        .build();
+
+                    auto rd = make_reader(slice);
+                    auto actual = mutation_from_streamed_mutation(rd).get0();
+
+                    auto&& ranges = slice.row_ranges(*s, actual.key());
+                    actual.partition().row_tombstones().trim(*s, ranges);
+
+                    auto n_to_consider = last_generation - oldest_generation + 1;
+                    auto possible_versions = boost::make_iterator_range(versions.end() - n_to_consider, versions.end());
+                    if (!boost::algorithm::any_of(possible_versions, [&] (const mutation& m) {
+                        auto m2 = m.sliced(ranges);
+                        if (n_to_consider == 1) {
+                            assert_that(actual).is_equal_to(m2);
+                        }
+                        return m2 == actual;
+                    })) {
+                        BOOST_FAIL(sprint("Mutation read doesn't match any expected version, slice: %s, read: %s\nexpected: [%s]",
+                            slice, actual, ::join(",\n", possible_versions)));
+                    }
+                }
+            });
+        });
+
+        int n_updates = 100;
+        while (!readers.available() && n_updates--) {
+            auto m2 = gen();
+            m2.partition().make_fully_continuous();
+
+            auto mt = make_lw_shared<memtable>(m2.schema());
+            mt->apply(m2);
+            cache.update([&] () noexcept {
+                auto snap = underlying();
+                underlying.apply(m2);
+                auto new_version = versions.back() + m2;
+                versions.emplace_back(std::move(new_version));
+                ++last_generation;
+            }, *mt).get();
+
+            later().get();
+            cache.evict();
+        }
+
+        done = true;
+        readers.get();
+
+        assert_that(cache.make_reader(s))
+            .produces(versions.back());
     });
 }

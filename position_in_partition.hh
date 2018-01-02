@@ -590,6 +590,13 @@ public:
             return tmp;
         }
     };
+    static interval::type make_interval(const schema& s, const position_range& r) {
+        assert(r.start().has_clustering_key());
+        assert(r.end().has_clustering_key());
+        return interval::right_open(
+            position_in_partition_with_schema(s.shared_from_this(), r.start()),
+            position_in_partition_with_schema(s.shared_from_this(), r.end()));
+    }
 public:
     bool equals(const schema& s, const clustering_interval_set& other) const {
         return boost::equal(_set, other._set);
@@ -598,14 +605,15 @@ public:
         // FIXME: Avoid copy
         return _set.find(position_in_partition_with_schema(s.shared_from_this(), position_in_partition(pos))) != _set.end();
     }
+    bool overlaps(const schema& s, const position_range& range) const {
+        // FIXME: Avoid copy
+        auto r = _set.equal_range(make_interval(s, range));
+        return r.first != r.second;
+    }
     // Adds given clustering range to this interval set.
     // The range may overlap with this set.
     void add(const schema& s, const position_range& r) {
-        assert(r.start().has_clustering_key());
-        assert(r.end().has_clustering_key());
-        _set += interval::right_open(
-            position_in_partition_with_schema(s.shared_from_this(), r.start()),
-            position_in_partition_with_schema(s.shared_from_this(), r.end()));
+        _set += make_interval(s, r);
     }
     position_range_iterator begin() const { return {_set.begin()}; }
     position_range_iterator end() const { return {_set.end()}; }

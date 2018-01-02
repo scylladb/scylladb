@@ -829,10 +829,15 @@ class components_writer {
     uint64_t _next_data_offset_to_write_summary = 0;
     // Enforces ratio of summary to data of 1 to N.
     size_t _summary_byte_cost = default_summary_byte_cost;
+    range_tombstone_stream _range_tombstones;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
     uint64_t get_offset() const;
     file_writer index_file_writer(sstable& sst, const io_priority_class& pc);
+    // Emits all tombstones which start before pos.
+    void drain_tombstones(position_in_partition_view pos);
+    void drain_tombstones();
+    void write_tombstone(range_tombstone&&);
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
             consume(tombstone());
@@ -844,7 +849,8 @@ public:
     components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
             _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
             _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-            _next_data_offset_to_write_summary(o._next_data_offset_to_write_summary), _summary_byte_cost(o._summary_byte_cost) {
+            _next_data_offset_to_write_summary(o._next_data_offset_to_write_summary), _summary_byte_cost(o._summary_byte_cost),
+            _range_tombstones(std::move(o._range_tombstones)) {
         o._index_needs_close = false;
     }
 

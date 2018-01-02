@@ -29,6 +29,7 @@
 #include "simple_schema.hh"
 #include "flat_mutation_reader.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "mutation_query.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -880,6 +881,79 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
         .produces_end_of_stream();
 }
 
+static
+void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
+    simple_schema ss;
+    auto s = ss.schema();
+
+    auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
+    auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
+
+    mutation m1 = ss.new_mutation("pk");
+    m1.partition().apply_delete(*s, rt1);
+
+    mutation m2 = ss.new_mutation("pk");;
+    m2.partition().apply_delete(*s, rt2);
+    ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
+
+    mutation_source ds = populate(s, {m1, m2});
+
+    // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
+    auto range = ss.make_ckey_range(0, 3);
+
+    {
+        auto slice = partition_slice_builder(*s).with_range(range).build();
+        auto rd = ds.make_flat_mutation_reader(s, query::full_partition_range, slice);
+
+        auto prange = position_range(range);
+        mutation result(m1.decorated_key(), m1.schema());
+
+        rd.consume_pausable([&] (mutation_fragment&& mf) {
+            if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
+                BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mf, range));
+            }
+            result.partition().apply(*s, std::move(mf));
+            return stop_iteration::no;
+        }).get();
+
+        assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
+    }
+
+    // Check fast_forward_to()
+    {
+        auto rd = ds.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+            nullptr, streamed_mutation::forwarding::yes);
+
+        auto prange = position_range(range);
+        mutation result(m1.decorated_key(), m1.schema());
+
+        rd.consume_pausable([&](mutation_fragment&& mf) {
+            BOOST_REQUIRE(!mf.position().has_clustering_key());
+            result.partition().apply(*s, std::move(mf));
+            return stop_iteration::no;
+        }).get();
+
+        rd.fast_forward_to(prange).get();
+
+        position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
+        auto consume_clustered = [&] (mutation_fragment&& mf) {
+            position_in_partition::less_compare less(*s);
+            if (less(mf.position(), last_pos)) {
+                BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mf, last_pos));
+            }
+            last_pos = position_in_partition(mf.position());
+            result.partition().apply(*s, std::move(mf));
+            return stop_iteration::no;
+        };
+
+        rd.consume_pausable(consume_clustered).get();
+        rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
+        rd.consume_pausable(consume_clustered).get();
+
+        assert_that(result).is_equal_to(m1 + m2);
+    }
+}
+
 void run_mutation_reader_tests(populate_fn populate) {
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
@@ -947,6 +1021,7 @@ void run_flat_mutation_reader_tests(populate_fn populate) {
     run_conversion_to_mutation_reader_tests(populate);
     test_next_partition(populate);
     test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
+    test_slicing_with_overlapping_range_tombstones(populate);
 }
 
 void run_mutation_source_tests(populate_fn populate) {
@@ -1438,19 +1513,25 @@ public:
         return m;
     }
 
-    std::vector<mutation> operator()(size_t n) {
-        std::vector<mutation> mutations;
+    std::vector<dht::decorated_key> make_partition_keys(size_t n) {
+        std::vector<dht::decorated_key> keys;
         for (size_t i = 0; i < n; i++) {
             auto key_blob = bytes(reinterpret_cast<const int8_t*>(&i), sizeof(i));
             auto pkey = partition_key::from_single_value(*_schema, key_blob);
-            auto dkey = dht::global_partitioner().decorate_key(*_schema, std::move(pkey));
+            keys.push_back(dht::global_partitioner().decorate_key(*_schema, std::move(pkey)));
 
+        }
+        boost::sort(keys, dht::decorated_key::less_comparator(_schema));
+        return keys;
+    }
+
+    std::vector<mutation> operator()(size_t n) {
+        auto keys = make_partition_keys(n);
+        std::vector<mutation> mutations;
+        for (auto&& dkey : keys) {
             auto m = operator()();
             mutations.emplace_back(_schema, std::move(dkey), std::move(m.partition()));
         }
-        boost::sort(mutations, [&] (const mutation& a, const mutation& b) {
-            return a.decorated_key().less_compare(*_schema, b.decorated_key());
-        });
         return mutations;
     }
 };
@@ -1467,6 +1548,10 @@ mutation random_mutation_generator::operator()() {
 
 std::vector<mutation> random_mutation_generator::operator()(size_t n) {
     return (*_impl)(n);
+}
+
+std::vector<dht::decorated_key> random_mutation_generator::make_partition_keys(size_t n) {
+    return _impl->make_partition_keys(n);
 }
 
 schema_ptr random_mutation_generator::schema() const {

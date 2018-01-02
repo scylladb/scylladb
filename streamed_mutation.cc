@@ -144,8 +144,7 @@ const clustering_key_prefix& mutation_fragment::key() const
 
 void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 {
-    assert(_kind == mf._kind);
-    assert(!is_range_tombstone());
+    assert(mergeable_with(mf));
     _data->_size_in_bytes = stdx::nullopt;
     switch (_kind) {
     case mutation_fragment::kind::partition_start:
@@ -172,6 +171,23 @@ void mutation_fragment::apply(const schema& s, mutation_fragment&& mf)
 position_in_partition_view mutation_fragment::position() const
 {
     return visit([] (auto& mf) -> position_in_partition_view { return mf.position(); });
+}
+
+position_range mutation_fragment::range() const {
+    switch (_kind) {
+    case kind::static_row:
+        return position_range::for_static_row();
+    case kind::clustering_row:
+        return position_range(position_in_partition(position()), position_in_partition::after_key(key()));
+    case kind::partition_start:
+        return position_range(position_in_partition(position()), position_in_partition::for_static_row());
+    case kind::partition_end:
+        return position_range(position_in_partition(position()), position_in_partition::after_all_clustered_rows());
+    case kind::range_tombstone:
+        auto&& rt = as_range_tombstone();
+        return position_range(position_in_partition(rt.position()), position_in_partition(rt.end_position()));
+    }
+    abort();
 }
 
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
@@ -425,49 +441,30 @@ class mutation_merger final : public streamed_mutation::impl {
         streamed_mutation* reader;
     };
     std::vector<row_and_reader> _readers;
-    range_tombstone_stream _deferred_tombstones;
 private:
     void read_next() {
         if (_readers.empty()) {
-            auto rt = _deferred_tombstones.get_next();
-            if (rt) {
-                push_mutation_fragment(std::move(*rt));
-            } else {
-                _end_of_stream = true;
-            }
+            _end_of_stream = true;
             return;
         }
 
         position_in_partition::less_compare cmp(*_schema);
         auto heap_compare = [&] (auto& a, auto& b) { return cmp(b.row.position(), a.row.position()); };
 
-        auto result = [&] {
-            auto rt = _deferred_tombstones.get_next(_readers.front().row);
-            if (rt) {
-                return std::move(*rt);
-            }
+        auto pop = [&] {
             boost::range::pop_heap(_readers, heap_compare);
             auto mf = std::move(_readers.back().row);
             _next_readers.emplace_back(std::move(_readers.back().reader));
             _readers.pop_back();
             return std::move(mf);
-        }();
+        };
+        auto result = pop();
 
-        while (!_readers.empty()) {
+        while (!_readers.empty() && result.mergeable_with(_readers.front().row)) {
             if (cmp(result.position(), _readers.front().row.position())) {
                 break;
             }
-            boost::range::pop_heap(_readers, heap_compare);
-            if (result.is_range_tombstone()) {
-                auto remainder = result.as_mutable_range_tombstone().apply(*_schema, std::move(_readers.back().row).as_range_tombstone());
-                if (remainder) {
-                    _deferred_tombstones.apply(std::move(*remainder));
-                }
-            } else {
-                result.apply(*_schema, std::move(_readers.back().row));
-            }
-            _next_readers.emplace_back(std::move(_readers.back().reader));
-            _readers.pop_back();
+            result.apply(*_schema, pop());
         }
 
         push_mutation_fragment(std::move(result));
@@ -527,7 +524,6 @@ protected:
         return make_ready_future<>();
     }
     virtual future<> fast_forward_to(position_range pr) override {
-        _deferred_tombstones.forward_to(pr.start());
         forward_buffer_to(pr.start());
         _end_of_stream = false;
 
@@ -541,7 +537,7 @@ protected:
 public:
     mutation_merger(schema_ptr s, dht::decorated_key dk, std::vector<streamed_mutation> readers)
         : streamed_mutation::impl(s, std::move(dk), merge_partition_tombstones(readers))
-        , _original_readers(std::move(readers)), _deferred_tombstones(*s)
+        , _original_readers(std::move(readers))
     {
         _next_readers.reserve(_original_readers.size());
         _readers.reserve(_original_readers.size());

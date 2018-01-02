@@ -352,6 +352,9 @@ public:
 
     position_in_partition_view position() const;
 
+    // Returns the range of positions for which this fragment holds relevant information.
+    position_range range() const;
+
     // Checks if this fragment may be relevant for any range starting at given position.
     bool relevant_for_range(const schema& s, position_in_partition_view pos) const;
 
@@ -404,7 +407,7 @@ public:
     const partition_start& as_partition_start() const & { return _data->_partition_start; }
     const partition_end& as_end_of_partition() const & { return _data->_partition_end; }
 
-    // Requirements: mutation_fragment_kind() == mf.mutation_fragment_kind() && !is_range_tombstone()
+    // Requirements: mergeable_with(mf)
     void apply(const schema& s, mutation_fragment&& mf);
 
     template<typename Consumer>
@@ -491,6 +494,15 @@ public:
             return as_end_of_partition().equal(s, other.as_end_of_partition());
         }
         abort();
+    }
+
+    // Fragments which have the same position() and are mergeable can be
+    // merged into one fragment with apply() which represents the sum of
+    // writes represented by each of the fragments.
+    // Fragments which have the same position() but are not mergeable
+    // can be emitted one after the other in the stream.
+    bool mergeable_with(const mutation_fragment& mf) const {
+        return _kind == mf._kind && _kind != kind::range_tombstone;
     }
 
     friend std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
@@ -660,6 +672,21 @@ public:
 
     future<mutation_fragment_opt> operator()() {
         return _impl->operator()();
+    }
+
+    // Resolves with a pointer to the next fragment in the stream without consuming it from the stream,
+    // or nullptr if there are no more fragments.
+    // The returned pointer is invalidated by any other call to this object.
+    future<mutation_fragment*> peek() {
+        if (!is_buffer_empty()) {
+            return make_ready_future<mutation_fragment*>(&_impl->_buffer.front());
+        }
+        if (is_end_of_stream()) {
+            return make_ready_future<mutation_fragment*>(nullptr);
+        }
+        return fill_buffer().then([this] {
+            return peek();
+        });
     }
 
     void set_max_buffer_size(size_t size) {

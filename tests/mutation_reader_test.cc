@@ -35,12 +35,14 @@
 #include "tests/sstable_utils.hh"
 #include "tests/simple_schema.hh"
 #include "tests/test_services.hh"
+#include "tests/mutation_source_test.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "cell_locking.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
+#include "partition_slice_builder.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -607,7 +609,7 @@ SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
             {mut3}
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
                 streamed_mutation::forwarding::no,
                 mutation_reader::forwarding::no);
@@ -643,7 +645,7 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
             {mut3c}
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(), std::move(readers_mutations)),
                 streamed_mutation::forwarding::no,
                 mutation_reader::forwarding::no);
@@ -678,7 +680,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
             {mut3d},
         };
 
-        auto reader = make_flat_mutation_reader<combined_mutation_reader>(s.schema(),
+        auto reader = make_combined_reader(s.schema(),
                 std::make_unique<dummy_incremental_selector>(s.schema(),
                         std::move(readers_mutations),
                         dht::partition_range::make_ending_with(dht::partition_range::bound(pkeys[1], false))),
@@ -742,6 +744,14 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
         , mutations);
 }
 
+static
+sstables::shared_sstable create_sstable(schema_ptr s, std::vector<mutation> mutations) {
+    static auto tmp = make_lw_shared<tmpdir>();
+    static int gen = 0;
+    return make_sstable_containing([&] {
+        return make_lw_shared<sstables::sstable>(s, tmp->path, gen++, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+    }, mutations);
+}
 
 class tracking_reader : public flat_mutation_reader::impl {
     flat_mutation_reader _reader;
@@ -1107,5 +1117,207 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
         }
 
         REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+    });
+}
+
+static mutation compacted(const mutation& m) {
+    auto result = m;
+    result.partition().compact_for_compaction(*result.schema(), always_gc, gc_clock::now());
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicing) {
+    return async([&] {
+        storage_service_for_tests ssft;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+
+        const int n_readers = 10;
+        auto keys = gen.make_partition_keys(3);
+        std::vector<mutation> combined;
+        std::vector<flat_mutation_reader> readers;
+        for (int i = 0; i < n_readers; ++i) {
+            std::vector<mutation> muts;
+            for (auto&& key : keys) {
+                mutation m = compacted(gen());
+                muts.push_back(mutation(s, key, std::move(m.partition())));
+            }
+            if (combined.empty()) {
+                combined = muts;
+            } else {
+                int j = 0;
+                for (auto&& m : muts) {
+                    combined[j++].apply(m);
+                }
+            }
+            mutation_source ds = create_sstable(s, muts)->as_mutation_source();
+            readers.push_back(ds.make_flat_mutation_reader(s,
+                dht::partition_range::make({keys[0]}, {keys[0]}),
+                s->full_slice(), default_priority_class(), nullptr,
+                streamed_mutation::forwarding::yes,
+                mutation_reader::forwarding::yes));
+        }
+
+        flat_mutation_reader rd = make_combined_reader(s, std::move(readers),
+            streamed_mutation::forwarding::yes,
+            mutation_reader::forwarding::yes);
+
+        std::vector<query::clustering_range> ranges = gen.make_random_ranges(3);
+
+        auto check_next_partition = [&] (const mutation& expected) {
+            mutation result(expected.decorated_key(), expected.schema());
+
+            rd.consume_pausable([&](mutation_fragment&& mf) {
+                position_in_partition::less_compare less(*s);
+                if (!less(mf.position(), position_in_partition_view::before_all_clustered_rows())) {
+                    BOOST_FAIL(sprint("Received clustering fragment: %s", mf));
+                }
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            for (auto&& range : ranges) {
+                auto prange = position_range(range);
+                rd.fast_forward_to(prange).get();
+                rd.consume_pausable([&](mutation_fragment&& mf) {
+                    if (!mf.relevant_for_range(*s, prange.start())) {
+                        BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mf, prange));
+                    }
+                    position_in_partition::less_compare less(*s);
+                    if (!less(mf.position(), prange.end())) {
+                        BOOST_FAIL(sprint("Received fragment is out of range: %s, range: %s", mf, prange));
+                    }
+                    result.partition().apply(*s, std::move(mf));
+                    return stop_iteration::no;
+                }).get();
+            }
+
+            assert_that(result).is_equal_to(expected, ranges);
+        };
+
+        check_next_partition(combined[0]);
+        rd.fast_forward_to(dht::partition_range::make_singular(keys[2])).get();
+        check_next_partition(combined[2]);
+    });
+}
+
+SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones) {
+    return async([&] {
+        storage_service_for_tests ssft;
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
+        auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
+
+        mutation m1 = ss.new_mutation("pk");
+        m1.partition().apply_delete(*s, rt1);
+        mutation m2 = m1;
+        m2.partition().apply_delete(*s, rt2);
+        ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
+
+        std::vector<flat_mutation_reader> readers;
+
+        mutation_source ds1 = create_sstable(s, {m1})->as_mutation_source();
+        mutation_source ds2 = create_sstable(s, {m2})->as_mutation_source();
+
+        // upper bound ends before the row in m2, so that the raw is fetched after next fast forward.
+        auto range = ss.make_ckey_range(0, 3);
+
+        {
+            auto slice = partition_slice_builder(*s).with_range(range).build();
+            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, slice));
+            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, slice));
+
+            auto rd = make_combined_reader(s, std::move(readers),
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+
+            auto prange = position_range(range);
+            mutation result(m1.decorated_key(), m1.schema());
+
+            rd.consume_pausable([&] (mutation_fragment&& mf) {
+                if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
+                    BOOST_FAIL(sprint("Received fragment which is not relevant for the slice: %s, slice: %s", mf, range));
+                }
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
+        }
+
+        // Check fast_forward_to()
+        {
+
+            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+                nullptr, streamed_mutation::forwarding::yes));
+            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+                nullptr, streamed_mutation::forwarding::yes));
+
+            auto rd = make_combined_reader(s, std::move(readers),
+                streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
+
+            auto prange = position_range(range);
+            mutation result(m1.decorated_key(), m1.schema());
+
+            rd.consume_pausable([&](mutation_fragment&& mf) {
+                BOOST_REQUIRE(!mf.position().has_clustering_key());
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            }).get();
+
+            rd.fast_forward_to(prange).get();
+
+            position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
+            auto consume_clustered = [&] (mutation_fragment&& mf) {
+                position_in_partition::less_compare less(*s);
+                if (less(mf.position(), last_pos)) {
+                    BOOST_FAIL(sprint("Out of order fragment: %s, last pos: %s", mf, last_pos));
+                }
+                last_pos = position_in_partition(mf.position());
+                result.partition().apply(*s, std::move(mf));
+                return stop_iteration::no;
+            };
+
+            rd.consume_pausable(consume_clustered).get();
+            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
+            rd.consume_pausable(consume_clustered).get();
+
+            assert_that(result).is_equal_to(m1 + m2);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
+    return seastar::async([] {
+        // Creates a mutation source which combines N mutation sources with mutation fragments spread
+        // among them in a round robin fashion.
+        auto make_combined_populator = [] (int n_sources) {
+            return [=] (schema_ptr s, const std::vector<mutation>& muts) {
+                std::vector<lw_shared_ptr<memtable>> memtables;
+                for (int i = 0; i < n_sources; ++i) {
+                    memtables.push_back(make_lw_shared<memtable>(s));
+                }
+
+                int source_index = 0;
+                for (auto&& m : muts) {
+                    flat_mutation_reader_from_mutations({m}).consume_pausable([&] (mutation_fragment&& mf) {
+                        mutation mf_m(m.decorated_key(), m.schema());
+                        mf_m.partition().apply(*s, mf);
+                        memtables[source_index++ % memtables.size()]->apply(mf_m);
+                        return stop_iteration::no;
+                    }).get();
+                }
+
+                std::vector<mutation_source> sources;
+                for (auto&& mt : memtables) {
+                    sources.push_back(mt->as_data_source());
+                }
+                return make_combined_mutation_source(std::move(sources));
+            };
+        };
+        run_mutation_source_tests(make_combined_populator(1));
+        run_mutation_source_tests(make_combined_populator(2));
+        run_mutation_source_tests(make_combined_populator(3));
     });
 }

@@ -2085,6 +2085,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
     , _summary_byte_cost(summary_byte_cost())
+    , _range_tombstones(s)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
@@ -2156,13 +2157,32 @@ stop_iteration components_writer::consume(static_row&& sr) {
 }
 
 stop_iteration components_writer::consume(clustering_row&& cr) {
-    ensure_tombstone_is_written();
+    drain_tombstones(cr.position());
     _sst.write_clustered_row(_out, _schema, cr);
     return stop_iteration::no;
 }
 
-stop_iteration components_writer::consume(range_tombstone&& rt) {
+void components_writer::drain_tombstones(position_in_partition_view pos) {
     ensure_tombstone_is_written();
+    while (auto mfo = _range_tombstones.get_next(pos)) {
+        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+    }
+}
+
+void components_writer::drain_tombstones() {
+    ensure_tombstone_is_written();
+    while (auto mfo = _range_tombstones.get_next()) {
+        write_tombstone(std::move(mfo->as_mutable_range_tombstone()));
+    }
+}
+
+stop_iteration components_writer::consume(range_tombstone&& rt) {
+    drain_tombstones(rt.position());
+    _range_tombstones.apply(std::move(rt));
+    return stop_iteration::no;
+}
+
+void components_writer::write_tombstone(range_tombstone&& rt) {
     auto start = composite::from_clustering_element(_schema, rt.start);
     auto start_marker = bound_kind_to_start_marker(rt.start_kind);
     auto end = composite::from_clustering_element(_schema, rt.end);
@@ -2170,10 +2190,11 @@ stop_iteration components_writer::consume(range_tombstone&& rt) {
     auto tomb = rt.tomb;
     _sst.index_tombstone(_out, start, std::move(rt), start_marker);
     _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, tomb);
-    return stop_iteration::no;
 }
 
 stop_iteration components_writer::consume_end_of_partition() {
+    drain_tombstones();
+
     // If there is an incomplete block in the promoted index, write it too.
     // However, if the _promoted_index is still empty, don't add a single
     // chunk - better not output a promoted index at all in this case.
@@ -2190,7 +2211,6 @@ stop_iteration components_writer::consume_end_of_partition() {
     _sst._pi_write.data = {};
     _sst._pi_write.block_first_colname = {};
 
-    ensure_tombstone_is_written();
     int16_t end_of_row = 0;
     write(_out, end_of_row);
 
