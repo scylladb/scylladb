@@ -120,7 +120,7 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
 static future<record> require_record(cql3::query_processor& qp, stdx::string_view role_name) {
     return find_record(qp, role_name).then([role_name](stdx::optional<record> mr) {
         if (!mr) {
-            throw nonexistant_role(sstring(role_name));
+            throw nonexistant_role(role_name);
         }
 
         return make_ready_future<record>(*mr);
@@ -248,7 +248,7 @@ standard_role_manager::create(const authenticated_user& performer, stdx::string_
 
     return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
         if (role_exists) {
-            throw role_already_exists(sstring(role_name));
+            throw role_already_exists(role_name);
         }
 
         return _qp.process(
@@ -294,7 +294,7 @@ standard_role_manager::alter(const authenticated_user&, stdx::string_view role_n
 future<> standard_role_manager::drop(const authenticated_user&, stdx::string_view role_name) {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {
-            throw nonexistant_role(sstring(role_name));
+            throw nonexistant_role(role_name);
         }
 
         // First, revoke this role from all roles that are members of it.
@@ -408,10 +408,8 @@ standard_role_manager::grant(
         return this->query_granted(
                 grantee_name,
                 recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
-            const sstring role_name_string = sstring(role_name);
-
-            if (roles.count(role_name_string) != 0) {
-                throw role_already_included(sstring(grantee_name), role_name_string);
+            if (roles.count(sstring(role_name)) != 0) {
+                throw role_already_included(grantee_name, role_name);
             }
 
             return make_ready_future<>();
@@ -422,10 +420,8 @@ standard_role_manager::grant(
         return this->query_granted(
                 role_name,
                 recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
-            const auto grantee_name_string = sstring(grantee_name);
-
-            if (roles.count(grantee_name_string) != 0) {
-                throw role_already_included(sstring(role_name), grantee_name_string);
+            if (roles.count(sstring(grantee_name)) != 0) {
+                throw role_already_included(role_name, grantee_name);
             }
 
             return make_ready_future<>();
@@ -450,10 +446,8 @@ standard_role_manager::revoke(
         return this->query_granted(
                 revokee_name,
                 recursive_role_query::no).then([revokee_name, role_name](std::unordered_set<sstring> roles) {
-            const auto role_name_string = sstring(role_name);
-
-            if (roles.count(role_name_string) == 0) {
-                throw revoke_ungranted_role(sstring(revokee_name), role_name_string);
+            if (roles.count(sstring(role_name)) == 0) {
+                throw revoke_ungranted_role(revokee_name, role_name);
             }
 
             return make_ready_future<>();
