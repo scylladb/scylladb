@@ -61,6 +61,18 @@ struct service_config final {
 };
 
 ///
+/// Due to poor (in this author's opinion) decisions of Apache Cassandra, certain choices of one role-manager,
+/// authenticator, or authorizer imply restrictions on the rest.
+///
+/// This exception is thrown when an invalid combination of modules is selected, with a message explaining the
+/// incompatibility.
+///
+class incompatible_module_combination : public std::invalid_argument {
+public:
+    using std::invalid_argument::invalid_argument;
+};
+
+///
 /// Central interface into access-control for the system.
 ///
 /// Access control encompasses user/role management, authentication, and authorization. This class provides access to
