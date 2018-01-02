@@ -357,8 +357,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
             return make_results(rm, std::move(roles));
         });
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -380,8 +379,7 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
     return as.underlying_role_manager().grant(_grantee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -394,8 +392,7 @@ future<> revoke_role_statement::check_access(const service::client_state& state)
     return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::make_role_resource(_role));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-revoke_role_statement::execute(
+future<result_message_ptr> revoke_role_statement::execute(
         distributed<service::storage_proxy>&,
         service::query_state& state,
         const query_options&) {
@@ -406,8 +403,7 @@ revoke_role_statement::execute(
     return rm.revoke(_revokee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
