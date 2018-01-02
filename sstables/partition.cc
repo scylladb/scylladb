@@ -970,14 +970,21 @@ private:
     }
     future<> read_from_datafile() {
         sstlog.trace("reader {}: read from data file", this);
-        return _context->read().then([this] {
-            auto& consumer = _consumer;
-            auto mut = consumer.get_mutation();
-            if (!mut) {
-                sstlog.trace("reader {}: eof", this);
-                return make_ready_future<>();
+        return _context->read().then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+
+                auto& consumer = _consumer;
+                auto mut = consumer.get_mutation();
+                if (!mut) {
+                    sstlog.trace("reader {}: eof", this);
+                    return make_ready_future<>();
+                }
+                on_next_partition(dht::global_partitioner().decorate_key(*_schema, std::move(mut->key)), mut->tomb);
+            } catch (...) {
+                throw std::runtime_error(sprint("SSTable reader found an exception when reading sstable %s : %s",
+                        _sst->get_filename(), std::current_exception()));
             }
-            on_next_partition(dht::global_partitioner().decorate_key(*_schema, std::move(mut->key)), mut->tomb);
             return make_ready_future<>();
         });
     }
