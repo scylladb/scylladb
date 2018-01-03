@@ -43,8 +43,6 @@
 
 namespace auth {
 
-const sstring auth::authenticated_user::ANONYMOUS_USERNAME("anonymous");
-
 authenticated_user::authenticated_user()
                 : _anon(true)
 {}
@@ -54,7 +52,8 @@ authenticated_user::authenticated_user(stdx::string_view name)
 {}
 
 const sstring& authenticated_user::name() const {
-    return _anon ? ANONYMOUS_USERNAME : _name;
+    static const sstring anonymous_username{"anonymous"};
+    return _anon ? anonymous_username : _name;
 }
 
 bool authenticated_user::operator==(const authenticated_user& v) const {

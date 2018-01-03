@@ -51,8 +51,6 @@ namespace auth {
 
 class authenticated_user final {
 public:
-    static const sstring ANONYMOUS_USERNAME;
-
     authenticated_user();
     authenticated_user(stdx::string_view name);
 
