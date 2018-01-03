@@ -109,53 +109,16 @@ resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(ki
     _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
 }
 
-resource resource::data(stdx::string_view keyspace) {
-    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)});
+resource::resource(data_resource_t, stdx::string_view keyspace)
+        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)}) {
 }
 
-resource resource::data(stdx::string_view keyspace, stdx::string_view table) {
-    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)});
+resource::resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table)
+        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)}) {
 }
 
-resource resource::role(stdx::string_view role) {
-    return resource(resource_kind::role, std::vector<sstring>{sstring(role)});
-}
-
-resource resource::from_name(stdx::string_view name) {
-    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
-        std::unordered_map<stdx::string_view, resource_kind> result;
-
-        for (const auto& pair : roots) {
-            result.emplace(pair.second, pair.first);
-        }
-
-        return result;
-    }();
-
-    std::vector<sstring> parts;
-    boost::split(parts, name, [](char ch) { return ch == '/'; });
-
-    if (parts.empty()) {
-        throw invalid_resource_name(name);
-    }
-
-    const auto iter = reverse_roots.find(parts[0]);
-    if (iter == reverse_roots.end()) {
-        throw invalid_resource_name(name);
-    }
-
-    const auto kind = iter->second;
-    parts.erase(parts.begin());
-
-    if (parts.size() > max_parts.at(kind)) {
-        throw invalid_resource_name(name);
-    }
-
-    return resource(kind, std::move(parts));
-}
-
-resource resource::root_of(resource_kind kind) {
-    return resource(kind);
+resource::resource(role_resource_t, stdx::string_view role)
+        : resource(resource_kind::role, std::vector<sstring>{sstring(role)}) {
 }
 
 sstring resource::name() const {
@@ -282,6 +245,39 @@ std::ostream& operator<<(std::ostream& os, const role_resource_view& v) {
     }
 
     return os;
+}
+
+resource parse_resource(stdx::string_view name) {
+    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
+        std::unordered_map<stdx::string_view, resource_kind> result;
+
+        for (const auto& pair : roots) {
+            result.emplace(pair.second, pair.first);
+        }
+
+        return result;
+    }();
+
+    std::vector<sstring> parts;
+    boost::split(parts, name, [](char ch) { return ch == '/'; });
+
+    if (parts.empty()) {
+        throw invalid_resource_name(name);
+    }
+
+    const auto iter = reverse_roots.find(parts[0]);
+    if (iter == reverse_roots.end()) {
+        throw invalid_resource_name(name);
+    }
+
+    const auto kind = iter->second;
+    parts.erase(parts.begin());
+
+    if (parts.size() > max_parts.at(kind)) {
+        throw invalid_resource_name(name);
+    }
+
+    return resource(kind, std::move(parts));
 }
 
 }

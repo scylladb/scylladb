@@ -302,7 +302,7 @@ future<> auth::password_authenticator::drop(sstring username) {
 }
 
 const auth::resource_set& auth::password_authenticator::protected_resources() const {
-    static const resource_set resources({resource::data(meta::AUTH_KS, meta::roles_table::name)});
+    static const resource_set resources({make_data_resource(meta::AUTH_KS, meta::roles_table::name)});
     return resources;
 }
 

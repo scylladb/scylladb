@@ -87,7 +87,7 @@ future<> create_role_statement::check_access(const service::client_state& state)
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission(auth::permission::CREATE, auth::resource::root_of(auth::resource_kind::role)).get0();
+        state.ensure_has_permission(auth::permission::CREATE, auth::resource(auth::resource_kind::role)).get0();
 
         if (*_options.is_superuser) {
             if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get0()) {
@@ -152,7 +152,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
         }
 
         if (*user.name != _role) {
-            state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
+            state.ensure_has_permission(auth::permission::ALTER, auth::make_role_resource(_role)).get0();
         } else {
             const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
 
@@ -210,7 +210,7 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission(auth::permission::DROP, auth::resource::role(_role)).get0();
+        state.ensure_has_permission(auth::permission::DROP, auth::make_role_resource(_role)).get0();
 
         auto& as = *state.get_auth_service();
 
@@ -259,7 +259,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     return async([this, &state] {
         if (state.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::resource::root_of(auth::resource_kind::role)).get0()) {
+                    auth::resource(auth::resource_kind::role)).get0()) {
             return;
         }
 
@@ -342,7 +342,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
             // only the roles granted to them.
             return cs.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::resource::root_of(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
+                    auth::resource(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
                 if (has_describe) {
                     return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
                 }
@@ -368,7 +368,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> grant_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
+    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::make_role_resource(_role));
 }
 
 future<result_message_ptr>
@@ -392,7 +392,7 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> revoke_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
+    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::make_role_resource(_role));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>

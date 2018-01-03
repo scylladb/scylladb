@@ -81,6 +81,16 @@ enum class resource_kind {
 std::ostream& operator<<(std::ostream&, resource_kind);
 
 ///
+/// Type tag for constructing data resources.
+///
+struct data_resource_t final {};
+
+///
+/// Type tag for constructing role resources.
+///
+struct role_resource_t final {};
+
+///
 /// Resources are entities that users can be granted permissions on.
 ///
 /// There are data (keyspaces and tables) and role resources. There may be other kinds of resources in the future.
@@ -99,19 +109,13 @@ class resource final {
     std::vector<sstring> _parts;
 
 public:
-    static resource root_of(resource_kind);
-
-    static resource data(stdx::string_view keyspace);
-    static resource data(stdx::string_view keyspace, stdx::string_view table);
-
-    static resource role(stdx::string_view role);
-
     ///
-    /// Parse a resource name.
+    /// A root resource of a particular kind.
     ///
-    /// \throws \ref invalid_resource_name when the name is malformed.
-    ///
-    static resource from_name(stdx::string_view);
+    explicit resource(resource_kind);
+    resource(data_resource_t, stdx::string_view keyspace);
+    resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table);
+    resource(role_resource_t, stdx::string_view role);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -127,9 +131,6 @@ public:
     permission_set applicable_permissions() const;
 
 private:
-    // A root resource.
-    explicit resource(resource_kind kind);
-
     resource(resource_kind, std::vector<sstring> parts);
 
     friend class std::hash<resource>;
@@ -138,6 +139,7 @@ private:
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
+    friend resource parse_resource(stdx::string_view);
 };
 
 bool operator<(const resource&, const resource&);
@@ -199,6 +201,24 @@ public:
 };
 
 std::ostream& operator<<(std::ostream&, const role_resource_view&);
+
+///
+/// Parse a resource from its name.
+///
+/// \throws \ref invalid_resource_name when the name is malformed.
+///
+resource parse_resource(stdx::string_view name);
+
+inline resource make_data_resource(stdx::string_view keyspace) {
+    return resource(data_resource_t{}, keyspace);
+}
+inline resource make_data_resource(stdx::string_view keyspace, stdx::string_view table) {
+    return resource(data_resource_t{}, keyspace, table);
+}
+
+inline resource make_role_resource(stdx::string_view role) {
+    return resource(role_resource_t{}, role);
+}
 
 }
 

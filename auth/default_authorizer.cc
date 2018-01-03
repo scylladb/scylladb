@@ -260,7 +260,7 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
             for (auto& row : *res) {
                 if (row.has(PERMISSIONS_NAME)) {
                     auto username = row.get_as<sstring>(ROLE_NAME);
-                    auto resource = resource::from_name(row.get_as<sstring>(RESOURCE_NAME));
+                    auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
                     auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
                     ps = permission_set::from_mask(ps.mask() & set.mask());
 
@@ -337,6 +337,6 @@ future<> auth::default_authorizer::revoke_all(resource resource) {
 }
 
 const auth::resource_set& auth::default_authorizer::protected_resources() {
-    static const resource_set resources({ resource::data(meta::AUTH_KS, PERMISSIONS_CF) });
+    static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
 }

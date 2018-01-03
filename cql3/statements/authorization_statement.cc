@@ -89,7 +89,7 @@ void cql3::statements::authorization_statement::maybe_correct_resource(auth::res
         const auto table = data_view.table();
 
         if (table && keyspace->empty()) {
-            resource = auth::resource::data(state.get_keyspace(), *table);
+            resource = auth::make_data_resource(state.get_keyspace(), *table);
         }
     }
 }

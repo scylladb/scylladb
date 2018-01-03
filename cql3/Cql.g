@@ -1047,15 +1047,15 @@ resource returns [uninitialized<auth::resource> res]
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
-    : K_ALL K_KEYSPACES { $res = auth::resource::root_of(auth::resource_kind::data); }
-    | K_KEYSPACE ks = keyspaceName { $res = auth::resource::data($ks.id); }
+    : K_ALL K_KEYSPACES { $res = auth::resource(auth::resource_kind::data); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::make_data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::resource::data($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+      { $res = auth::make_data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
 
 roleResource returns [uninitialized<auth::resource> res]
-    : K_ALL K_ROLES { $res = auth::resource::root_of(auth::resource_kind::role); }
-    | K_ROLE role = userOrRoleName { $res = auth::resource::role(static_cast<const cql3::role_name&>(role).to_string()); }
+    : K_ALL K_ROLES { $res = auth::resource(auth::resource_kind::role); }
+    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(static_cast<const cql3::role_name&>(role).to_string()); }
     ;
 
 /**
