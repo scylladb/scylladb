@@ -53,9 +53,6 @@ authenticated_user::authenticated_user(stdx::string_view name)
                 : _name(sstring(name)), _anon(false)
 {}
 
-authenticated_user::authenticated_user(authenticated_user&&) = default;
-authenticated_user::authenticated_user(const authenticated_user&) = default;
-
 const sstring& authenticated_user::name() const {
     return _anon ? ANONYMOUS_USERNAME : _name;
 }

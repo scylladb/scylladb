@@ -55,8 +55,6 @@ public:
 
     authenticated_user();
     authenticated_user(stdx::string_view name);
-    authenticated_user(authenticated_user&&);
-    authenticated_user(const authenticated_user&);
 
     const sstring& name() const;
 
