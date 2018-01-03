@@ -171,7 +171,7 @@ public:
                 auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
 
                 auto start = test_env::now();
-                auto ret = sstables::compact_sstables(std::move(ssts), *cf, sst_gen, std::numeric_limits<uint64_t>::max(), 0).get0();
+                auto ret = sstables::compact_sstables(sstables::compaction_descriptor(std::move(ssts)), *cf, sst_gen).get0();
                 auto end = test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
