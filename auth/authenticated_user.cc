@@ -41,23 +41,27 @@
 
 #include "authenticated_user.hh"
 
+namespace auth {
+
 const sstring auth::authenticated_user::ANONYMOUS_USERNAME("anonymous");
 
-auth::authenticated_user::authenticated_user()
+authenticated_user::authenticated_user()
                 : _anon(true)
 {}
 
-auth::authenticated_user::authenticated_user(stdx::string_view name)
+authenticated_user::authenticated_user(stdx::string_view name)
                 : _name(sstring(name)), _anon(false)
 {}
 
-auth::authenticated_user::authenticated_user(authenticated_user&&) = default;
-auth::authenticated_user::authenticated_user(const authenticated_user&) = default;
+authenticated_user::authenticated_user(authenticated_user&&) = default;
+authenticated_user::authenticated_user(const authenticated_user&) = default;
 
-const sstring& auth::authenticated_user::name() const {
+const sstring& authenticated_user::name() const {
     return _anon ? ANONYMOUS_USERNAME : _name;
 }
 
-bool auth::authenticated_user::operator==(const authenticated_user& v) const {
+bool authenticated_user::operator==(const authenticated_user& v) const {
     return _anon ? v._anon : _name == v._name;
+}
+
 }
