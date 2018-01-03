@@ -22,6 +22,7 @@
 #include "repair.hh"
 #include "range_split.hh"
 
+#include "atomic_cell_hash.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
@@ -467,7 +468,7 @@ private:
     void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
         feed_hash(_hasher, col.name());
         feed_hash(_hasher, col.type->name());
-        cell.feed_hash(_hasher, col);
+        feed_hash(_hasher, cell, col);
     }
 
     void consume_range_tombstone_start(const range_tombstone& rt) {

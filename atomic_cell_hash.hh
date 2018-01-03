@@ -25,6 +25,7 @@
 
 #include "types.hh"
 #include "atomic_cell.hh"
+#include "atomic_cell_or_collection.hh"
 #include "hashing.hh"
 #include "counters.hh"
 
@@ -76,5 +77,17 @@ struct appending_hash<collection_mutation> {
     template<typename Hasher>
     void operator()(Hasher& h, const collection_mutation& cm, const column_definition& cdef) const {
         feed_hash(h, static_cast<collection_mutation_view>(cm), cdef);
+    }
+};
+
+template<>
+struct appending_hash<atomic_cell_or_collection> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const atomic_cell_or_collection& c, const column_definition& cdef) const {
+        if (cdef.is_atomic()) {
+            feed_hash(h, c.as_atomic_cell(), cdef);
+        } else {
+            feed_hash(h, c.as_collection_mutation(), cdef);
+        }
     }
 };
