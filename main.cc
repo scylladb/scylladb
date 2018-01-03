@@ -675,6 +675,7 @@ int main(int ac, char** av) {
             cf_cache_hitrate_calculator.start(std::ref(db), std::ref(cf_cache_hitrate_calculator)).get();
             engine().at_exit([&cf_cache_hitrate_calculator] { return cf_cache_hitrate_calculator.stop(); });
             cf_cache_hitrate_calculator.local().run_on(engine().cpu_id());
+            api::set_server_cache(ctx);
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 

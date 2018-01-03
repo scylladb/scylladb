@@ -112,6 +112,11 @@ future<> set_server_stream_manager(http_context& ctx) {
                 "The stream manager API", set_stream_manager);
 }
 
+future<> set_server_cache(http_context& ctx) {
+    return register_api(ctx, "cache_service",
+            "The cache service API", set_cache_service);
+}
+
 future<> set_server_gossip_settle(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
@@ -119,9 +124,6 @@ future<> set_server_gossip_settle(http_context& ctx) {
         rb->register_function(r, "failure_detector",
                 "The failure detector API");
         set_failure_detector(ctx,r);
-        rb->register_function(r, "cache_service",
-                "The cache service API");
-        set_cache_service(ctx,r);
     });
 }
 
