@@ -183,8 +183,10 @@ public:
     };
 
     struct reader_and_last_fragment_kind {
-        flat_mutation_reader* reader;
-        mutation_fragment::kind last_kind;
+        flat_mutation_reader* reader = nullptr;
+        mutation_fragment::kind last_kind = mutation_fragment::kind::partition_end;
+
+        reader_and_last_fragment_kind() = default;
 
         reader_and_last_fragment_kind(flat_mutation_reader* r, mutation_fragment::kind k)
             : reader(r)
@@ -212,6 +214,12 @@ private:
     // Readers that reached EOS.
     std::vector<reader_and_last_fragment_kind> _halted_readers;
     std::vector<mutation_fragment> _current;
+    // Optimisation for cases where only a single reader emits a particular
+    // partition. If _single_reader.reader is not null that reader is
+    // guaranteed to be the only one having relevant data until the partition
+    // end, a call to next_partition() or a call to
+    // fast_forward_to(dht::partition_range).
+    reader_and_last_fragment_kind _single_reader;
     dht::decorated_key_opt _key;
     const schema_ptr _schema;
     streamed_mutation::forwarding _fwd_sm;
@@ -378,6 +386,9 @@ void mutation_reader_merger::prepare_forwardable_readers() {
     _next.reserve(_halted_readers.size() + _fragment_heap.size() + _next.size());
 
     std::move(_halted_readers.begin(), _halted_readers.end(), std::back_inserter(_next));
+    if (_single_reader.reader) {
+        _next.emplace_back(std::exchange(_single_reader.reader, {}), _single_reader.last_kind);
+    }
     for (auto& df : _fragment_heap) {
         _next.emplace_back(df.reader, df.fragment.mutation_fragment_kind());
     }
@@ -398,6 +409,25 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
 }
 
 future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()() {
+    // Avoid merging-related logic if we know that only a single reader owns
+    // current partition.
+    if (_single_reader.reader) {
+        if (_single_reader.reader->is_buffer_empty()) {
+            if (_single_reader.reader->is_end_of_stream()) {
+                _current.clear();
+                return make_ready_future<mutation_fragment_batch>(_current);
+            }
+            return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
+        }
+        _current.clear();
+        _current.emplace_back(_single_reader.reader->pop_mutation_fragment());
+        _single_reader.last_kind = _current.back().mutation_fragment_kind();
+        if (_current.back().is_end_of_partition()) {
+            _next.emplace_back(std::exchange(_single_reader.reader, {}), mutation_fragment::kind::partition_end);
+        }
+        return make_ready_future<mutation_fragment_batch>(_current);
+    }
+
     if (!_next.empty()) {
         return prepare_next().then([this] { return (*this)(); });
     }
@@ -423,6 +453,12 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
             _reader_heap.pop_back();
         }
         while (!_reader_heap.empty() && key(_fragment_heap).equal(*_schema, key(_reader_heap)));
+        if (_fragment_heap.size() == 1) {
+            _single_reader = { _fragment_heap.back().reader, mutation_fragment::kind::partition_start };
+            _current.emplace_back(_fragment_heap.back().fragment);
+            _fragment_heap.clear();
+            return make_ready_future<mutation_fragment_batch>(_current);
+        }
     }
 
     const auto equal = position_in_partition::equal_compare(*_schema);
@@ -448,6 +484,7 @@ void mutation_reader_merger::next_partition() {
 }
 
 future<> mutation_reader_merger::fast_forward_to(const dht::partition_range& pr) {
+    _single_reader = { };
     _next.clear();
     _halted_readers.clear();
     _fragment_heap.clear();
