@@ -71,21 +71,6 @@ struct convert<std::unordered_map<K, V, Rest...>> {
 
 namespace std {
 
-// these are also defined in sstring.hh. redefine to get different syntax
-
-template<typename K, typename V>
-std::ostream& operator<<(std::ostream& os, const std::pair<K, V>& p) {
-    return os << p.first << '=' << p.second;
-}
-
-template<typename K, typename V, typename... Args>
-std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V, Args...>& map) {
-    using value_type = typename std::unordered_map<K, V, Args...>::value_type;
-    os << '{';
-    std::copy(map.begin(), map.end(), std::ostream_iterator<value_type>(os, ","));
-    return os << '}';
-}
-
 template<typename K, typename V, typename... Args>
 std::istream& operator>>(std::istream&, std::unordered_map<K, V, Args...>&);
 
@@ -204,6 +189,9 @@ template<typename T, utils::config_file::value_status S>
 void utils::config_file::named_value<T, S>::add_command_line_option(
                 boost::program_options::options_description_easy_init& init,
                 const stdx::string_view& name, const stdx::string_view& desc) {
+    // NOTE. We are not adding default values. We could, but must in that case manually (in some way) geenrate the textual
+    // version, since the available ostream operators for things like pairs and collections don't match what we can deal with parser-wise.
+    // See removed ostream operators above.
     init(hyphenate(name).data(), value_ex(&_value)->notifier([this](auto&&) { _source = config_source::CommandLine; }), desc.data());
 }
 
