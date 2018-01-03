@@ -62,6 +62,7 @@ static future<> cl_test(commitlog::config cfg, Func && f) {
 template<typename Func>
 static future<> cl_test(Func && f) {
     commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
     return cl_test(cfg, std::forward<Func>(f));
 }
 
@@ -330,7 +331,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         std::sort(ids.begin(), ids.end());
                         auto id = ids.front();
                         auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
-                            commitlog::descriptor desc(filename);
+                            commitlog::descriptor desc(filename, db::commitlog::descriptor::FILENAME_PREFIX);
                             return desc.id == id;
                         });
                         if (i == segments.end()) {
