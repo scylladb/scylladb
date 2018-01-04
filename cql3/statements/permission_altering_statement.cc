@@ -85,24 +85,10 @@ future<> cql3::statements::permission_altering_statement::check_access(const ser
 
         // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject GRANT/REVOKE.
         return state.ensure_has_permission(auth::permission::AUTHORIZE, _resource).then([this, &state] {
-            static auto perm_list = {
-                auth::permission::READ,
-                auth::permission::WRITE,
-                auth::permission::CREATE,
-                auth::permission::ALTER,
-                auth::permission::DROP,
-                auth::permission::SELECT,
-                auth::permission::MODIFY,
-            };
-            return do_for_each(perm_list, [this, &state](auth::permission p) {
+            return do_for_each(_permissions, [this, &state](auth::permission p) {
                 // TODO: how about we re-write the access check to check a set
-                // right away. Might need some tweaking of enum_set to make it
-                // neat/transparent, but still...
-                // This is not critical code however.
-                if (_permissions.contains(p)) {
-                    return state.ensure_has_permission(p, _resource);
-                }
-                return make_ready_future();
+                // right away.
+                return state.ensure_has_permission(p, _resource);
             });
         });
     });
