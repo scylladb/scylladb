@@ -175,7 +175,6 @@ default_authorizer::modify(
         permission_set set,
         const resource& resource,
         stdx::string_view op) {
-    // TODO: why does this not check super user?
     auto query = sprint(
             "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
             meta::AUTH_KS,
