@@ -146,8 +146,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
                 throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
             }
 
-            const bool granted_to_user = as.get_roles(*user.name).get0().count(_role) != 0;
-            if (granted_to_user) {
+            if (auth::has_role(as, user, _role).get0()) {
                 throw exceptions::unauthorized_exception(
                         "You are not allowed to alter your own superuser status or that of a role granted to you.");
             }
@@ -272,7 +271,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
         //
 
         const auto user_has_grantee = [this, &state] {
-            return state.get_auth_service()->get_roles(*state.user()->name).get0().count(*_grantee) != 0;
+            return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get0();
         };
 
         if (_grantee && !user_has_grantee()) {

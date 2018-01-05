@@ -216,4 +216,17 @@ future<> alter_role(
 ///
 future<> drop_role(service&, const authenticated_user& performer, stdx::string_view name);
 
+///
+/// Check if `grantee` has been granted the named role.
+///
+/// \returns an exceptional future with \ref nonexistent_role if `grantee` or `name` do not exist.
+///
+future<bool> has_role(const service&, stdx::string_view grantee, stdx::string_view name);
+///
+/// Check if the authenticated user has been granted the named role.
+///
+/// \returns an exceptional future with \ref nonexistent_role if the user or `name` do not exist.
+///
+future<bool> has_role(const service&, const authenticated_user&, stdx::string_view name);
+
 }

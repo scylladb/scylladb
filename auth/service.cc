@@ -378,4 +378,19 @@ future<> drop_role(service& ser, const authenticated_user& performer, stdx::stri
     });
 }
 
+future<bool> has_role(const service& ser, stdx::string_view grantee, stdx::string_view name) {
+    return when_all_succeed(
+            validate_role_exists(ser, name),
+            ser.get_roles(grantee)).then([name](std::unordered_set<sstring> all_roles) {
+        return make_ready_future<bool>(all_roles.count(sstring(name)) != 0);
+    });
+}
+future<bool> has_role(const service& ser, const authenticated_user& u, stdx::string_view name) {
+    if (is_anonymous(u)) {
+        return make_ready_future<bool>(false);
+    }
+
+    return has_role(ser, *u.name, name);
+}
+
 }
