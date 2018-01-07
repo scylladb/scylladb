@@ -399,6 +399,14 @@ public:
         return { maximum_token(), token_bound::end };
     }
 
+    bool is_min() const {
+        return _token.is_minimum();
+    }
+
+    bool is_max() const {
+        return _token.is_maximum();
+    }
+
     static ring_position starting_at(dht::token token) {
         return { std::move(token), token_bound::start };
     }
@@ -556,6 +564,12 @@ public:
     ring_position_view(const dht::token& token, partition_key* key, int8_t weight)
         : _token(&token)
         , _key(key)
+        , _weight(weight)
+    { }
+
+    explicit ring_position_view(const dht::token& token, int8_t weight = -1)
+        : _token(&token)
+        , _key(nullptr)
         , _weight(weight)
     { }
 
