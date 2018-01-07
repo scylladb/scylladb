@@ -55,7 +55,7 @@ public:
         std::unique_ptr<incremental_selector_impl> _impl;
         mutable stdx::optional<dht::token_range> _current_token_range;
         mutable std::vector<shared_sstable> _current_sstables;
-        mutable dht::token _current_next_token;
+        mutable dht::ring_position _current_next_position = dht::ring_position::min();
     public:
         ~incremental_selector();
         incremental_selector(std::unique_ptr<incremental_selector_impl> impl);
@@ -63,7 +63,7 @@ public:
 
         struct selection {
             const std::vector<shared_sstable>& sstables;
-            dht::token next_token;
+            dht::ring_position next_position;
         };
 
         // Return the sstables that intersect with t and the best next

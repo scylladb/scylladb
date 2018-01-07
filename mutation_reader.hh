@@ -107,8 +107,11 @@ make_mutation_reader(Args&&... args) {
 
 class reader_selector {
 protected:
-    dht::token _selector_position;
+    schema_ptr _s;
+    dht::ring_position _selector_position;
 public:
+    reader_selector(schema_ptr s, dht::ring_position rp) noexcept : _s(std::move(s)), _selector_position(std::move(rp)) {}
+
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) = 0;
@@ -116,7 +119,8 @@ public:
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const dht::token* const t) const noexcept {
-        return !_selector_position.is_maximum() && (!t || *t >= _selector_position);
+        dht::ring_position_comparator cmp(*_s);
+        return !_selector_position.is_max() && (!t || cmp(dht::ring_position_view(*t), _selector_position) >= 0);
     }
 };
 

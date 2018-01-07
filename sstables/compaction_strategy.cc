@@ -67,7 +67,7 @@ extern logging::logger clogger;
 class incremental_selector_impl {
 public:
     virtual ~incremental_selector_impl() {}
-    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) = 0;
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::ring_position> select(const dht::token& token) = 0;
 };
 
 class sstable_set_impl {
@@ -139,9 +139,9 @@ sstable_set::incremental_selector::incremental_selector(sstable_set::incremental
 sstable_set::incremental_selector::selection
 sstable_set::incremental_selector::select(const dht::token& t) const {
     if (!_current_token_range || !_current_token_range->contains(t, dht::token_comparator())) {
-        std::tie(_current_token_range, _current_sstables, _current_next_token) = _impl->select(t);
+        std::tie(_current_token_range, _current_sstables, _current_next_position) = _impl->select(t);
     }
-    return {_current_sstables, _current_next_token};
+    return {_current_sstables, _current_next_position};
 }
 
 sstable_set::incremental_selector
@@ -176,8 +176,8 @@ public:
     incremental_selector(const std::vector<shared_sstable>& sstables)
         : _sstables(sstables) {
     }
-    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) override {
-        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), _sstables, dht::maximum_token());
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::ring_position> select(const dht::token& token) override {
+        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), _sstables, dht::ring_position::max());
     }
 };
 
@@ -293,34 +293,41 @@ public:
         , _it(leveled_sstables.begin())
         , _end(leveled_sstables.end()) {
     }
-    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::token> select(const dht::token& token) override {
+    virtual std::tuple<dht::token_range, std::vector<shared_sstable>, dht::ring_position> select(const dht::token& token) override {
         auto pr = dht::partition_range::make(dht::ring_position::starting_at(token), dht::ring_position::ending_at(token));
         auto interval = make_interval(*_schema, std::move(pr));
         auto ssts = _unleveled_sstables;
+        using namespace dht;
 
-        const auto next_token =  [&] {
-            const auto next = std::next(_it);
-            return next == _end ? dht::maximum_token() : next->first.lower().token();
+        auto inclusiveness = [] (auto& interval) {
+            return boost::icl::is_left_closed(interval.bounds()) ? ring_position::token_bound::start : ring_position::token_bound::end;
         };
 
-        const auto current_token =  [&] {
-            return _it == _end ? dht::maximum_token() : _it->first.lower().token();
+        const auto next_pos =  [&] {
+            const auto next = std::next(_it);
+            auto& interval = next->first;
+            return next == _end ? ring_position::max() : ring_position(interval.lower().token(), inclusiveness(interval));
+        };
+
+        const auto current_pos =  [&] {
+            auto& interval = _it->first;
+            return _it == _end ? ring_position::max() : ring_position(interval.lower().token(), inclusiveness(interval));
         };
 
         while (_it != _end) {
             if (boost::icl::contains(_it->first, interval)) {
                 ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
-                return std::make_tuple(to_token_range(_it->first), std::move(ssts), next_token());
+                return std::make_tuple(to_token_range(_it->first), std::move(ssts), next_pos());
             }
             // we don't want to skip current interval if token lies before it.
             if (boost::icl::lower_less(interval, _it->first)) {
                 return std::make_tuple(dht::token_range::make({token, true}, {_it->first.lower().token(), false}),
                     std::move(ssts),
-                    current_token());
+                    current_pos());
             }
             _it++;
         }
-        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), std::move(ssts), dht::maximum_token());
+        return std::make_tuple(dht::token_range::make_open_ended_both_sides(), std::move(ssts), ring_position::max());
     }
 };
 
