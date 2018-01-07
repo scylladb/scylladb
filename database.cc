@@ -72,6 +72,7 @@
 #include "db/schema_tables.hh"
 #include "db/query_context.hh"
 #include "sstables/compaction_manager.hh"
+#include "sstables/compaction_backlog_manager.hh"
 #include "sstables/progress_monitor.hh"
 
 #include "checked-file-impl.hh"
@@ -81,12 +82,17 @@ using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
-class permit_monitor final : public sstables::write_monitor {
+// Handles permit management only, used for situations where we don't want to inform
+// the compaction manager about backlogs (i.e., tests)
+class permit_monitor : public sstables::write_monitor {
     sstable_write_permit _permit;
 public:
     permit_monitor(sstable_write_permit&& permit)
             : _permit(std::move(permit)) {
     }
+
+    virtual void on_write_started(const sstables::writer_offset_tracker& t) override { }
+    virtual void on_data_write_completed() override { }
     virtual void on_write_completed() override {
         // We need to start a flush before the current one finishes, otherwise
         // we'll have a period without significant disk activity when the current
@@ -95,6 +101,43 @@ public:
         _permit = sstable_write_permit::unconditional();
     }
     virtual void on_flush_completed() override { }
+};
+
+// Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
+class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
+    sstables::shared_sstable _sst;
+    compaction_manager& _compaction_manager;
+    sstables::compaction_strategy& _compaction_strategy;
+    const sstables::writer_offset_tracker* _tracker = nullptr;
+    uint64_t _progress_seen = 0;
+public:
+    database_sstable_write_monitor(sstable_write_permit&& permit, sstables::shared_sstable sst, compaction_manager& manager, sstables::compaction_strategy& strategy)
+            : permit_monitor(std::move(permit))
+            , _sst(std::move(sst))
+            , _compaction_manager(manager)
+            , _compaction_strategy(strategy)
+    {}
+
+    virtual void on_write_started(const sstables::writer_offset_tracker& t) override {
+        _tracker = &t;
+        _compaction_strategy.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+    }
+
+    virtual void on_data_write_completed() override {
+        _progress_seen = _tracker->offset;
+        _tracker = nullptr;
+    }
+
+    void write_failed() {
+        _compaction_strategy.get_backlog_tracker().revert_charges(_sst);
+    }
+
+    virtual uint64_t written() const override {
+        if (_tracker) {
+            return _tracker->offset;
+        }
+        return _progress_seen;
+    }
 };
 
 static const std::unordered_set<sstring> system_keyspaces = {
@@ -776,6 +819,7 @@ void column_family::add_sstable(sstables::shared_sstable sstable, const std::vec
     new_sstables->insert(sstable);
     _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
+    _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
 }
 
 future<>
@@ -849,7 +893,6 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
 
             dblog.debug("Flushing to {}", newtab->get_filename());
 
-            auto&& priority = service::get_local_streaming_write_priority();
             // This is somewhat similar to the main memtable flush, but with important differences.
             //
             // The first difference, is that we don't keep aggregate collectd statistics about this one.
@@ -858,25 +901,30 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             //
             // Lastly, we don't have any commitlog RP to update, and we don't need to deal manipulate the
             // memtable list, since this memtable was not available for reading up until this point.
-            auto monitor = seastar::make_shared<permit_monitor>(permit.release_sstable_write_permit());
-            return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
-                return newtab->open_data();
-            }).then([this, old, newtab] () {
-                auto adder = [this, newtab] {
-                    add_sstable(newtab, {engine().cpu_id()});
-                    try_trigger_compaction();
-                    dblog.debug("Flushing to {} done", newtab->get_filename());
-                };
-                if (_config.enable_cache) {
-                    return _cache.update_invalidating(adder, *old);
-                } else {
-                    adder();
-                    return old->clear_gently();
-                }
-            }).handle_exception([old, permit = std::move(permit), newtab] (auto ep) {
-                newtab->mark_for_deletion();
-                dblog.error("failed to write streamed sstable: {}", ep);
-                return make_exception_future<>(ep);
+            auto fp = permit.release_sstable_write_permit();
+            database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
+            return do_with(std::move(monitor), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
+                auto&& priority = service::get_local_streaming_write_priority();
+                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
+                    return newtab->open_data();
+                }).then([this, old, newtab] () {
+                    auto adder = [this, newtab] {
+                        add_sstable(newtab, {engine().cpu_id()});
+                        try_trigger_compaction();
+                        dblog.debug("Flushing to {} done", newtab->get_filename());
+                    };
+                    if (_config.enable_cache) {
+                        return _cache.update_invalidating(adder, *old);
+                    } else {
+                        adder();
+                        return old->clear_gently();
+                    }
+                }).handle_exception([old, permit = std::move(permit), &monitor, newtab] (auto ep) {
+                    monitor.write_failed();
+                    newtab->mark_for_deletion();
+                    dblog.error("failed to write streamed sstable: {}", ep);
+                    return make_exception_future<>(ep);
+                });
             });
             // We will also not have any retry logic. If we fail here, we'll fail the streaming and let
             // the upper layers know. They can then apply any logic they want here.
@@ -909,14 +957,18 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
 
                 newtab->set_unshared();
 
-                auto&& priority = service::get_local_streaming_write_priority();
-                auto monitor = seastar::make_shared<permit_monitor>(permit.release_sstable_write_permit());
-                return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
-                    smb.sstables.emplace_back(newtab);
-                }).handle_exception([newtab] (auto ep) {
-                    newtab->mark_for_deletion();
-                    dblog.error("failed to write streamed sstable: {}", ep);
-                    return make_exception_future<>(ep);
+                auto fp = permit.release_sstable_write_permit();
+                database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
+                return do_with(std::move(monitor), [this, old, newtab, &smb, permit = std::move(permit)] (auto& monitor) mutable {
+                    auto&& priority = service::get_local_streaming_write_priority();
+                    return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group).then([this, newtab, old, &smb, permit = std::move(permit)] {
+                        smb.sstables.emplace_back(newtab);
+                    }).handle_exception([newtab, &monitor] (auto ep) {
+                        monitor.write_failed();
+                        newtab->mark_for_deletion();
+                        dblog.error("failed to write streamed sstable: {}", ep);
+                        return make_exception_future<>(ep);
+                    });
                 });
             });
         });
@@ -996,24 +1048,27 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    auto&& priority = service::get_local_memtable_flush_priority();
-    auto monitor = seastar::make_shared<permit_monitor>(std::move(permit));
-    return write_memtable_to_sstable(*old, newtab, std::move(monitor), incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
-        return newtab->open_data();
-    }).then([this, old, newtab] () {
-        dblog.debug("Flushing to {} done", newtab->get_filename());
-        return update_cache(old, newtab);
-    }).then([this, old, newtab] () noexcept {
-        _memtables->erase(old);
-        dblog.debug("Memtable for {} replaced", newtab->get_filename());
-        return stop_iteration::yes;
-    }).handle_exception([this, old, newtab] (auto e) {
-        newtab->mark_for_deletion();
-        dblog.error("failed to write sstable {}: {}", newtab->get_filename(), e);
-        // If we failed this write we will try the write again and that will create a new flush reader
-        // that will decrease dirty memory again. So we need to reset the accounting.
-        old->revert_flushed_memory();
-        return stop_iteration::no;
+    database_sstable_write_monitor monitor(std::move(permit), newtab, _compaction_manager, _compaction_strategy);
+    return do_with(std::move(monitor), [this, old, newtab] (auto& monitor) {
+        auto&& priority = service::get_local_memtable_flush_priority();
+        return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
+            return newtab->open_data();
+        }).then([this, old, newtab] () {
+            dblog.debug("Flushing to {} done", newtab->get_filename());
+            return update_cache(old, newtab);
+        }).then([this, old, newtab] () noexcept {
+            _memtables->erase(old);
+            dblog.debug("Memtable for {} replaced", newtab->get_filename());
+            return stop_iteration::yes;
+        }).handle_exception([this, old, newtab, &monitor] (auto e) {
+            monitor.write_failed();
+            newtab->mark_for_deletion();
+            dblog.error("failed to write sstable {}: {}", newtab->get_filename(), e);
+            // If we failed this write we will try the write again and that will create a new flush reader
+            // that will decrease dirty memory again. So we need to reset the accounting.
+            old->revert_flushed_memory();
+            return stop_iteration::no;
+        });
     });
 }
 
@@ -1285,6 +1340,9 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     });
 }
 
+// For replace/remove_ancestors_needed_write, note that we need to update the compaction backlog
+// manually. The new tables will be coming from a remote shard and thus unaccounted for in our
+// list so far, and the removed ones will no longer be needed by us.
 void column_family::replace_ancestors_needed_rewrite(std::vector<sstables::shared_sstable> new_sstables) {
     std::vector<sstables::shared_sstable> old_sstables;
     std::unordered_set<uint64_t> ancestors;
@@ -1292,12 +1350,14 @@ void column_family::replace_ancestors_needed_rewrite(std::vector<sstables::share
     for (auto& sst : new_sstables) {
         auto sst_ancestors = sst->ancestors();
         ancestors.insert(sst_ancestors.begin(), sst_ancestors.end());
+        _compaction_strategy.get_backlog_tracker().add_sstable(sst);
     }
 
     for (auto& ancestor : ancestors) {
         auto it = _sstables_need_rewrite.find(ancestor);
         if (it != _sstables_need_rewrite.end()) {
             old_sstables.push_back(it->second);
+            _compaction_strategy.get_backlog_tracker().remove_sstable(it->second);
             _sstables_need_rewrite.erase(it);
         }
     }
@@ -1310,6 +1370,7 @@ void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t>
         auto it = _sstables_need_rewrite.find(ancestor);
         if (it != _sstables_need_rewrite.end()) {
             old_sstables.push_back(it->second);
+            _compaction_strategy.get_backlog_tracker().remove_sstable(it->second);
             _sstables_need_rewrite.erase(it);
         }
     }
@@ -1433,10 +1494,21 @@ future<> column_family::run_compaction(sstables::compaction_descriptor descripto
 void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
     dblog.info0("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
+
+    _compaction_manager.register_backlog_tracker(new_cs.get_backlog_tracker());
+    auto move_read_charges = new_cs.type() == _compaction_strategy.type();
+    _compaction_strategy.get_backlog_tracker().transfer_ongoing_charges(new_cs.get_backlog_tracker(), move_read_charges);
+
     auto new_sstables = new_cs.make_sstable_set(_schema);
     for (auto&& s : *_sstables->all()) {
+        new_cs.get_backlog_tracker().add_sstable(s);
         new_sstables.insert(s);
     }
+
+    if (!move_read_charges) {
+        _compaction_manager.stop_tracking_ongoing_compactions(this);
+    }
+
     // now exception safe:
     _compaction_strategy = std::move(new_cs);
     _sstables = std::move(new_sstables);
@@ -1979,7 +2051,7 @@ make_flush_cpu_controller(db::config& cfg, seastar::thread_scheduling_group* bac
     if (cfg.auto_adjust_flush_quota()) {
         return flush_cpu_controller(250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
     }
-    return flush_cpu_controller(flush_cpu_controller::disabled{backup});
+    return flush_cpu_controller(backlog_cpu_controller::disabled{backup});
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -1996,12 +2068,26 @@ database::database(const db::config& cfg)
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
     , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
     , _background_writer_scheduling_group(1ms, _cfg->background_writer_scheduling_quota())
-    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = 2.0f * _dirty_memory_manager.throttle_threshold()] {
+    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
     , _version(empty_version)
     , _compaction_manager(std::make_unique<compaction_manager>())
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _flush_io_controller(service::get_local_memtable_flush_priority(), 250ms, cfg.virtual_dirty_soft_limit(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+        return _dirty_memory_manager.virtual_dirty_memory() / limit;
+    })
+    , _compaction_io_controller(service::get_local_compaction_priority(), 250ms, [this] () -> float {
+        auto backlog = _compaction_manager->backlog();
+        // This means we are using an unimplemented strategy
+        if (std::isinf(backlog)) {
+            // returning the normalization factor means that we'll return the maximum
+            // output in the _control_points. We can get rid of this when we implement
+            // all strategies.
+            return compaction_io_controller::normalization_factor;
+        }
+        return _compaction_manager->backlog() / memory::stats().total_memory();
+    })
 {
     _compaction_manager->start();
     setup_metrics();
@@ -2009,31 +2095,32 @@ database::database(const db::config& cfg)
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
-void flush_cpu_controller::adjust() {
-    auto mid = _goal + (hard_dirty_limit - _goal) / 2;
+void backlog_controller::adjust() {
+    auto backlog = _current_backlog();
 
-    auto dirty = _current_dirty();
-    if (dirty < _goal) {
-        _current_quota = dirty * q1 / _goal;
-    } else if ((dirty >= _goal) && (dirty < mid)) {
-        _current_quota = q1 + (dirty - _goal) * (q2 - q1)/(mid - _goal);
-    } else {
-        _current_quota = q2 + (dirty - mid) * (qmax - q2) / (hard_dirty_limit - mid);
+    // interpolate to find out which region we are. This run infrequently and there are a fixed
+    // number of points so a simple loop will do.
+    size_t idx = 1;
+    while ((idx < _control_points.size()) && (_control_points[idx].input < backlog)) {
+        idx++;
     }
 
-    dblog.trace("dirty {}, goal {}, mid {} quota {}", dirty, _goal, mid, _current_quota);
+    control_point& cp = _control_points[idx];
+    control_point& last = _control_points[idx - 1];
+    float result = last.output + (backlog - last.input) * (cp.output - last.output)/(cp.input - last.input);
+    update_controller(result);
+}
+
+void backlog_cpu_controller::update_controller(float quota) {
+    _current_quota = quota;
     _scheduling_group.update_usage(_current_quota);
 }
 
-flush_cpu_controller::flush_cpu_controller(std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
-    : _goal(soft_limit / 2)
-    , _current_dirty(std::move(current_dirty))
-    , _interval(interval)
-    , _update_timer([this] { adjust(); })
-    , _scheduling_group(1ms, 0.0f)
-    , _current_scheduling_group(&_scheduling_group)
-{
-    _update_timer.arm_periodic(_interval);
+void backlog_io_controller::update_controller(float shares) {
+    if (!_inflight_update.available()) {
+        return; // next timer will fix it
+    }
+    _inflight_update = engine().update_shares_for_class(_io_priority, uint32_t(shares));
 }
 
 void
@@ -3514,6 +3601,10 @@ database::stop() {
         return _dirty_memory_manager.shutdown();
     }).then([this] {
         return _streaming_dirty_memory_manager.shutdown();
+    }).then([this] {
+        return _flush_io_controller.shutdown();
+    }).then([this] {
+        return _compaction_io_controller.shutdown();
     });
 }
 
@@ -3988,8 +4079,9 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
         return _cache.invalidate([p, truncated_at] {
             p->prune(truncated_at);
             dblog.debug("cleaning out row cache");
-        }).then([p]() mutable {
-            return parallel_for_each(p->remove, [](sstables::shared_sstable s) {
+        }).then([this, p]() mutable {
+            return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
+                _compaction_strategy.get_backlog_tracker().remove_sstable(s);
                 return sstables::delete_atomically({s});
             }).then([p] {
                 return make_ready_future<db::replay_position>(p->rp);
@@ -4224,10 +4316,11 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr)
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator)
 {
-    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
-        flat_mutation_reader reader = sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr);
+    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
+        flat_mutation_reader reader = sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr, monitor_generator(sst));
         if (sst->is_shared()) {
             using sig = bool (&)(const dht::decorated_key&);
             reader = make_filtering_reader(std::move(reader), sig(belongs_to_current_shard));
@@ -4256,10 +4349,11 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr)
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator)
 {
-    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
-        return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr);
+    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
+        return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr, monitor_generator(sst));
     };
     return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
@@ -4277,7 +4371,7 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
-                          seastar::shared_ptr<sstables::write_monitor> monitor,
+                          sstables::write_monitor& monitor,
                           bool backup, const io_priority_class& pc, bool leave_unsealed,
                           seastar::thread_scheduling_group *tsg) {
     sstables::sstable_writer_config cfg;
@@ -4285,15 +4379,16 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.thread_scheduling_group = tsg;
-    cfg.monitor = std::move(monitor);
+    cfg.monitor = &monitor;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc),
                                  mt.partition_count(), mt.schema(), cfg, pc);
 }
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
-    auto monitor = seastar::make_shared<permit_monitor>(sstable_write_permit::unconditional());
-    return write_memtable_to_sstable(mt, std::move(sst), std::move(monitor));
+    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst] (auto& monitor) {
+        return write_memtable_to_sstable(mt, std::move(sst), monitor);
+    });
 }
 
 std::ostream& operator<<(std::ostream& os, gc_clock::time_point tp) {

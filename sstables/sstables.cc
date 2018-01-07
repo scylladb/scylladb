@@ -73,9 +73,21 @@ logging::logger sstlog("sstable");
 
 static const db::config& get_config();
 
-seastar::shared_ptr<write_monitor> default_write_monitor() {
-    static thread_local seastar::shared_ptr<write_monitor> monitor = seastar::make_shared<noop_write_monitor>();
-    return monitor;
+// Because this is a noop and won't hold any state, it is better to use a global than a
+// thread_local. It will be faster, specially on non-x86.
+static noop_write_monitor default_noop_write_monitor;
+write_monitor& default_write_monitor() {
+    return default_noop_write_monitor;
+}
+
+static noop_read_monitor default_noop_read_monitor;
+read_monitor& default_read_monitor() {
+    return default_noop_read_monitor;
+}
+
+static no_read_monitoring noop_read_monitor_generator;
+read_monitor_generator& default_read_monitor_generator() {
+    return noop_read_monitor_generator;
 }
 
 static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
@@ -2339,6 +2351,8 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _sst.create_data().get();
     _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
     prepare_file_writer();
+
+    _monitor->on_write_started(_writer->offset_tracker());
     _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
     _sst._shards = { shard };
 }
@@ -2351,6 +2365,7 @@ void sstable_writer::consume_end_of_stream()
 {
     _components_writer->consume_end_of_stream();
     _components_writer = stdx::nullopt;
+    _monitor->on_data_write_completed();
     finish_file_writer();
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);

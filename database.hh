@@ -69,6 +69,7 @@
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/progress_monitor.hh"
 #include "sstables/version.hh"
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
@@ -77,7 +78,7 @@
 #include "db/view/view.hh"
 #include "lister.hh"
 #include "utils/phased_barrier.hh"
-#include "cpu_controller.hh"
+#include "backlog_controller.hh"
 #include "dirty_memory_manager.hh"
 #include "reader_resource_tracker.hh"
 
@@ -852,7 +853,8 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr);
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
 
 flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         lw_shared_ptr<sstables::sstable_set> sstables,
@@ -862,7 +864,8 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         reader_resource_tracker resource_tracker,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr);
+        mutation_reader::forwarding fwd_mr,
+        sstables::read_monitor_generator& monitor_generator = sstables::default_read_monitor_generator());
 
 class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
@@ -1091,6 +1094,8 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
+    flush_io_controller _flush_io_controller;
+    compaction_io_controller _compaction_io_controller;
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, timeout_clock::time_point timeout);

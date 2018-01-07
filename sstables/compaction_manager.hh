@@ -35,6 +35,7 @@
 #include <functional>
 #include "sstables/compaction.hh"
 #include "compaction_weight_registration.hh"
+#include "compaction_backlog_manager.hh"
 
 class column_family;
 class compacting_sstable_registration;
@@ -134,6 +135,8 @@ private:
     // Postpone compaction for a column family that couldn't be executed due to ongoing
     // similar-sized compaction.
     void postpone_compaction_for_column_family(column_family* cf);
+
+    compaction_backlog_manager _backlog_manager;
 public:
     compaction_manager();
     ~compaction_manager();
@@ -171,6 +174,10 @@ public:
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.
     future<> remove(column_family* cf);
 
+    // No longer interested in tracking backlog for compactions in this column
+    // family. For instance, we could be ALTERing TABLE to a different strategy.
+    void stop_tracking_ongoing_compactions(column_family* cf);
+
     const stats& get_stats() const {
         return _stats;
     }
@@ -194,6 +201,14 @@ public:
     // another compaction waiting on same weight can start as soon as possible. That's usually
     // called before compaction seals sstable and such and after all compaction work is done.
     void on_compaction_complete(compaction_weight_registration& weight_registration);
+
+    float backlog() {
+        return _backlog_manager.backlog();
+    }
+
+    void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
+        _backlog_manager.register_backlog_tracker(backlog_tracker);
+    }
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;

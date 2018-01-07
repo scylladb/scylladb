@@ -25,13 +25,14 @@
 #include "core/fstream.hh"
 #include "types.hh"
 #include "compress.hh"
+#include "progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
 
 namespace sstables {
 
 class file_writer {
     output_stream<char> _out;
-    uint64_t _offset = 0;
+    writer_offset_tracker _offset;
 public:
     file_writer(file f, file_output_stream_options options)
         : _out(make_file_output_stream(std::move(f), std::move(options))) {}
@@ -43,11 +44,11 @@ public:
     file_writer(file_writer&&) = default;
 
     future<> write(const char* buf, size_t n) {
-        _offset += n;
+        _offset.offset += n;
         return _out.write(buf, n);
     }
     future<> write(const bytes& s) {
-        _offset += s.size();
+        _offset.offset += s.size();
         return _out.write(s);
     }
     future<> flush() {
@@ -57,6 +58,10 @@ public:
         return _out.close();
     }
     uint64_t offset() const {
+        return _offset.offset;
+    }
+
+    const writer_offset_tracker& offset_tracker() const {
         return _offset;
     }
 };

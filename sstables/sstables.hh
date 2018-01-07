@@ -104,7 +104,7 @@ public:
     future<> read();
     future<> fast_forward_to(uint64_t begin, uint64_t end);
     future<> skip_to(indexable_element, uint64_t begin);
-    uint64_t position() const;
+    const reader_position_tracker& reader_position() const;
     bool eof() const;
     ~data_consume_context();
     data_consume_context(data_consume_context&&) noexcept;
@@ -129,7 +129,7 @@ struct sstable_writer_config {
     bool leave_unsealed = false;
     stdx::optional<db::replay_position> replay_position;
     seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
-    seastar::shared_ptr<write_monitor> monitor = default_write_monitor();
+    write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
 };
 
@@ -282,7 +282,8 @@ public:
         const query::partition_slice& slice,
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        read_monitor& monitor = default_read_monitor());
 
     flat_mutation_reader read_row_flat(schema_ptr schema, dht::ring_position_view key) {
         auto& full_slice = schema->full_slice();
@@ -297,7 +298,8 @@ public:
         const io_priority_class& pc = default_priority_class(),
         reader_resource_tracker resource_tracker = no_resource_tracking(),
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+        read_monitor& monitor = default_read_monitor());
 
     flat_mutation_reader read_range_rows_flat(schema_ptr schema, const dht::partition_range& range) {
         auto& full_slice = schema->full_slice();
@@ -877,7 +879,7 @@ class sstable_writer {
     std::unique_ptr<file_writer> _writer;
     stdx::optional<components_writer> _components_writer;
     shard_id _shard; // Specifies which shard new sstable will belong to.
-    seastar::shared_ptr<write_monitor> _monitor;
+    write_monitor* _monitor;
     bool _correctly_serialize_non_compound_range_tombstones;
 private:
     void prepare_file_writer();
@@ -888,7 +890,7 @@ public:
     ~sstable_writer();
     sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(std::move(o._monitor)),
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
             _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
     void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
     void consume(tombstone t) { _components_writer->consume(t); }
