@@ -266,7 +266,7 @@ void stream_session::received_failed_complete_message() {
 }
 
 void stream_session::abort() {
-    sslog.info("[Stream #{}] Aborted stream session, peer={}", plan_id(), peer);
+    sslog.info("[Stream #{}] Aborted stream session={}, peer={}, is_initialized={}", plan_id(), this, peer, is_initialized());
     close_session(stream_session_state::FAILED);
 }
 
@@ -366,6 +366,9 @@ void stream_session::transfer_task_completed_all() {
 }
 
 void stream_session::send_failed_complete_message() {
+    if (!is_initialized()) {
+        return;
+    }
     auto plan_id = this->plan_id();
     if (_received_failed_complete_message) {
         sslog.debug("[Stream #{}] Skip sending failed message back to peer", plan_id);
@@ -523,6 +526,10 @@ void stream_session::start() {
     on_initialization_complete().handle_exception([this] (auto ep) {
         this->on_error();
     });
+}
+
+bool stream_session::is_initialized() const {
+    return bool(_stream_result);
 }
 
 void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
