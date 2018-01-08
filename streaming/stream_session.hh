@@ -150,7 +150,7 @@ public:
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
     inet_address peer;
-    unsigned dst_cpu_id;
+    unsigned dst_cpu_id = 0;
 private:
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
@@ -230,6 +230,8 @@ public:
     void init(shared_ptr<stream_result_future> stream_result_);
 
     void start();
+
+    bool is_initialized() const;
 
     /**
      * Request data fetch task to this session.
