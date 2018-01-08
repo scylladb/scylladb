@@ -729,7 +729,7 @@ public:
     // The new range must not overlap with the previous range and
     // must be after it.
     //
-    stdx::optional<position_in_partition_view> fast_forward_to(position_range);
+    stdx::optional<position_in_partition_view> fast_forward_to(position_range, db::timeout_clock::time_point timeout);
 
     bool needs_skip() const {
         return (_skip_in_progress || !_in_progress)
@@ -1089,7 +1089,7 @@ public:
             _partition_finished = true;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         return ensure_initialized().then([this, &pr] {
             if (!is_initialized()) {
                 _end_of_stream = true;
@@ -1162,11 +1162,11 @@ public:
         }
         // If _ds is not created then next_partition() has no effect because there was no partition_start emitted yet.
     }
-    virtual future<> fast_forward_to(position_range cr) override {
+    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(cr.start());
         if (!_partition_finished) {
             _end_of_stream = false;
-            return advance_context(_consumer.fast_forward_to(std::move(cr)));
+            return advance_context(_consumer.fast_forward_to(std::move(cr), timeout));
         } else {
             _end_of_stream = true;
             return make_ready_future<>();
@@ -1249,7 +1249,7 @@ mp_row_consumer::push_ready_fragments() {
     return proceed::yes;
 }
 
-stdx::optional<position_in_partition_view> mp_row_consumer::fast_forward_to(position_range r) {
+stdx::optional<position_in_partition_view> mp_row_consumer::fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
     sstlog.trace("mp_row_consumer {}: fast_forward_to({})", this, r);
     _out_of_range = _is_mutation_end;
     _fwd_end = std::move(r).end();

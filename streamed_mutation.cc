@@ -353,7 +353,7 @@ streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_m
                     if (mf) {
                         this->push_mutation_fragment(std::move(*mf));
                     }
-                    return _sm.fast_forward_to(query::clustering_range{}).then([this, timeout] {
+                    return _sm.fast_forward_to(query::clustering_range{}, timeout).then([this, timeout] {
                         return this->fill_buffer(timeout);
                     });
                 });
@@ -421,7 +421,7 @@ streamed_mutation make_forwardable(streamed_mutation m) {
             });
         }
 
-        virtual future<> fast_forward_to(position_range pr) override {
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             _current = std::move(pr);
             _end_of_stream = false;
             forward_buffer_to(_current.start());
@@ -525,15 +525,15 @@ protected:
         }
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range pr) override {
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
 
         _next_readers.clear();
         _readers.clear();
-        return parallel_for_each(_original_readers, [this, &pr] (streamed_mutation& rd) {
+        return parallel_for_each(_original_readers, [this, &pr, timeout] (streamed_mutation& rd) {
             _next_readers.emplace_back(&rd);
-            return rd.fast_forward_to(pr);
+            return rd.fast_forward_to(pr, timeout);
         });
     }
 public:

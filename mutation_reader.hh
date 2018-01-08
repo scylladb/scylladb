@@ -68,7 +68,7 @@ public:
     public:
         virtual ~impl() {}
         virtual future<streamed_mutation_opt> operator()() = 0;
-        virtual future<> fast_forward_to(const dht::partition_range&) {
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) {
             throw std::bad_function_call();
         }
     };
@@ -94,7 +94,7 @@ public:
     // previous fast forward target).
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
-    future<> fast_forward_to(const dht::partition_range& pr) { return _impl->fast_forward_to(pr); }
+    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout = db::no_timeout) { return _impl->fast_forward_to(pr, timeout); }
 };
 
 // Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
@@ -115,7 +115,7 @@ public:
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) = 0;
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) = 0;
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) = 0;
 
     // Can be false-positive but never false-negative!
     bool has_new_readers(const dht::token* const t) const noexcept {
@@ -191,15 +191,15 @@ public:
             _rd.next_partition();
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _end_of_stream = false;
-        return _rd.fast_forward_to(pr);
+        return _rd.fast_forward_to(pr, timeout);
     }
-    virtual future<> fast_forward_to(position_range pr) override {
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
-        return _rd.fast_forward_to(std::move(pr));
+        return _rd.fast_forward_to(std::move(pr), timeout);
     }
 };
 

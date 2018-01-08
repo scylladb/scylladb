@@ -253,7 +253,7 @@ protected:
         _last = {};
         return ret;
     }
-    future<> fast_forward_to(const dht::partition_range& pr) {
+    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
         _range = &pr;
         _last = { };
         return make_ready_future<>();
@@ -339,17 +339,17 @@ public:
             }
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _end_of_stream = false;
         clear_buffer();
         if (_delegate_range) {
-            return _delegate->fast_forward_to(pr);
+            return _delegate->fast_forward_to(pr, timeout);
         } else {
             _delegate = {};
-            return iterator_reader::fast_forward_to(pr);
+            return iterator_reader::fast_forward_to(pr, timeout);
         }
     }
-    virtual future<> fast_forward_to(position_range cr) override {
+    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");
     };
 };
@@ -489,10 +489,10 @@ public:
             _partition_reader = stdx::nullopt;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range&) override {
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
         throw std::bad_function_call();
     }
-    virtual future<> fast_forward_to(position_range) override {
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
         throw std::bad_function_call();
     }
 };

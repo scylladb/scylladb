@@ -277,8 +277,8 @@ public:
         /*
          * fast_forward_to is forbidden on flat_mutation_reader created for a single partition.
          */
-        virtual future<> fast_forward_to(const dht::partition_range&) = 0;
-        virtual future<> fast_forward_to(position_range) = 0;
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -346,8 +346,8 @@ public:
     // previous fast forward target).
     // pr needs to be valid until the reader is destroyed or fast_forward_to()
     // is called again.
-    future<> fast_forward_to(const dht::partition_range& pr) {
-        return _impl->fast_forward_to(pr);
+    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->fast_forward_to(pr, timeout);
     }
     // Skips to a later range of rows.
     // The new range must not overlap with the current range.
@@ -370,8 +370,8 @@ public:
     //
     // When forwarding mode is not enabled, fast_forward_to()
     // cannot be used.
-    future<> fast_forward_to(position_range cr) {
-        return _impl->fast_forward_to(std::move(cr));
+    future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->fast_forward_to(std::move(cr), timeout);
     }
     bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
@@ -455,12 +455,12 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
                 _reader.next_partition();
             }
         }
-        virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
             _end_of_stream = false;
             return _reader.fast_forward_to(pr);
         }
-        virtual future<> fast_forward_to(position_range pr) override {
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             throw std::bad_function_call();
         }
     };

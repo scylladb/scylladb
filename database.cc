@@ -494,7 +494,7 @@ public:
                 }));
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _pr = &pr;
 
         dht::ring_position_comparator cmp(*_s);

@@ -272,10 +272,10 @@ public:
             _end_of_stream = true;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another partition.");
     };
-    virtual future<> fast_forward_to(position_range cr) override {
+    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         throw std::runtime_error("This reader can't be fast forwarded to another position.");
     };
 };

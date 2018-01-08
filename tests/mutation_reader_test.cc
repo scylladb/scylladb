@@ -586,7 +586,7 @@ public:
         }
         return readers;
     }
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         return create_new_readers(&pr.start()->value().token());
     }
 };
@@ -789,7 +789,7 @@ public:
         }
     }
 
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         ++_ff_count;
         // Don't forward this to the underlying reader, it will force us
         // to come up with meaningful partition-ranges which is hard and
@@ -797,7 +797,7 @@ public:
         return make_ready_future<>();
     }
 
-    virtual future<> fast_forward_to(position_range) override {
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) override {
         throw std::bad_function_call();
     }
 

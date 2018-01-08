@@ -310,7 +310,7 @@ public:
     }
 };
 
-future<> read_context::create_underlying(bool skip_first_fragment) {
+future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_clock::time_point timeout) {
     if (_range_query) {
         // FIXME: Singular-range mutation readers don't support fast_forward_to(), so need to use a wide range
         // here in case the same reader will need to be fast forwarded later.
@@ -318,7 +318,7 @@ future<> read_context::create_underlying(bool skip_first_fragment) {
     } else {
         _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
     }
-    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase).then([this, skip_first_fragment] {
+    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase, timeout).then([this, skip_first_fragment] {
         _underlying_snapshot = {};
         if (skip_first_fragment) {
             return _underlying.underlying()().then([](auto &&mf) {});
@@ -349,7 +349,7 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        return _read_context->create_underlying(false).then([this, phase] {
+        return _read_context->create_underlying(false, timeout).then([this, phase] {
           return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
@@ -416,12 +416,12 @@ public:
             _end_of_stream = true;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range&) override {
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _end_of_stream = true;
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range pr) override {
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         if (!_reader) {
             _end_of_stream = true;
             return make_ready_future<>();
@@ -429,7 +429,7 @@ public:
         assert(bool(_read_context->fwd()));
         _end_of_stream = false;
         forward_buffer_to(pr.start());
-        return _reader->fast_forward_to(std::move(pr));
+        return _reader->fast_forward_to(std::move(pr), timeout);
     }
 };
 
@@ -536,7 +536,7 @@ public:
         });
     }
 
-    future<> fast_forward_to(dht::partition_range&& pr) {
+    future<> fast_forward_to(dht::partition_range&& pr, db::timeout_clock::time_point timeout) {
         if (!pr.start()) {
             _last_key = row_cache::previous_entry_pointer();
         } else if (!pr.start()->is_inclusive() && pr.start()->value().has_key()) {
@@ -546,7 +546,7 @@ public:
             _last_key = {};
         }
 
-        return _reader.fast_forward_to(std::move(pr));
+        return _reader.fast_forward_to(std::move(pr), timeout);
     }
 };
 
@@ -574,7 +574,7 @@ private:
                            : dht::ring_position_view::min();
     }
 
-    flat_mutation_reader_opt do_read_from_primary() {
+    flat_mutation_reader_opt do_read_from_primary(db::timeout_clock::time_point timeout) {
         return _cache._read_section(_cache._tracker.region(), [this] {
             return with_linearized_managed_bytes([&] () -> flat_mutation_reader_opt {
                 bool not_moved = true;
@@ -622,18 +622,18 @@ private:
         });
     }
 
-    future<flat_mutation_reader_opt> read_from_primary() {
-        auto fro = do_read_from_primary();
+    future<flat_mutation_reader_opt> read_from_primary(db::timeout_clock::time_point timeout) {
+        auto fro = do_read_from_primary(timeout);
         if (!_secondary_in_progress) {
             return make_ready_future<flat_mutation_reader_opt>(std::move(fro));
         }
-        return _secondary_reader.fast_forward_to(std::move(_secondary_range)).then([this] {
-            return read_from_secondary();
+        return _secondary_reader.fast_forward_to(std::move(_secondary_range), timeout).then([this, timeout] {
+            return read_from_secondary(timeout);
         });
     }
 
-    future<flat_mutation_reader_opt> read_from_secondary() {
-        return _secondary_reader().then([this] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
+    future<flat_mutation_reader_opt> read_from_secondary(db::timeout_clock::time_point timeout) {
+        return _secondary_reader().then([this, timeout] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
             if (fropt) {
                 if (ps) {
                     push_mutation_fragment(std::move(*ps));
@@ -641,12 +641,12 @@ private:
                 return make_ready_future<flat_mutation_reader_opt>(std::move(fropt));
             } else {
                 _secondary_in_progress = false;
-                return read_from_primary();
+                return read_from_primary(timeout);
             }
         });
     }
-    future<> read_next_partition() {
-        return (_secondary_in_progress ? read_from_secondary() : read_from_primary()).then([this] (auto&& fropt) {
+    future<> read_next_partition(db::timeout_clock::time_point timeout) {
+        return (_secondary_in_progress ? read_from_secondary(timeout) : read_from_primary(timeout)).then([this] (auto&& fropt) {
             if (bool(fropt)) {
                 _reader = std::move(fropt);
             } else {
@@ -676,7 +676,7 @@ public:
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (!_reader) {
-                return read_next_partition();
+                return read_next_partition(timeout);
             } else {
                 return fill_buffer_from(*_reader, timeout).then([this] (bool reader_finished) {
                     if (reader_finished) {
@@ -700,7 +700,7 @@ public:
             }
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _reader = {};
         _end_of_stream = false;
@@ -711,11 +711,11 @@ public:
         _lower_bound = pr.start();
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range cr) override {
+    virtual future<> fast_forward_to(position_range cr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(cr.start());
         if (_reader) {
             _end_of_stream = false;
-            return _reader->fast_forward_to(std::move(cr));
+            return _reader->fast_forward_to(std::move(cr), timeout);
         } else {
             _end_of_stream = true;
             return make_ready_future<>();

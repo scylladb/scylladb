@@ -108,7 +108,7 @@ public:
             _partition_reader = stdx::nullopt;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _prange = &pr;
         _keyspaces = stdx::nullopt;
@@ -116,11 +116,11 @@ public:
         _end_of_stream = false;
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range pr) override {
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
         if (_partition_reader) {
-            return _partition_reader->fast_forward_to(std::move(pr));
+            return _partition_reader->fast_forward_to(std::move(pr), timeout);
         }
         return make_ready_future<>();
     }

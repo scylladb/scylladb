@@ -610,7 +610,7 @@ public:
         virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
 
         // See streamed_mutation::fast_forward_to().
-        virtual future<> fast_forward_to(position_range) {
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
             throw std::bad_function_call(); // FIXME: make pure virtual after implementing everywhere.
         }
 
@@ -668,8 +668,8 @@ public:
     // The new range must not overlap with the current range.
     //
     // See docs of streamed_mutation::forwarding for semantics.
-    future<> fast_forward_to(position_range pr) {
-        return _impl->fast_forward_to(std::move(pr));
+    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->fast_forward_to(std::move(pr), timeout);
     }
 
     future<mutation_fragment_opt> operator()() {
@@ -847,10 +847,10 @@ streamed_mutation transform(streamed_mutation sm, T t) {
             });
         }
 
-        virtual future<> fast_forward_to(position_range pr) override {
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) override {
             _end_of_stream = false;
             forward_buffer_to(pr.start());
-            return _sm.fast_forward_to(std::move(pr));
+            return _sm.fast_forward_to(std::move(pr), timeout);
         }
     };
     return make_streamed_mutation<reader>(std::move(sm), std::move(t));
