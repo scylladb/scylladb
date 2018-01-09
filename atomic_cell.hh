@@ -57,7 +57,6 @@ class atomic_cell_type final {
 private:
     static constexpr int8_t LIVE_FLAG = 0x01;
     static constexpr int8_t EXPIRY_FLAG = 0x02; // When present, expiry field is present. Set only for live cells
-    static constexpr int8_t REVERT_FLAG = 0x04; // transient flag used to efficiently implement ReversiblyMergeable for atomic cells.
     static constexpr int8_t COUNTER_UPDATE_FLAG = 0x08; // Cell is a counter update.
     static constexpr int8_t COUNTER_IN_PLACE_REVERT = 0x10;
     static constexpr unsigned flags_size = 1;
@@ -74,15 +73,8 @@ private:
     static bool is_counter_update(bytes_view cell) {
         return cell[0] & COUNTER_UPDATE_FLAG;
     }
-    static bool is_revert_set(bytes_view cell) {
-        return cell[0] & REVERT_FLAG;
-    }
     static bool is_counter_in_place_revert_set(bytes_view cell) {
         return cell[0] & COUNTER_IN_PLACE_REVERT;
-    }
-    template<typename BytesContainer>
-    static void set_revert(BytesContainer& cell, bool revert) {
-        cell[0] = (cell[0] & ~REVERT_FLAG) | (revert * REVERT_FLAG);
     }
     template<typename BytesContainer>
     static void set_counter_in_place_revert(BytesContainer& cell, bool flag) {
@@ -216,9 +208,6 @@ public:
     bool is_counter_update() const {
         return atomic_cell_type::is_counter_update(_data);
     }
-    bool is_revert_set() const {
-        return atomic_cell_type::is_revert_set(_data);
-    }
     bool is_counter_in_place_revert_set() const {
         return atomic_cell_type::is_counter_in_place_revert_set(_data);
     }
@@ -273,9 +262,6 @@ public:
     }
     bytes_view serialize() const {
         return _data;
-    }
-    void set_revert(bool revert) {
-        atomic_cell_type::set_revert(_data, revert);
     }
     void set_counter_in_place_revert(bool flag) {
         atomic_cell_type::set_counter_in_place_revert(_data, flag);
