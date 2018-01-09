@@ -52,7 +52,6 @@ public:
     }
 
     reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        BOOST_TEST_MESSAGE(sprint("Expecting %s", m));
         auto mo = read_next();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
@@ -61,7 +60,6 @@ public:
     }
 
     reader_assertions& produces_compacted(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        BOOST_TEST_MESSAGE(sprint("Expecting after compaction: %s", m));
         auto mo = read_next();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
