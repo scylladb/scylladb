@@ -2822,6 +2822,12 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
             later().get();
             cache.evict();
+
+            // Don't allow backlog to grow too much to avoid bad_alloc
+            const auto max_active_versions = 10;
+            while (versions.size() > max_active_versions) {
+                later().get();
+            }
         }
 
         done = true;
