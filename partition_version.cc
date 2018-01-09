@@ -112,10 +112,10 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduc
 
 }
 
-row partition_snapshot::static_row() const {
-    return ::squashed<row>(version(),
+::static_row partition_snapshot::static_row() const {
+    return ::static_row(::squashed<row>(version(),
                          [] (const mutation_partition& mp) -> const row& { return mp.static_row(); },
-                         [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); });
+                         [this] (row& a, const row& b) { a.apply(*_schema, column_kind::static_column, b); }));
 }
 
 bool partition_snapshot::static_row_continuous() const {

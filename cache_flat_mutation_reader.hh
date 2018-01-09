@@ -160,11 +160,11 @@ inline
 future<> cache_flat_mutation_reader::process_static_row() {
     if (_snp->static_row_continuous()) {
         _read_context->cache().on_row_hit();
-        row sr = _lsa_manager.run_in_read_section([this] {
+        static_row sr = _lsa_manager.run_in_read_section([this] {
             return _snp->static_row();
         });
         if (!sr.empty()) {
-            push_mutation_fragment(mutation_fragment(static_row(std::move(sr))));
+            push_mutation_fragment(mutation_fragment(std::move(sr)));
         }
         return make_ready_future<>();
     } else {
