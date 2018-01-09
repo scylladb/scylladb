@@ -656,3 +656,64 @@ SEASTAR_TEST_CASE(test_consume_flat) {
         test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes));
     });
 }
+
+SEASTAR_TEST_CASE(test_make_forwardable) {
+    return seastar::async([] {
+        simple_schema s;
+
+        auto keys = s.make_pkeys(10);
+
+        auto crs = boost::copy_range < std::vector <
+                   mutation_fragment >> (boost::irange(0, 3) | boost::adaptors::transformed([&](auto n) {
+                       return s.make_row(s.make_ckey(n), "value");
+                   }));
+
+        auto ms = boost::copy_range < std::vector < mutation >> (keys | boost::adaptors::transformed([&](auto &key) {
+            auto m = mutation(key, s.schema());
+            for (auto &mf : crs) {
+                m.apply(mf);
+            }
+            return m;
+        }));
+
+        auto make_reader = [&] (auto& range) {
+            return assert_that(
+                make_forwardable(flat_mutation_reader_from_mutations(ms, range, streamed_mutation::forwarding::no)));
+        };
+
+        auto test = [&] (auto& rd, auto& partition) {
+            rd.produces_partition_start(partition.decorated_key(), partition.partition().partition_tombstone());
+            rd.produces_end_of_stream();
+            rd.fast_forward_to(position_range::all_clustered_rows());
+            for (auto &row : partition.partition().clustered_rows()) {
+                rd.produces_row_with_key(row.key());
+            }
+            rd.produces_end_of_stream();
+            rd.next_partition();
+        };
+
+        auto rd = make_reader(query::full_partition_range);
+
+        for (auto& partition : ms) {
+            test(rd, partition);
+        }
+
+        auto single_range = dht::partition_range::make_singular(ms[0].decorated_key());
+
+        auto rd2 = make_reader(single_range);
+
+        rd2.produces_partition_start(ms[0].decorated_key(), ms[0].partition().partition_tombstone());
+        rd2.produces_end_of_stream();
+        rd2.fast_forward_to(position_range::all_clustered_rows());
+        rd2.produces_row_with_key(ms[0].partition().clustered_rows().begin()->key());
+        rd2.produces_row_with_key(std::next(ms[0].partition().clustered_rows().begin())->key());
+
+        auto remaining_range = dht::partition_range::make_starting_with({ms[0].decorated_key(), false});
+
+        rd2.fast_forward_to(remaining_range);
+
+        for (int i = 1; i < ms.size(); ++i) {
+            test(rd2, ms[i]);
+        }
+    });
+}
