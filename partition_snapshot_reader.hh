@@ -163,17 +163,7 @@ private:
 
     mutation_fragment_opt read_static_row() {
         _last_entry = position_in_partition(position_in_partition::static_row_tag_t());
-        mutation_fragment_opt sr;
-        for (auto&& v : _snapshot->versions()) {
-            if (!v.partition().static_row().empty()) {
-                if (!sr) {
-                    sr = mutation_fragment(static_row(v.partition().static_row()));
-                } else {
-                    sr->as_mutable_static_row().apply(*_schema, v.partition().static_row());
-                }
-            }
-        }
-        return sr;
+        return mutation_fragment(_snapshot->static_row());
     }
 
     mutation_fragment_opt read_next() {
