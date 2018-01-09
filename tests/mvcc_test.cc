@@ -415,7 +415,7 @@ static mutation_partition read_using_cursor(partition_snapshot& snap) {
     for (auto&& rt : snap.range_tombstones()) {
         mp.apply_delete(*snap.schema(), rt);
     }
-    mp.apply(*snap.schema(), static_row(snap.static_row()));
+    mp.apply(*snap.schema(), static_row(snap.static_row(false)));
     mp.set_static_row_continuous(snap.static_row_continuous());
     mp.apply(snap.partition_tombstone());
     return mp;
