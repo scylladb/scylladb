@@ -61,14 +61,14 @@ public:
 class role_already_exists : public roles_argument_exception {
 public:
     explicit role_already_exists(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The '%s' role already exists.", role_name)) {
+            : roles_argument_exception(sprint("Role %s already exists.", role_name)) {
     }
 };
 
 class nonexistant_role : public roles_argument_exception {
 public:
     explicit nonexistant_role(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The role '%s' does not exist.", role_name)) {
+            : roles_argument_exception(sprint("Role %s doesn't exist.", role_name)) {
     }
 };
 
@@ -76,7 +76,7 @@ class role_already_included : public roles_argument_exception {
 public:
     role_already_included(stdx::string_view grantee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' already includes role '%s'.", grantee_name, role_name)) {
+                      sprint("%s already includes role %s.", grantee_name, role_name)) {
     }
 };
 
@@ -84,7 +84,7 @@ class revoke_ungranted_role : public roles_argument_exception {
 public:
     revoke_ungranted_role(stdx::string_view revokee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' was not granted role '%s', so it cannot be revoked.", revokee_name, role_name)) {
+                      sprint("%s was not granted role %s, so it cannot be revoked.", revokee_name, role_name)) {
     }
 };
 

@@ -148,7 +148,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
             try {
                 if (auth::has_role(as, user, _role).get0()) {
                     throw exceptions::unauthorized_exception(
-                        "You are not allowed to alter your own superuser status or that of a role granted to you.");
+                        "You aren't allowed to alter your own superuser status or that of a role granted to you.");
                 }
             } catch (const auth::nonexistant_role& e) {
                 throw exceptions::invalid_request_exception(e.what());
