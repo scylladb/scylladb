@@ -342,6 +342,10 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             _end_of_stream = false;
             clear_buffer();
             _next = {};
+            _current = {
+                position_in_partition(position_in_partition::partition_start_tag_t()),
+                position_in_partition(position_in_partition::after_static_row_tag_t())
+            };
             return _underlying.fast_forward_to(pr);
         }
     };
