@@ -22,6 +22,10 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/irange.hpp>
+#include <vector>
+#include <random>
 
 #include "utils/dynamic_bitset.hh"
 
@@ -111,4 +115,110 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 174);
+}
+
+static void test_random_ops(size_t size, std::random_device& rd ) {
+    // BOOST_REQUIRE and friends are very slow, just use regular throws instead.
+    auto require = [] (bool b) {
+        if (!b) {
+            throw 0;
+        }
+    };
+    auto require_equal = [&] (const auto& a, const auto& b) {
+        require(a == b);
+    };
+
+    utils::dynamic_bitset db{size};
+    std::vector<bool> bv(size, false);
+    std::uniform_int_distribution<size_t> global_op_dist(0, size-1);
+    std::uniform_int_distribution<size_t> bit_dist(0, size-1);
+    std::uniform_int_distribution<int> global_op_selection_dist(0, 1);
+    std::uniform_int_distribution<int> single_op_selection_dist(0, 5);
+    auto is_set = [&] (size_t i) -> bool {
+        return bv[i];
+    };
+    size_t limit = size * 100;
+#ifdef DEBUG
+    limit = std::min<size_t>(limit, 20000);
+#endif
+    for (size_t i = 0; i != limit; ++i) {
+        if (global_op_dist(rd) == 0) {
+            // perform a global operation
+            switch (global_op_selection_dist(rd)) {
+            case 0:
+                for (size_t j = 0; j != size; ++j) {
+                    db.clear(j);
+                    bv[j] = false;
+                }
+                break;
+            case 1:
+                for (size_t j = 0; j != size; ++j) {
+                    db.set(j);
+                    bv[j] = true;
+                }
+                break;
+            }
+        } else {
+            // perform a single-bit operation
+            switch (single_op_selection_dist(rd)) {
+            case 0: {
+                auto bit = bit_dist(rd);
+                db.set(bit);
+                bv[bit] = true;
+                break;
+            }
+            case 1: {
+                auto bit = bit_dist(rd);
+                db.clear(bit);
+                bv[bit] = false;
+                break;
+            }
+            case 2: {
+                auto bit = bit_dist(rd);
+                bool dbb = db.test(bit);
+                bool bvb = bv[bit];
+                require_equal(dbb, bvb);
+                break;
+            }
+            case 3: {
+                auto bit = bit_dist(rd);
+                auto next = db.find_next_set(bit);
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(bit+1, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(bit+1, next), is_set));
+                    require(is_set(next));
+                }
+                break;            }
+            case 4: {
+                auto next = db.find_first_set();
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, next), is_set));
+                    require(is_set(next));
+                }
+                break;
+            }
+            case 5: {
+                auto next = db.find_last_set();
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(next + 1, size), is_set));
+                    require(is_set(next));
+                }
+                break;
+            }
+            }
+        }
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE(test_random_operations) {
+    std::random_device rd;
+    for (auto size : { 1, 63, 64, 65, 2000, 4096-65, 4096-64, 4096-63, 4096-1, 4096, 4096+1, 262144-1, 262144, 262144+1}) {
+        BOOST_CHECK_NO_THROW(test_random_ops(size, rd));
+    }
 }
