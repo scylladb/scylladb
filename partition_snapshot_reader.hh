@@ -163,7 +163,11 @@ private:
 
     mutation_fragment_opt read_static_row() {
         _last_entry = position_in_partition(position_in_partition::static_row_tag_t());
-        return mutation_fragment(_snapshot->static_row());
+        auto sr = _snapshot->static_row();
+        if (!sr.empty()) {
+            return mutation_fragment(std::move(sr));
+        }
+        return stdx::nullopt;
     }
 
     mutation_fragment_opt read_next() {
