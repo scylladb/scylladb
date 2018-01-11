@@ -27,6 +27,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "to_string.hh"
+
 BOOST_AUTO_TEST_CASE(root_of) {
     //
     // data
@@ -160,4 +162,14 @@ BOOST_AUTO_TEST_CASE(output) {
 
     BOOST_REQUIRE_EQUAL(sprint("%s", auth::root_role_resource()), "<all roles>");
     BOOST_REQUIRE_EQUAL(sprint("%s", auth::make_role_resource("joe")), "<role joe>");
+}
+
+BOOST_AUTO_TEST_CASE(expand) {
+    const auto r1 = auth::root_data_resource();
+    const auto r2 = auth::make_data_resource("ks");
+    const auto r3 = auth::make_data_resource("ks", "tab");
+
+    BOOST_REQUIRE_EQUAL(auth::expand_resource_family(r1), (auth::resource_set{r1}));
+    BOOST_REQUIRE_EQUAL(auth::expand_resource_family(r2), (auth::resource_set{r1, r2}));
+    BOOST_REQUIRE_EQUAL(auth::expand_resource_family(r3), (auth::resource_set{r1, r2, r3}));
 }

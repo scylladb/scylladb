@@ -275,4 +275,22 @@ const resource& root_role_resource() {
     return the_root_role_resource;
 }
 
+resource_set expand_resource_family(const resource& rr) {
+    resource r = rr;
+    resource_set rs;
+
+    while (true) {
+        const auto pr = r.parent();
+        rs.insert(std::move(r));
+
+        if (!pr) {
+            break;
+        }
+
+        r = std::move(*pr);
+    }
+
+    return rs;
+}
+
 }

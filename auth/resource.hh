@@ -246,4 +246,9 @@ namespace auth {
 
 using resource_set = std::unordered_set<resource>;
 
+//
+// A resource and all of its parents.
+//
+resource_set expand_resource_family(const resource&);
+
 }
