@@ -211,8 +211,8 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
         service& ser,
         const authenticated_user& performer,
         permission_set set,
-        optional<resource> resource,
-        optional<sstring> role) const {
+        std::optional<resource> resource,
+        std::optional<sstring> role) const {
     return when_all_succeed(
             auth::has_superuser(ser, performer),
             auth::get_roles(ser, performer)).then(

@@ -72,8 +72,8 @@ public:
             service&,
             const authenticated_user& performer,
             permission_set,
-            stdx::optional<resource>,
-            stdx::optional<sstring>) const override {
+            std::optional<resource>,
+            std::optional<sstring>) const override {
         throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
     }
 

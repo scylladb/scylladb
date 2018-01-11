@@ -162,7 +162,7 @@ sstring resource::name() const {
     return boost::algorithm::join(_parts, "/");
 }
 
-stdx::optional<resource> resource::parent() const {
+std::optional<resource> resource::parent() const {
     if (_parts.size() == 1) {
         return {};
     }
@@ -210,7 +210,7 @@ data_resource_view::data_resource_view(const resource& r) : _resource(r) {
     }
 }
 
-stdx::optional<stdx::string_view> data_resource_view::keyspace() const {
+std::optional<stdx::string_view> data_resource_view::keyspace() const {
     if (_resource._parts.size() == 1) {
         return {};
     }
@@ -218,7 +218,7 @@ stdx::optional<stdx::string_view> data_resource_view::keyspace() const {
     return _resource._parts[1];
 }
 
-stdx::optional<stdx::string_view> data_resource_view::table() const {
+std::optional<stdx::string_view> data_resource_view::table() const {
     if (_resource._parts.size() <= 2) {
         return {};
     }
@@ -264,7 +264,7 @@ role_resource_view::role_resource_view(const resource& r) : _resource(r) {
     }
 }
 
-stdx::optional<stdx::string_view> role_resource_view::role() const {
+std::optional<stdx::string_view> role_resource_view::role() const {
     if (_resource._parts.size() == 1) {
         return {};
     }

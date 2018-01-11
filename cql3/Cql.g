@@ -1019,8 +1019,8 @@ revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
 
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
-		std::experimental::optional<auth::resource> r;
-		std::experimental::optional<sstring> u;
+		std::optional<auth::resource> r;
+		std::optional<sstring> u;
 		bool recursive = true;
     }
     : K_LIST

@@ -76,7 +76,12 @@ public:
     virtual future<> revoke(const authenticated_user&, permission_set, resource, sstring) override;
 
     virtual future<std::vector<permission_details>>
-    list(service&, const authenticated_user&, permission_set, optional<resource>, optional<sstring>) const override;
+    list(
+            service&,
+            const authenticated_user&,
+            permission_set,
+            std::optional<resource>,
+            std::optional<sstring>) const override;
 
     virtual future<> revoke_all(sstring) override;
 

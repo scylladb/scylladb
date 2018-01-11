@@ -187,7 +187,7 @@ future<bool> service::client_state::check_has_permission(auth::permission p, aut
         return make_ready_future<bool>(true);
     }
 
-    std::experimental::optional<auth::resource> parent = resource.parent();
+    std::optional<auth::resource> parent = resource.parent();
 
     return _auth_service->get_permissions(*_user->name, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
         if (set.contains(p)) {

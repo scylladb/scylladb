@@ -231,8 +231,8 @@ public:
             service& ser,
             const authenticated_user& user,
             permission_set ps,
-            optional<resource> r,
-            optional<sstring> s) const override {
+            std::optional<resource> r,
+            std::optional<sstring> s) const override {
         return _authorizer->list(ser, user, std::move(ps), std::move(r), std::move(s));
     }
 

@@ -41,10 +41,10 @@
 
 #pragma once
 
-#include <experimental/optional>
 #include <experimental/string_view>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -122,7 +122,7 @@ public:
     ///
     sstring name() const;
 
-    stdx::optional<resource> parent() const;
+    std::optional<resource> parent() const;
 
     permission_set applicable_permissions() const;
 
@@ -172,9 +172,9 @@ public:
     ///
     explicit data_resource_view(const resource& r);
 
-    stdx::optional<stdx::string_view> keyspace() const;
+    std::optional<stdx::string_view> keyspace() const;
 
-    stdx::optional<stdx::string_view> table() const;
+    std::optional<stdx::string_view> table() const;
 };
 
 std::ostream& operator<<(std::ostream&, const data_resource_view&);
@@ -195,7 +195,7 @@ public:
     ///
     explicit role_resource_view(const resource&);
 
-    stdx::optional<stdx::string_view> role() const;
+    std::optional<stdx::string_view> role() const;
 };
 
 std::ostream& operator<<(std::ostream&, const role_resource_view&);

@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 #include <tuple>
 
@@ -50,6 +51,7 @@
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "seastarx.hh"
+#include "stdx.hh"
 
 namespace auth {
 
@@ -66,8 +68,6 @@ struct permission_details {
         return std::tie(user, resource, permissions) < std::tie(v.user, v.resource, v.permissions);
     }
 };
-
-using std::experimental::optional;
 
 ///
 /// Abstract interface for authorizing users to access resources.
@@ -119,8 +119,8 @@ public:
             service&,
             const authenticated_user& performer,
             permission_set matching,
-            optional<resource> resource,
-            optional<sstring> user) const = 0;
+            std::optional<resource> resource,
+            std::optional<sstring> user) const = 0;
 
     ///
     /// Revoke all permissions granted to a particular user.

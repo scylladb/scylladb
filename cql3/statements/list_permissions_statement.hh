@@ -41,7 +41,7 @@
 
 #pragma once
 
-#include <experimental/optional>
+#include <optional>
 
 #include "authorization_statement.hh"
 #include "auth/permission.hh"
@@ -54,12 +54,12 @@ namespace statements {
 class list_permissions_statement : public authorization_statement {
 private:
     auth::permission_set _permissions;
-    std::experimental::optional<auth::resource> _resource;
-    std::experimental::optional<sstring> _username;
+    std::optional<auth::resource> _resource;
+    std::optional<sstring> _username;
     bool _recursive;
 
 public:
-    list_permissions_statement(auth::permission_set, std::experimental::optional<auth::resource>, std::experimental::optional<sstring>, bool);
+    list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
 
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
     future<> check_access(const service::client_state&) override;
