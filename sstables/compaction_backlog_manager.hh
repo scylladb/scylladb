@@ -114,6 +114,7 @@ class compaction_backlog_manager {
     void remove_backlog_tracker(compaction_backlog_tracker* tracker);
     friend class compaction_backlog_tracker;
 public:
+    ~compaction_backlog_manager();
     double backlog() const;
     void register_backlog_tracker(compaction_backlog_tracker& tracker);
 };

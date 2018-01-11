@@ -663,3 +663,9 @@ void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tra
     tracker._manager = this;
     _backlog_trackers.insert(&tracker);
 }
+
+compaction_backlog_manager::~compaction_backlog_manager() {
+    for (auto* tracker : _backlog_trackers) {
+        tracker->_manager = nullptr;
+    }
+}
