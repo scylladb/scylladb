@@ -1104,7 +1104,7 @@ with open(buildfile, 'w') as f:
         rule configure
           command = {python} configure.py $configure_args
           generator = 1
-        build build.ninja: configure | configure.py
+        build build.ninja: configure | configure.py seastar/configure.py
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
