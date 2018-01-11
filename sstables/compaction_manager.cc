@@ -599,7 +599,7 @@ void compaction_manager::on_compaction_complete(compaction_weight_registration& 
     reevalute_postponed_compactions();
 }
 
-double compaction_backlog_tracker::backlog() {
+double compaction_backlog_tracker::backlog() const {
     return _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 

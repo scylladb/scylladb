@@ -422,7 +422,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         double contribution = 0;
     };
 
-    inflight_component partial_backlog(compaction_backlog_tracker::ongoing_writes& ongoing_writes) {
+    inflight_component partial_backlog(const compaction_backlog_tracker::ongoing_writes& ongoing_writes) const {
         inflight_component in;
         for (auto& swp :  ongoing_writes) {
             auto written = swp.second->written();
@@ -434,7 +434,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         return in;
     }
 
-    inflight_component compacted_backlog(compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) {
+    inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
         inflight_component in;
         for (auto& crp : ongoing_compactions) {
             auto compacted = crp.second->compacted();
@@ -448,7 +448,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         return log(x) * inv_log_4;
     }
 public:
-    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) {
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         inflight_component partial = partial_backlog(ow);
         inflight_component compacted = compacted_backlog(oc);
 
@@ -478,7 +478,7 @@ public:
 };
 
 struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
-    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) override {
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return std::numeric_limits<double>::infinity();
     }
     virtual void add_sstable(sstables::shared_sstable sst) override { }
@@ -486,7 +486,7 @@ struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::
 };
 
 struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
-    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) override {
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return 0;
     }
     virtual void add_sstable(sstables::shared_sstable sst) override { }

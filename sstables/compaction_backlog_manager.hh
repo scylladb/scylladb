@@ -71,7 +71,7 @@ public:
     struct impl {
         virtual void add_sstable(sstables::shared_sstable sst) = 0;
         virtual void remove_sstable(sstables::shared_sstable sst) = 0;
-        virtual double backlog(ongoing_writes& ow, ongoing_compactions& oc) = 0;
+        virtual double backlog(const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
         virtual ~impl() { }
     };
 
@@ -80,7 +80,7 @@ public:
     compaction_backlog_tracker(const compaction_backlog_tracker&) = delete;
     ~compaction_backlog_tracker();
 
-    double backlog();
+    double backlog() const;
     void add_sstable(sstables::shared_sstable sst);
     void remove_sstable(sstables::shared_sstable sst);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);

@@ -273,7 +273,7 @@ public:
 class resharding_backlog_tracker final : public compaction_backlog_tracker::impl {
     uint64_t _total_bytes = 0;
 public:
-    virtual double backlog(compaction_backlog_tracker::ongoing_writes& ow, compaction_backlog_tracker::ongoing_compactions& oc) {
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _total_bytes;
     }
 
