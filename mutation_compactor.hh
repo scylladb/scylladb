@@ -57,11 +57,8 @@ GCC6_CONCEPT(
 // emit_only_live::yes will cause compact_for_query to emit only live
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
-template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
-GCC6_CONCEPT(
-    requires CompactedFragmentsConsumer<Consumer>
-)
-class compact_mutation {
+template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction>
+class compact_mutation_state {
     const schema& _schema;
     gc_clock::time_point _query_time;
     gc_clock::time_point _gc_before;
@@ -73,7 +70,6 @@ class compact_mutation {
     uint32_t _partition_limit{};
     uint32_t _partition_row_limit{};
 
-    Consumer _consumer;
     range_tombstone_accumulator _range_tombstones;
 
     bool _static_row_live{};
@@ -90,13 +86,14 @@ private:
         return SSTableCompaction == compact_for_sstables::yes;
     }
 
-    void partition_is_not_empty() {
+    template <typename Consumer>
+    void partition_is_not_empty(Consumer& consumer) {
         if (_empty_partition) {
             _empty_partition = false;
-            _consumer.consume_new_partition(*_dk);
+            consumer.consume_new_partition(*_dk);
             auto pt = _range_tombstones.get_partition_tombstone();
             if (pt && !can_purge_tombstone(pt)) {
-                _consumer.consume(pt);
+                consumer.consume(pt);
             }
         }
     }
@@ -122,10 +119,10 @@ private:
         return t.timestamp < _max_purgeable;
     };
 public:
-    compact_mutation(compact_mutation&&) = delete; // Because 'this' is captured
+    compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
-    compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
-              uint32_t partition_limit, Consumer consumer)
+    compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+              uint32_t partition_limit)
         : _schema(s)
         , _query_time(query_time)
         , _gc_before(saturating_subtract(query_time, s.gc_grace_seconds()))
@@ -134,21 +131,19 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _consumer(std::move(consumer))
         , _range_tombstones(s, _slice.options.contains(query::partition_slice::option::reversed))
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
 
-    compact_mutation(const schema& s, gc_clock::time_point compaction_time, Consumer consumer,
-                     std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+    compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
+            std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
         : _schema(s)
         , _query_time(compaction_time)
         , _gc_before(saturating_subtract(_query_time, s.gc_grace_seconds()))
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
-        , _consumer(std::move(consumer))
         , _range_tombstones(s, false)
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
@@ -167,27 +162,39 @@ public:
         _max_purgeable = api::missing_timestamp;
     }
 
-    void consume(tombstone t) {
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    void consume(tombstone t, Consumer& consumer) {
         _range_tombstones.set_partition_tombstone(t);
         if (!only_live() && !can_purge_tombstone(t)) {
-            partition_is_not_empty();
+            partition_is_not_empty(consumer);
         }
     }
 
-    stop_iteration consume(static_row&& sr) {
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    stop_iteration consume(static_row&& sr, Consumer& consumer) {
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
                                                      row_tombstone(current_tombstone),
                                                      _query_time, _can_gc, _gc_before);
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
-            partition_is_not_empty();
-            return _consumer.consume(std::move(sr), current_tombstone, is_live);
+            partition_is_not_empty(consumer);
+            return consumer.consume(std::move(sr), current_tombstone, is_live);
         }
         return stop_iteration::no;
     }
 
-    stop_iteration consume(clustering_row&& cr) {
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    stop_iteration consume(clustering_row&& cr, Consumer& consumer) {
         auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
         auto t = cr.tomb();
         if (t.tomb() <= current_tombstone || can_purge_tombstone(t)) {
@@ -197,8 +204,8 @@ public:
         bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before);
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
         if (only_live() && is_live) {
-            partition_is_not_empty();
-            auto stop = _consumer.consume(std::move(cr), t, true);
+            partition_is_not_empty(consumer);
+            auto stop = consumer.consume(std::move(cr), t, true);
             if (++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
             }
@@ -206,8 +213,8 @@ public:
         } else if (!only_live()) {
             auto stop = stop_iteration::no;
             if (!cr.empty()) {
-                partition_is_not_empty();
-                stop = _consumer.consume(std::move(cr), t, is_live);
+                partition_is_not_empty(consumer);
+                stop = consumer.consume(std::move(cr), t, is_live);
             }
             if (!sstable_compaction() && is_live && ++_rows_in_current_partition == _current_partition_limit) {
                 return stop_iteration::yes;
@@ -217,17 +224,25 @@ public:
         return stop_iteration::no;
     }
 
-    stop_iteration consume(range_tombstone&& rt) {
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    stop_iteration consume(range_tombstone&& rt, Consumer& consumer) {
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
         if (!can_purge_tombstone(rt.tomb) && rt.tomb > _range_tombstones.get_partition_tombstone()) {
-            partition_is_not_empty();
-            return _consumer.consume(std::move(rt));
+            partition_is_not_empty(consumer);
+            return consumer.consume(std::move(rt));
         }
         return stop_iteration::no;
     }
 
-    stop_iteration consume_end_of_partition() {
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    stop_iteration consume_end_of_partition(Consumer& consumer) {
         if (!_empty_partition) {
             // #589 - Do not add extra row for statics unless we did a CK range-less query.
             // See comment in query
@@ -237,13 +252,64 @@ public:
 
             _row_limit -= _rows_in_current_partition;
             _partition_limit -= _rows_in_current_partition > 0;
-            auto stop = _consumer.consume_end_of_partition();
+            auto stop = consumer.consume_end_of_partition();
             if (!sstable_compaction()) {
                 return _row_limit && _partition_limit && stop != stop_iteration::yes
                        ? stop_iteration::no : stop_iteration::yes;
             }
         }
         return stop_iteration::no;
+    }
+};
+
+template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
+GCC6_CONCEPT(
+    requires CompactedFragmentsConsumer<Consumer>
+)
+class compact_mutation {
+    lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> _state;
+    Consumer _consumer;
+
+public:
+    compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
+              uint32_t partition_limit, Consumer consumer)
+        : _state(make_lw_shared<compact_mutation_state<OnlyLive, SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
+        , _consumer(std::move(consumer)) {
+    }
+
+    compact_mutation(const schema& s, gc_clock::time_point compaction_time, Consumer consumer,
+                     std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
+        : _state(make_lw_shared<compact_mutation_state<OnlyLive, SSTableCompaction>>(s, compaction_time, get_max_purgeable))
+        , _consumer(std::move(consumer)) {
+    }
+
+    compact_mutation(lw_shared_ptr<compact_mutation_state<OnlyLive, SSTableCompaction>> state, Consumer consumer)
+        : _state(std::move(state))
+        , _consumer(std::move(consumer)) {
+    }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _state->consume_new_partition(dk);
+    }
+
+    void consume(tombstone t) {
+        _state->consume(std::move(t), _consumer);
+    }
+
+    stop_iteration consume(static_row&& sr) {
+        return _state->consume(std::move(sr), _consumer);
+    }
+
+    stop_iteration consume(clustering_row&& cr) {
+        return _state->consume(std::move(cr), _consumer);
+    }
+
+    stop_iteration consume(range_tombstone&& rt) {
+        return _state->consume(std::move(rt), _consumer);
+    }
+
+    stop_iteration consume_end_of_partition() {
+        return _state->consume_end_of_partition(_consumer);
     }
 
     auto consume_end_of_stream() {
@@ -258,6 +324,11 @@ GCC6_CONCEPT(
 struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, Consumer> {
     using compact_mutation<only_live, compact_for_sstables::no, Consumer>::compact_mutation;
 };
+
+template<emit_only_live_rows OnlyLive>
+using compact_for_query_state = compact_mutation_state<OnlyLive, compact_for_sstables::no>;
+using compact_for_mutation_query_state = compact_for_query_state<emit_only_live_rows::no>;
+using compact_for_data_query_state = compact_for_query_state<emit_only_live_rows::yes>;
 
 template<typename Consumer>
 GCC6_CONCEPT(
