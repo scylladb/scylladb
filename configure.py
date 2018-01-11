@@ -289,11 +289,15 @@ scylla_tests = [
     'tests/cql_roles_query_test',
 ]
 
+perf_tests = [
+    'tests/perf/perf_mutation_readers'
+]
+
 apps = [
     'scylla',
     ]
 
-tests = scylla_tests
+tests = scylla_tests + perf_tests
 
 other = [
     'iotune',
@@ -723,6 +727,13 @@ for t in scylla_tests:
         deps[t] += scylla_tests_seastar_deps
     else:
         deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
+
+perf_tests_seastar_deps = [
+    'seastar/tests/perf/perf_tests.cc'
+]
+
+for t in perf_tests:
+    deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc', 'tests/sstable_utils.cc']
 deps['tests/mutation_reader_test'] += ['tests/sstable_utils.cc']
