@@ -147,6 +147,10 @@ public:
     future<> keyspace_changed(const sstring& ks_name);
     future<> update_pending_ranges();
 
+    auth::service& get_local_auth_service() {
+        return _auth_service.local();
+    }
+
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
     }
