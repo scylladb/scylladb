@@ -574,7 +574,7 @@ make_combined_reader(schema_ptr schema,
 
     return mutation_reader_from_flat_mutation_reader(make_flat_mutation_reader<combined_mutation_reader>(
                     schema,
-                    std::make_unique<list_reader_selector>(std::move(schema), std::move(flat_readers)),
+                    std::make_unique<list_reader_selector>(schema, std::move(flat_readers)),
                     fwd_sm,
                     fwd_mr));
 }
