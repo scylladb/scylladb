@@ -159,7 +159,6 @@ private:
         };
 
         state _state = state::UNINITIALIZED;
-        ::shared_ptr<auth::authenticator::sasl_challenge> _sasl_challenge;
     public:
         connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();
