@@ -31,6 +31,8 @@
 #include "stdx.hh"
 #include "seastar/core/future-util.hh"
 
+#include "db/timeout_clock.hh"
+
 // mutation_fragments are the objects that streamed_mutation are going to
 // stream. They can represent:
 //  - a static row
@@ -605,10 +607,10 @@ public:
         { }
 
         virtual ~impl() { }
-        virtual future<> fill_buffer() = 0;
+        virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
 
         // See streamed_mutation::fast_forward_to().
-        virtual future<> fast_forward_to(position_range) {
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
             throw std::bad_function_call(); // FIXME: make pure virtual after implementing everywhere.
         }
 
@@ -628,7 +630,7 @@ public:
                 if (is_end_of_stream()) {
                     return make_ready_future<mutation_fragment_opt>();
                 }
-                return fill_buffer().then([this] { return operator()(); });
+                return fill_buffer(db::no_timeout).then([this] { return operator()(); });
             }
             return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
         }
@@ -660,14 +662,14 @@ public:
 
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
 
-    future<> fill_buffer() { return _impl->fill_buffer(); }
+    future<> fill_buffer(db::timeout_clock::time_point timeout = db::no_timeout) { return _impl->fill_buffer(timeout); }
 
     // Skips to a later range of rows.
     // The new range must not overlap with the current range.
     //
     // See docs of streamed_mutation::forwarding for semantics.
-    future<> fast_forward_to(position_range pr) {
-        return _impl->fast_forward_to(std::move(pr));
+    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->fast_forward_to(std::move(pr), timeout);
     }
 
     future<mutation_fragment_opt> operator()() {
@@ -836,8 +838,8 @@ streamed_mutation transform(streamed_mutation sm, T t) {
             , _t(std::move(t))
         { }
 
-        virtual future<> fill_buffer() override {
-            return _sm.fill_buffer().then([this] {
+        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+            return _sm.fill_buffer(timeout).then([this] {
                 while (!_sm.is_buffer_empty()) {
                     push_mutation_fragment(_t(_sm.pop_mutation_fragment()));
                 }
@@ -845,10 +847,10 @@ streamed_mutation transform(streamed_mutation sm, T t) {
             });
         }
 
-        virtual future<> fast_forward_to(position_range pr) override {
+        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) override {
             _end_of_stream = false;
             forward_buffer_to(pr.start());
-            return _sm.fast_forward_to(std::move(pr));
+            return _sm.fast_forward_to(std::move(pr), timeout);
         }
     };
     return make_streamed_mutation<reader>(std::move(sm), std::move(t));

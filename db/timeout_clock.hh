@@ -1,4 +1,8 @@
 /*
+ * Copyright (C) 2017 ScyllaDB
+ */
+
+/*
  * This file is part of Scylla.
  *
  * Scylla is free software: you can redistribute it and/or modify
@@ -15,35 +19,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * Copyright (C) 2017 ScyllaDB
- */
-
 #pragma once
 
-#include <core/file.hh>
-#include <core/semaphore.hh>
-#include "db/timeout_clock.hh"
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/semaphore.hh>
+#include <chrono>
 
-class reader_resource_tracker {
-    db::timeout_semaphore* _sem = nullptr;
-public:
-    reader_resource_tracker() = default;
-    explicit reader_resource_tracker(db::timeout_semaphore* sem)
-        : _sem(sem) {
-    }
-
-    bool operator==(const reader_resource_tracker& other) const {
-        return _sem == other._sem;
-    }
-
-    file track(file f) const;
-
-    db::timeout_semaphore* get_semaphore() const {
-        return _sem;
-    }
-};
-
-inline reader_resource_tracker no_resource_tracking() {
-    return reader_resource_tracker(nullptr);
+namespace db {
+using timeout_clock = seastar::lowres_clock;
+using timeout_semaphore = basic_semaphore<default_timeout_exception_factory, timeout_clock>;
+static constexpr timeout_clock::time_point no_timeout = timeout_clock::time_point::max();
 }

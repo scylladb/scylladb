@@ -25,6 +25,7 @@
 #include "query-result.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
+#include "db/timeout_clock.hh"
 
 class reconcilable_result;
 class frozen_reconcilable_result;
@@ -127,7 +128,8 @@ future<reconcilable_result> mutation_query(
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     query::result_memory_accounter&& accounter = { },
-    tracing::trace_state_ptr trace_ptr = nullptr);
+    tracing::trace_state_ptr trace_ptr = nullptr,
+    db::timeout_clock::time_point timeout = db::no_timeout);
 
 future<> data_query(
     schema_ptr s,
@@ -138,7 +140,8 @@ future<> data_query(
     uint32_t partition_limit,
     gc_clock::time_point query_time,
     query::result::builder& builder,
-    tracing::trace_state_ptr trace_ptr = nullptr);
+    tracing::trace_state_ptr trace_ptr = nullptr,
+    db::timeout_clock::time_point timeout = db::no_timeout);
 
 // Performs a query for counter updates.
 future<mutation_opt> counter_write_query(schema_ptr, const mutation_source&,

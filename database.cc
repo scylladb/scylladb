@@ -78,6 +78,8 @@
 #include "checked-file-impl.hh"
 #include "disk-error-handler.hh"
 
+#include "db/timeout_clock.hh"
+
 using namespace std::chrono_literals;
 
 logging::logger dblog("database");
@@ -223,19 +225,6 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_s
         }
         return partition_presence_checker_result::definitely_doesnt_exist;
     };
-}
-
-mutation_source
-column_family::sstables_as_mutation_source() {
-    return mutation_source([this] (schema_ptr s,
-                                   const dht::partition_range& r,
-                                   const query::partition_slice& slice,
-                                   const io_priority_class& pc,
-                                   tracing::trace_state_ptr trace_state,
-                                   streamed_mutation::forwarding fwd,
-                                   mutation_reader::forwarding fwd_mr) {
-        return make_sstable_reader(std::move(s), _sstables, r, slice, pc, std::move(trace_state), fwd, fwd_mr);
-    });
 }
 
 snapshot_source
@@ -505,7 +494,7 @@ public:
                 }));
     }
 
-    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
+    virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _pr = &pr;
 
         dht::ring_position_comparator cmp(*_s);
@@ -710,7 +699,7 @@ column_family::make_streaming_reader(schema_ptr s,
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
-future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, timeout_clock::time_point timeout) {
+future<std::vector<locked_cell>> column_family::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
 }
@@ -2957,18 +2946,19 @@ future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request,
                      const dht::partition_range_vector& partition_ranges,
                      tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter,
-                     uint64_t max_size) {
+                     uint64_t max_size, db::timeout_clock::time_point timeout) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
-    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state)] (query::result_memory_accounter accounter) mutable {
+    return f.then([this, lc, s = std::move(s), &cmd, request, &partition_ranges, trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;
-        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state)] {
+        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout] {
             auto&& range = *qs.current_partition_range++;
             return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
-                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state);
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state,
+                              timeout);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
@@ -3011,12 +3001,13 @@ std::chrono::milliseconds column_family::get_coordinator_read_latency_percentile
 static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
 
 future<lw_shared_ptr<query::result>, cache_temperature>
-database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges, tracing::trace_state_ptr trace_state,
-                uint64_t max_result_size) {
+database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
+                tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
     return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
-                            max_result_size).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+                            max_result_size,
+                            timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
@@ -3031,10 +3022,11 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_requ
 
 future<reconcilable_result, cache_temperature>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
-                          query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state) {
+                          query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
     return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter), std::move(trace_state)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+            cmd.timestamp, std::move(accounter), std::move(trace_state),
+            timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
@@ -3137,7 +3129,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::r
 }
 
 future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
-                                                   timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
+                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
     auto m = fm.unfreeze(m_schema);
     m.upgrade(cf.schema());
 
@@ -3323,7 +3315,7 @@ void dirty_memory_manager::start_reclaiming() noexcept {
     _should_flush.signal();
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, timeout_clock::time_point timeout) {
+future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     auto& cf = find_column_family(m.column_family_id());
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h)]() mutable {
         try {
@@ -3335,13 +3327,13 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     }, timeout);
 }
 
-future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, timeout_clock::time_point timeout) {
+future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     return cf.dirty_memory_region_group().run_when_memory_available([this, &m, &cf, h = std::move(h)]() mutable {
         cf.apply(m, std::move(h));
     }, timeout);
 }
 
-future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
   return update_write_metrics(seastar::futurize_apply([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
@@ -3368,7 +3360,7 @@ static future<> maybe_handle_reorder(std::exception_ptr exp) {
     }
 }
 
-future<> database::apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
             commitlog_entry_writer cew(m.schema(), fm);
@@ -3380,7 +3372,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
     return apply_in_memory(m, cf, {}, timeout);
 }
 
-future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
         commitlog_entry_writer cew(s, m);
@@ -3391,7 +3383,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
     return apply_in_memory(m, std::move(s), {}, timeout);
 }
 
-future<> database::do_apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
@@ -3434,7 +3426,7 @@ Future database::update_write_metrics(Future&& f) {
     });
 }
 
-future<> database::apply(schema_ptr s, const frozen_mutation& m, timeout_clock::time_point timeout) {
+future<> database::apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
@@ -3475,7 +3467,6 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_config.resources_sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.active_reads = &_stats->active_reads;
-    cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
     cfg.read_concurrency_config.max_queue_length = 100;
     cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
         ++_stats->sstable_read_queue_overloaded;

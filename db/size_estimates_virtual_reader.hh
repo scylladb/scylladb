@@ -37,6 +37,7 @@
 #include "stdx.hh"
 #include "streamed_mutation.hh"
 #include "sstables/sstables.hh"
+#include "db/timeout_clock.hh"
 
 namespace db {
 
@@ -86,15 +87,15 @@ private:
         });
     }
 public:
-    virtual future<> fill_buffer() override {
-        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        return do_until([this, timeout] { return is_end_of_stream() || is_buffer_full(); }, [this, timeout] {
             if (!_partition_reader) {
                 return get_next_partition();
             }
             return _partition_reader->consume_pausable([this] (mutation_fragment mf) {
                 push_mutation_fragment(std::move(mf));
                 return stop_iteration(is_buffer_full());
-            }).then([this] {
+            }, timeout).then([this] {
                 if (_partition_reader->is_end_of_stream() && _partition_reader->is_buffer_empty()) {
                     _partition_reader = stdx::nullopt;
                 }
@@ -107,7 +108,7 @@ public:
             _partition_reader = stdx::nullopt;
         }
     }
-    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _prange = &pr;
         _keyspaces = stdx::nullopt;
@@ -115,11 +116,11 @@ public:
         _end_of_stream = false;
         return make_ready_future<>();
     }
-    virtual future<> fast_forward_to(position_range pr) override {
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
         forward_buffer_to(pr.start());
         _end_of_stream = false;
         if (_partition_reader) {
-            return _partition_reader->fast_forward_to(std::move(pr));
+            return _partition_reader->fast_forward_to(std::move(pr), timeout);
         }
         return make_ready_future<>();
     }

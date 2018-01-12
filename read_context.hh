@@ -83,18 +83,18 @@ public:
             return std::move(mfopt);
         });
     }
-    future<> fast_forward_to(dht::partition_range&& range) {
+    future<> fast_forward_to(dht::partition_range&& range, db::timeout_clock::time_point timeout) {
         auto snapshot_and_phase = _cache.snapshot_of(dht::ring_position_view::for_range_start(_range));
-        return fast_forward_to(std::move(range), snapshot_and_phase.snapshot, snapshot_and_phase.phase);
+        return fast_forward_to(std::move(range), snapshot_and_phase.snapshot, snapshot_and_phase.phase, timeout);
     }
-    future<> fast_forward_to(dht::partition_range&& range, mutation_source& snapshot, row_cache::phase_type phase) {
+    future<> fast_forward_to(dht::partition_range&& range, mutation_source& snapshot, row_cache::phase_type phase, db::timeout_clock::time_point timeout) {
         _range = std::move(range);
         _last_key = { };
         _new_last_key = { };
         if (_reader) {
             if (_reader_creation_phase == phase) {
                 ++_cache._tracker._stats.underlying_partition_skips;
-                return _reader->fast_forward_to(_range);
+                return _reader->fast_forward_to(_range, timeout);
             } else {
                 ++_cache._tracker._stats.underlying_recreations;
                 _reader = {}; // See issue #2644
@@ -192,14 +192,14 @@ public:
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }
 private:
-    future<> ensure_underlying() {
+    future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {
-            return create_underlying(true);
+            return create_underlying(true, timeout);
         }
         return make_ready_future<>();
     }
 public:
-    future<> create_underlying(bool skip_first_fragment);
+    future<> create_underlying(bool skip_first_fragment, db::timeout_clock::time_point timeout);
     void enter_partition(const dht::decorated_key& dk, mutation_source& snapshot, row_cache::phase_type phase) {
         _phase = phase;
         _underlying_snapshot = snapshot;
@@ -211,14 +211,14 @@ public:
         _key = dk;
     }
     // Fast forwards the underlying streamed_mutation to given range.
-    future<> fast_forward_to(position_range range) {
-        return ensure_underlying().then([this, range = std::move(range)] {
-            return _underlying.underlying().fast_forward_to(std::move(range));
+    future<> fast_forward_to(position_range range, db::timeout_clock::time_point timeout) {
+        return ensure_underlying(timeout).then([this, range = std::move(range), timeout] {
+            return _underlying.underlying().fast_forward_to(std::move(range), timeout);
         });
     }
     // Gets the next fragment from the underlying reader
-    future<mutation_fragment_opt> get_next_fragment() {
-        return ensure_underlying().then([this] {
+    future<mutation_fragment_opt> get_next_fragment(db::timeout_clock::time_point timeout) {
+        return ensure_underlying(timeout).then([this] {
             return _underlying.underlying()();
         });
     }
