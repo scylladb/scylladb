@@ -452,7 +452,7 @@ cql_server::connection::read_frame() {
     }
 }
 
-future<response_type>
+future<cql_server::connection::processing_result>
     cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     using auth_state = service::client_state::auth_state;
 
@@ -536,27 +536,27 @@ future<response_type>
                 case auth_state::READY:
                     break;
             }
-            return make_ready_future<response_type>(response);
+            return make_ready_future<processing_result>(std::move(response));
         } catch (const exceptions::unavailable_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_timeout_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_failure_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_failure_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::already_exists_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
         } catch (const exceptions::cassandra_exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
         } catch (std::exception& ex) {
-            return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
         } catch (...) {
-            return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
+            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
         }
     }).finally([tracing_state = client_state.get_trace_state()] {
         tracing::stop_foreground(tracing_state);
@@ -626,6 +626,32 @@ struct process_request_executor {
 };
 static thread_local auto process_request_stage = seastar::make_execution_stage("transport", process_request_executor::get());
 
+void cql_server::connection::update_client_state(processing_result& response) {
+    if (response.keyspace) {
+        if (response.keyspace.get_owner_shard() != engine().cpu_id()) {
+            _client_state.set_raw_keyspace(*response.keyspace);
+        } else {
+            // Avoid extra copy if we are on the same shard
+            _client_state.set_raw_keyspace(std::move(*response.keyspace));
+        }
+    }
+
+    if (response.user) {
+        if (response.user.get_owner_shard() != engine().cpu_id()) {
+            if (!_client_state.user() || *_client_state.user() != *response.user) {
+                _client_state.set_login(make_shared<auth::authenticated_user>(*response.user));
+            }
+        } else if (!_client_state.user()) {
+            // If we are on the same shard there is no need to copy unless _client_state._user == nullptr
+            _client_state.set_login(response.user.release());
+        }
+    }
+
+    if (_client_state.get_auth_state() != response.auth_state) {
+        _client_state.set_auth_state(response.auth_state);
+    }
+}
+
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
@@ -670,19 +696,15 @@ future<> cql_server::connection::process_request() {
                 auto cpu = pick_request_cpu();
                 return [&] {
                     if (cpu == engine().cpu_id()) {
-                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested).then([] (auto&& response) {
-                            return std::make_pair(make_foreign(response.first), response.second);
-                        });
+                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
                     } else {
                         return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested).then([] (auto&& response) {
-                                return std::make_pair(make_foreign(response.first), response.second);
-                            });
+                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
                 }().then([this, flags] (auto&& response) {
-                    _client_state.merge(response.second);
-                    return this->write_response(std::move(response.first), _compression);
+                    update_client_state(response);
+                    return this->write_response(std::move(response.cql_response), _compression);
                 }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
                     // Keep buf alive.
                 });

@@ -92,12 +92,16 @@ private:
 #endif
     ::shared_ptr<auth::authenticated_user> _user;
 
+    // Only considered in the "request copy"
+    bool _user_is_dirty = false;
+
     auth_state _auth_state = auth_state::UNINITIALIZED;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
     bool _is_thrift;
+    bool _is_request_copy = false;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     api::timestamp_type _last_timestamp_micros = 0;
@@ -189,6 +193,10 @@ public:
         return _is_thrift;
     }
 
+    bool is_dirty() const noexcept {
+        return _dirty;
+    }
+
     bool is_internal() const {
         return _is_internal;
     }
@@ -251,7 +259,11 @@ public:
     }
 #endif
 
-    const sstring& get_raw_keyspace() const {
+    const sstring& get_raw_keyspace() const noexcept {
+        return _keyspace;
+    }
+
+    sstring& get_raw_keyspace() noexcept {
         return _keyspace;
     }
 
@@ -274,6 +286,10 @@ public:
         }
         _keyspace = keyspace;
         _dirty = true;
+    }
+
+    void set_raw_keyspace(sstring new_keyspace) noexcept {
+        _keyspace = std::move(new_keyspace);
     }
 
     const sstring& get_keyspace() const {
@@ -324,6 +340,10 @@ public:
 
     ::shared_ptr<auth::authenticated_user> user() const {
         return _user;
+    }
+
+    bool user_is_dirty() const noexcept {
+        return _user_is_dirty;
     }
 
 #if 0

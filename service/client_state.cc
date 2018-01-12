@@ -55,6 +55,9 @@ void service::client_state::set_login(::shared_ptr<auth::authenticated_user> use
         throw std::invalid_argument("Must provide user");
     }
     _user = std::move(user);
+    if (_is_request_copy) {
+        _user_is_dirty = true;
+    }
 }
 
 future<> service::client_state::check_user_exists() {
@@ -235,6 +238,7 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
         , _auth_state(orig._auth_state)
         , _is_internal(orig._is_internal)
         , _is_thrift(orig._is_thrift)
+        , _is_request_copy(true)
         , _remote_address(orig._remote_address)
         , _auth_service(local_auth_service_copy(orig))
         , _request_ts(ts)

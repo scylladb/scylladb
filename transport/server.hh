@@ -134,6 +134,20 @@ private:
     friend class connection;
     friend class process_request_executor;
     class connection : public boost::intrusive::list_base_hook<> {
+        struct processing_result {
+            foreign_ptr<shared_ptr<cql_server::response>> cql_response;
+            foreign_ptr<std::unique_ptr<sstring>> keyspace;
+            foreign_ptr<shared_ptr<auth::authenticated_user>> user;
+            service::client_state::auth_state auth_state;
+
+            processing_result(response_type r)
+                : cql_response(make_foreign(std::move(r.first)))
+                , keyspace(r.second.is_dirty() ? make_foreign(std::make_unique<sstring>(std::move(r.second.get_raw_keyspace()))) : nullptr)
+                , user(r.second.user_is_dirty() ? make_foreign(r.second.user()) : nullptr)
+                , auth_state(r.second.get_auth_state())
+            {}
+        };
+
         cql_server& _server;
         ipv4_addr _server_addr;
         connected_socket _fd;
@@ -161,9 +175,10 @@ private:
         future<> shutdown();
     private:
         friend class process_request_executor;
-        future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
+        future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
+        void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
         future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
