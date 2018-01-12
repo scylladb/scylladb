@@ -454,6 +454,8 @@ cql_server::connection::read_frame() {
 
 future<response_type>
     cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
+    using auth_state = service::client_state::auth_state;
+
     auto cqlop = static_cast<cql_binary_opcode>(op);
     tracing::trace_state_props_set trace_props;
 
@@ -473,19 +475,19 @@ future<response_type>
     return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
-        switch (_state) {
-            case state::UNINITIALIZED:
+        switch (client_state.get_auth_state()) {
+            case auth_state::UNINITIALIZED:
                 if (cqlop != cql_binary_opcode::STARTUP && cqlop != cql_binary_opcode::OPTIONS) {
                     throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting STARTUP or OPTIONS", int(cqlop)));
                 }
                 break;
-            case state::AUTHENTICATION:
+            case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
                     throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting %s", int(cqlop), _version == 1 ? "CREDENTIALS" : "SASL_RESPONSE"));
                 }
                 break;
-            case state::READY: default:
+            case auth_state::READY: default:
                 if (cqlop == cql_binary_opcode::STARTUP) {
                     throw exceptions::protocol_exception("Unexpected message STARTUP, the connection is already initialized");
                 }
@@ -509,27 +511,29 @@ future<response_type>
         --_server._requests_serving;
         try {
             response_type response = f.get0();
+            service::client_state& resp_client_state = response.second;
             auto res_op = response.first->opcode();
+
             // and modify state now that we've generated a response.
-            switch (_state) {
-                case state::UNINITIALIZED:
+            switch (client_state.get_auth_state()) {
+                case auth_state::UNINITIALIZED:
                     if (cqlop == cql_binary_opcode::STARTUP) {
                         if (res_op == cql_binary_opcode::AUTHENTICATE) {
-                            _state = state::AUTHENTICATION;
+                            resp_client_state.set_auth_state(auth_state::AUTHENTICATION);
                         } else if (res_op == cql_binary_opcode::READY) {
-                            _state = state::READY;
+                            resp_client_state.set_auth_state(auth_state::READY);
                         }
                     }
                     break;
-                case state::AUTHENTICATION:
+                case auth_state::AUTHENTICATION:
                     // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                     assert(cqlop == cql_binary_opcode::AUTH_RESPONSE || cqlop == cql_binary_opcode::CREDENTIALS);
                     if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
-                        _state = state::READY;
+                        resp_client_state.set_auth_state(auth_state::READY);
                     }
                     break;
                 default:
-                case state::READY:
+                case auth_state::READY:
                     break;
             }
             return make_ready_future<response_type>(response);

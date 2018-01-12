@@ -148,17 +148,11 @@ private:
         std::unordered_map<uint16_t, cql_query_state> _query_states;
         unsigned _request_cpu = 0;
 
-        enum class state : uint8_t {
-            UNINITIALIZED, AUTHENTICATION, READY
-        };
-
         enum class tracing_request_type : uint8_t {
             not_requested,
             no_write_on_close,
             write_on_close
         };
-
-        state _state = state::UNINITIALIZED;
     public:
         connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();

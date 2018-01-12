@@ -59,6 +59,11 @@ namespace service {
  * State related to a client connection.
  */
 class client_state {
+public:
+    enum class auth_state : uint8_t {
+        UNINITIALIZED, AUTHENTICATION, READY
+    };
+
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
@@ -86,6 +91,8 @@ private:
     private volatile String keyspace;
 #endif
     ::shared_ptr<auth::authenticated_user> _user;
+
+    auth_state _auth_state = auth_state::UNINITIALIZED;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -121,6 +128,14 @@ public:
 
     const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state_ptr;
+    }
+
+    auth_state get_auth_state() const noexcept {
+        return _auth_state;
+    }
+
+    void set_auth_state(auth_state new_state) noexcept {
+        _auth_state = new_state;
     }
 
     /// \brief A cross-shard copy-constructor.

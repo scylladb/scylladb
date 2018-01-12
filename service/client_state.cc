@@ -92,6 +92,9 @@ void service::client_state::merge(const client_state& other) {
     if (_user == nullptr) {
         _user = other._user;
     }
+    if (_auth_state != other._auth_state) {
+        _auth_state = other._auth_state;
+    }
 }
 
 future<> service::client_state::has_all_keyspaces_access(
@@ -229,6 +232,7 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
         : _keyspace(orig._keyspace)
         , _cpu_of_origin(engine().cpu_id())
         , _user(local_user_copy(orig))
+        , _auth_state(orig._auth_state)
         , _is_internal(orig._is_internal)
         , _is_thrift(orig._is_thrift)
         , _remote_address(orig._remote_address)
