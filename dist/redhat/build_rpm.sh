@@ -96,11 +96,11 @@ fi
 
 
 if [ $JOBS -gt 0 ]; then
-    SRPM_OPTS="$SRPM_OPTS --define='_smp_mflags -j$JOBS'"
+    RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
 fi
-sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS
+sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
 if [ "$TARGET" = "epel-7-x86_64" ]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
-sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS build/srpms/scylla-$VERSION*.src.rpm
+sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/scylla-$VERSION*.src.rpm
