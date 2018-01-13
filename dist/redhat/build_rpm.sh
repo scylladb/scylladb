@@ -7,6 +7,7 @@ print_usage() {
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
     echo "  --rebuild-dep  ignored (for compatibility with previous versions)"
+    echo "  --xtrace print command traces before executing command"
     exit 1
 }
 JOBS=0
@@ -27,6 +28,10 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--rebuild-dep")
+            shift 1
+            ;;
+        "--xtrace")
+            set -o xtrace
             shift 1
             ;;
         *)
