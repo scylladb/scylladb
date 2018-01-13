@@ -66,4 +66,6 @@ public:
     }
 };
 
+using default_hasher = xx_hasher;
+
 }

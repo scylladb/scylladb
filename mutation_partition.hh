@@ -29,6 +29,7 @@
 #include <boost/range/adaptor/filtered.hpp>
 
 #include <seastar/core/bitset-iter.hh>
+#include <seastar/util/optimized_optional.hh>
 
 #include "schema.hh"
 #include "tombstone.hh"
@@ -48,6 +49,32 @@
 class mutation_fragment;
 class clustering_row;
 
+struct cell_hash {
+    using size_type = uint64_t;
+    static constexpr size_type no_hash = 0;
+
+    size_type hash = no_hash;
+
+    explicit operator bool() const noexcept {
+        return hash != no_hash;
+    }
+};
+
+template<>
+struct appending_hash<cell_hash> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const cell_hash& ch) const {
+        feed_hash(h, ch.hash);
+    }
+};
+
+using cell_hash_opt = seastar::optimized_optional<cell_hash>;
+
+struct cell_and_hash {
+    atomic_cell_or_collection cell;
+    mutable cell_hash_opt hash;
+};
+
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
@@ -58,15 +85,19 @@ class clustering_row;
 // Can be used as a range of row::cell_entry.
 //
 class row {
+
     class cell_entry {
         boost::intrusive::set_member_hook<> _link;
         column_id _id;
-        atomic_cell_or_collection _cell;
+        cell_and_hash _cell_and_hash;
         friend class row;
     public:
-        cell_entry(column_id id, atomic_cell_or_collection cell)
+        cell_entry(column_id id, cell_and_hash c_a_h)
             : _id(id)
-            , _cell(std::move(cell))
+            , _cell_and_hash(std::move(c_a_h))
+        { }
+        cell_entry(column_id id, atomic_cell_or_collection cell)
+            : cell_entry(id, cell_and_hash{std::move(cell), cell_hash_opt()})
         { }
         cell_entry(column_id id)
             : _id(id)
@@ -75,8 +106,11 @@ class row {
         cell_entry(const cell_entry&);
 
         column_id id() const { return _id; }
-        const atomic_cell_or_collection& cell() const { return _cell; }
-        atomic_cell_or_collection& cell() { return _cell; }
+        const atomic_cell_or_collection& cell() const { return _cell_and_hash.cell; }
+        atomic_cell_or_collection& cell() { return _cell_and_hash.cell; }
+        const cell_hash_opt& hash() const { return _cell_and_hash.hash; }
+        const cell_and_hash& get_cell_and_hash() const { return _cell_and_hash; }
+        cell_and_hash& get_cell_and_hash() { return _cell_and_hash; }
 
         struct compare {
             bool operator()(const cell_entry& e1, const cell_entry& e2) const {
@@ -107,7 +141,7 @@ public:
     static constexpr size_t max_vector_size = 32;
     static constexpr size_t internal_count = 5;
 private:
-    using vector_type = managed_vector<atomic_cell_or_collection, internal_count, size_type>;
+    using vector_type = managed_vector<cell_and_hash, internal_count, size_type>;
 
     struct vector_storage {
         std::bitset<max_vector_size> present;
@@ -143,6 +177,8 @@ public:
 
     // Returns a pointer to cell's value or nullptr if column is not set.
     const atomic_cell_or_collection* find_cell(column_id id) const;
+    // Returns a pointer to cell's value and hash or nullptr if column is not set.
+    const cell_and_hash* find_cell_and_hash(column_id id) const;
 private:
     template<typename Func>
     void remove_if(Func&& func) {
@@ -151,7 +187,7 @@ private:
                 if (!_storage.vector.present.test(i)) {
                     continue;
                 }
-                auto& c = _storage.vector.v[i];
+                auto& c = _storage.vector.v[i].cell;
                 if (func(i, c)) {
                     c = atomic_cell_or_collection();
                     _storage.vector.present.reset(i);
@@ -176,10 +212,10 @@ private:
     auto get_range_vector() const {
         auto id_range = boost::irange<column_id>(0, _storage.vector.v.size());
         return boost::combine(id_range, _storage.vector.v)
-        | boost::adaptors::filtered([this] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
+        | boost::adaptors::filtered([this] (const boost::tuple<const column_id&, const cell_and_hash&>& t) {
             return _storage.vector.present.test(t.get<0>());
-        }) | boost::adaptors::transformed([] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
-            return std::pair<column_id, const atomic_cell_or_collection&>(t.get<0>(), t.get<1>());
+        }) | boost::adaptors::transformed([] (const boost::tuple<const column_id&, const cell_and_hash&>& t) {
+            return std::pair<column_id, const atomic_cell_or_collection&>(t.get<0>(), t.get<1>().cell);
         });
     }
     auto get_range_set() const {
@@ -195,43 +231,58 @@ private:
 
     template<typename Func>
     void consume_with(Func&&);
+
+    // Func obeys the same requirements as for for_each_cell below.
+    template<typename Func, typename MaybeConstCellAndHash>
+    static constexpr auto maybe_invoke_with_hash(Func& func, column_id id, MaybeConstCellAndHash& c_a_h) {
+        if constexpr (std::is_invocable_v<Func, column_id, const cell_and_hash&>) {
+            return func(id, c_a_h);
+        } else {
+            return func(id, c_a_h.cell);
+        }
+    }
+
 public:
-    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    // Calls Func(column_id, cell_and_hash&) or Func(column_id, atomic_cell_and_collection&)
+    // for each cell in this row, depending on the concrete Func type.
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(Func&& func) {
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                func(i, _storage.vector.v[i]);
+                maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
             }
         } else {
             for (auto& cell : _storage.set) {
-                func(cell.id(), cell.cell());
+                maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash());
             }
         }
     }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
-        for_each_cell_until([func = std::forward<Func>(func)] (column_id id, const atomic_cell_or_collection& c) {
-            func(id, c);
-            return stop_iteration::no;
-        });
+        if (_type == storage_type::vector) {
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                maybe_invoke_with_hash(func, i, _storage.vector.v[i]);
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash());
+            }
+        }
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
         if (_type == storage_type::vector) {
             for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                auto& cell = _storage.vector.v[i];
-                if (func(i, cell) == stop_iteration::yes) {
+                if (maybe_invoke_with_hash(func, i, _storage.vector.v[i]) == stop_iteration::yes) {
                     break;
                 }
             }
         } else {
             for (auto& cell : _storage.set) {
-                const auto& c = cell.cell();
-                if (func(cell.id(), c) == stop_iteration::yes) {
+                if (maybe_invoke_with_hash(func, cell.id(), cell.get_cell_and_hash()) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -240,15 +291,14 @@ public:
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, const atomic_cell_or_collection& cell);
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell, cell_hash_opt hash = cell_hash_opt());
 
     // Merges cell's value into the row.
     // Weak exception guarantees.
-    void apply(const column_definition& column, atomic_cell_or_collection&& cell);
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt());
 
     // Monotonic exception guarantees. In case of exception the sum of cell and this remains the same as before the exception.
-    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell);
-
+    void apply_monotonically(const column_definition& column, atomic_cell_or_collection&& cell, cell_hash_opt hash = cell_hash_opt());
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
@@ -271,6 +321,10 @@ public:
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     size_t external_memory_usage() const;
+
+    cell_hash_opt cell_hash_for(column_id id) const;
+
+    void prepare_hash(const schema& s, column_kind kind) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
