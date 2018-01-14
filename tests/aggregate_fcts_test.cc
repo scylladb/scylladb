@@ -51,10 +51,13 @@ void create_table(Env &e) {
                       " g_0 decimal,"
                       " g_2 decimal,"
                       " h varint, "
-                      " t text)").get();
+                      " t text,"
+                      " dt date,"
+                      " tm timestamp,"
+                      " tu timeuuid)").get();
 
-        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t) VALUES (1, 1, 1, 1, 1, 1, 1, 1.00, 1, 'a')").get();
-        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t) VALUES (2, 2, 2, 2, 2, 2, 2, 2.00, 2, 'b')").get();
+        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (1, 1, 1, 1, 1, 1, 1, 1.00, 1, 'a', '2017-12-02', '2017-12-02t03:00:00', b650cbe0-f914-11e7-8892-000000000004)").get();
+        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (2, 2, 2, 2, 2, 2, 2, 2.00, 2, 'b', '2016-12-02', '2016-12-02t06:00:00', D2177dD0-EAa2-11de-a572-001B779C76e3)").get();
 }
 
 } /* anonymous namespace */
@@ -123,8 +126,11 @@ SEASTAR_TEST_CASE(test_aggregate_max) {
                                  "max(f), "
                                  "max(g_0), "
                                  "max(g_2), "
-                                 "max(h),"
-                                 "max(t) FROM test").get0();
+                                 "max(h), "
+                                 "max(t), "
+                                 "max(dt), "
+                                 "max(tm), "
+                                 "max(tu) FROM test").get0();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(2))},
                                                           {short_type->decompose(int16_t(2))},
@@ -135,7 +141,10 @@ SEASTAR_TEST_CASE(test_aggregate_max) {
                                                           {decimal_type->from_string("2")},
                                                           {decimal_type->from_string("2.00")},
                                                           {varint_type->from_string("2")},
-                                                          {utf8_type->from_string("b")}});
+                                                          {utf8_type->from_string("b")},
+                                                          {simple_date_type->from_string("2017-12-02")},
+                                                          {timestamp_type->from_string("2017-12-02t03:00:00")},
+                                                          {timeuuid_type->from_string("D2177dD0-EAa2-11de-a572-001B779C76e3")}});
     });
 }
 
@@ -151,8 +160,11 @@ SEASTAR_TEST_CASE(test_aggregate_min) {
                                  "min(f), "
                                  "min(g_0), "
                                  "min(g_2), "
-                                 "min(h),"
-                                 "min(t) FROM test").get0();
+                                 "min(h), "
+                                 "min(t), "
+                                 "min(dt), "
+                                 "min(tm), "
+                                 "min(tu) FROM test").get0();
 
         assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(1))},
                                                           {short_type->decompose(int16_t(1))},
@@ -163,7 +175,10 @@ SEASTAR_TEST_CASE(test_aggregate_min) {
                                                           {decimal_type->from_string("1")},
                                                           {decimal_type->from_string("1.00")},
                                                           {varint_type->from_string("1")},
-                                                          {utf8_type->from_string("a")}});
+                                                          {utf8_type->from_string("a")},
+                                                          {simple_date_type->from_string("2016-12-02")},
+                                                          {timestamp_type->from_string("2016-12-02t06:00:00")},
+                                                          {timeuuid_type->from_string("b650cbe0-f914-11e7-8892-000000000004")}});
     });
 }
 
