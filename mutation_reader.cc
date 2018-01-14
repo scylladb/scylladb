@@ -32,7 +32,8 @@
 
 GCC6_CONCEPT(
     template<typename Producer>
-    concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range) {
+    concept bool FragmentProducer = requires(Producer p, dht::partition_range part_range, position_range pos_range,
+            db::timeout_clock::time_point timeout) {
         // The returned fragments are expected to have the same
         // position_in_partition. Iterators and references are expected
         // to be valid until the next call to operator()().
@@ -40,8 +41,8 @@ GCC6_CONCEPT(
         // These have the same semantics as their
         // flat_mutation_reader counterparts.
         { p.next_partition() };
-        { p.fast_forward_to(part_range) } -> future<>;
-        { p.fast_forward_to(pos_range) } -> future<>;
+        { p.fast_forward_to(part_range, timeout) } -> future<>;
+        { p.fast_forward_to(pos_range, timeout) } -> future<>;
     };
 )
 
