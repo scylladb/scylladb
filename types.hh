@@ -321,7 +321,18 @@ class abstract_type;
 class data_value;
 
 struct simple_date_native_type {
-    uint32_t days;
+    using primary_type = uint32_t;
+    primary_type days;
+};
+
+struct timestamp_native_type {
+    using primary_type = db_clock::time_point;
+    primary_type tp;
+};
+
+struct timeuuid_native_type {
+    using primary_type = utils::UUID;
+    primary_type uuid;
 };
 
 using data_type = shared_ptr<const abstract_type>;
@@ -360,6 +371,8 @@ public:
     data_value(double);
     data_value(net::ipv4_address);
     data_value(simple_date_native_type);
+    data_value(timestamp_native_type);
+    data_value(timeuuid_native_type);
     data_value(db_clock::time_point);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
@@ -1235,6 +1248,18 @@ template <>
 inline
 shared_ptr<const abstract_type> data_type_for<simple_date_native_type>() {
     return simple_date_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<timestamp_native_type>() {
+    return timestamp_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<timeuuid_native_type>() {
+    return timeuuid_type;
 }
 
 template <>

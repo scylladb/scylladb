@@ -3347,6 +3347,12 @@ data_value::data_value(net::ipv4_address v) : data_value(make_new(inet_addr_type
 data_value::data_value(simple_date_native_type v) : data_value(make_new(simple_date_type, v.days)) {
 }
 
+data_value::data_value(timestamp_native_type v) : data_value(make_new(timestamp_type, v.tp)) {
+}
+
+data_value::data_value(timeuuid_native_type v) : data_value(make_new(timeuuid_type, v.uuid)) {
+}
+
 data_value::data_value(db_clock::time_point v) : data_value(make_new(date_type, v)) {
 }
 

@@ -95,6 +95,15 @@ functions::init() {
     declare(aggregate_fcts::make_max_function<sstring>());
     declare(aggregate_fcts::make_min_function<sstring>());
 
+    declare(aggregate_fcts::make_max_function<simple_date_native_type>());
+    declare(aggregate_fcts::make_min_function<simple_date_native_type>());
+
+    declare(aggregate_fcts::make_max_function<timestamp_native_type>());
+    declare(aggregate_fcts::make_min_function<timestamp_native_type>());
+
+    declare(aggregate_fcts::make_max_function<timeuuid_native_type>());
+    declare(aggregate_fcts::make_min_function<timeuuid_native_type>());
+
     //FIXME:
     //declare(aggregate_fcts::make_count_function<bytes>());
     //declare(aggregate_fcts::make_max_function<bytes>());

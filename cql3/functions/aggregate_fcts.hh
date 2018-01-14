@@ -227,9 +227,29 @@ make_avg_function() {
     return make_shared<avg_function_for<Type>>();
 }
 
+template <typename T>
+struct aggregate_type_for {
+    using type = T;
+};
+
+template<>
+struct aggregate_type_for<simple_date_native_type> {
+    using type = simple_date_native_type::primary_type;
+};
+
+template<>
+struct aggregate_type_for<timestamp_native_type> {
+    using type = timestamp_native_type::primary_type;
+};
+
+template<>
+struct aggregate_type_for<timeuuid_native_type> {
+    using type = timeuuid_native_type::primary_type;
+};
+
 template <typename Type>
 class impl_max_function_for final : public aggregate_function::aggregate {
-   std::experimental::optional<Type> _max{};
+   std::experimental::optional<typename aggregate_type_for<Type>::type> _max{};
 public:
     virtual void reset() override {
         _max = {};
@@ -238,13 +258,13 @@ public:
         if (!_max) {
             return {};
         }
-        return data_type_for<Type>()->decompose(*_max);
+        return data_type_for<Type>()->decompose(Type{*_max});
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
-        auto val = value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
+        auto val = value_cast<typename aggregate_type_for<Type>::type>(data_type_for<Type>()->deserialize(*values[0]));
         if (!_max) {
             _max = val;
         } else {
@@ -276,7 +296,7 @@ make_max_function() {
 
 template <typename Type>
 class impl_min_function_for final : public aggregate_function::aggregate {
-   std::experimental::optional<Type> _min{};
+   std::experimental::optional<typename aggregate_type_for<Type>::type> _min{};
 public:
     virtual void reset() override {
         _min = {};
@@ -285,13 +305,13 @@ public:
         if (!_min) {
             return {};
         }
-        return data_type_for<Type>()->decompose(*_min);
+        return data_type_for<Type>()->decompose(Type{*_min});
     }
     virtual void add_input(cql_serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
-        auto val = value_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
+        auto val = value_cast<typename aggregate_type_for<Type>::type>(data_type_for<Type>()->deserialize(*values[0]));
         if (!_min) {
             _min = val;
         } else {

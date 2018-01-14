@@ -61,7 +61,7 @@ logging::logger prep_cache_log("prepared_statements_cache");
 
 distributed<query_processor> _the_query_processor;
 
-const sstring query_processor::CQL_VERSION = "3.3.1";
+const sstring query_processor::CQL_VERSION = "3.3.2";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
