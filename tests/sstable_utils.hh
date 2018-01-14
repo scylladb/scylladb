@@ -22,3 +22,13 @@
 #include "sstables/sstables.hh"
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
+
+//
+// Make set of keys sorted by token for current shard.
+//
+std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s);
+
+//
+// Return one key for current shard. Note that it always returns the same key for a given shard.
+//
+sstring make_local_key(const schema_ptr& s);

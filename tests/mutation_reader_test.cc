@@ -1213,7 +1213,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
         auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
 
-        mutation m1 = ss.new_mutation("pk");
+        mutation m1 = ss.new_mutation(make_local_key(s));
         m1.partition().apply_delete(*s, rt1);
         mutation m2 = m1;
         m2.partition().apply_delete(*s, rt2);

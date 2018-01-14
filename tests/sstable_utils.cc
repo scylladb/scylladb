@@ -26,7 +26,9 @@
 #include "database.hh"
 #include "memtable-sstable.hh"
 #include "mutation_reader_assertions.hh"
-
+#include "dht/i_partitioner.hh"
+#include <boost/range/irange.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts) {
     auto sst = sst_factory();
@@ -65,4 +67,30 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
     rd.produces_end_of_stream();
 
     return sst;
+}
+
+std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s) {
+    std::vector<std::pair<sstring, dht::decorated_key>> p;
+    p.reserve(n);
+
+    auto key_id = 0U;
+    auto generated = 0U;
+    while (generated < n) {
+        auto raw_key = to_sstring(key_id++);
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
+
+        if (engine().cpu_id() != dht::global_partitioner().shard_of(dk.token())) {
+            continue;
+        }
+        generated++;
+        p.emplace_back(std::move(raw_key), std::move(dk));
+    }
+    boost::sort(p, [&] (auto& p1, auto& p2) {
+        return p1.second.less_compare(*s, p2.second);
+    });
+    return boost::copy_range<std::vector<sstring>>(p | boost::adaptors::map_keys);
+}
+
+sstring make_local_key(const schema_ptr& s) {
+    return make_local_keys(1, s).front();
 }
