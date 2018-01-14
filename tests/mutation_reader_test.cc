@@ -538,7 +538,6 @@ static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) 
 }
 
 class dummy_incremental_selector : public reader_selector {
-    schema_ptr _s;
     std::vector<std::vector<mutation>> _readers_mutations;
     streamed_mutation::forwarding _fwd;
     dht::partition_range _pr;
