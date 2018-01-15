@@ -46,6 +46,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/selection/selection.hh"
+#include "service/storage_service.hh"
 
 static auth::permission_set filter_applicable_permissions(const auth::permission_set& ps, const auth::resource& r) {
     auto const filtered_permissions = auth::permission_set::from_mask(ps.mask() & r.applicable_permissions().mask());
@@ -67,6 +68,11 @@ cql3::statements::permission_altering_statement::permission_altering_statement(
 }
 
 void cql3::statements::permission_altering_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
+    if (!service::get_local_storage_service().cluster_supports_roles()) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify access-control information until the cluster has fully upgraded.");
+    }
+
     // a check to ensure the existence of the user isn't being leaked by user existence check.
     state.ensure_not_anonymous();
 }

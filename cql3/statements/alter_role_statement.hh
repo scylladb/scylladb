@@ -62,6 +62,8 @@ public:
                 , _options(std::move(options)) {
     }
 
+    void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+
     virtual future<> check_access(const service::client_state&) override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>

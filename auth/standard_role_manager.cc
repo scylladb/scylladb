@@ -178,40 +178,61 @@ future<> standard_role_manager::create_metadata_tables_if_missing() {
                     _migration_manager));
 }
 
-// Must be called within the scope of a seastar thread
-bool standard_role_manager::has_existing_roles() const {
-    static const sstring default_role_query = sprint(
-        "SELECT * FROM %s WHERE %s = ?",
-        meta::roles_table::qualified_name(),
-        meta::roles_table::role_col_name);
+future<> standard_role_manager::create_default_role_if_missing() {
+    return default_role_row_satisfies(_qp, [](auto&&) { return true; }).then([this](bool exists) {
+        if (!exists) {
+            static const sstring query = sprint(
+                    "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
+                    meta::roles_table::qualified_name(),
+                    meta::roles_table::role_col_name);
 
-    static const sstring all_roles_query = sprint("SELECT * FROM %s LIMIT 1", meta::roles_table::qualified_name());
+            return _qp.process(
+                    query,
+                    db::consistency_level::QUORUM,
+                    {meta::DEFAULT_SUPERUSER_NAME}).then([](auto&&) {
+                log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
+                return make_ready_future<>();
+            });
+        }
 
-    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default role, we
-    // can potentially avoid doing a range query with a high consistency level.
+        return make_ready_future<>();
+    }).handle_exception_type([](const exceptions::unavailable_exception& e) {
+        log.warn("Skipped default role setup: some nodes were not ready; will retry");
+        return make_exception_future<>(e);
+    });
+}
 
-    const bool default_exists_one = !_qp.process(
-            default_role_query,
-            db::consistency_level::ONE,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            true).get0()->empty();
+static const sstring legacy_table_name{"users"};
 
-    if (default_exists_one) {
-        return true;
-    }
+bool standard_role_manager::legacy_metadata_exists() const {
+    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+}
 
-    const bool default_exists_quorum = !_qp.process(
-            default_role_query,
-            db::consistency_level::QUORUM,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            true).get0()->empty();
+future<> standard_role_manager::migrate_legacy_metadata() {
+    log.info("Starting migration of legacy user metadata.");
+    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
 
-    if (default_exists_quorum) {
-        return true;
-    }
+    return _qp.process(
+            query,
+            db::consistency_level::QUORUM).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            role_config config;
+            config.is_superuser = row.get_as<bool>("super");
+            config.can_login = true;
 
-    const bool any_exists_quorum = !_qp.process(all_roles_query, db::consistency_level::QUORUM).get0()->empty();
-    return any_exists_quorum;
+            return do_with(
+                    row.get_as<sstring>("name"),
+                    std::move(config),
+                    [this](const auto& name, const auto& config) {
+                return this->create_or_replace(name, config);
+            });
+        }).finally([results] {});
+    }).then([] {
+        log.info("Finished migrating legacy user metadata.");
+    }).handle_exception([](std::exception_ptr ep) {
+        log.error("Encountered an error during migration!");
+        std::rethrow_exception(ep);
+    });
 }
 
 future<> standard_role_manager::start() {
@@ -219,23 +240,20 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    try {
-                        if (this->has_existing_roles()) {
-                            return;
+                    if (any_nondefault_role_row_satisfies(_qp, [](auto&&) { return true; }).get0()) {
+                        if (this->legacy_metadata_exists()) {
+                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }
-                        // Create the default superuser.
-                        _qp.process(
-                                sprint(
-                                        "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
-                                        meta::roles_table::qualified_name(),
-                                        meta::roles_table::role_col_name),
-                                db::consistency_level::QUORUM,
-                                {meta::DEFAULT_SUPERUSER_NAME}).get();
-                        log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
-                    } catch (const exceptions::unavailable_exception& e) {
-                        log.warn("Skipped default role setup: some nodes were not ready; will retry");
-                        throw e;
+
+                        return;
                     }
+
+                    if (this->legacy_metadata_exists()) {
+                        this->migrate_legacy_metadata().get0();
+                        return;
+                    }
+
+                    create_default_role_if_missing().get0();
                 });
             });
         });
@@ -247,23 +265,27 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
-future<>
-standard_role_manager::create(stdx::string_view role_name, const role_config& c) {
+future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) {
     static const sstring query = sprint(
             "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
+    return _qp.process(
+            query,
+            consistency_for_role(role_name),
+            {sstring(role_name), c.is_superuser, c.can_login},
+            true).discard_result();
+}
+
+future<>
+standard_role_manager::create(stdx::string_view role_name, const role_config& c) {
     return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
         }
 
-        return _qp.process(
-                query,
-                consistency_for_role(role_name),
-                {sstring(role_name), c.is_superuser, c.can_login},
-                true).discard_result();
+        return this->create_or_replace(role_name, c);
     });
 }
 

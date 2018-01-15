@@ -91,6 +91,48 @@ default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::mig
 default_authorizer::~default_authorizer() {
 }
 
+static const sstring legacy_table_name{"permissions"};
+
+bool default_authorizer::legacy_metadata_exists() const {
+    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+}
+
+future<bool> default_authorizer::any_granted() const {
+    static const sstring query = sprint("SELECT * FROM %s.%s LIMIT 1", meta::AUTH_KS, PERMISSIONS_CF);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {},
+            true).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return !results->empty();
+    });
+}
+
+future<> default_authorizer::migrate_legacy_metadata() {
+    alogger.info("Starting migration of legacy permissions metadata.");
+    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            return do_with(
+                    row.get_as<sstring>("username"),
+                    parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
+                    [this, &row](const auto& username, const auto& r) {
+                const permission_set perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+                return grant(username, perms, r);
+            });
+        }).finally([results] {});
+    }).then([] {
+        alogger.info("Finished migrating legacy permissions metadata.");
+    }).handle_exception([](std::exception_ptr ep) {
+        alogger.error("Encountered an error during migration!");
+        std::rethrow_exception(ep);
+    });
+}
+
 future<> default_authorizer::start() {
     static const sstring create_table = sprint(
             "CREATE TABLE %s.%s ("
@@ -113,12 +155,28 @@ future<> default_authorizer::start() {
                 PERMISSIONS_CF,
                 _qp,
                 create_table,
-                _migration_manager);
+                _migration_manager).then([this] {
+            _finished = do_after_system_ready(_as, [this] {
+                if (legacy_metadata_exists()) {
+                   return any_granted().then([this](bool any) {
+                       if (!any) {
+                           return migrate_legacy_metadata();
+                       }
+
+                       alogger.warn("Ignoring legacy permissions metadata since role permissions exist.");
+                       return make_ready_future<>();
+                   });
+               }
+
+               return make_ready_future<>();
+            });
+        });
     });
 }
 
 future<> default_authorizer::stop() {
-    return make_ready_future<>();
+    _as.request_abort();
+    return _finished.handle_exception_type([](const sleep_aborted&) {});
 }
 
 future<permission_set>

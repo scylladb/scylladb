@@ -161,28 +161,81 @@ static sstring hashpw(const sstring& pass) {
     return hashpw(pass, gensalt());
 }
 
+static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
+    return utf8_type->deserialize(row.get_blob(SALTED_HASH)) != data_value::make_null(utf8_type);
+}
+
+static const sstring update_row_query = sprint(
+        "UPDATE %s SET %s = ? WHERE %s = ?",
+        meta::roles_table::qualified_name(),
+        SALTED_HASH,
+        meta::roles_table::role_col_name);
+
+static const sstring legacy_table_name{"credentials"};
+
+bool password_authenticator::legacy_metadata_exists() const {
+    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+}
+
+future<> password_authenticator::migrate_legacy_metadata() {
+    plogger.info("Starting migration of legacy authentication metadata.");
+    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
+
+    return _qp.process(
+            query,
+            db::consistency_level::QUORUM).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            auto username = row.get_as<sstring>("username");
+            auto salted_hash = row.get_as<sstring>(SALTED_HASH);
+
+            return _qp.process(
+                    update_row_query,
+                    consistency_for_user(username),
+                    {std::move(salted_hash), username}).discard_result();
+        }).finally([results] {});
+    }).then([] {
+       plogger.info("Finished migrating legacy authentication metadata.");
+    }).handle_exception([](std::exception_ptr ep) {
+        plogger.error("Encountered an error during migration!");
+        std::rethrow_exception(ep);
+    });
+}
+
+future<> password_authenticator::create_default_if_missing() {
+    return default_role_row_satisfies(_qp, &has_salted_hash).then([this](bool exists) {
+        if (!exists) {
+            return _qp.process(
+                    update_row_query,
+                    db::consistency_level::QUORUM,
+                    {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
+                plogger.info("Created default superuser authentication record.");
+            });
+        }
+
+        return make_ready_future<>();
+    });
+}
+
 future<> password_authenticator::start() {
      return once_among_shards([this] {
          gensalt(); // do this once to determine usable hashing
 
          _stopped = do_after_system_ready(_as, [this] {
-             return has_existing_users().then([this](bool existing) {
-                 if (!existing) {
-                     static const sstring query = sprint(
-                             "UPDATE %s SET %s = ? WHERE %s = ?",
-                             meta::roles_table::qualified_name(),
-                             SALTED_HASH,
-                             meta::roles_table::role_col_name);
+             return async([this] {
+                 if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
+                     if (legacy_metadata_exists()) {
+                         plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
+                     }
 
-                     return _qp.process(
-                             query,
-                             db::consistency_level::ONE,
-                             {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto) {
-                         plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
-                     });
+                     return;
                  }
 
-                 return make_ready_future<>();
+                 if (legacy_metadata_exists()) {
+                     migrate_legacy_metadata().get0();
+                     return;
+                 }
+
+                 create_default_if_missing().get0();
              });
          });
 
@@ -269,14 +322,8 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
         return make_ready_future<>();
     }
 
-    static const sstring query = sprint(
-            "UPDATE %s SET %s = ? WHERE %s = ?",
-            meta::roles_table::qualified_name(),
-            SALTED_HASH,
-            meta::roles_table::role_col_name);
-
     return _qp.process(
-            query,
+            update_row_query,
             consistency_for_user(role_name),
             {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
@@ -382,56 +429,6 @@ const resource_set& password_authenticator::protected_resources() const {
         bool _complete = false;
     };
     return ::make_shared<plain_text_password_challenge>(*this);
-}
-
-//
-// Similar in structure to `service::has_existing_legacy_users()`, but trying to generalize the pattern breaks all
-// kinds of module boundaries and leaks implementation details.
-//
-future<bool> password_authenticator::has_existing_users() const {
-    static const auto hash_is_null = [](const cql3::untyped_result_set_row& row) {
-        return utf8_type->deserialize(row.get_blob(SALTED_HASH)) == data_value::make_null(utf8_type);
-    };
-
-    static const sstring default_user_query = sprint(
-            "SELECT %s FROM %s WHERE %s = ?",
-            SALTED_HASH,
-            meta::roles_table::qualified_name(),
-            meta::roles_table::role_col_name);
-
-    static const sstring all_users_query = sprint(
-            "SELECT %s FROM %s LIMIT 1",
-            SALTED_HASH,
-            meta::roles_table::qualified_name());
-
-    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
-    // can potentially avoid doing a range query with a high consistency level.
-
-    return _qp.process(
-            default_user_query,
-            db::consistency_level::ONE,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            true).then([this](auto results) {
-        if (!results->empty() && !hash_is_null(results->one())) {
-            return make_ready_future<bool>(true);
-        }
-
-        return _qp.process(
-                default_user_query,
-                db::consistency_level::QUORUM,
-                {meta::DEFAULT_SUPERUSER_NAME},
-                true).then([this](auto results) {
-            if (!results->empty() && !hash_is_null(results->one())) {
-                return make_ready_future<bool>(true);
-            }
-
-            return _qp.process(
-                    all_users_query,
-                    db::consistency_level::QUORUM).then([](auto results) {
-                return make_ready_future<bool>(!boost::algorithm::all_of(*results, hash_is_null));
-            });
-        });
-    });
 }
 
 }

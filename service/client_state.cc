@@ -160,11 +160,19 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
             throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
         }
 
-        // we want to disallow altering AUTH_KS and TRACING_KS.
-        for (auto& n : { auth::meta::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
-            if (name == n && p == auth::permission::DROP) {
-                throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
-            }
+        //
+        // we want to disallow dropping any contents of TRACING_KS and disallow dropping the `auth::meta::AUTH_KS`
+        // keyspace.
+        //
+
+        const bool dropping_anything_in_tracing = (name == tracing::trace_keyspace_helper::KEYSPACE_NAME)
+                && (p == auth::permission::DROP);
+
+        const bool dropping_auth_keyspace = (resource == auth::make_data_resource(auth::meta::AUTH_KS))
+                && (p == auth::permission::DROP);
+
+        if (dropping_anything_in_tracing || dropping_auth_keyspace) {
+            throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
         }
     }
 

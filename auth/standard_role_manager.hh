@@ -92,7 +92,13 @@ private:
 
     future<> create_metadata_tables_if_missing();
 
-    bool has_existing_roles() const;
+    bool legacy_metadata_exists() const;
+
+    future<> migrate_legacy_metadata();
+
+    future<> create_default_role_if_missing();
+
+    future<> create_or_replace(stdx::string_view role_name, const role_config&);
 
     future<> modify_membership(stdx::string_view role_name, stdx::string_view grantee_name, membership_change);
 };

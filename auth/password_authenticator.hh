@@ -92,7 +92,11 @@ public:
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
 private:
-    future<bool> has_existing_users() const;
+    bool legacy_metadata_exists() const;
+
+    future<> migrate_legacy_metadata();
+
+    future<> create_default_if_missing();
 };
 
 }

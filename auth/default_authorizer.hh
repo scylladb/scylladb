@@ -43,6 +43,8 @@
 
 #include <functional>
 
+#include <seastar/core/abort_source.hh>
+
 #include "auth/authorizer.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
@@ -55,6 +57,10 @@ class default_authorizer : public authorizer {
     cql3::query_processor& _qp;
 
     ::service::migration_manager& _migration_manager;
+
+    abort_source _as{};
+
+    future<> _finished{make_ready_future<>()};
 
 public:
     default_authorizer(cql3::query_processor&, ::service::migration_manager&);
@@ -84,6 +90,12 @@ public:
     virtual const resource_set& protected_resources() const override;
 
 private:
+    bool legacy_metadata_exists() const;
+
+    future<bool> any_granted() const;
+
+    future<> migrate_legacy_metadata();
+
     future<> modify(stdx::string_view, permission_set, const resource&, stdx::string_view);
 };
 

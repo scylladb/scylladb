@@ -54,6 +54,7 @@
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/request_validations.hh"
 #include "exceptions/exceptions.hh"
+#include "service/storage_service.hh"
 #include "transport/messages/result_message.hh"
 #include "unimplemented.hh"
 
@@ -79,9 +80,22 @@ static future<result_message_ptr> void_result_message() {
     return make_ready_future<result_message_ptr>(nullptr);
 }
 
+void validate_cluster_support() {
+    // TODO(jhaberku): All other feature-checking CQL statements also grab the `storage_service` globally. I'm not sure
+    // if it's accessible through some other object, but for now I'm sticking with convention.
+    if (!service::get_local_storage_service().cluster_supports_roles()) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify access-control information until the cluster has fully upgraded.");
+    }
+}
+
 //
 // `create_role_statement`
 //
+
+void create_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state&) {
+    validate_cluster_support();
+}
 
 future<> create_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
@@ -130,6 +144,10 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
 //
 // `alter_role_statement`
 //
+
+void alter_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state&) {
+    validate_cluster_support();
+}
 
 future<> alter_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
@@ -206,6 +224,8 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
 //
 
 void drop_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
+    validate_cluster_support();
+
     if (*state.user() == auth::authenticated_user(_role)) {
         throw request_validations::invalid_request("Cannot DROP primary role for current login.");
     }
