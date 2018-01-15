@@ -77,31 +77,31 @@ public:
             : _authenticator(std::move(a)) {
     }
 
-    future<> start() override {
+    virtual future<> start() override {
         return _authenticator->start();
     }
 
-    future<> stop() override {
+    virtual future<> stop() override {
         return _authenticator->stop();
     }
 
-    const sstring& qualified_java_name() const override {
+    virtual const sstring& qualified_java_name() const override {
         return transitional_authenticator_name();
     }
 
-    bool require_authentication() const override {
+    virtual bool require_authentication() const override {
         return true;
     }
 
-    authentication_option_set supported_options() const override {
+    virtual authentication_option_set supported_options() const override {
         return _authenticator->supported_options();
     }
 
-    authentication_option_set alterable_options() const override {
+    virtual authentication_option_set alterable_options() const override {
         return _authenticator->alterable_options();
     }
 
-    future<authenticated_user> authenticate(const credentials_map& credentials) const override {
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override {
         auto i = credentials.find(authenticator::USERNAME_KEY);
         if ((i == credentials.end() || i->second.empty())
                 && (!credentials.count(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
@@ -120,30 +120,30 @@ public:
         });
     }
 
-    future<> create(sstring username, const authentication_options& options) override {
+    virtual future<> create(sstring username, const authentication_options& options) override {
         return _authenticator->create(username, options);
     }
 
-    future<> alter(sstring username, const authentication_options& options) override {
+    virtual future<> alter(sstring username, const authentication_options& options) override {
         return _authenticator->alter(username, options);
     }
 
-    future<> drop(sstring username) override {
+    virtual future<> drop(sstring username) override {
         return _authenticator->drop(username);
     }
 
-    const resource_set& protected_resources() const override {
+    virtual const resource_set& protected_resources() const override {
         return _authenticator->protected_resources();
     }
 
-    ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
         class sasl_wrapper : public sasl_challenge {
         public:
             sasl_wrapper(::shared_ptr<sasl_challenge> sasl)
                     : _sasl(std::move(sasl)) {
             }
 
-            bytes evaluate_response(bytes_view client_response) override {
+            virtual bytes evaluate_response(bytes_view client_response) override {
                 try {
                     return _sasl->evaluate_response(client_response);
                 } catch (exceptions::authentication_exception&) {
@@ -152,11 +152,11 @@ public:
                 }
             }
 
-            bool is_complete() const {
+            virtual bool is_complete() const override {
                 return _complete || _sasl->is_complete();
             }
 
-            future<authenticated_user> get_authenticated_user() const {
+            virtual future<authenticated_user> get_authenticated_user() const {
                 return futurize_apply([this] {
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {
@@ -192,18 +192,19 @@ public:
     ~transitional_authorizer() {
     }
 
-    future<> start() override {
+    virtual future<> start() override {
         return _authorizer->start();
     }
 
-    future<> stop() override {
+    virtual future<> stop() override {
         return _authorizer->stop();
     }
 
-    const sstring& qualified_java_name() const override {
+    virtual const sstring& qualified_java_name() const override {
         return transitional_authorizer_name();
     }
-    future<permission_set> authorize(service& ser, sstring role, resource resource) const override {
+
+    virtual future<permission_set> authorize(service& ser, sstring role, resource resource) const override {
         return ser.role_has_superuser(role).then([resource](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<
@@ -217,15 +218,15 @@ public:
         });
     }
 
-    future<> grant(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
+    virtual future<> grant(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
         return _authorizer->grant(user, std::move(ps), std::move(r), std::move(s));
     }
 
-    future<> revoke(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
+    virtual future<> revoke(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
         return _authorizer->revoke(user, std::move(ps), std::move(r), std::move(s));
     }
 
-    future<std::vector<permission_details>>
+    virtual future<std::vector<permission_details>>
     list(
             service& ser,
             const authenticated_user& user,
@@ -235,19 +236,19 @@ public:
         return _authorizer->list(ser, user, std::move(ps), std::move(r), std::move(s));
     }
 
-    future<> revoke_all(sstring s) override {
+    virtual future<> revoke_all(sstring s) override {
         return _authorizer->revoke_all(std::move(s));
     }
 
-    future<> revoke_all(resource r) override {
+    virtual future<> revoke_all(resource r) override {
         return _authorizer->revoke_all(std::move(r));
     }
 
-    const resource_set& protected_resources() override {
+    virtual const resource_set& protected_resources() override {
         return _authorizer->protected_resources();
     }
 
-    future<> validate_configuration() const override {
+    virtual future<> validate_configuration() const override {
         return _authorizer->validate_configuration();
     }
 };

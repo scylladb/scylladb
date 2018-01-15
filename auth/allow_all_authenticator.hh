@@ -44,27 +44,27 @@ public:
     allow_all_authenticator(cql3::query_processor&, ::service::migration_manager&) {
     }
 
-    future<> start() override {
+    virtual future<> start() override {
         return make_ready_future<>();
     }
 
-    future<> stop() override {
+    virtual future<> stop() override {
         return make_ready_future<>();
     }
 
-    const sstring& qualified_java_name() const override {
+    virtual const sstring& qualified_java_name() const override {
         return allow_all_authenticator_name();
     }
 
-    bool require_authentication() const override {
+    virtual bool require_authentication() const override {
         return false;
     }
 
-    authentication_option_set supported_options() const override {
+    virtual authentication_option_set supported_options() const override {
         return authentication_option_set();
     }
 
-    authentication_option_set alterable_options() const override {
+    virtual authentication_option_set alterable_options() const override {
         return authentication_option_set();
     }
 
@@ -72,24 +72,24 @@ public:
         return make_ready_future<authenticated_user>(anonymous_user());
     }
 
-    future<> create(sstring username, const authentication_options& options) override {
+    virtual future<> create(sstring username, const authentication_options& options) override {
         return make_ready_future();
     }
 
-    future<> alter(sstring username, const authentication_options& options) override {
+    virtual future<> alter(sstring username, const authentication_options& options) override {
         return make_ready_future();
     }
 
-    future<> drop(sstring username) override {
+    virtual future<> drop(sstring username) override {
         return make_ready_future();
     }
 
-    const resource_set& protected_resources() const override {
+    virtual const resource_set& protected_resources() const override {
         static const resource_set resources;
         return resources;
     }
 
-    ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
         throw std::runtime_error("Should not reach");
     }
 };

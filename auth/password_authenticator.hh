@@ -65,29 +65,29 @@ public:
 
     ~password_authenticator();
 
-    future<> start() override;
+    virtual future<> start() override;
 
-    future<> stop() override;
+    virtual future<> stop() override;
 
-    const sstring& qualified_java_name() const override;
+    virtual const sstring& qualified_java_name() const override;
 
-    bool require_authentication() const override;
+    virtual bool require_authentication() const override;
 
-    authentication_option_set supported_options() const override;
+    virtual authentication_option_set supported_options() const override;
 
-    authentication_option_set alterable_options() const override;
+    virtual authentication_option_set alterable_options() const override;
 
-    future<authenticated_user> authenticate(const credentials_map& credentials) const override;
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
 
-    future<> create(sstring username, const authentication_options& options) override;
+    virtual future<> create(sstring username, const authentication_options& options) override;
 
-    future<> alter(sstring username, const authentication_options& options) override;
+    virtual future<> alter(sstring username, const authentication_options& options) override;
 
-    future<> drop(sstring username) override;
+    virtual future<> drop(sstring username) override;
 
-    const resource_set& protected_resources() const override;
+    virtual const resource_set& protected_resources() const override;
 
-    ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
     static db::consistency_level consistency_for_user(const sstring& username);
 

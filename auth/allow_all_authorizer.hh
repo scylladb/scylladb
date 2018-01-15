@@ -44,31 +44,31 @@ public:
     allow_all_authorizer(cql3::query_processor&, ::service::migration_manager&) {
     }
 
-    future<> start() override {
+    virtual future<> start() override {
         return make_ready_future<>();
     }
 
-    future<> stop() override {
+    virtual future<> stop() override {
         return make_ready_future<>();
     }
 
-    const sstring& qualified_java_name() const override {
+    virtual const sstring& qualified_java_name() const override {
         return allow_all_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, sstring role_name, resource) const override {
+    virtual future<permission_set> authorize(service&, sstring role_name, resource) const override {
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    future<> grant(const authenticated_user&, permission_set, resource, sstring) override {
+    virtual future<> grant(const authenticated_user&, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
     }
 
-    future<> revoke(const authenticated_user&, permission_set, resource, sstring) override {
+    virtual future<> revoke(const authenticated_user&, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
-    future<std::vector<permission_details>> list(
+    virtual future<std::vector<permission_details>> list(
             service&,
             const authenticated_user& performer,
             permission_set,
@@ -77,20 +77,20 @@ public:
         throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
     }
 
-    future<> revoke_all(sstring dropped_user) override {
+    virtual future<> revoke_all(sstring dropped_user) override {
         return make_ready_future();
     }
 
-    future<> revoke_all(resource) override {
+    virtual future<> revoke_all(resource) override {
         return make_ready_future();
     }
 
-    const resource_set& protected_resources() override {
+    virtual const resource_set& protected_resources() override {
         static const resource_set resources;
         return resources;
     }
 
-    future<> validate_configuration() const override {
+    virtual future<> validate_configuration() const override {
         return make_ready_future();
     }
 };
