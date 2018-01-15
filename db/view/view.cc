@@ -280,7 +280,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
         if (def.is_atomic()) {
             maybe_update_expiry_and_ttl(c.as_atomic_cell());
         } else {
-            static_pointer_cast<const collection_type_impl>(def.type)->for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
+            collection_type_impl::for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
         }
     });
 
@@ -374,7 +374,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
         if (def->is_atomic()) {
             set_max_ts(cell.as_atomic_cell());
         } else {
-            static_pointer_cast<const collection_type_impl>(def->type)->for_each_cell(cell.as_collection_mutation(), set_max_ts);
+            collection_type_impl::for_each_cell(cell.as_collection_mutation(), set_max_ts);
         }
     });
     get_view_row(base_key, existing).apply(shadowable_tombstone(ts, now));

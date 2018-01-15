@@ -824,7 +824,7 @@ public:
     // Calls Func(atomic_cell_view) for each cell in this collection.
     // noexcept if Func doesn't throw.
     template<typename Func>
-    void for_each_cell(collection_mutation_view c, Func&& func) const {
+    static void for_each_cell(collection_mutation_view c, Func&& func) {
         auto m_view = deserialize_mutation_form(std::move(c));
         for (auto&& c : m_view.cells) {
             func(std::move(c.second));
