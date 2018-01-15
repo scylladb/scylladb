@@ -50,7 +50,7 @@ Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake python ragel
+BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake python ragel grep kernel-headers
 %{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
 %{?rhel:BuildRequires: scylla-libstdc++72-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc72-c++, scylla-python34-pyparsing20}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs
@@ -67,13 +67,27 @@ This package contains ScyllaDB server.
     %{nil}
 
 %build
+
+defines=()
+
+# We want a package compiled with old kernel headers to
+# support nowait aio if the user upgrades their kernel
+if ! grep -qwr RWF_NOWAIT /usr/include/linux; then
+    defines+=("-DRWF_NOWAIT=8")
+fi
+if ! grep -qwr aio_rw_flags /usr/include/linux; then
+    defines+=("-Daio_rw_flags=aio_reserved1")
+fi
+
+cflags="--cflags=${defines[*]}"
+
 %define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
 %if 0%{?fedora}
-./configure.py --enable-dpdk --mode=release
+./configure.py --enable-dpdk --mode=release "$cflags"
 %endif
 %if 0%{?rhel}
 . /etc/profile.d/scylla.sh
-python3.4 ./configure.py --enable-dpdk --mode=release --static-boost --compiler=/opt/scylladb/bin/g++-7.2 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
+python3.4 ./configure.py --enable-dpdk --mode=release "$cflags" --static-boost --compiler=/opt/scylladb/bin/g++-7.2 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
