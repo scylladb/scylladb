@@ -268,10 +268,6 @@ public:
 
     row difference(const schema&, column_kind, const row& other) const;
 
-    // Assumes the other row has the same schema
-    // Consistent with feed_hash()
-    bool operator==(const row&) const;
-
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     size_t external_memory_usage() const;

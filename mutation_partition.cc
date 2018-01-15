@@ -1389,20 +1389,6 @@ auto row::with_both_ranges(const row& other, Func&& func) const {
     }
 }
 
-bool row::operator==(const row& other) const {
-    if (size() != other.size()) {
-        return false;
-    }
-
-    auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1,
-                           std::pair<column_id, const atomic_cell_or_collection&> c2) {
-        return c1.first == c2.first && c1.second == c2.second;
-    };
-    return with_both_ranges(other, [&] (auto r1, auto r2) {
-        return boost::equal(r1, r2, cells_equal);
-    });
-}
-
 bool row::equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const {
     if (size() != other.size()) {
         return false;
