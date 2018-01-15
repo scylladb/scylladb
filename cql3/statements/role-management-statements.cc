@@ -115,8 +115,6 @@ future<result_message_ptr>
 create_role_statement::execute(distributed<service::storage_proxy>&,
                                service::query_state& state,
                                const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
-
     auth::role_config config;
     config.is_superuser = *_options.is_superuser;
     config.can_login = *_options.can_login;
@@ -197,8 +195,6 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
 
 future<result_message_ptr>
 alter_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
-
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
@@ -258,8 +254,6 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
 
 future<result_message_ptr>
 drop_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
-
     auto& as = *state.get_client_state().get_auth_service();
 
     return auth::drop_role(as, _role).then([] {
