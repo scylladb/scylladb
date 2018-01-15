@@ -839,7 +839,7 @@ public:
     }
 
     future<> fast_forward_to(const dht::partition_range& pr) {
-        return _reader.fast_forward_to(pr);
+        return _reader.fast_forward_to(pr, _timeout);
     }
 
     std::size_t call_count() const {
