@@ -25,6 +25,7 @@
 #include "md5_hasher.hh"
 #include "xx_hasher.hh"
 
+#include <type_traits>
 #include <variant>
 
 namespace query {
@@ -67,5 +68,11 @@ public:
 };
 
 using default_hasher = xx_hasher;
+
+template<typename Hasher>
+using using_hash_of_hash = std::negation<std::disjunction<std::is_same<Hasher, md5_hasher>, std::is_same<Hasher, noop_hasher>>>;
+
+template<typename Hasher>
+inline constexpr bool using_hash_of_hash_v = using_hash_of_hash<Hasher>::value;
 
 }

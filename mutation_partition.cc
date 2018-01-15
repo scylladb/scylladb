@@ -632,13 +632,33 @@ struct appending_hash<row> {
             }
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
-                feed_hash(h, cell_and_hash->cell.as_atomic_cell(), def);
                 max_ts.update(cell_and_hash->cell.as_atomic_cell().timestamp());
+                if constexpr (query::using_hash_of_hash_v<Hasher>) {
+                    if (cell_and_hash->hash) {
+                        feed_hash(h, *cell_and_hash->hash);
+                    } else {
+                        query::default_hasher cellh;
+                        feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(), def);
+                        feed_hash(h, cellh.finalize_uint64());
+                    }
+                } else {
+                    feed_hash(h, cell_and_hash->cell.as_atomic_cell(), def);
+                }
             } else {
                 auto&& cm = cell_and_hash->cell.as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                feed_hash(h, cm, def);
                 max_ts.update(ctype->last_update(cm));
+                if constexpr (query::using_hash_of_hash_v<Hasher>) {
+                    if (cell_and_hash->hash) {
+                        feed_hash(h, *cell_and_hash->hash);
+                    } else {
+                        query::default_hasher cellh;
+                        feed_hash(cellh, cm, def);
+                        feed_hash(h, cellh.finalize_uint64());
+                    }
+                } else {
+                    feed_hash(h, cm, def);
+                }
             }
         }
     }
