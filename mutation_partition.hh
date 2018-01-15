@@ -193,17 +193,6 @@ private:
 
     void vector_to_set();
 
-    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
-    //
-    // Func() is allowed to modify the cell. Emptying a cell makes it still
-    // visible to for_each().
-    //
-    // In case of exception, calls Rollback(column_id, atomic_cell_or_collection&) on
-    // all cells on which Func() was successfully invoked in reverse order.
-    //
-    template<typename Func, typename Rollback>
-    void for_each_cell(Func&&, Rollback&&);
-
     template<typename Func>
     void consume_with(Func&&);
 public:

@@ -979,45 +979,6 @@ row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
     apply_monotonically(column, std::move(value));
 }
 
-template<typename Func, typename Rollback>
-void row::for_each_cell(Func&& func, Rollback&& rollback) {
-    static_assert(noexcept(rollback(std::declval<column_id>(), std::declval<atomic_cell_or_collection&>())),
-                           "rollback must be noexcept");
-
-    if (_type == storage_type::vector) {
-        unsigned i = 0;
-        try {
-            for (; i < _storage.vector.v.size(); i++) {
-                if (_storage.vector.present.test(i)) {
-                    func(i, _storage.vector.v[i]);
-                }
-            }
-        } catch (...) {
-            while (i) {
-                --i;
-                if (_storage.vector.present.test(i)) {
-                    rollback(i, _storage.vector.v[i]);
-                }
-            }
-            throw;
-        }
-    } else {
-        auto i = _storage.set.begin();
-        try {
-            while (i != _storage.set.end()) {
-                func(i->id(), i->cell());
-                ++i;
-            }
-        } catch (...) {
-            while (i != _storage.set.begin()) {
-                --i;
-                rollback(i->id(), i->cell());
-            }
-            throw;
-        }
-    }
-}
-
 template<typename Func>
 void row::consume_with(Func&& func) {
     if (_type == storage_type::vector) {
