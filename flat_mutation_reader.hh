@@ -93,8 +93,6 @@ public:
         bool _end_of_stream = false;
         schema_ptr _schema;
         friend class flat_mutation_reader;
-        template <typename Source>
-        friend future<bool> fill_buffer_from(flat_mutation_reader::impl&, Source&, db::timeout_clock::time_point);
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
@@ -469,6 +467,36 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
 
 flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
+inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
+
+template <typename Underlying>
+class delegating_reader : public flat_mutation_reader::impl {
+    Underlying _underlying;
+public:
+    delegating_reader(Underlying&& r) : impl(to_reference(r).schema()), _underlying(std::forward<Underlying>(r)) { }
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        return fill_buffer_from(to_reference(_underlying), timeout).then([this] (bool underlying_finished) {
+            _end_of_stream = underlying_finished;
+        });
+    }
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        _end_of_stream = false;
+        forward_buffer_to(pr.start());
+        return to_reference(_underlying).fast_forward_to(std::move(pr), timeout);
+    }
+    virtual void next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            to_reference(_underlying).next_partition();
+        }
+        _end_of_stream = to_reference(_underlying).is_end_of_stream() && to_reference(_underlying).is_buffer_empty();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        _end_of_stream = false;
+        clear_buffer();
+        return to_reference(_underlying).fast_forward_to(pr, timeout);
+    }
+};
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);
 
 flat_mutation_reader make_forwardable(flat_mutation_reader m);
@@ -481,6 +509,10 @@ flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation>, 
 inline flat_mutation_reader flat_mutation_reader_from_mutations(std::vector<mutation> ms, streamed_mutation::forwarding fwd) {
     return flat_mutation_reader_from_mutations(std::move(ms), query::full_partition_range, fwd);
 }
+flat_mutation_reader
+flat_mutation_reader_from_mutations(std::vector<mutation> ms,
+                                    const query::partition_slice& slice,
+                                    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 flat_mutation_reader
 make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::partition_range_vector& ranges,

@@ -977,8 +977,7 @@ void run_conversion_to_mutation_reader_tests(populate_fn populate) {
                                          streamed_mutation::forwarding fwd,
                                          mutation_reader::forwarding fwd_mr)
                                {
-                                   auto&& res = source.make_flat_mutation_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-                                   return mutation_reader_from_flat_mutation_reader(std::move(res));
+                                   return source.make_flat_mutation_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
                                });
     };
     run_mutation_reader_tests(populate_with_flat_mutation_reader_conversion);

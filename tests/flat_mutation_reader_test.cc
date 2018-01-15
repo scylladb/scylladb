@@ -461,7 +461,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         }));
 
         auto source = mutation_source([&] (schema_ptr, const dht::partition_range& range) {
-            return make_reader_returning_many(ms, range);
+            return flat_mutation_reader_from_mutations(ms, range);
         });
 
         auto ranges = dht::partition_range_vector {
