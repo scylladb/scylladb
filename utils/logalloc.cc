@@ -575,10 +575,8 @@ size_t segment_pool::reclaim_segments(size_t target) {
     bi::slist<segment_zone> zones_to_remove;
     for (auto& zone : _all_zones | boost::adaptors::reversed) {
         if (zone.empty()) {
-            if (reclaimed_segments < target || !zone.free_segment_count()) {
-                reclaimed_segments += zone.free_segment_count();
-                zones_to_remove.push_front(zone);
-            }
+            reclaimed_segments += zone.free_segment_count();
+            zones_to_remove.push_front(zone);
         } else if (zone.free_segment_count()) {
             _free_segments_in_zones += zone.free_segment_count();
             zone.rebuild_free_segments_list();
