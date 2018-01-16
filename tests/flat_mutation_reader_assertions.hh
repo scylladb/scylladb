@@ -162,11 +162,11 @@ public:
         return produces(m);
     }
 
-    flat_reader_assertions& produces(const mutation& m) {
+    flat_reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
-        assert_that(*mo).is_equal_to(m);
+        assert_that(*mo).is_equal_to(m, ck_ranges);
         return *this;
     }
 
