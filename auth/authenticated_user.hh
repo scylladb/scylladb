@@ -66,6 +66,7 @@ public:
     }
 
     bool operator==(const authenticated_user&) const;
+    bool operator!=(const authenticated_user& other) const { return !(*this == other); }
 private:
     sstring _name;
     bool _anon;
