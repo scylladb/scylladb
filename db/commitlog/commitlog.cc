@@ -1175,7 +1175,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
-        // xfs doesn't like files extended betond eof, so enlarge the file
+        // xfs doesn't like files extended beyond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
             auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
