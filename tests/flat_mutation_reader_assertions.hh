@@ -184,6 +184,17 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces_eos_or_empty_mutation() {
+        BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        if (mo) {
+            if (!mo->partition().empty()) {
+                BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
+            }
+        }
+        return *this;
+    }
+
     void has_monotonic_positions() {
         position_in_partition::less_compare less(*_reader.schema());
         mutation_fragment_opt previous_fragment;
