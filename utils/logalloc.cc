@@ -296,7 +296,7 @@ static inline bool can_allocate_more_memory(size_t size)
 class segment_zone : public bi::set_base_hook<>, public bi::slist_base_hook<> {
     struct free_segment : public bi::slist_base_hook<> { };
 
-    static constexpr size_t maximum_size = 256;
+    static constexpr size_t maximum_size = max_zone_segments;
     static constexpr size_t minimum_size = 16;
     static thread_local size_t next_attempt_size;
 
