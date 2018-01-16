@@ -246,6 +246,13 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
+        return fast_forward_to(position_range{
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck2)
+        });
+    }
+
     mutation_assertion next_mutation() {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
         BOOST_REQUIRE(bool(mo));
