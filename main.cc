@@ -276,18 +276,24 @@ int main(int ac, char** av) {
     app_template app(std::move(app_cfg));
 
     auto cfg = make_lw_shared<db::config>();
-    bool help_version = false;
     auto init = app.get_options_description().add_options();
 
+    // If --version is requested, print it out and exit immediately to avoid
+    // Seastar-specific warnings that may occur when running the app
+    init("version", bpo::bool_switch(), "print version number and exit");
+    bpo::variables_map vm;
+    bpo::store(bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run(), vm);
+    if (vm["version"].as<bool>()) {
+        print("%s\n", scylla_version());
+        return 0;
+    }
+
+    // TODO : default, always read?
+    init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
     cfg->add_options(init);
     for (configurable& c : configurables()) {
         c.append_options(init);
     }
-
-    init // TODO : default, always read?
-        ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
-        ("version", bpo::bool_switch(&help_version), "print version number and exit")
-        ;
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -301,11 +307,7 @@ int main(int ac, char** av) {
     directories dirs;
 
     return app.run_deprecated(ac, av, [&] {
-        if (help_version) {
-            print("%s\n", scylla_version());
-            engine().exit(0);
-            return make_ready_future<>();
-        }
+
         print("Scylla version %s starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
