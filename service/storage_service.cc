@@ -929,7 +929,17 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
                 slogger.warn("{}", err);
                 throw std::runtime_error(err);
             }
-            restore_replica_count(endpoint, ep.value()).get();
+            // Kick off streaming commands. No need to wait for
+            // restore_replica_count to complete which can take a long time,
+            // since when it completes, this node will send notification to
+            // tell the removal_coordinator with IP address notify_endpoint
+            // that the restore process is finished on this node. This node
+            // will be removed from _replicating_nodes on the
+            // removal_coordinator.
+            auto notify_endpoint = ep.value();
+            restore_replica_count(endpoint, notify_endpoint).handle_exception([endpoint, notify_endpoint] (auto ep) {
+                slogger.info("Failed to restore_replica_count for node {}, notify_endpoint={} : {}", endpoint, notify_endpoint, ep);
+            });
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
