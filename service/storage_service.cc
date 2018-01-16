@@ -1155,10 +1155,10 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     slogger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
     auto local_tokens = get_local_tokens().get0();
-    set_gossip_tokens(local_tokens);
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-    set_mode(mode::NORMAL, "node is now in normal status", true);
     replicate_to_all_cores().get();
+    set_gossip_tokens(local_tokens);
+    set_mode(mode::NORMAL, "node is now in normal status", true);
 }
 
 void storage_service::set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens) {
