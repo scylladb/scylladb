@@ -84,6 +84,38 @@ public:
         return *this;
     }
 
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", rt));
+        auto mfo = read_next();
+        if (!mfo) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got end of stream", rt));
+        }
+        if (!mfo->is_range_tombstone()) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
+        }
+        const schema& s = *_reader.schema();
+        range_tombstone_list actual_list(s);
+        position_in_partition::equal_compare eq(s);
+        while (mutation_fragment* next = _reader.peek().get0()) {
+            if (!next->is_range_tombstone() || !eq(next->position(), mfo->position())) {
+                break;
+            }
+            actual_list.apply(s, _reader().get0()->as_range_tombstone());
+        }
+        actual_list.apply(s, mfo->as_range_tombstone());
+        {
+            range_tombstone_list expected_list(s);
+            expected_list.apply(s, rt);
+            actual_list.trim(s, ck_ranges);
+            expected_list.trim(s, ck_ranges);
+            if (!actual_list.equal(s, expected_list)) {
+                BOOST_FAIL(sprint("Expected %s, but got %s", expected_list, actual_list));
+            }
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_partition_end() {
         BOOST_TEST_MESSAGE("Expecting partition end");
         auto mfopt = read_next();
