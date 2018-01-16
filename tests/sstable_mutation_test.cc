@@ -40,6 +40,7 @@
 #include "tests/test_services.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "simple_schema.hh"
+#include "tests/sstable_utils.hh"
 
 using namespace sstables;
 
@@ -407,7 +408,7 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
         auto s = make_lw_shared(schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto key = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
         auto c_key_start = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
         auto c_key_end = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
 
@@ -774,7 +775,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto k = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto k = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
         auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(static_cast<int32_t>(0xffff0000))});
 
         mutation m(k, s);
@@ -808,7 +809,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         builder.with_column("v", int32_type);
         auto s = builder.build();
 
-        auto k = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto k = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
         auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
         mutation m(k, s);
 
@@ -858,7 +859,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
         mutation m(dk, s);
 
@@ -917,7 +918,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
         mutation m(dk, s);
 
@@ -975,7 +976,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
             builder.with_column("v", int32_type);
             auto s = builder.build(compact);
 
-            auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+            auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
             auto cell = atomic_cell::make_live(1, int32_type->decompose(88), { });
             mutation m(dk, s);
 
@@ -1022,7 +1023,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(dk, s);
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
@@ -1062,7 +1063,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(dk, s);
         for (auto&& v : { 1, 2, 3, 4 }) {
             auto cell = atomic_cell::make_live(1, int32_type->decompose(v), { });
@@ -1095,7 +1096,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         builder.with_column("v", int32_type);
         auto s = builder.build(schema_builder::compact_storage::yes);
 
-        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes("key1")}));
+        auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_exploded(*s, {to_bytes(make_local_key(s))}));
         mutation m(dk, s);
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
@@ -1137,7 +1138,9 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
         auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
 
-        mutation m1 = ss.new_mutation("pk");
+        auto local_k = make_local_key(s);
+
+        mutation m1 = ss.new_mutation(local_k);
         ss.add_row(m1, ss.make_ckey(0), "v0"); // So that we don't hit workaround for #1203, which would cover up bugs
         m1.partition().apply_delete(*s, rt1);
         m1.partition().apply_delete(*s, ss.make_ckey(4), ss.new_tombstone());
@@ -1146,7 +1149,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         m1.partition().apply_delete(*s, ss.make_ckey(20), ss.new_tombstone());
         m1.partition().apply_delete(*s, rt3);
 
-        mutation m2 = ss.new_mutation("pk");
+        mutation m2 = ss.new_mutation(local_k);
         m2.partition().apply_delete(*s, rt2);
         ss.add_row(m2, ss.make_ckey(4), "v2"); // position inside rt2
 

@@ -111,7 +111,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     const int n_keys = 1001;
     assert(!contains_key(n_keys - 1)); // so that we can form a range with position greater than all keys
 
-    mutation m(table.make_pkey("pkey1"), s);
+    mutation m(table.make_pkey(), s);
     std::vector<clustering_key> keys;
     for (int i = 0; i < n_keys; ++i) {
         keys.push_back(table.make_ckey(i));
@@ -336,7 +336,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
     simple_schema table;
     schema_ptr s = table.schema();
 
-    mutation m(table.make_pkey("pkey1"), s);
+    mutation m(table.make_pkey(), s);
 
     std::vector<clustering_key> keys;
     for (int i = 0; i < 20; ++i) {
@@ -430,7 +430,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     simple_schema table;
     schema_ptr s = table.schema();
 
-    mutation m(table.make_pkey("pkey1"), s);
+    mutation m(table.make_pkey(), s);
 
     std::vector<clustering_key> keys;
     for (int i = 0; i < 20; ++i) {
@@ -534,10 +534,12 @@ static void test_range_queries(populate_fn populate) {
 
     int partition_count = 300;
 
+    auto keys = make_local_keys(partition_count, s);
+
     std::vector<mutation> partitions;
     for (int i = 0; i < partition_count; ++i) {
         partitions.emplace_back(
-            make_partition_mutation(to_bytes(sprint("key_%d", i))));
+            make_partition_mutation(to_bytes(keys[i])));
     }
 
     std::sort(partitions.begin(), partitions.end(), mutation_decorated_key_less_comparator());
@@ -683,9 +685,11 @@ static void test_clustering_slices(populate_fn populate) {
         return dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(key)));
     };
 
+    auto partition_count = 3;
+    auto local_keys = make_local_keys(partition_count, s);
     std::vector<dht::decorated_key> keys;
-    for (int i = 0; i < 3; ++i) {
-        keys.push_back(make_pk(sprint("key%d", i)));
+    for (int i = 0; i < partition_count; ++i) {
+        keys.push_back(make_pk(local_keys[i]));
     }
     std::sort(keys.begin(), keys.end(), dht::ring_position_less_comparator(*s));
 
@@ -850,7 +854,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
     simple_schema s;
     auto cks = s.make_ckeys(6);
 
-    auto pkey = s.make_pkey(0);
+    auto pkey = s.make_pkey();
     mutation m(pkey, s.schema());
     s.add_row(m, cks[0], "data");
 
@@ -889,10 +893,11 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
     auto rt1 = ss.make_range_tombstone(ss.make_ckey_range(1, 10));
     auto rt2 = ss.make_range_tombstone(ss.make_ckey_range(1, 5)); // rt1 + rt2 = {[1, 5], (5, 10]}
 
-    mutation m1 = ss.new_mutation("pk");
+    auto key = make_local_key(s);
+    mutation m1 = ss.new_mutation(key);
     m1.partition().apply_delete(*s, rt1);
 
-    mutation m2 = ss.new_mutation("pk");;
+    mutation m2 = ss.new_mutation(key);
     m2.partition().apply_delete(*s, rt2);
     ss.add_row(m2, ss.make_ckey(4), "v2"); // position after rt2.position() but before rt2.end_position().
 
@@ -1060,14 +1065,18 @@ static mutation_sets generate_mutation_sets() {
                 .with_column("regular_col_1_s2", bytes_type) // will have id in between common columns
                 .build();
 
+        auto local_keys = make_local_keys(2, s1); // use only one schema as s1 and s2 don't differ in representation.
+        auto& key1 = local_keys[0];
+        auto& key2 = local_keys[1];
+
         // Differing keys
         result.unequal.emplace_back(mutations{
-            mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1),
-            mutation(partition_key::from_single_value(*s2, to_bytes("key2")), s2)
+            mutation(partition_key::from_single_value(*s1, to_bytes(key1)), s1),
+            mutation(partition_key::from_single_value(*s2, to_bytes(key2)), s2)
         });
 
-        auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1);
-        auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes("key1")), s2);
+        auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes(key1)), s1);
+        auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes(key1)), s2);
         result.equal.emplace_back(mutations{m1, m2});
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
@@ -1292,11 +1301,8 @@ public:
 
         _schema = make_schema();
 
-        for (size_t i = 0; i < n_blobs; ++i) {
-            bytes b(_external_blob_size, int8_t(0));
-            std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(i), b.begin());
-            _blobs.emplace_back(std::move(b));
-        }
+        auto keys = make_local_keys(n_blobs, _schema, _external_blob_size);
+        _blobs =  boost::copy_range<std::vector<bytes>>(keys | boost::adaptors::transformed([this] (sstring& k) { return to_bytes(k); }));
     }
 
     bytes random_blob() {
@@ -1513,15 +1519,11 @@ public:
     }
 
     std::vector<dht::decorated_key> make_partition_keys(size_t n) {
-        std::vector<dht::decorated_key> keys;
-        for (size_t i = 0; i < n; i++) {
-            auto key_blob = bytes(reinterpret_cast<const int8_t*>(&i), sizeof(i));
-            auto pkey = partition_key::from_single_value(*_schema, key_blob);
-            keys.push_back(dht::global_partitioner().decorate_key(*_schema, std::move(pkey)));
-
-        }
-        boost::sort(keys, dht::decorated_key::less_comparator(_schema));
-        return keys;
+        auto local_keys = make_local_keys(n, _schema);
+        return boost::copy_range<std::vector<dht::decorated_key>>(local_keys | boost::adaptors::transformed([this] (sstring& key) {
+            auto pkey = partition_key::from_single_value(*_schema, to_bytes(key));
+            return dht::global_partitioner().decorate_key(*_schema, std::move(pkey));
+        }));
     }
 
     std::vector<mutation> operator()(size_t n) {
