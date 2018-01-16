@@ -783,7 +783,7 @@ private:
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             mutation&& m,
-            streamed_mutation_opt existings) const;
+            flat_mutation_reader_opt existings) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

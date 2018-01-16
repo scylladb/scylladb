@@ -4203,11 +4203,11 @@ std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, cons
 future<> column_family::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        streamed_mutation_opt existings) const {
+        flat_mutation_reader_opt existings) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(base,
                         std::move(views),
-                        streamed_mutation_from_mutation(std::move(m)),
+                        flat_mutation_reader_from_mutations({std::move(m)}),
                         std::move(existings)).then([base_token = std::move(base_token)] (auto&& updates) {
         db::view::mutate_MV(std::move(base_token), std::move(updates));
     });
@@ -4247,15 +4247,12 @@ future<> column_family::push_view_replica_updates(const schema_ptr& s, const fro
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), this] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->as_mutation_source()(
+            auto reader = this->as_mutation_source().make_flat_mutation_reader(
                 base,
                 pk,
                 slice,
                 service::get_local_sstable_query_read_priority());
-            auto f = reader();
-            return f.then([&m, reader = std::move(reader), base = std::move(base), views = std::move(views), this] (auto&& existing) mutable {
-                return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(existing));
-            });
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader));
     });
 }
 

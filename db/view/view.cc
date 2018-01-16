@@ -467,19 +467,20 @@ void view_updates::generate_update(
 class view_update_builder {
     schema_ptr _schema; // The base schema
     std::vector<view_updates> _view_updates;
-    streamed_mutation _updates;
-    streamed_mutation_opt _existings;
+    flat_mutation_reader _updates;
+    flat_mutation_reader_opt _existings;
     range_tombstone_accumulator _update_tombstone_tracker;
     range_tombstone_accumulator _existing_tombstone_tracker;
     mutation_fragment_opt _update;
     mutation_fragment_opt _existing;
     gc_clock::time_point _now;
+    partition_key _key = partition_key::make_empty();
 public:
 
     view_update_builder(schema_ptr s,
         std::vector<view_updates>&& views_to_update,
-        streamed_mutation&& updates,
-        streamed_mutation_opt&& existings)
+        flat_mutation_reader&& updates,
+        flat_mutation_reader_opt&& existings)
             : _schema(std::move(s))
             , _view_updates(std::move(views_to_update))
             , _updates(std::move(updates))
@@ -487,10 +488,6 @@ public:
             , _update_tombstone_tracker(*_schema, false)
             , _existing_tombstone_tracker(*_schema, false)
             , _now(gc_clock::now()) {
-        _update_tombstone_tracker.set_partition_tombstone(_updates.partition_tombstone());
-        if (_existings) {
-            _existing_tombstone_tracker.set_partition_tombstone(_existings->partition_tombstone());
-        }
     }
 
     future<std::vector<mutation>> build();
@@ -532,8 +529,17 @@ private:
 
 future<std::vector<mutation>> view_update_builder::build() {
     return advance_all().then([this] (auto&& ignored) {
-        return repeat([this] {
-            return this->on_results();
+        assert(_update && _update->is_partition_start());
+        _key = std::move(std::move(_update)->as_partition_start().key().key());
+        _update_tombstone_tracker.set_partition_tombstone(_update->as_partition_start().partition_tombstone());
+        if (_existing && _existing->is_partition_start()) {
+            _existing_tombstone_tracker.set_partition_tombstone(_existing->as_partition_start().partition_tombstone());
+        }
+    }).then([this] {
+        return advance_all().then([this] (auto&& ignored) {
+            return repeat([this] {
+                return this->on_results();
+            });
         });
     }).then([this] {
         std::vector<mutation> mutations;
@@ -563,7 +569,7 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
     update.cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before);
 
     for (auto&& v : _view_updates) {
-        v.generate_update(_updates.key(), update, existing, _now);
+        v.generate_update(_key, update, existing, _now);
     }
 }
 
@@ -574,7 +580,7 @@ static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clust
 }
 
 future<stop_iteration> view_update_builder::on_results() {
-    if (_update && _existing) {
+    if (_update && !_update->is_end_of_partition() && _existing && !_existing->is_end_of_partition()) {
         int cmp = position_in_partition::tri_compare(*_schema)(_update->position(), _existing->position());
         if (cmp < 0) {
             // We have an update where there was nothing before
@@ -616,7 +622,7 @@ future<stop_iteration> view_update_builder::on_results() {
             _existing_tombstone_tracker.apply(std::move(*_existing).as_range_tombstone());
             _update_tombstone_tracker.apply(std::move(*_update).as_range_tombstone());
         } else if (_update->is_clustering_row()) {
-            assert(!_existing->is_range_tombstone());
+            assert(_existing->is_clustering_row());
             apply_tracked_tombstones(_update_tombstone_tracker, _update->as_mutable_clustering_row());
             apply_tracked_tombstones(_existing_tombstone_tracker, _existing->as_mutable_clustering_row());
             generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
@@ -625,7 +631,7 @@ future<stop_iteration> view_update_builder::on_results() {
     }
 
     auto tombstone = _update_tombstone_tracker.current_tombstone();
-    if (tombstone && _existing) {
+    if (tombstone && _existing && !_existing->is_end_of_partition()) {
         // We don't care if it's a range tombstone, as we're only looking for existing entries that get deleted
         if (_existing->is_clustering_row()) {
             auto& existing = _existing->as_clustering_row();
@@ -636,7 +642,7 @@ future<stop_iteration> view_update_builder::on_results() {
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
-    if (_update) {
+    if (_update && !_update->is_end_of_partition()) {
         if (_update->is_clustering_row()) {
             generate_update(std::move(*_update).as_clustering_row(), { });
         }
@@ -649,8 +655,8 @@ future<stop_iteration> view_update_builder::on_results() {
 future<std::vector<mutation>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
-        streamed_mutation&& updates,
-        streamed_mutation_opt&& existings) {
+        flat_mutation_reader&& updates,
+        flat_mutation_reader_opt&& existings) {
     auto vs = boost::copy_range<std::vector<view_updates>>(views_to_update | boost::adaptors::transformed([&] (auto&& v) {
         return view_updates(std::move(v), base);
     }));
