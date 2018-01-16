@@ -43,7 +43,7 @@ static std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, siz
         auto dk = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes(raw_key)));
         key_id++;
 
-        if (engine().cpu_id() != dht::global_partitioner().shard_of(dk.token())) {
+        if (engine_is_ready() && engine().cpu_id() != dht::global_partitioner().shard_of(dk.token())) {
             continue;
         }
         generated++;
