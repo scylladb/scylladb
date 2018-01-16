@@ -1121,7 +1121,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source()(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
