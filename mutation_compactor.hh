@@ -76,7 +76,8 @@ class compact_mutation_state {
     uint32_t _rows_in_current_partition;
     uint32_t _current_partition_limit;
     bool _empty_partition{};
-    const dht::decorated_key* _dk;
+    const dht::decorated_key* _dk{};
+    dht::decorated_key _last_dk;
     bool _has_ck_selector{};
 private:
     static constexpr bool only_live() {
@@ -132,6 +133,7 @@ public:
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _range_tombstones(s, _slice.options.contains(query::partition_slice::option::reversed))
+        , _last_dk({dht::token(), partition_key::make_empty()})
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -145,6 +147,7 @@ public:
         , _can_gc([this] (tombstone t) { return can_gc(t); })
         , _slice(s.full_slice())
         , _range_tombstones(s, false)
+        , _last_dk({dht::token(), partition_key::make_empty()})
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
         static_assert(!only_live(), "SSTable compaction cannot be run with emit_only_live_rows::yes.");
@@ -260,6 +263,24 @@ public:
         }
         return stop_iteration::no;
     }
+
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    auto consume_end_of_stream(Consumer& consumer) {
+        if (_dk) {
+            _last_dk = *_dk;
+            _dk = &_last_dk;
+        }
+        return consumer.consume_end_of_stream();
+    }
+
+    /// The decorated key of the partition the compaction is positioned in.
+    /// Can be null if the compaction wasn't started yet.
+    const dht::decorated_key* current_partition() const {
+        return _dk;
+    }
 };
 
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
@@ -313,7 +334,7 @@ public:
     }
 
     auto consume_end_of_stream() {
-        return _consumer.consume_end_of_stream();
+        return _state->consume_end_of_stream(_consumer);
     }
 };
 
