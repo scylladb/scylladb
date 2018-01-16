@@ -1170,7 +1170,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             mt2->make_flat_reader(s)), 1, s, cfg).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source()(s))
+        assert_that(sst->as_mutation_source().make_flat_mutation_reader(s))
             .produces(m1 + m2)
             .produces_end_of_stream();
     });
