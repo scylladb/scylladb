@@ -58,6 +58,6 @@ static std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, siz
 //
 // Return one key for current shard. Note that it always returns the same key for a given shard.
 //
-static sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
+inline sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
     return make_local_keys(1, s, min_key_size).front();
 }
