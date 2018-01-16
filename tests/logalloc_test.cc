@@ -1171,3 +1171,39 @@ SEASTAR_TEST_CASE(test_reclaiming_runs_as_long_as_there_is_soft_pressure) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
+    return seastar::async([] {
+        region r;
+        with_allocator(r.allocator(), [&] {
+            chunked_fifo<managed_bytes> objs;
+
+            auto zone_size = max_zone_segments * segment_size;
+
+            // We need to generate 3 zones, so that at least one zone (not last) can be released fully. The first
+            // zone would not due to emergency reserve.
+            while (logalloc::shard_tracker().region_occupancy().used_space() < zone_size * 2 + zone_size / 4) {
+                objs.emplace_back(managed_bytes(managed_bytes::initialized_later(), 1024));
+            }
+
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+
+            while (logalloc::shard_tracker().region_occupancy().used_space() >= logalloc::segment_size * 2) {
+                objs.pop_front();
+            }
+
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+
+            auto before = logalloc::shard_tracker().non_lsa_used_space();
+            logalloc::shard_tracker().reclaim(logalloc::segment_size);
+            auto after = logalloc::shard_tracker().non_lsa_used_space();
+
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().non_lsa_used_space());
+            BOOST_TEST_MESSAGE(logalloc::shard_tracker().region_occupancy());
+
+            BOOST_REQUIRE(after <= before);
+        });
+    });
+}
