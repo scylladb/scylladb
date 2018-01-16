@@ -454,6 +454,9 @@ public:
     // Returns statistics for all segments allocated by LSA on this shard.
     occupancy_stats occupancy();
 
+    // Returns amount of allocated memory not managed by LSA
+    size_t non_lsa_used_space() const;
+
     impl& get_impl() { return *_impl; }
 
     // Set the minimum number of segments reclaimed during single reclamation cycle.

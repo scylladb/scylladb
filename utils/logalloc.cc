@@ -117,6 +117,7 @@ public:
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
     occupancy_stats occupancy();
+    size_t non_lsa_used_space();
     void set_reclamation_step(size_t step_in_segments) { _reclamation_step = step_in_segments; }
     size_t reclamation_step() const { return _reclamation_step; }
     void enable_abort_on_bad_alloc() { _abort_on_bad_alloc = true; }
@@ -151,6 +152,10 @@ occupancy_stats tracker::region_occupancy() {
 
 occupancy_stats tracker::occupancy() {
     return _impl->occupancy();
+}
+
+size_t tracker::non_lsa_used_space() const {
+    return _impl->non_lsa_used_space();
 }
 
 void tracker::full_compaction() {
@@ -1675,6 +1680,11 @@ occupancy_stats tracker::impl::occupancy() {
     return occ;
 }
 
+size_t tracker::impl::non_lsa_used_space() {
+    auto free_space_in_zones = shard_segment_pool.free_segments_in_zones() * segment_size;
+    return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_zones;
+}
+
 void tracker::impl::reclaim_all_free_segments()
 {
     llogger.debug("Reclaiming all free segments");
@@ -2007,11 +2017,8 @@ tracker::impl::impl() {
         sm::make_gauge("large_objects_total_space_bytes", [this] { return shard_segment_pool.non_lsa_memory_in_use(); },
                        sm::description("Holds a current size of allocated non-LSA memory.")),
 
-        sm::make_gauge("non_lsa_used_space_bytes",
-            [this] {
-                auto free_space_in_zones = shard_segment_pool.free_segments_in_zones() * segment_size;
-                return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_zones;
-            }, sm::description("Holds a current amount of used non-LSA memory.")),
+        sm::make_gauge("non_lsa_used_space_bytes", [this] { return non_lsa_used_space(); },
+                       sm::description("Holds a current amount of used non-LSA memory.")),
 
         sm::make_gauge("free_space_in_zones", [this] { return shard_segment_pool.free_segments_in_zones() * segment_size; },
                        sm::description("Holds a current amount of free memory in zones.")),
