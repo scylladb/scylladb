@@ -30,6 +30,7 @@
 #include "flat_mutation_reader.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "mutation_query.hh"
+#include "mutation_rebuilder.hh"
 
 // partitions must be sorted by decorated key
 static void require_no_token_duplicates(const std::vector<mutation>& partitions) {
@@ -71,29 +72,64 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
 
         mutation_source ms = populate(m.schema(), {m});
 
-        streamed_mutation sliced_sm = [&] {
-            mutation_reader rd = ms(m.schema(), prange, slice_with_ranges);
-            streamed_mutation_opt smo = rd().get0();
-            BOOST_REQUIRE(bool(smo));
-            return std::move(*smo);
-        }();
+        flat_mutation_reader sliced_reader =
+            ms.make_flat_mutation_reader(m.schema(), prange, slice_with_ranges);
 
-        streamed_mutation fwd_sm = [&] {
-            mutation_reader rd = ms(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
-            streamed_mutation_opt smo = rd().get0();
-            BOOST_REQUIRE(bool(smo));
-            return std::move(*smo);
-        }();
+        flat_mutation_reader fwd_reader =
+            ms.make_flat_mutation_reader(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
 
-        mutation fwd_m = mutation_from_streamed_mutation(fwd_sm).get0();
+        stdx::optional<mutation_rebuilder> builder{};
+        struct consumer {
+            schema_ptr _s;
+            stdx::optional<mutation_rebuilder>& _builder;
+            consumer(schema_ptr s, stdx::optional<mutation_rebuilder>& builder)
+                : _s(std::move(s))
+                , _builder(builder) { }
+
+            void consume_new_partition(const dht::decorated_key& dk) {
+                assert(!_builder);
+                _builder = mutation_rebuilder(dk, std::move(_s));
+            }
+
+            stop_iteration consume(tombstone t) {
+                assert(_builder);
+                return _builder->consume(t);
+            }
+
+            stop_iteration consume(range_tombstone&& rt) {
+                assert(_builder);
+                return _builder->consume(std::move(rt));
+            }
+
+            stop_iteration consume(static_row&& sr) {
+                assert(_builder);
+                return _builder->consume(std::move(sr));
+            }
+
+            stop_iteration consume(clustering_row&& cr) {
+                assert(_builder);
+                return _builder->consume(std::move(cr));
+            }
+
+            stop_iteration consume_end_of_partition() {
+                assert(_builder);
+                return stop_iteration::yes;
+            }
+
+            void consume_end_of_stream() { }
+        };
+        fwd_reader.consume(consumer(m.schema(), builder)).get0();
+        BOOST_REQUIRE(bool(builder));
         for (auto&& range : ranges) {
             BOOST_TEST_MESSAGE(sprint("fwd %s", range));
-            fwd_sm.fast_forward_to(position_range(range)).get();
-            fwd_m += mutation_from_streamed_mutation(fwd_sm).get0();
+            fwd_reader.fast_forward_to(position_range(range)).get();
+            fwd_reader.consume(consumer(m.schema(), builder)).get0();
         }
+        mutation_opt fwd_m = builder->consume_end_of_stream();
 
-        mutation sliced_m = mutation_from_streamed_mutation(sliced_sm).get0();
-        assert_that(sliced_m).is_equal_to(fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
+        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get0();
+        BOOST_REQUIRE(bool(sliced_m));
+        assert_that(*sliced_m).is_equal_to(*fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
 }
 
