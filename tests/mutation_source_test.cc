@@ -501,55 +501,51 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     ));
 
     mutation_source ms = populate(s, std::vector<mutation>({m}));
-    mutation_reader rd = ms(s,
+    auto rd = assert_that(ms.make_flat_mutation_reader(s,
         query::full_partition_range,
         s->full_slice(),
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes);
-
-    streamed_mutation_opt smo = rd().get0();
-    BOOST_REQUIRE(bool(smo));
-    auto sm = assert_that_stream(std::move(*smo));
-
-    sm.fwd_to(position_range(query::clustering_range::make(
+        streamed_mutation::forwarding::yes));
+    rd.produces_partition_start(m.decorated_key());
+    rd.fast_forward_to(position_range(query::clustering_range::make(
         query::clustering_range::bound(keys[1], true),
         query::clustering_range::bound(keys[2], true)
     )));
 
-    sm.produces_row_with_key(keys[2]);
+    rd.produces_row_with_key(keys[2]);
 
-    sm.fwd_to(position_range(query::clustering_range::make(
+    rd.fast_forward_to(position_range(query::clustering_range::make(
         query::clustering_range::bound(keys[4], true),
         query::clustering_range::bound(keys[8], false)
     )));
 
-    sm.produces_range_tombstone(rt2);
-    sm.produces_row_with_key(keys[4]);
-    sm.produces_range_tombstone(rt3);
+    rd.produces_range_tombstone(rt2);
+    rd.produces_row_with_key(keys[4]);
+    rd.produces_range_tombstone(rt3);
 
-    sm.fwd_to(position_range(query::clustering_range::make(
+    rd.fast_forward_to(position_range(query::clustering_range::make(
         query::clustering_range::bound(keys[10], true),
         query::clustering_range::bound(keys[12], false)
     )));
 
-    sm.produces_range_tombstone(rt4);
-    sm.produces_range_tombstone(rt5);
-    sm.produces_end_of_stream();
+    rd.produces_range_tombstone(rt4);
+    rd.produces_range_tombstone(rt5);
+    rd.produces_end_of_stream();
 
-    sm.fwd_to(position_range(query::clustering_range::make(
+    rd.fast_forward_to(position_range(query::clustering_range::make(
         query::clustering_range::bound(keys[14], true),
         query::clustering_range::bound(keys[15], false)
     )));
 
-    sm.produces_end_of_stream();
+    rd.produces_end_of_stream();
 
-    sm.fwd_to(position_range(query::clustering_range::make(
+    rd.fast_forward_to(position_range(query::clustering_range::make(
         query::clustering_range::bound(keys[15], true),
         query::clustering_range::bound(keys[16], false)
     )));
 
-    sm.produces_end_of_stream();
+    rd.produces_end_of_stream();
 }
 
 static void test_range_queries(populate_fn populate) {
