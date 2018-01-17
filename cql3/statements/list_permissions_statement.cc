@@ -162,7 +162,7 @@ cql3::statements::list_permissions_statement::execute(
             std::vector<auth::permission_details>(),
             [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {
                 details.insert(details.end(), pd.begin(), pd.end());
-                return std::move(details);
+                return details;
             }).then([this](std::vector<auth::permission_details> details) {
                 std::sort(details.begin(), details.end());
 
