@@ -425,17 +425,15 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        mutation_reader rd = ms(s, pr, slice);
+        auto rd = assert_that(ms.make_flat_mutation_reader(s, pr, slice));
 
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(bool(smo));
-        auto sm = assert_that_stream(std::move(*smo));
-
-        sm.produces_row_with_key(keys[2]);
-        sm.produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()));
-        sm.produces_row_with_key(keys[8]);
-        sm.produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()));
-        sm.produces_end_of_stream();
+        rd.produces_partition_start(m.decorated_key());
+        rd.produces_row_with_key(keys[2]);
+        rd.produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()));
+        rd.produces_row_with_key(keys[8]);
+        rd.produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()));
+        rd.produces_partition_end();
+        rd.produces_end_of_stream();
     }
 
     {
@@ -446,14 +444,13 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        mutation_reader rd = ms(s, pr, slice);
+        auto rd = assert_that(ms.make_flat_mutation_reader(s, pr, slice));
 
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(bool(smo));
-        assert_that_stream(std::move(*smo))
+        rd.produces_partition_start(m.decorated_key())
             .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
             .produces_row_with_key(keys[8])
             .produces_range_tombstone(rt4, slice.row_ranges(*s, m.key()))
+            .produces_partition_end()
             .produces_end_of_stream();
     }
 }
