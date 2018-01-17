@@ -182,6 +182,7 @@ if __name__ == "__main__":
     # disable false positive due to new (with_alignment(...)) ...
     env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
     env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
+    env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
     for n, test in enumerate(test_to_run):
         path = test[0]
         exec_args = test[2] if len(test) >= 3 else []
