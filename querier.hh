@@ -202,3 +202,59 @@ public:
         }, _compaction_state);
     }
 };
+
+/// Special-purpose cache for saving queriers between pages.
+///
+/// Queriers are saved at the end of the page and looked up at the beginning of
+/// the next page. The lookup() always removes the querier from the cache, it
+/// has to be inserted again at the end of the page.
+/// Lookup provides the following extra logic, special to queriers:
+/// * It accepts a factory function which is used to create a new querier if
+///     the lookup fails (see below). This allows for simple call sites.
+/// * It does range matching. A query sometimes will result in multiple querier
+///     objects executing on the same node and shard paralelly. To identify the
+///     appropriate querier lookup() will consider - in addition to the lookup
+///     key - the read range.
+/// * It does schema version and position checking. In some case a subsequent
+///     page will have a different schema version or will start from a position
+///     that is before the end position of the previous page. lookup() will
+///     recognize these cases and drop the previous querier and create a new one.
+class querier_cache {
+    using entries = std::unordered_map<utils::UUID, querier>;
+
+    entries _entries;
+
+    entries::iterator find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state);
+
+public:
+    querier_cache() = default;
+
+    querier_cache(const querier_cache&) = delete;
+    querier_cache& operator=(const querier_cache&) = delete;
+
+    void insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state);
+
+    /// Lookup a querier in the cache.
+    ///
+    /// If the querier doesn't exist, use `create_fun' to create it.
+    ///
+    /// Queriers are found based on `key` and `range`. There may be multiple
+    /// queriers for the same `key` differentiated by their read range. Since
+    /// each subsequent page may have a narrower read range then the one before
+    /// it ranges cannot be simply matched based on equality. For matching we
+    /// use the fact that the coordinator splits the query range into
+    /// non-overlapping ranges. Thus both bounds of any range, or in case of
+    /// singular ranges only the start bound are guaranteed to be unique.
+    ///
+    /// The found querier is checked for a matching read-kind and schema
+    /// version. The start position is also checked against the current
+    /// position of the querier using the `range' and `slice'. If there is a
+    /// mismatch drop the querier and create a new one with `create_fun'.
+    querier lookup(utils::UUID key,
+            emit_only_live_rows only_live,
+            const schema& s,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            const noncopyable_function<querier()>& create_fun);
+};

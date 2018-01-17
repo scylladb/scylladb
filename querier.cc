@@ -23,6 +23,24 @@
 
 #include "schema.hh"
 
+static sstring cannot_use_reason(querier::can_use cu)
+{
+    switch (cu)
+    {
+        case querier::can_use::yes:
+            return "can be used";
+        case querier::can_use::no_emit_only_live_rows_mismatch:
+            return "emit only live rows mismatch";
+        case querier::can_use::no_schema_version_mismatch:
+            return "schema version mismatch";
+        case querier::can_use::no_ring_pos_mismatch:
+            return "ring pos mismatch";
+        case querier::can_use::no_clustering_pos_mismatch:
+            return "clustering pos mismatch";
+    }
+    return "unknown reason";
+}
+
 querier::position querier::current_position() const {
     const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
     const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
@@ -122,4 +140,61 @@ querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, co
         return can_use::no_clustering_pos_mismatch;
     }
     return can_use::yes;
+}
+
+querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state) {
+    const auto queriers = _entries.equal_range(key);
+
+    if (queriers.first == _entries.end()) {
+        tracing::trace(trace_state, "Found no cached querier for key {}", key);
+        return _entries.end();
+    }
+
+    const auto it = std::find_if(queriers.first, queriers.second, [&] (const std::pair<const utils::UUID, querier>& elem) {
+        return elem.second.matches(range);
+    });
+
+    if (it == queriers.second) {
+        tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range {}", key, range);
+    }
+    tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
+    return it;
+}
+
+void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
+    // FIXME: see #3159
+    // In reverse mode flat_mutation_reader drops any remaining rows of the
+    // current partition when the page ends so it cannot be reused across
+    // pages.
+    if (q.is_reversed()) {
+        return;
+    }
+
+    tracing::trace(trace_state, "Caching querier with key {}", key);
+    _entries.emplace(key, std::move(q));
+}
+
+querier querier_cache::lookup(utils::UUID key,
+        emit_only_live_rows only_live,
+        const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state,
+        const noncopyable_function<querier()>& create_fun) {
+    auto it = find_querier(key, range, trace_state);
+    if (it == _entries.end()) {
+        return create_fun();
+    }
+
+    auto q = std::move(it->second);
+    _entries.erase(it);
+
+    const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
+    if (can_be_used == querier::can_use::yes) {
+        tracing::trace(trace_state, "Reusing querier");
+        return q;
+    }
+
+    tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
+    return create_fun();
 }
