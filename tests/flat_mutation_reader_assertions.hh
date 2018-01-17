@@ -23,6 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "flat_mutation_reader.hh"
+#include "mutation_assertions.hh"
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions {

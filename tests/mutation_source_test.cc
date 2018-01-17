@@ -20,10 +20,9 @@
  */
 
 #include <set>
+#include <boost/test/unit_test.hpp>
 #include "partition_slice_builder.hh"
 #include "schema_builder.hh"
-#include "mutation_reader_assertions.hh"
-#include "mutation_assertions.hh"
 #include "mutation_source_test.hh"
 #include "counters.hh"
 #include "simple_schema.hh"
