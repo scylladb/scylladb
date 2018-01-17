@@ -297,71 +297,45 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
     mutation_source ms = populate(s, partitions);
 
     auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
-    mutation_reader rd = ms(s,
+    auto rd = assert_that(ms.make_flat_mutation_reader(s,
         pr,
         s->full_slice(),
         default_priority_class(),
         nullptr,
         streamed_mutation::forwarding::no,
-        mutation_reader::forwarding::yes);
+        mutation_reader::forwarding::yes));
 
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(smo);
-        //smo->fast_forward_to(position_range::all_clustered_rows()).get();
-        smo->fill_buffer().get();
-        BOOST_REQUIRE(smo->is_buffer_full()); // if not, increase n_ckeys
-        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys[0]));
-        assert_that_stream(std::move(*smo))
-            .produces_row_with_key(table.make_ckey(0))
-            .produces_row_with_key(table.make_ckey(1));
-            // ...don't finish consumption to leave the reader in the middle of partition
-    }
+    rd.fill_buffer().get();
+    BOOST_REQUIRE(rd.is_buffer_full()); // if not, increase n_ckeys
+    rd.produces_partition_start(keys[0])
+        .produces_row_with_key(table.make_ckey(0))
+        .produces_row_with_key(table.make_ckey(1));
+    // ...don't finish consumption to leave the reader in the middle of partition
 
     pr = dht::partition_range::make({missing_key}, {missing_key});
-    rd.fast_forward_to(pr).get();
+    rd.fast_forward_to(pr);
 
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(!smo);
-    }
+    rd.produces_end_of_stream();
 
     pr = dht::partition_range::make({keys[3]}, {keys[3]});
-    rd.fast_forward_to(pr).get();
+    rd.fast_forward_to(pr)
+        .produces_partition_start(keys[3])
+        .produces_row_with_key(table.make_ckey(ckeys_per_part * 3))
+        .produces_row_with_key(table.make_ckey(ckeys_per_part * 3 + 1));
 
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(smo);
-        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys[3]));
-        assert_that_stream(std::move(*smo))
-            .produces_row_with_key(table.make_ckey(ckeys_per_part * 3))
-            .produces_row_with_key(table.make_ckey(ckeys_per_part * 3 + 1));
-    }
-
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(!smo);
-    }
+    rd.next_partition();
+    rd.produces_end_of_stream();
 
     pr = dht::partition_range::make_starting_with({keys[keys.size() - 1]});
-    rd.fast_forward_to(pr).get();
+    rd.fast_forward_to(pr)
+        .produces_partition_start(keys.back())
+        .produces_row_with_key(table.make_ckey(ckeys_per_part * (keys.size() - 1)));
 
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(smo);
-        BOOST_REQUIRE(smo->decorated_key().equal(*s, keys.back()));
-        assert_that_stream(std::move(*smo))
-            .produces_row_with_key(table.make_ckey(ckeys_per_part * (keys.size() - 1)));
-        // ...don't finish consumption to leave the reader in the middle of partition
-    }
+    // ...don't finish consumption to leave the reader in the middle of partition
 
     pr = dht::partition_range::make({key_after_all}, {key_after_all});
-    rd.fast_forward_to(pr).get();
-
-    {
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(!smo);
-    }
+    rd.fast_forward_to(pr)
+        .produces_end_of_stream();
 }
 
 static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate_fn populate) {
