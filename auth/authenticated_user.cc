@@ -43,7 +43,7 @@
 
 namespace auth {
 
-authenticated_user::authenticated_user()
+authenticated_user::authenticated_user() noexcept
                 : _anon(true)
 {}
 
@@ -56,7 +56,7 @@ const sstring& authenticated_user::name() const {
     return _anon ? anonymous_username : _name;
 }
 
-bool authenticated_user::operator==(const authenticated_user& v) const {
+bool authenticated_user::operator==(const authenticated_user& v) const noexcept {
     return _anon ? v._anon : _name == v._name;
 }
 

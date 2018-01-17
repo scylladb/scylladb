@@ -51,17 +51,17 @@ namespace auth {
 
 class authenticated_user final {
 public:
-    authenticated_user();
+    authenticated_user() noexcept;
     authenticated_user(stdx::string_view name);
 
     const sstring& name() const;
 
-    bool is_anonymous() const {
+    bool is_anonymous() const noexcept {
         return _anon;
     }
 
-    bool operator==(const authenticated_user&) const;
-    bool operator!=(const authenticated_user& other) const { return !(*this == other); }
+    bool operator==(const authenticated_user&) const noexcept;
+    bool operator!=(const authenticated_user& other) const noexcept { return !(*this == other); }
 private:
     sstring _name;
     bool _anon;
