@@ -776,17 +776,16 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(0)))
             .build();
-        assert_that(ds(s, pr, slice))
+        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
             .produces_eos_or_empty_mutation();
     }
 
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = ds(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
-        auto smo = rd().get0();
-        assert_that_stream(std::move(*smo))
-          .fwd_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+        auto rd = assert_that(ds.make_flat_mutation_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        rd.produces_partition_start(pk)
+          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
           .produces_row_with_key(ck1)
           .produces_row_with_key(ck2)
           .produces_end_of_stream();
@@ -795,11 +794,10 @@ static void test_clustering_slices(populate_fn populate) {
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = ds(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
-        auto smo = rd().get0();
-        assert_that_stream(std::move(*smo))
+        auto rd = assert_that(ds.make_flat_mutation_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        rd.produces_partition_start(pk)
           .produces_end_of_stream()
-          .fwd_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
+          .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
           .produces_row_with_key(ck1)
           .produces_row_with_key(ck2)
           .produces_end_of_stream();
@@ -809,7 +807,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1)))
             .build();
-        assert_that(ds(s, pr, slice))
+        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
             .produces(row1 + row2 + row3 + row4 + row5 + del_1)
             .produces_end_of_stream();
     }
@@ -818,7 +816,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(2)))
             .build();
-        assert_that(ds(s, pr, slice))
+        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
             .produces(row6 + row7 + del_1 + del_2, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -827,7 +825,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1, 2)))
             .build();
-        assert_that(ds(s, pr, slice))
+        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
             .produces(row3 + row4 + del_1)
             .produces_end_of_stream();
     }
@@ -836,7 +834,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(3)))
             .build();
-        assert_that(ds(s, pr, slice))
+        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
             .produces(row8 + del_3)
             .produces_end_of_stream();
     }
@@ -844,12 +842,12 @@ static void test_clustering_slices(populate_fn populate) {
     // Test out-of-range partition keys
     {
         auto pr = dht::partition_range::make_singular(keys[0]);
-        assert_that(ds(s, pr, s->full_slice()))
+        assert_that(ds.make_flat_mutation_reader(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
     {
         auto pr = dht::partition_range::make_singular(keys[2]);
-        assert_that(ds(s, pr, s->full_slice()))
+        assert_that(ds.make_flat_mutation_reader(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
 }
