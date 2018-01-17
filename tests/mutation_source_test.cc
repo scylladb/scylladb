@@ -833,7 +833,7 @@ static void test_query_only_static_row(populate_fn populate) {
     // fully populate cache
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms(s.schema(), prange, s.schema()->full_slice()))
+        assert_that(ms.make_flat_mutation_reader(s.schema(), prange, s.schema()->full_slice()))
             .produces(m1)
             .produces_end_of_stream();
     }
@@ -844,7 +844,7 @@ static void test_query_only_static_row(populate_fn populate) {
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms(s.schema(), prange, slice))
+        assert_that(ms.make_flat_mutation_reader(s.schema(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
