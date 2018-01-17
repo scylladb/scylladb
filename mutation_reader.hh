@@ -311,22 +311,6 @@ public:
     //
     // All parameters captured by reference must remain live as long as returned
     // mutation_reader or streamed_mutation obtained through it are alive.
-    mutation_reader operator()(schema_ptr s,
-        partition_range range,
-        const query::partition_slice& slice,
-        io_priority pc = default_priority_class(),
-        tracing::trace_state_ptr trace_state = nullptr,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const
-    {
-        return mutation_reader_from_flat_mutation_reader((*_fn)(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr));
-    }
-
-    mutation_reader operator()(schema_ptr s, partition_range range = query::full_partition_range) const {
-        auto& full_slice = s->full_slice();
-        return (*this)(std::move(s), range, full_slice);
-    }
-
     flat_mutation_reader
     make_flat_mutation_reader(
         schema_ptr s,
