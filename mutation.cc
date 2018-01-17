@@ -22,6 +22,7 @@
 #include "mutation.hh"
 #include "query-result-writer.hh"
 #include "flat_mutation_reader.hh"
+#include "mutation_rebuilder.hh"
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))
@@ -214,43 +215,6 @@ mutation& mutation::operator+=(mutation&& other) {
 mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
     return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
 }
-
-class mutation_rebuilder {
-    mutation _m;
-    size_t _remaining_limit;
-
-public:
-    mutation_rebuilder(dht::decorated_key dk, schema_ptr s)
-        : _m(std::move(dk), std::move(s)), _remaining_limit(0) {
-    }
-
-    stop_iteration consume(tombstone t) {
-        _m.partition().apply(t);
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(range_tombstone&& rt) {
-        _m.partition().apply_row_tombstone(*_m.schema(), std::move(rt));
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(static_row&& sr) {
-        _m.partition().static_row().apply(*_m.schema(), column_kind::static_column, std::move(sr.cells()));
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(clustering_row&& cr) {
-        auto& dr = _m.partition().clustered_row(*_m.schema(), std::move(cr.key()));
-        dr.apply(cr.tomb());
-        dr.apply(cr.marker());
-        dr.cells().apply(*_m.schema(), column_kind::regular_column, std::move(cr.cells()));
-        return stop_iteration::no;
-    }
-
-    mutation_opt consume_end_of_stream() {
-        return mutation_opt(std::move(_m));
-    }
-};
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm) {
     if (!sm) {
