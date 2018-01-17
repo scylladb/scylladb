@@ -263,6 +263,10 @@ public:
         return _reader.fill_buffer();
     }
 
+    bool is_buffer_full() const {
+        return _reader.is_buffer_full();
+    }
+
     void set_max_buffer_size(size_t size) {
         _reader.set_max_buffer_size(size);
     }
