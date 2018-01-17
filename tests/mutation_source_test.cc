@@ -160,22 +160,20 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
     mutation_source ms = populate(s, std::vector<mutation>({m}));
 
-    auto new_stream = [&ms, s] () -> streamed_mutation_assertions {
+    auto new_stream = [&ms, s, &m] () -> flat_reader_assertions {
         BOOST_TEST_MESSAGE("Creating new streamed_mutation");
-        mutation_reader rd = ms(s,
+        auto res = assert_that(ms.make_flat_mutation_reader(s,
             query::full_partition_range,
             s->full_slice(),
             default_priority_class(),
             nullptr,
-            streamed_mutation::forwarding::yes);
-
-        streamed_mutation_opt smo = rd().get0();
-        BOOST_REQUIRE(bool(smo));
-        return assert_that_stream(std::move(*smo));
+            streamed_mutation::forwarding::yes));
+        res.produces_partition_start(m.decorated_key());
+        return std::move(res);
     };
 
-    auto verify_range = [&] (streamed_mutation_assertions& sm, int start, int end) {
-        sm.fwd_to(keys[start], keys[end]);
+    auto verify_range = [&] (flat_reader_assertions& sm, int start, int end) {
+        sm.fast_forward_to(keys[start], keys[end]);
 
         for (; start < end; ++start) {
             if (!contains_key(start)) {
@@ -197,7 +195,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
     {
         auto sm = new_stream();
-        sm.fwd_to(position_range(query::full_clustering_range));
+        sm.fast_forward_to(position_range(query::full_clustering_range));
         for (int i = 0; i < n_keys; ++i) {
             if (contains_key(i)) {
                 sm.produces_row_with_key(keys[i]);
@@ -222,17 +220,17 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     // Skip before EOS
     {
         auto sm = new_stream();
-        sm.fwd_to(keys[0], keys[4]);
+        sm.fast_forward_to(keys[0], keys[4]);
         sm.produces_row_with_key(keys[1]);
-        sm.fwd_to(keys[5], keys[8]);
+        sm.fast_forward_to(keys[5], keys[8]);
         sm.produces_row_with_key(keys[5]);
         sm.produces_row_with_key(keys[7]);
         sm.produces_end_of_stream();
-        sm.fwd_to(keys[9], keys[12]);
-        sm.fwd_to(keys[12], keys[13]);
-        sm.fwd_to(keys[13], keys[13]);
+        sm.fast_forward_to(keys[9], keys[12]);
+        sm.fast_forward_to(keys[12], keys[13]);
+        sm.fast_forward_to(keys[13], keys[13]);
         sm.produces_end_of_stream();
-        sm.fwd_to(keys[13], keys[16]);
+        sm.fast_forward_to(keys[13], keys[16]);
         sm.produces_row_with_key(keys[13]);
         sm.produces_row_with_key(keys[15]);
         sm.produces_end_of_stream();
