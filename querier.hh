@@ -258,3 +258,20 @@ public:
             tracing::trace_state_ptr trace_state,
             const noncopyable_function<querier()>& create_fun);
 };
+
+class querier_cache_context {
+    querier_cache* _cache{};
+    utils::UUID _key;
+    bool _is_first_page;
+
+public:
+    querier_cache_context() = default;
+    querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page);
+    void insert(querier&& q, tracing::trace_state_ptr trace_state);
+    querier lookup(emit_only_live_rows only_live,
+            const schema& s,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            const noncopyable_function<querier()>& create_fun);
+};

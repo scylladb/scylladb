@@ -198,3 +198,27 @@ querier querier_cache::lookup(utils::UUID key,
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     return create_fun();
 }
+
+querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)
+    : _cache(&cache)
+    , _key(key)
+    , _is_first_page(is_first_page) {
+}
+
+void querier_cache_context::insert(querier&& q, tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{}) {
+        _cache->insert(_key, std::move(q), std::move(trace_state));
+    }
+}
+
+querier querier_cache_context::lookup(emit_only_live_rows only_live,
+        const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state,
+        const noncopyable_function<querier()>& create_fun) {
+    if (_cache && _key != utils::UUID{} && !_is_first_page) {
+        return _cache->lookup(_key, only_live, s, range, slice, std::move(trace_state), create_fun);
+    }
+    return create_fun();
+}
