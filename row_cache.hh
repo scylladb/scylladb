@@ -26,6 +26,7 @@
 
 #include "core/memory.hh"
 #include <seastar/core/thread.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
@@ -285,7 +286,7 @@ public:
     // All invocations of external_updater on given cache instance are serialized internally.
     // Must have strong exception guarantees. If throws, the underlying mutation source
     // must be left in the state in which it was before the call.
-    using external_updater = std::function<void()>;
+    using external_updater = seastar::noncopyable_function<void()>;
 public:
     struct stats {
         utils::timed_rate_moving_average hits;
