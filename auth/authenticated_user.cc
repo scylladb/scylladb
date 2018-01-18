@@ -46,8 +46,8 @@
 namespace auth {
 
 authenticated_user::authenticated_user(stdx::string_view name)
-                : name(sstring(name))
-{}
+        : name(sstring(name)) {
+}
 
 std::ostream& operator<<(std::ostream& os, const authenticated_user& u) {
     if (!u.name) {

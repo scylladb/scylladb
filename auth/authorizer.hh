@@ -71,7 +71,8 @@ using std::experimental::optional;
 
 class authorizer {
 public:
-    virtual ~authorizer() {}
+    virtual ~authorizer() {
+    }
 
     virtual future<> start() = 0;
 
@@ -130,7 +131,8 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<std::vector<permission_details>> list(service&, const authenticated_user& performer, permission_set, optional<resource>, optional<sstring>) const = 0;
+    virtual future<std::vector<permission_details>>
+    list(service&, const authenticated_user& performer, permission_set, optional<resource>, optional<sstring>) const = 0;
 
     /**
      * This method is called before deleting a user with DROP USER query so that a new user with the same

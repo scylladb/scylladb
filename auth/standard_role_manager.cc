@@ -113,7 +113,7 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
                         row.get_as<bool>("can_login"),
                         (row.has("member_of")
                                  ? row.get_set<sstring>("member_of")
-                                 : std::unordered_set<sstring>()) });
+                                 : std::unordered_set<sstring>())});
     });
 }
 

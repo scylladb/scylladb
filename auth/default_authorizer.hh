@@ -58,6 +58,7 @@ class default_authorizer : public authorizer {
 
 public:
     default_authorizer(cql3::query_processor&, ::service::migration_manager&);
+
     ~default_authorizer();
 
     future<> start() override;
@@ -74,7 +75,8 @@ public:
 
     future<> revoke(const authenticated_user&, permission_set, resource, sstring) override;
 
-    future<std::vector<permission_details>> list(service&, const authenticated_user&, permission_set, optional<resource>, optional<sstring>) const override;
+    future<std::vector<permission_details>>
+    list(service&, const authenticated_user&, permission_set, optional<resource>, optional<sstring>) const override;
 
     future<> revoke_all(sstring) override;
 

@@ -73,8 +73,8 @@ public:
 
     using credentials_map = std::unordered_map<sstring, sstring>;
 
-    virtual ~authenticator()
-    {}
+    virtual ~authenticator() {
+    }
 
     virtual future<> start() = 0;
 
@@ -154,9 +154,13 @@ public:
 
     class sasl_challenge {
     public:
-        virtual ~sasl_challenge() {}
+        virtual ~sasl_challenge() {
+        }
+
         virtual bytes evaluate_response(bytes_view client_response) = 0;
+
         virtual bool is_complete() const = 0;
+
         virtual future<authenticated_user> get_authenticated_user() const = 0;
     };
 

@@ -63,13 +63,11 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
 
 static const std::unordered_map<resource_kind, stdx::string_view> roots{
         {resource_kind::data, "data"},
-        {resource_kind::role, "roles"},
-};
+        {resource_kind::role, "roles"}};
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
-        {resource_kind::role, 1},
-};
+        {resource_kind::role, 1}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
     if (dv.table()) {
