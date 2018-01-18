@@ -295,21 +295,15 @@ future<> i_endpoint_snitch::create_snitch(
     const sstring& snitch_name, A&&... a) {
 
     // First, create and "start" the distributed snitch object...
-    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([] {
+    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([snitch_name] {
         // ...and then start each local snitch.
         return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
             return local_inst.start();
-        }).then_wrapped([] (auto&& f) {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch (...) {
-                auto eptr = std::current_exception();
-
-                return stop_snitch().then([eptr] () {
-                    std::rethrow_exception(eptr);
-                });
-            }
+        }).handle_exception([snitch_name] (std::exception_ptr eptr) {
+            logger().error("Failed to create {}: {}", snitch_name, eptr);
+            return stop_snitch().finally([eptr = std::move(eptr)] {
+                return make_exception_future<>(eptr);
+            });
         });
     });
 }
