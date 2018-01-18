@@ -1163,7 +1163,7 @@ dropRoleStatement returns [::shared_ptr<drop_role_statement> stmt]
 listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
     @init {
         bool recursive = true;
-        std::experimental::optional<cql3::role_name> grantee;
+        std::optional<cql3::role_name> grantee;
     }
     : K_LIST K_ROLES
         (K_OF g=userOrRoleName { grantee = std::move(g); })?

@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include <experimental/optional>
 #include <experimental/string_view>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -46,8 +46,8 @@ struct role_config final {
 
 // Differential update for altering existing roles.
 struct role_config_update final {
-    stdx::optional<bool> is_superuser{};
-    stdx::optional<bool> can_login{};
+    std::optional<bool> is_superuser{};
+    std::optional<bool> can_login{};
 };
 
 // A logical argument error for a role-management operation.
