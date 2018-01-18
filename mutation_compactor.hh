@@ -79,6 +79,8 @@ class compact_mutation_state {
     const dht::decorated_key* _dk{};
     dht::decorated_key _last_dk;
     bool _has_ck_selector{};
+
+    std::optional<static_row> _last_static_row;
 private:
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -119,6 +121,7 @@ private:
         }
         return t.timestamp < _max_purgeable;
     };
+
 public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
@@ -163,6 +166,7 @@ public:
         _range_tombstones.clear();
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _max_purgeable = api::missing_timestamp;
+        _last_static_row.reset();
     }
 
     template <typename Consumer>
@@ -181,6 +185,7 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     stop_iteration consume(static_row&& sr, Consumer& consumer) {
+        _last_static_row = sr;
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
                                                      row_tombstone(current_tombstone),
@@ -280,6 +285,34 @@ public:
     /// Can be null if the compaction wasn't started yet.
     const dht::decorated_key* current_partition() const {
         return _dk;
+    }
+
+    /// Reset limits and query-time to the new page's ones and re-emit the
+    /// partition-header and static row if there are clustering rows or range
+    /// tombstones left in the partition.
+    template <typename Consumer>
+    GCC6_CONCEPT(
+        requires CompactedFragmentsConsumer<Consumer>
+    )
+    void start_new_page(uint32_t row_limit,
+            uint32_t partition_limit,
+            gc_clock::time_point query_time,
+            mutation_fragment::kind next_fragment_kind,
+            Consumer& consumer) {
+        _empty_partition = true;
+        _static_row_live = false;
+        _row_limit = row_limit;
+        _partition_limit = partition_limit;
+        _rows_in_current_partition = 0;
+        _current_partition_limit = std::min(_row_limit, _partition_row_limit);
+        _query_time = query_time;
+        _gc_before = saturating_subtract(query_time, _schema.gc_grace_seconds());
+
+        if ((next_fragment_kind == mutation_fragment::kind::clustering_row || next_fragment_kind == mutation_fragment::kind::range_tombstone)
+                && _last_static_row) {
+            // Stopping here would cause an infinite loop so ignore return value.
+            consume(*std::exchange(_last_static_row, {}), consumer);
+        }
     }
 };
 
