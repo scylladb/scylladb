@@ -55,7 +55,7 @@ class list_permissions_statement : public authorization_statement {
 private:
     auth::permission_set _permissions;
     std::optional<auth::resource> _resource;
-    std::optional<sstring> _username;
+    std::optional<sstring> _role_name;
     bool _recursive;
 
 public:

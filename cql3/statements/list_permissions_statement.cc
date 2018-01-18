@@ -51,10 +51,10 @@
 cql3::statements::list_permissions_statement::list_permissions_statement(
         auth::permission_set permissions,
         std::optional<auth::resource> resource,
-        std::optional<sstring> username, bool recursive)
+        std::optional<sstring> role_name, bool recursive)
             : _permissions(permissions)
             , _resource(std::move(resource))
-            , _username(std::move(username))
+            , _role_name(std::move(role_name))
             , _recursive(recursive) {
 }
 
@@ -78,16 +78,16 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
             return make_ready_future<>();
         }
 
-        if (!_username) {
+        if (!_role_name) {
             return make_exception_future<>(
                     exceptions::unauthorized_exception("You are not authorized to view everyone's permissions"));
         }
 
-        return auth::has_role(as, *state.user(), *_username).then([this](bool has_role) {
+        return auth::has_role(as, *state.user(), *_role_name).then([this](bool has_role) {
             if (!has_role) {
                 return make_exception_future<>(
                         exceptions::unauthorized_exception(
-                                sprint("You are not authorized to view %s's permissions", *_username)));
+                                sprint("You are not authorized to view %s's permissions", *_role_name)));
             }
 
             return make_ready_future<>();
@@ -132,7 +132,7 @@ cql3::statements::list_permissions_statement::execute(
         return auth::list_filtered_permissions(
                 as,
                 _permissions,
-                _username,
+                _role_name,
                 resource_filter).then([this](std::vector<auth::permission_details> all_details) {
             std::sort(all_details.begin(), all_details.end());
 

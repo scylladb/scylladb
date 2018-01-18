@@ -60,10 +60,10 @@ static auth::permission_set filter_applicable_permissions(const auth::permission
 
 cql3::statements::permission_altering_statement::permission_altering_statement(
                 auth::permission_set permissions, auth::resource resource,
-                sstring username)
+                sstring role_name)
                 : _permissions(filter_applicable_permissions(permissions, resource))
                 , _resource(std::move(resource))
-                , _username(std::move(username)) {
+                , _role_name(std::move(role_name)) {
 }
 
 void cql3::statements::permission_altering_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
@@ -72,9 +72,9 @@ void cql3::statements::permission_altering_statement::validate(distributed<servi
 }
 
 future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) {
-    return state.get_auth_service()->underlying_role_manager().exists(_username).then([this, &state](bool exists) {
+    return state.get_auth_service()->underlying_role_manager().exists(_role_name).then([this, &state](bool exists) {
         if (!exists) {
-            throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
+            throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _role_name));
         }
 
         maybe_correct_resource(_resource, state);
@@ -92,4 +92,3 @@ future<> cql3::statements::permission_altering_statement::check_access(const ser
         });
     });
 }
-
