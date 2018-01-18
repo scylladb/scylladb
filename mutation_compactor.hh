@@ -314,6 +314,10 @@ public:
             consume(*std::exchange(_last_static_row, {}), consumer);
         }
     }
+
+    bool are_limits_reached() const {
+        return _row_limit == 0 || _partition_limit == 0;
+    }
 };
 
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
