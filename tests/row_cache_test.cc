@@ -643,19 +643,19 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
 
         cache.populate(m1); // m1 is supposed to have random continuity and populate() should preserve it
 
-        auto rd1 = cache.make_reader(gen.schema());
-        auto sm1 = rd1().get0();
+        auto rd1 = cache.make_flat_reader(gen.schema());
+        rd1.fill_buffer().get();
 
         // Merge m2 into cache
         auto mt = make_lw_shared<memtable>(gen.schema());
         mt->apply(m2);
         cache.update([&] { underlying.apply(m2); }, *mt).get();
 
-        auto rd2 = cache.make_reader(gen.schema());
-        auto sm2 = rd2().get0();
+        auto rd2 = cache.make_flat_reader(gen.schema());
+        rd2.fill_buffer().get();
 
-        assert_that(std::move(sm1)).has_mutation().is_equal_to(m1);
-        assert_that(std::move(sm2)).has_mutation().is_equal_to(m1 + m2);
+        assert_that(std::move(rd1)).next_mutation().is_equal_to(m1);
+        assert_that(std::move(rd2)).next_mutation().is_equal_to(m1 + m2);
     });
 }
 
