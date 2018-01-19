@@ -12,6 +12,7 @@ class FakeCollectd(object):
     def query(self, command):
         pass
 
+
 Metric = metric.Metric
 if 'MARK_ABSENT_PROBABILITY' in os.environ:
     MARK_ABSENT_PROBABILITY = float(os.environ['MARK_ABSENT_PROBABILITY'])

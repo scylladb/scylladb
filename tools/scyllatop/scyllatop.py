@@ -41,6 +41,7 @@ def fancyUserInterface(metricPatterns, interval, collectd):
     except KeyboardInterrupt:
         pass
 
+
 if __name__ == '__main__':
     description = '\n'.join(['A top-like tool for scylladb collectd metrics.',
                              'Keyboard shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',

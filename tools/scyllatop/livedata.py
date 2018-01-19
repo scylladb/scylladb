@@ -46,19 +46,19 @@ class LiveData(object):
 
     def go(self, mainLoop):
         while not self._stop:
-            for metric in self._measurements:
-                self._update(metric)
+            for metric_obj in self._measurements:
+                self._update(metric_obj)
 
             for view in self._views:
                 view.update(self)
             time.sleep(self._interval)
             mainLoop.draw_screen()
 
-    def _update(self, metric):
+    def _update(self, metric_obj):
         try:
-            metric.update()
+            metric_obj.update()
         except parseexception.ParseException:
-            logging.exception('exception while updating metric {0}'.format(metric))
+            logging.exception('exception while updating metric {0}'.format(metric_obj))
 
     def stop(self):
         self._stop = True
