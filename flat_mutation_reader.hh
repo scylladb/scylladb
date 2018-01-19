@@ -97,6 +97,7 @@ public:
     protected:
         template<typename... Args>
         void push_mutation_fragment(Args&&... args) {
+            seastar::memory::on_alloc_point(); // for exception safety tests
             _buffer.emplace_back(std::forward<Args>(args)...);
             _buffer_size += _buffer.back().memory_usage();
         }
