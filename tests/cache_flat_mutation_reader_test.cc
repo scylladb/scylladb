@@ -35,6 +35,7 @@
 
 #include "memtable_snapshot_source.hh"
 #include "mutation_assertions.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 /*
  * ===================
@@ -88,11 +89,11 @@ struct expected_fragment {
     expected_fragment(int row_key) : f(row_key) { }
     expected_fragment(range_tombstone rt) : f(rt) { }
 
-    void check(streamed_mutation_assertions& sm, const query::clustering_row_ranges& ranges) {
+    void check(flat_reader_assertions& r, const query::clustering_row_ranges& ranges) {
         if (f.which() == 0) {
-            sm.produces_row_with_key(make_ck(boost::get<int>(f)));
+            r.produces_row_with_key(make_ck(boost::get<int>(f)));
         } else {
-            sm.produces_range_tombstone(boost::get<range_tombstone>(f), ranges);
+            r.produces_range_tombstone(boost::get<range_tombstone>(f), ranges);
         }
     }
 };
@@ -196,12 +197,17 @@ public:
     }
 };
 
-static void check_produces_only(streamed_mutation sm, std::deque<expected_fragment> expected, const query::clustering_row_ranges& ranges) {
-    auto sa = assert_that_stream(std::move(sm));
+static void check_produces_only(const dht::decorated_key& dk,
+                                flat_mutation_reader r,
+                                std::deque<expected_fragment> expected,
+                                const query::clustering_row_ranges& ranges) {
+    auto ra = assert_that(std::move(r));
+    ra.produces_partition_start(dk);
     for (auto&& e : expected) {
-        e.check(sa, ranges);
+        e.check(ra, ranges);
     }
-    sa.produces_end_of_stream();
+    ra.produces_partition_end();
+    ra.produces_end_of_stream();
 }
 
 void test_slice_single_version(mutation& underlying,
@@ -220,11 +226,9 @@ void test_slice_single_version(mutation& underlying,
 
     try {
         auto range = dht::partition_range::make_singular(DK);
-        auto reader = cache.make_reader(SCHEMA, range, slice);
-        auto smo = reader().get0();
-        BOOST_REQUIRE(bool(smo));
+        auto reader = cache.make_flat_reader(SCHEMA, range, slice);
 
-        check_produces_only(std::move(*smo), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
+        check_produces_only(DK, std::move(reader), expected_sm_fragments, slice.row_ranges(*SCHEMA, DK.key()));
 
         auto snp = cache_tester::snapshot_for_key(cache, DK);
         assert_single_version(snp);
