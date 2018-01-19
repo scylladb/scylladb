@@ -2294,10 +2294,10 @@ SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
         populate_range(cache, dht::partition_range::make_singular({keys[6]}));
 
         // FIXME: When readers have buffering across partitions, limit buffering to 1
-        auto rd1 = assert_that(cache.make_reader(s.schema(), range1));
+        auto rd1 = assert_that(cache.make_flat_reader(s.schema(), range1));
         rd1.produces(muts[0]);
 
-        auto rd2 = assert_that(cache.make_reader(s.schema(), range2));
+        auto rd2 = assert_that(cache.make_flat_reader(s.schema(), range2));
         rd2.produces(muts[4]);
 
         rd1.produces(muts[1]);
