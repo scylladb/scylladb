@@ -2813,12 +2813,10 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
         auto make_reader = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s, pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(3);
-            return std::move(sm);
+            auto rd = cache.make_flat_reader(s, pr, slice);
+            rd.set_max_buffer_size(3);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         const int n_readers = 3;
@@ -2844,7 +2842,9 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         .build();
 
                     auto rd = make_reader(slice);
-                    auto actual = mutation_from_streamed_mutation(rd).get0();
+                    auto actual_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                    BOOST_REQUIRE(actual_opt);
+                    auto actual = *actual_opt;
 
                     auto&& ranges = slice.row_ranges(*s, actual.key());
                     actual.partition().row_tombstones().trim(*s, ranges);
@@ -2893,7 +2893,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         done = true;
         readers.get();
 
-        assert_that(cache.make_reader(s))
+        assert_that(cache.make_flat_reader(s))
             .produces(versions.back());
     });
 }
