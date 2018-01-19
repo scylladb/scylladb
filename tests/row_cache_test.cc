@@ -2472,17 +2472,15 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             cache.update([&] { underlying.apply(m); }, *mt).get();
         };
 
-        auto make_sm = [&] {
-            auto rd = cache.make_reader(s.schema(), pr);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+        auto make_reader = [&] {
+            auto rd = cache.make_flat_reader(s.schema(), pr);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             populate_range(cache, pr, query::clustering_range::make({s.make_ckey(2)}, {s.make_ckey(4)}));
 
@@ -2510,7 +2508,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             populate_range(cache, pr, query::full_clustering_range);
             check_continuous(cache, pr, query::full_clustering_range);
 
-            assert_that(cache.make_reader(s.schema(), pr))
+            assert_that(cache.make_flat_reader(s.schema(), pr))
                 .produces(m1 + m2)
                 .produces_end_of_stream();
         }
@@ -2522,14 +2520,14 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             populate_range(cache, pr, s.make_ckey_range(5, 5));
             populate_range(cache, pr, s.make_ckey_range(8, 8));
 
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             apply(m3);
 
             populate_range(cache, pr, query::full_clustering_range);
             check_continuous(cache, pr, query::full_clustering_range);
 
-            assert_that(cache.make_reader(s.schema(), pr))
+            assert_that(cache.make_flat_reader(s.schema(), pr))
                 .produces(m1 + m2 + m3)
                 .produces_end_of_stream();
         }
@@ -2540,14 +2538,14 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(4)));
             populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
 
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             apply(m4);
 
             populate_range(cache, pr, query::full_clustering_range);
             check_continuous(cache, pr, query::full_clustering_range);
 
-            assert_that(cache.make_reader(s.schema(), pr))
+            assert_that(cache.make_flat_reader(s.schema(), pr))
                 .produces_compacted(m1 + m2 + m3 + m4)
                 .produces_end_of_stream();
         }
