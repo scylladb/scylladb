@@ -112,7 +112,7 @@ cql3::statements::list_permissions_statement::execute(
     };
 
     static thread_local const std::vector<::shared_ptr<column_specification>> metadata({
-        make_column("role"), make_column("resource"), make_column("permission")
+        make_column("role"), make_column("username"), make_column("resource"), make_column("permission")
     });
 
     typedef std::optional<auth::resource> opt_resource;
@@ -162,9 +162,12 @@ cql3::statements::list_permissions_statement::execute(
                     // Make sure names are sorted.
                     auto names = auth::permissions::to_strings(v.permissions);
                     for (auto& p : std::set<sstring>(names.begin(), names.end())) {
+                        const auto decomposed_user = utf8_type->decompose(v.user);
+
                         rs->add_row(
                                 std::vector<bytes_opt>{
-                                        utf8_type->decompose(v.user),
+                                        decomposed_user,
+                                        decomposed_user,
                                         utf8_type->decompose(sstring(sprint("%s", v.resource))),
                                         utf8_type->decompose(p)});
                     }
