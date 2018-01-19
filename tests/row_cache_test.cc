@@ -2709,17 +2709,15 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
-            auto rd = cache.make_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+        auto make_rd = [&] (const query::partition_slice* slice = nullptr) {
+            auto rd = cache.make_flat_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_rd(); // to keep the old version around
 
             populate_range(cache, pr, s.make_ckey_range(0, 0));
             populate_range(cache, pr, s.make_ckey_range(3, 3));
@@ -2729,22 +2727,24 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
             auto slice1 = partition_slice_builder(*s.schema())
                 .with_range(s.make_ckey_range(0, 4))
                 .build();
-            auto sm2 = assert_that_stream(make_sm(&slice1));
+            auto rd2 = assert_that(make_rd(&slice1));
 
-            sm2.produces_row_with_key(s.make_ckey(0));
-            sm2.produces_row_with_key(s.make_ckey(1));
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(0));
+            rd2.produces_row_with_key(s.make_ckey(1));
 
             populate_range(cache, pr, s.make_ckey_range(2, 4));
 
-            sm2.produces_row_with_key(s.make_ckey(2));
-            sm2.produces_row_with_key(s.make_ckey(3));
-            sm2.produces_row_with_key(s.make_ckey(4));
-            sm2.produces_end_of_stream();
+            rd2.produces_row_with_key(s.make_ckey(2));
+            rd2.produces_row_with_key(s.make_ckey(3));
+            rd2.produces_row_with_key(s.make_ckey(4));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
             // FIXME: [1, 2] will not be continuous due to concurrent population.
             // check_continuous(cache, pr, s.make_ckey_range(0, 4));
 
-            assert_that(cache.make_reader(s.schema(), pr))
+            assert_that(cache.make_flat_reader(s.schema(), pr))
                 .produces(m1 + m2)
                 .produces_end_of_stream();
         }
