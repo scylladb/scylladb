@@ -748,7 +748,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         mutation_reader::forwarding _fwd_mr;
 
         flat_mutation_reader operator()() {
-            return _ms.make_flat_mutation_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
+            return _ms.make_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
         }
     };
 
@@ -893,7 +893,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         std::vector<flat_mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_flat_mutation_reader(s, pr, slice, pc, tr, fwd));
+            rd.emplace_back(ms.make_reader(s, pr, slice, pc, tr, fwd));
         }
         return make_combined_reader(s, std::move(rd), fwd);
     });

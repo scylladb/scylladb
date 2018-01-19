@@ -630,7 +630,7 @@ public:
         : impl(s)
         , _ranges(ranges)
         , _current_range(_ranges.begin())
-        , _reader(source.make_flat_mutation_reader(s, *_current_range, slice, pc, trace_state, streamed_mutation::forwarding::no,
+        , _reader(source.make_reader(s, *_current_range, slice, pc, trace_state, streamed_mutation::forwarding::no,
                                                    _ranges.size() > 1 ? mutation_reader::forwarding::yes : fwd_mr))
     {
     }

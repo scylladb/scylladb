@@ -23,6 +23,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "flat_mutation_reader.hh"
+#include "mutation_assertions.hh"
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
@@ -84,6 +85,38 @@ public:
         return *this;
     }
 
+    // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
+    flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", rt));
+        auto mfo = read_next();
+        if (!mfo) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got end of stream", rt));
+        }
+        if (!mfo->is_range_tombstone()) {
+            BOOST_FAIL(sprint("Expected range tombstone %s, but got %s", rt, *mfo));
+        }
+        const schema& s = *_reader.schema();
+        range_tombstone_list actual_list(s);
+        position_in_partition::equal_compare eq(s);
+        while (mutation_fragment* next = _reader.peek().get0()) {
+            if (!next->is_range_tombstone() || !eq(next->position(), mfo->position())) {
+                break;
+            }
+            actual_list.apply(s, _reader().get0()->as_range_tombstone());
+        }
+        actual_list.apply(s, mfo->as_range_tombstone());
+        {
+            range_tombstone_list expected_list(s);
+            expected_list.apply(s, rt);
+            actual_list.trim(s, ck_ranges);
+            expected_list.trim(s, ck_ranges);
+            if (!actual_list.equal(s, expected_list)) {
+                BOOST_FAIL(sprint("Expected %s, but got %s", expected_list, actual_list));
+            }
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_partition_end() {
         BOOST_TEST_MESSAGE("Expecting partition end");
         auto mfopt = read_next();
@@ -130,11 +163,11 @@ public:
         return produces(m);
     }
 
-    flat_reader_assertions& produces(const mutation& m) {
+    flat_reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
-        assert_that(*mo).is_equal_to(m);
+        assert_that(*mo).is_equal_to(m, ck_ranges);
         return *this;
     }
 
@@ -148,6 +181,17 @@ public:
     flat_reader_assertions& produces(const Range& range) {
         for (auto&& m : range) {
             produces(m);
+        }
+        return *this;
+    }
+
+    flat_reader_assertions& produces_eos_or_empty_mutation() {
+        BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
+        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        if (mo) {
+            if (!mo->partition().empty()) {
+                BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
+            }
         }
         return *this;
     }
@@ -203,6 +247,13 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
+        return fast_forward_to(position_range{
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
+            position_in_partition(position_in_partition::clustering_row_tag_t(), ck2)
+        });
+    }
+
     mutation_assertion next_mutation() {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
         BOOST_REQUIRE(bool(mo));
@@ -211,6 +262,10 @@ public:
 
     future<> fill_buffer() {
         return _reader.fill_buffer();
+    }
+
+    bool is_buffer_full() const {
+        return _reader.is_buffer_full();
     }
 
     void set_max_buffer_size(size_t size) {

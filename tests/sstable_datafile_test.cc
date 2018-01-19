@@ -998,12 +998,12 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(schema_ptr s,
 
 // mutation_reader for sstable keeping all the required objects alive.
 static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
-    return sst->as_mutation_source().make_flat_mutation_reader(s, query::full_partition_range, s->full_slice());
+    return sst->as_mutation_source().make_reader(s, query::full_partition_range, s->full_slice());
 
 }
 
 static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
-    return sst->as_mutation_source().make_flat_mutation_reader(s, pr, s->full_slice());
+    return sst->as_mutation_source().make_reader(s, pr, s->full_slice());
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
@@ -2601,7 +2601,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
 void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, const query::partition_slice& ps,
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
-    auto reader = sst->as_mutation_source().make_flat_mutation_reader(s, query::full_partition_range, ps);
+    auto reader = sst->as_mutation_source().make_reader(s, query::full_partition_range, ps);
 
     partition_key::equality pk_eq(*s);
     clustering_key::equality ck_eq(*s);
@@ -3684,7 +3684,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
                 .with_range(query::clustering_range::make_singular(ck2))
                 .with_range(query::clustering_range::make_singular(ck3))
                 .build();
-            flat_mutation_reader rd = ms.make_flat_mutation_reader(table.schema(), query::full_partition_range, slice);
+            flat_mutation_reader rd = ms.make_reader(table.schema(), query::full_partition_range, slice);
             assert_that(std::move(rd)).has_monotonic_positions();
         }
     });
@@ -3735,7 +3735,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         auto sst = make_sstable(dir.path, flat_mutation_reader_from_mutations(partitions), cfg);
 
         auto ms = as_mutation_source(sst);
-        auto rd = ms.make_flat_mutation_reader(table.schema(),
+        auto rd = ms.make_reader(table.schema(),
             query::full_partition_range,
             table.schema()->full_slice(),
             default_priority_class(),
@@ -4236,7 +4236,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
         merged.insert(mutations.begin(), mutations.end());
-        auto rd = assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, query::full_partition_range));
+        auto rd = assert_that(sst->as_mutation_source().make_reader(s, query::full_partition_range));
         auto keys_read = 0;
         for (auto&& m : merged) {
             keys_read++;
@@ -4246,7 +4246,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
         BOOST_REQUIRE(keys_read == keys_written);
 
         auto r = dht::partition_range::make({mutations.back().decorated_key(), true}, {mutations.back().decorated_key(), true});
-        assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, r))
+        assert_that(sst->as_mutation_source().make_reader(s, r))
             .produces(slice(mutations, r))
             .produces_end_of_stream();
     });
@@ -4499,7 +4499,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
-            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }

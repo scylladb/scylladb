@@ -26,6 +26,7 @@
 #include "query-request.hh"
 #include "schema.hh"
 #include "streamed_mutation.hh"
+#include "flat_mutation_reader.hh"
 #include "stdx.hh"
 
 namespace db {
@@ -82,8 +83,8 @@ bool clustering_prefix_matches(const schema& base, const partition_key& key, con
 future<std::vector<mutation>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
-        streamed_mutation&& updates,
-        streamed_mutation_opt&& existings);
+        flat_mutation_reader&& updates,
+        flat_mutation_reader_opt&& existings);
 
 query::clustering_row_ranges calculate_affected_clustering_ranges(
         const schema& base,
