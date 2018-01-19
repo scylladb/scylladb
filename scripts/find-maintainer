@@ -1,0 +1,88 @@
+#!/usr/bin/python3
+
+import argparse
+import fnmatch
+
+
+class Subsystem:
+
+    def __init__(self, name):
+        self.name = name
+        self.maintainers = []
+        self.reviewers = []
+        self.patterns = []
+
+    def add_maintainer(self, email):
+        self.maintainers += [email]
+
+    def add_reviewer(self, email):
+        self.reviewers += [email]
+
+    def add_pattern(self, pattern):
+        self.patterns += [pattern]
+
+    def match(self, target):
+        for pattern in self.patterns:
+            if fnmatch.fnmatch(target, pattern):
+                return True
+        return False
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "filename", help="filename to find a maintainer or reviewer for")
+    args = parser.parse_args()
+
+    subsystems = []
+
+    with open('MAINTAINERS') as f:
+        lines = f.readlines()
+
+        # Find starting point of subsystems:
+        while len(lines) > 0:
+            line = lines.pop(0).strip()
+            if line == "---":
+                break
+
+        # Parse subsystems:
+        while len(lines) > 0:
+            subsystem_name = lines.pop(0).strip()
+            if len(subsystem_name) == 0:
+                continue
+
+            subsystem = Subsystem(subsystem_name)
+
+            if subsystem_name == "THE REST":
+                the_rest = subsystem
+            else:
+                subsystems += [subsystem]
+
+            while len(lines) > 0:
+                annotation = lines.pop(0).strip()
+                if len(annotation) == 0:
+                    break
+                key, value = annotation.split(": ")
+                if key == 'M':
+                    subsystem.add_maintainer(value)
+                elif key == 'R':
+                    subsystem.add_reviewer(value)
+                elif key == 'F':
+                    subsystem.add_pattern(value)
+
+    match = False
+
+    for subsystem in subsystems:
+        if subsystem.match(args.filename):
+            match = True
+            print(subsystem.name)
+            for maintainer in subsystem.maintainers:
+                print("  %-40s [maintainer]" % maintainer)
+            for reviewer in subsystem.reviewers:
+                print("  %-40s [reviewer]" % reviewer)
+
+    if not match:
+        print("No subsystem found for file '%s'. Contact one of the following maintainers:" % args.filename)
+        for maintainer in the_rest.maintainers:
+            print("  %s" % maintainer)
+        for reviewer in the_rest.reviewers:
+            print("  %s" % reviewer)
