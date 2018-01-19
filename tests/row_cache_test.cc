@@ -525,26 +525,26 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
         auto key2_range = get_partition_range(mutations[2]);
 
         // Populate cache for first key
-        assert_that(cache.make_reader(s, key0_range))
+        assert_that(cache.make_flat_reader(s, key0_range))
             .produces(mutations[0])
             .produces_end_of_stream();
 
         // Populate cache for last key
-        assert_that(cache.make_reader(s, key2_range))
+        assert_that(cache.make_flat_reader(s, key2_range))
             .produces(mutations[2])
             .produces_end_of_stream();
 
         // Test single-key queries
-        assert_that(cache.make_reader(s, key0_range))
+        assert_that(cache.make_flat_reader(s, key0_range))
             .produces(mutations[0])
             .produces_end_of_stream();
 
-        assert_that(cache.make_reader(s, key2_range))
+        assert_that(cache.make_flat_reader(s, key2_range))
             .produces(mutations[2])
             .produces_end_of_stream();
 
         // Test range query
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
             .produces(mutations[0])
             .produces(mutations[1])
             .produces(mutations[2])
