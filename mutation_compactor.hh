@@ -40,26 +40,27 @@ enum class compact_for_sstables {
     yes,
 };
 
-/*
-template<typename T>
-concept bool CompactedMutationsConsumer() {
-    return requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
-        clustering_row cr, range_tombstone rt, tombstone current_tombstone, bool is_alive)
-    {
+GCC6_CONCEPT(
+    template<typename T>
+    concept bool CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
+            clustering_row cr, range_tombstone rt, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
         obj.consume_new_partition(dk);
         obj.consume(t);
-        { obj.consume(std::move(sr), current_tombstone, is_alive) } ->stop_iteration;
-        { obj.consume(std::move(cr), current_tombstone, is_alive) } ->stop_iteration;
-        { obj.consume(std::move(rt)) } ->stop_iteration;
-        { obj.consume_end_of_partition() } ->stop_iteration;
+        { obj.consume(std::move(sr), current_tombstone, is_alive) } -> stop_iteration;
+        { obj.consume(std::move(cr), current_row_tombstone, is_alive) } -> stop_iteration;
+        { obj.consume(std::move(rt)) } -> stop_iteration;
+        { obj.consume_end_of_partition() } -> stop_iteration;
         obj.consume_end_of_stream();
     };
-}
-*/
+)
+
 // emit_only_live::yes will cause compact_for_query to emit only live
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
-template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename CompactedMutationsConsumer>
+template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
+GCC6_CONCEPT(
+    requires CompactedFragmentsConsumer<Consumer>
+)
 class compact_mutation {
     const schema& _schema;
     gc_clock::time_point _query_time;
@@ -72,7 +73,7 @@ class compact_mutation {
     uint32_t _partition_limit{};
     uint32_t _partition_row_limit{};
 
-    CompactedMutationsConsumer _consumer;
+    Consumer _consumer;
     range_tombstone_accumulator _range_tombstones;
 
     bool _static_row_live{};
@@ -124,7 +125,7 @@ public:
     compact_mutation(compact_mutation&&) = delete; // Because 'this' is captured
 
     compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint32_t limit,
-              uint32_t partition_limit, CompactedMutationsConsumer consumer)
+              uint32_t partition_limit, Consumer consumer)
         : _schema(s)
         , _query_time(query_time)
         , _gc_before(saturating_subtract(query_time, s.gc_grace_seconds()))
@@ -139,7 +140,7 @@ public:
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
 
-    compact_mutation(const schema& s, gc_clock::time_point compaction_time, CompactedMutationsConsumer consumer,
+    compact_mutation(const schema& s, gc_clock::time_point compaction_time, Consumer consumer,
                      std::function<api::timestamp_type(const dht::decorated_key&)> get_max_purgeable)
         : _schema(s)
         , _query_time(compaction_time)
@@ -250,12 +251,18 @@ public:
     }
 };
 
-template<emit_only_live_rows only_live, typename CompactedMutationsConsumer>
-struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, CompactedMutationsConsumer> {
-    using compact_mutation<only_live, compact_for_sstables::no, CompactedMutationsConsumer>::compact_mutation;
+template<emit_only_live_rows only_live, typename Consumer>
+GCC6_CONCEPT(
+    requires CompactedFragmentsConsumer<Consumer>
+)
+struct compact_for_query : compact_mutation<only_live, compact_for_sstables::no, Consumer> {
+    using compact_mutation<only_live, compact_for_sstables::no, Consumer>::compact_mutation;
 };
 
-template<typename CompactedMutationsConsumer>
-struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, CompactedMutationsConsumer> {
-    using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, CompactedMutationsConsumer>::compact_mutation;
+template<typename Consumer>
+GCC6_CONCEPT(
+    requires CompactedFragmentsConsumer<Consumer>
+)
+struct compact_for_compaction : compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer> {
+    using compact_mutation<emit_only_live_rows::no, compact_for_sstables::yes, Consumer>::compact_mutation;
 };
