@@ -2044,16 +2044,14 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
             while (true) {
                 try {
                     injector.fail_after(i++);
-                    auto rd = cache.make_reader(s, query::full_partition_range, slice);
-                    auto smo = rd().get0();
-                    BOOST_REQUIRE(smo);
-                    auto got = mutation_from_streamed_mutation(*smo).get0();
-                    smo = rd().get0();
-                    BOOST_REQUIRE(!smo);
+                    auto rd = cache.make_flat_reader(s, query::full_partition_range, slice);
+                    auto got_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                    BOOST_REQUIRE(got_opt);
+                    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd).get0());
                     injector.cancel();
 
-                    assert_that(got).is_equal_to(mut, ranges);
-                    assert_that(cache.make_reader(s, query::full_partition_range, slice))
+                    assert_that(*got_opt).is_equal_to(mut, ranges);
+                    assert_that(cache.make_flat_reader(s, query::full_partition_range, slice))
                         .produces(mut, ranges);
 
                     if (!injector.failed()) {
@@ -2069,7 +2067,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
             auto slice = partition_slice_builder(*s).with_ranges(gen.make_random_ranges(3)).build();
             auto&& ranges = slice.row_ranges(*s, mut.key());
             injector.fail_after(0);
-            assert_that(cache.make_reader(s, query::full_partition_range, slice))
+            assert_that(cache.make_flat_reader(s, query::full_partition_range, slice))
                 .produces(mut, ranges);
             injector.cancel();
         };
