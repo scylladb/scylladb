@@ -576,15 +576,15 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         auto key2_range = get_partition_range(mutations[2]);
 
         for (int i = 0; i < 2; ++i) {
-            assert_that(cache.make_reader(s, key2_range))
+            assert_that(cache.make_flat_reader(s, key2_range))
                 .produces(mutations[2])
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s, key1_range))
+            assert_that(cache.make_flat_reader(s, key1_range))
                 .produces(mutations[1])
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s, key0_range))
+            assert_that(cache.make_flat_reader(s, key0_range))
                 .produces(mutations[0])
                 .produces_end_of_stream();
         }
