@@ -672,7 +672,7 @@ SEASTAR_TEST_CASE(test_random_partition_population) {
 
         row_cache cache(gen.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        assert_that(cache.make_reader(gen.schema()))
+        assert_that(cache.make_flat_reader(gen.schema()))
             .produces(m1)
             .produces_end_of_stream();
 
@@ -681,7 +681,7 @@ SEASTAR_TEST_CASE(test_random_partition_population) {
         }).get();
 
         auto pr = dht::partition_range::make_singular(m2.decorated_key());
-        assert_that(cache.make_reader(gen.schema(), pr))
+        assert_that(cache.make_flat_reader(gen.schema(), pr))
             .produces(m1 + m2)
             .produces_end_of_stream();
     });
