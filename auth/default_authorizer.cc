@@ -61,7 +61,9 @@ extern "C" {
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 
-const sstring& auth::default_authorizer_name() {
+namespace auth {
+
+const sstring& default_authorizer_name() {
     static const sstring name = meta::AUTH_PACKAGE_NAME + "CassandraAuthorizer";
     return name;
 }
@@ -75,20 +77,20 @@ static logging::logger alogger("default_authorizer");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
 static const class_registrator<
-        auth::authorizer,
-        auth::default_authorizer,
+        authorizer,
+        default_authorizer,
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
-auth::default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
+default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
         : _qp(qp)
         , _migration_manager(mm) {
 }
 
-auth::default_authorizer::~default_authorizer() {
+default_authorizer::~default_authorizer() {
 }
 
-future<> auth::default_authorizer::start() {
+future<> default_authorizer::start() {
     static const sstring create_table = sprint(
             "CREATE TABLE %s.%s ("
             "%s text,"
@@ -105,8 +107,8 @@ future<> auth::default_authorizer::start() {
             RESOURCE_NAME,
             90 * 24 * 60 * 60); // 3 months.
 
-    return auth::once_among_shards([this] {
-        return auth::create_metadata_table_if_missing(
+    return once_among_shards([this] {
+        return create_metadata_table_if_missing(
                 PERMISSIONS_CF,
                 _qp,
                 create_table,
@@ -114,11 +116,11 @@ future<> auth::default_authorizer::start() {
     });
 }
 
-future<> auth::default_authorizer::stop() {
+future<> default_authorizer::stop() {
     return make_ready_future<>();
 }
 
-future<auth::permission_set> auth::default_authorizer::authorize_role_directly(
+future<permission_set> default_authorizer::authorize_role_directly(
         const service& ser,
         stdx::string_view role_name,
         const resource& r) const {
@@ -148,7 +150,7 @@ future<auth::permission_set> auth::default_authorizer::authorize_role_directly(
     });
 }
 
-future<auth::permission_set> auth::default_authorizer::authorize(
+future<permission_set> default_authorizer::authorize(
         service& ser,
         sstring role_name,
         resource resource) const {
@@ -167,7 +169,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
     });
 }
 
-future<> auth::default_authorizer::modify(permission_set set, resource resource, sstring user, sstring op) {
+future<> default_authorizer::modify(permission_set set, resource resource, sstring user, sstring op) {
     // TODO: why does this not check super user?
     auto query = sprint(
             "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -186,15 +188,15 @@ future<> auth::default_authorizer::modify(permission_set set, resource resource,
 }
 
 
-future<> auth::default_authorizer::grant(permission_set set, resource resource, sstring to) {
+future<> default_authorizer::grant(permission_set set, resource resource, sstring to) {
     return modify(std::move(set), std::move(resource), std::move(to), "+");
 }
 
-future<> auth::default_authorizer::revoke(permission_set set, resource resource, sstring from) {
+future<> default_authorizer::revoke(permission_set set, resource resource, sstring from) {
     return modify(std::move(set), std::move(resource), std::move(from), "-");
 }
 
-future<std::vector<auth::permission_details>> auth::default_authorizer::list(
+future<std::vector<permission_details>> default_authorizer::list(
         service& ser,
         permission_set set,
         std::optional<resource> resource,
@@ -246,7 +248,7 @@ future<std::vector<auth::permission_details>> auth::default_authorizer::list(
     });
 }
 
-future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
+future<> default_authorizer::revoke_all(sstring dropped_user) {
     auto query = sprint(
             "DELETE FROM %s.%s WHERE %s = ?",
             meta::AUTH_KS,
@@ -265,7 +267,7 @@ future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
     });
 }
 
-future<> auth::default_authorizer::revoke_all(resource resource) {
+future<> default_authorizer::revoke_all(resource resource) {
     auto query = sprint(
             "SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
             ROLE_NAME,
@@ -310,7 +312,9 @@ future<> auth::default_authorizer::revoke_all(resource resource) {
     });
 }
 
-const auth::resource_set& auth::default_authorizer::protected_resources() const {
+const resource_set& default_authorizer::protected_resources() const {
     static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
+}
+
 }

@@ -61,29 +61,31 @@ extern "C" {
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 
-const sstring& auth::password_authenticator_name() {
+namespace auth {
+
+const sstring& password_authenticator_name() {
     static const sstring name = meta::AUTH_PACKAGE_NAME + "PasswordAuthenticator";
     return name;
 }
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
-static const sstring DEFAULT_USER_NAME = auth::meta::DEFAULT_SUPERUSER_NAME;
-static const sstring DEFAULT_USER_PASSWORD = auth::meta::DEFAULT_SUPERUSER_NAME;
+static const sstring DEFAULT_USER_NAME = meta::DEFAULT_SUPERUSER_NAME;
+static const sstring DEFAULT_USER_PASSWORD = meta::DEFAULT_SUPERUSER_NAME;
 
 static logging::logger plogger("password_authenticator");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
 static const class_registrator<
-        auth::authenticator,
-        auth::password_authenticator,
+        authenticator,
+        password_authenticator,
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
-auth::password_authenticator::~password_authenticator() {
+password_authenticator::~password_authenticator() {
 }
 
-auth::password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
     : _qp(qp)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>()) {
@@ -159,11 +161,11 @@ static sstring hashpw(const sstring& pass) {
     return hashpw(pass, gensalt());
 }
 
-future<> auth::password_authenticator::start() {
-     return auth::once_among_shards([this] {
+future<> password_authenticator::start() {
+     return once_among_shards([this] {
          gensalt(); // do this once to determine usable hashing
 
-         _stopped = auth::do_after_system_ready(_as, [this] {
+         _stopped = do_after_system_ready(_as, [this] {
              return has_existing_users().then([this](bool existing) {
                  if (!existing) {
                      return _qp.process(
@@ -186,35 +188,35 @@ future<> auth::password_authenticator::start() {
      });
  }
 
-future<> auth::password_authenticator::stop() {
+future<> password_authenticator::stop() {
     _as.request_abort();
     return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
-db::consistency_level auth::password_authenticator::consistency_for_user(const sstring& username) {
+db::consistency_level password_authenticator::consistency_for_user(const sstring& username) {
     if (username == DEFAULT_USER_NAME) {
         return db::consistency_level::QUORUM;
     }
     return db::consistency_level::LOCAL_ONE;
 }
 
-const sstring& auth::password_authenticator::qualified_java_name() const {
+const sstring& password_authenticator::qualified_java_name() const {
     return password_authenticator_name();
 }
 
-bool auth::password_authenticator::require_authentication() const {
+bool password_authenticator::require_authentication() const {
     return true;
 }
 
-auth::authentication_option_set auth::password_authenticator::supported_options() const {
+authentication_option_set password_authenticator::supported_options() const {
     return authentication_option_set{authentication_option::password};
 }
 
-auth::authentication_option_set auth::password_authenticator::alterable_options() const {
+authentication_option_set password_authenticator::alterable_options() const {
     return authentication_option_set{authentication_option::password};
 }
 
-future<auth::authenticated_user> auth::password_authenticator::authenticate(
+future<authenticated_user> password_authenticator::authenticate(
                 const credentials_map& credentials) const {
     if (!credentials.count(USERNAME_KEY)) {
         throw exceptions::authentication_exception(sprint("Required key '%s' is missing", USERNAME_KEY));
@@ -258,7 +260,7 @@ future<auth::authenticated_user> auth::password_authenticator::authenticate(
     });
 }
 
-future<> auth::password_authenticator::create(sstring username, const authentication_options& options) {
+future<> password_authenticator::create(sstring username, const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -272,7 +274,7 @@ future<> auth::password_authenticator::create(sstring username, const authentica
     return _qp.process(query, consistency_for_user(username), {hashpw(*options.password), username}).discard_result();
 }
 
-future<> auth::password_authenticator::alter(sstring username,
+future<> password_authenticator::alter(sstring username,
                 const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
@@ -287,7 +289,7 @@ future<> auth::password_authenticator::alter(sstring username,
     return _qp.process(query, consistency_for_user(username), {hashpw(*options.password), username}).discard_result();
 }
 
-future<> auth::password_authenticator::drop(sstring username) {
+future<> password_authenticator::drop(sstring username) {
     auto query = sprint(
             "DELETE %s FROM %s WHERE %s = ?",
             SALTED_HASH,
@@ -297,12 +299,12 @@ future<> auth::password_authenticator::drop(sstring username) {
     return _qp.process(query, consistency_for_user(username), {username}).discard_result();
 }
 
-const auth::resource_set& auth::password_authenticator::protected_resources() const {
+const resource_set& password_authenticator::protected_resources() const {
     static const resource_set resources({make_data_resource(meta::AUTH_KS, meta::roles_table::name)});
     return resources;
 }
 
-::shared_ptr<auth::authenticator::sasl_challenge> auth::password_authenticator::new_sasl_challenge() const {
+::shared_ptr<authenticator::sasl_challenge> password_authenticator::new_sasl_challenge() const {
     class plain_text_password_challenge : public sasl_challenge {
         const password_authenticator& _self;
 
@@ -374,10 +376,10 @@ const auth::resource_set& auth::password_authenticator::protected_resources() co
 }
 
 //
-// Similar in structure to `auth::service::has_existing_legacy_users()`, but trying to generalize the pattern breaks all
+// Similar in structure to `service::has_existing_legacy_users()`, but trying to generalize the pattern breaks all
 // kinds of module boundaries and leaks implementation details.
 //
-future<bool> auth::password_authenticator::has_existing_users() const {
+future<bool> password_authenticator::has_existing_users() const {
     static const auto hash_is_null = [](const cql3::untyped_result_set_row& row) {
         return utf8_type->deserialize(row.get_blob(SALTED_HASH)) == data_value::make_null(utf8_type);
     };
@@ -421,4 +423,6 @@ future<bool> auth::password_authenticator::has_existing_users() const {
             });
         });
     });
+}
+
 }
