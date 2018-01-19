@@ -184,8 +184,8 @@ int main(int argc, char** argv) {
             // Verify that all mutations from memtable went through
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, range);
-                auto mo = mutation_from_streamed_mutation(reader().get0()).get0();
+                auto reader = cache.make_flat_reader(s, range);
+                auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
@@ -201,9 +201,10 @@ int main(int argc, char** argv) {
 
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
-                auto reader = cache.make_reader(s, range);
-                auto mo = reader().get0();
-                assert(mo);
+                auto reader = cache.make_flat_reader(s, range);
+                auto mfopt = reader().get0();
+                assert(mfopt);
+                assert(mfopt->is_partition_start());
             }
 
             std::cout << "Testing reading when memory can't be reclaimed.\n";
@@ -238,7 +239,7 @@ int main(int argc, char** argv) {
                 }
 
                 try {
-                    auto reader = cache.make_reader(s, range);
+                    auto reader = cache.make_flat_reader(s, range);
                     assert(!reader().get0());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
                     new char[evicted_from_cache + logalloc::segment_size];
