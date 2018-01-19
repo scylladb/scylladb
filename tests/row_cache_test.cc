@@ -185,10 +185,10 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
             return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
         })), tracker);
 
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
             .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
             .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
     });
