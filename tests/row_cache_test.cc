@@ -126,7 +126,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         cache_tracker tracker;
         row_cache cache(s, snapshot_source_from_snapshot(make_source_with(m)), tracker);
 
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
             .produces(m)
             .produces_end_of_stream();
     });
