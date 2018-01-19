@@ -254,11 +254,11 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
         }
     })), tracker);
 
-    assert_that(cache.make_reader(s, range))
+    assert_that(cache.make_flat_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
     BOOST_REQUIRE_EQUAL(secondary_calls_count, calls_to_secondary);
-    assert_that(cache.make_reader(s, range))
+    assert_that(cache.make_flat_reader(s, range))
         .produces(m)
         .produces_end_of_stream();
     BOOST_REQUIRE_EQUAL(secondary_calls_count, calls_to_secondary);
