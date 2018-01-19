@@ -503,7 +503,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
 SEASTAR_TEST_CASE(broken_ranges_collection) {
     return reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
-        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_flat_mutation_reader(s, query::full_partition_range));
+        auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, query::full_partition_range));
         return repeat([s, reader] {
             return read_mutation_from_flat_mutation_reader(*reader).then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
@@ -901,7 +901,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -957,7 +957,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 
         {
             auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck1})).build();
-            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1005,7 +1005,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
             {
                 auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_starting_with({ck})).build();
-                assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+                assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                         .produces(m)
                         .produces_end_of_stream();
             }
@@ -1047,7 +1047,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1121,7 +1121,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
 
         {
             auto slice = partition_slice_builder(*s).build();
-            assert_that(sst->as_mutation_source().make_flat_mutation_reader(s, dht::partition_range::make_singular(dk), slice))
+            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
                     .produces(m)
                     .produces_end_of_stream();
         }
@@ -1170,7 +1170,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             mt2->make_flat_reader(s)), 1, s, cfg).get();
         sst->load().get();
 
-        assert_that(sst->as_mutation_source().make_flat_mutation_reader(s))
+        assert_that(sst->as_mutation_source().make_reader(s))
             .produces(m1 + m2)
             .produces_end_of_stream();
     });

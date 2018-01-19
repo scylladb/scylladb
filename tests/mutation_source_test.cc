@@ -73,10 +73,10 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
         mutation_source ms = populate(m.schema(), {m});
 
         flat_mutation_reader sliced_reader =
-            ms.make_flat_mutation_reader(m.schema(), prange, slice_with_ranges);
+            ms.make_reader(m.schema(), prange, slice_with_ranges);
 
         flat_mutation_reader fwd_reader =
-            ms.make_flat_mutation_reader(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
+            ms.make_reader(m.schema(), prange, full_slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
 
         stdx::optional<mutation_rebuilder> builder{};
         struct consumer {
@@ -162,7 +162,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
 
     auto new_stream = [&ms, s, &m] () -> flat_reader_assertions {
         BOOST_TEST_MESSAGE("Creating new streamed_mutation");
-        auto res = assert_that(ms.make_flat_mutation_reader(s,
+        auto res = assert_that(ms.make_reader(s,
             query::full_partition_range,
             s->full_slice(),
             default_priority_class(),
@@ -297,7 +297,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
     mutation_source ms = populate(s, partitions);
 
     auto pr = dht::partition_range::make({keys[0]}, {keys[1]});
-    auto rd = assert_that(ms.make_flat_mutation_reader(s,
+    auto rd = assert_that(ms.make_reader(s,
         pr,
         s->full_slice(),
         default_priority_class(),
@@ -399,7 +399,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        auto rd = assert_that(ms.make_flat_mutation_reader(s, pr, slice));
+        auto rd = assert_that(ms.make_reader(s, pr, slice));
 
         rd.produces_partition_start(m.decorated_key());
         rd.produces_row_with_key(keys[2]);
@@ -418,7 +418,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
             ))
             .build();
 
-        auto rd = assert_that(ms.make_flat_mutation_reader(s, pr, slice));
+        auto rd = assert_that(ms.make_reader(s, pr, slice));
 
         rd.produces_partition_start(m.decorated_key())
             .produces_range_tombstone(rt3, slice.row_ranges(*s, m.key()))
@@ -472,7 +472,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     ));
 
     mutation_source ms = populate(s, std::vector<mutation>({m}));
-    auto rd = assert_that(ms.make_flat_mutation_reader(s,
+    auto rd = assert_that(ms.make_reader(s,
         query::full_partition_range,
         s->full_slice(),
         default_priority_class(),
@@ -556,7 +556,7 @@ static void test_range_queries(populate_fn populate) {
 
     auto test_slice = [&] (dht::partition_range r) {
         BOOST_TEST_MESSAGE(sprint("Testing range %s", r));
-        assert_that(ds.make_flat_mutation_reader(s, r))
+        assert_that(ds.make_reader(s, r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
     };
@@ -741,14 +741,14 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(0)))
             .build();
-        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
+        assert_that(ds.make_reader(s, pr, slice))
             .produces_eos_or_empty_mutation();
     }
 
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_flat_mutation_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
           .produces_row_with_key(ck1)
@@ -759,7 +759,7 @@ static void test_clustering_slices(populate_fn populate) {
     {
         auto slice = partition_slice_builder(*s)
             .build();
-        auto rd = assert_that(ds.make_flat_mutation_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+        auto rd = assert_that(ds.make_reader(s, pr, slice, default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
         rd.produces_partition_start(pk)
           .produces_end_of_stream()
           .fast_forward_to(position_range(position_in_partition::for_key(ck1), position_in_partition::after_key(ck2)))
@@ -772,7 +772,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1)))
             .build();
-        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
+        assert_that(ds.make_reader(s, pr, slice))
             .produces(row1 + row2 + row3 + row4 + row5 + del_1)
             .produces_end_of_stream();
     }
@@ -781,7 +781,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(2)))
             .build();
-        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
+        assert_that(ds.make_reader(s, pr, slice))
             .produces(row6 + row7 + del_1 + del_2, slice.row_ranges(*s, pk.key()))
             .produces_end_of_stream();
     }
@@ -790,7 +790,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(1, 2)))
             .build();
-        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
+        assert_that(ds.make_reader(s, pr, slice))
             .produces(row3 + row4 + del_1)
             .produces_end_of_stream();
     }
@@ -799,7 +799,7 @@ static void test_clustering_slices(populate_fn populate) {
         auto slice = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(make_ck(3)))
             .build();
-        assert_that(ds.make_flat_mutation_reader(s, pr, slice))
+        assert_that(ds.make_reader(s, pr, slice))
             .produces(row8 + del_3)
             .produces_end_of_stream();
     }
@@ -807,12 +807,12 @@ static void test_clustering_slices(populate_fn populate) {
     // Test out-of-range partition keys
     {
         auto pr = dht::partition_range::make_singular(keys[0]);
-        assert_that(ds.make_flat_mutation_reader(s, pr, s->full_slice()))
+        assert_that(ds.make_reader(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
     {
         auto pr = dht::partition_range::make_singular(keys[2]);
-        assert_that(ds.make_flat_mutation_reader(s, pr, s->full_slice()))
+        assert_that(ds.make_reader(s, pr, s->full_slice()))
             .produces_eos_or_empty_mutation();
     }
 }
@@ -832,7 +832,7 @@ static void test_query_only_static_row(populate_fn populate) {
     // fully populate cache
     {
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_flat_mutation_reader(s.schema(), prange, s.schema()->full_slice()))
+        assert_that(ms.make_reader(s.schema(), prange, s.schema()->full_slice()))
             .produces(m1)
             .produces_end_of_stream();
     }
@@ -843,7 +843,7 @@ static void test_query_only_static_row(populate_fn populate) {
             .with_ranges({})
             .build();
         auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-        assert_that(ms.make_flat_mutation_reader(s.schema(), prange, slice))
+        assert_that(ms.make_reader(s.schema(), prange, slice))
             .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
             .produces_end_of_stream();
     }
@@ -858,7 +858,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
     s.add_row(m, cks[0], "data");
 
     auto source = populate(s.schema(), {m});
-    assert_that(source.make_flat_mutation_reader(s.schema(),
+    assert_that(source.make_reader(s.schema(),
                 query::full_partition_range,
                 s.schema()->full_slice(),
                 default_priority_class(),
@@ -907,7 +907,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 
     {
         auto slice = partition_slice_builder(*s).with_range(range).build();
-        auto rd = ds.make_flat_mutation_reader(s, query::full_partition_range, slice);
+        auto rd = ds.make_reader(s, query::full_partition_range, slice);
 
         auto prange = position_range(range);
         mutation result(m1.decorated_key(), m1.schema());
@@ -925,7 +925,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 
     // Check fast_forward_to()
     {
-        auto rd = ds.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+        auto rd = ds.make_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
             nullptr, streamed_mutation::forwarding::yes);
 
         auto prange = position_range(range);
@@ -981,7 +981,7 @@ void run_conversion_to_mutation_reader_tests(populate_fn populate) {
                                          streamed_mutation::forwarding fwd,
                                          mutation_reader::forwarding fwd_mr)
                                {
-                                   return source.make_flat_mutation_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                                   return source.make_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
                                });
     };
     run_mutation_reader_tests(populate_with_flat_mutation_reader_conversion);
@@ -1000,7 +1000,7 @@ void test_next_partition(populate_fn populate) {
         mutations.push_back(std::move(m));
     }
     auto source = populate(s.schema(), mutations);
-    assert_that(source.make_flat_mutation_reader(s.schema()))
+    assert_that(source.make_reader(s.schema()))
         .next_partition() // Does nothing before first partition
         .produces_partition_start(pkeys[0])
         .produces_static_row()

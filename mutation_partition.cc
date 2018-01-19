@@ -1824,7 +1824,7 @@ future<> data_query(
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, query_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
 
-    return do_with(source.make_flat_mutation_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
+    return do_with(source.make_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
                                                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
                    [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
         return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
@@ -1932,7 +1932,7 @@ static do_mutation_query(schema_ptr s,
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
             *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
 
-    return do_with(source.make_flat_mutation_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
+    return do_with(source.make_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
                                                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
                    [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
         return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
@@ -2118,7 +2118,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
                          const query::partition_slice& slice,
                          tracing::trace_state_ptr trace_ptr)
             : range(dht::partition_range::make_singular(dk))
-            , reader(source.make_flat_mutation_reader(s, range, slice, service::get_local_sstable_query_read_priority(),
+            , reader(source.make_reader(s, range, slice, service::get_local_sstable_query_read_priority(),
                                                       std::move(trace_ptr), streamed_mutation::forwarding::no,
                                                       mutation_reader::forwarding::no))
         { }

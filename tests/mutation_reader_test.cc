@@ -1153,7 +1153,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 }
             }
             mutation_source ds = create_sstable(s, muts)->as_mutation_source();
-            readers.push_back(ds.make_flat_mutation_reader(s,
+            readers.push_back(ds.make_reader(s,
                 dht::partition_range::make({keys[0]}, {keys[0]}),
                 s->full_slice(), default_priority_class(), nullptr,
                 streamed_mutation::forwarding::yes,
@@ -1228,8 +1228,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
 
         {
             auto slice = partition_slice_builder(*s).with_range(range).build();
-            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, slice));
-            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, slice));
+            readers.push_back(ds1.make_reader(s, query::full_partition_range, slice));
+            readers.push_back(ds2.make_reader(s, query::full_partition_range, slice));
 
             auto rd = make_combined_reader(s, std::move(readers),
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -1251,9 +1251,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         // Check fast_forward_to()
         {
 
-            readers.push_back(ds1.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds1.make_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
                 nullptr, streamed_mutation::forwarding::yes));
-            readers.push_back(ds2.make_flat_mutation_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
+            readers.push_back(ds2.make_reader(s, query::full_partition_range, s->full_slice(), default_priority_class(),
                 nullptr, streamed_mutation::forwarding::yes));
 
             auto rd = make_combined_reader(s, std::move(readers),

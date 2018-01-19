@@ -312,7 +312,7 @@ public:
     // All parameters captured by reference must remain live as long as returned
     // mutation_reader or streamed_mutation obtained through it are alive.
     flat_mutation_reader
-    make_flat_mutation_reader(
+    make_reader(
         schema_ptr s,
         partition_range range,
         const query::partition_slice& slice,
@@ -325,12 +325,12 @@ public:
     }
 
     flat_mutation_reader
-    make_flat_mutation_reader(
+    make_reader(
         schema_ptr s,
         partition_range range = query::full_partition_range) const
     {
         auto& full_slice = s->full_slice();
-        return this->make_flat_mutation_reader(std::move(s), range, full_slice);
+        return this->make_reader(std::move(s), range, full_slice);
     }
 
     partition_presence_checker make_partition_presence_checker() {

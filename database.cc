@@ -640,7 +640,7 @@ column_family::make_reader(schema_ptr s,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
     if (_virtual_reader) {
-        return (*_virtual_reader).make_flat_mutation_reader(s, range, slice, pc, trace_state, fwd, fwd_mr);
+        return (*_virtual_reader).make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
     std::vector<flat_mutation_reader> readers;
@@ -4247,7 +4247,7 @@ future<> column_family::push_view_replica_updates(const schema_ptr& s, const fro
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), this] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->as_mutation_source().make_flat_mutation_reader(
+            auto reader = this->as_mutation_source().make_reader(
                 base,
                 pk,
                 slice,
