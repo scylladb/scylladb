@@ -2122,15 +2122,14 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
                 populate_range(cache, pr, s.make_ckey_range(6, 10));
 
                 injector.fail_after(i++);
-                auto rd = cache.make_reader(s.schema(), pr, slice);
-                auto smo = rd().get0();
-                BOOST_REQUIRE(smo);
-                auto got = mutation_from_streamed_mutation(*smo).get0();
-                smo = rd().get0();
-                BOOST_REQUIRE(!smo);
+                auto rd = cache.make_flat_reader(s.schema(), pr, slice);
+                auto got_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                BOOST_REQUIRE(got_opt);
+                auto mfopt = rd().get0();
+                BOOST_REQUIRE(!mfopt);
                 injector.cancel();
 
-                assert_that(got).is_equal_to(mut);
+                assert_that(*got_opt).is_equal_to(mut);
 
                 if (!injector.failed()) {
                     break;
