@@ -2602,13 +2602,11 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             cache.update([&] { underlying.apply(m); }, *mt).get();
         };
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
-            auto rd = cache.make_reader(s, pr, slice ? *slice : s->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+        auto make_reader = [&] (const query::partition_slice* slice = nullptr) {
+            auto rd = cache.make_flat_reader(s, pr, slice ? *slice : s->full_slice());
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
@@ -2619,25 +2617,27 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             auto slice1 = partition_slice_builder(*s)
                 .with_range(query::clustering_range::make_singular(ck2))
                 .build();
-            auto sm1 = make_sm(&slice1);
+            auto rd1 = make_reader(&slice1);
 
             apply(m2);
 
             populate_range(cache, pr, query::full_clustering_range);
             check_continuous(cache, pr, query::full_clustering_range);
 
-            assert_that_stream(std::move(sm1))
+            assert_that(std::move(rd1))
+                .produces_partition_start(pk)
                 .produces_row_with_key(ck2)
+                .produces_partition_end()
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s, pr))
+            assert_that(cache.make_flat_reader(s, pr))
                 .produces_compacted(m1 + m2)
                 .produces_end_of_stream();
 
             auto slice34 = partition_slice_builder(*s)
                 .with_range(range_3_4)
                 .build();
-            assert_that(cache.make_reader(s, pr, slice34))
+            assert_that(cache.make_flat_reader(s, pr, slice34))
                 .produces_compacted(m34)
                 .produces_end_of_stream();
         }
