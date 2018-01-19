@@ -2682,7 +2682,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
         populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
         check_continuous(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
 
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces_compacted(m1)
             .produces_end_of_stream();
     });
