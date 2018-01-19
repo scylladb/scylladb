@@ -43,6 +43,7 @@
 #include "auth/authorizer.hh"
 #include "auth/authenticator.hh"
 #include "auth/common.hh"
+#include "auth/resource.hh"
 #include "exceptions/exceptions.hh"
 #include "validation.hh"
 #include "db/system_keyspace.hh"
@@ -261,3 +262,12 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
     assert(!orig._trace_state_ptr);
 }
 
+future<> service::client_state::ensure_exists(const auth::resource& r) const {
+    return _auth_service->exists(r).then([&r](bool exists) {
+        if (!exists) {
+            throw exceptions::invalid_request_exception(sprint("%s doesn't exist.", r));
+        }
+
+        return make_ready_future<>();
+    });
+}

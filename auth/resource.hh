@@ -173,8 +173,6 @@ public:
 
 std::ostream& operator<<(std::ostream&, const data_resource_view&);
 
-bool resource_exists(const data_resource_view&);
-
 ///
 /// A "role" view of \ref resource.
 ///

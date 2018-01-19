@@ -138,6 +138,8 @@ public:
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
     future<std::unordered_set<sstring>> get_roles(stdx::string_view role_name) const;
 
+    future<bool> exists(const resource&) const;
+
     authenticator& underlying_authenticator() {
         return *_authenticator;
     }

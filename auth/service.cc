@@ -272,6 +272,41 @@ future<std::unordered_set<sstring>> service::get_roles(stdx::string_view role_na
     return _role_manager->query_granted(role_name, recursive_role_query::yes);
 }
 
+future<bool> service::exists(const resource& r) const {
+    switch (r.kind()) {
+        case resource_kind::data: {
+            const auto& db = _qp.db().local();
+
+            data_resource_view v(r);
+            const auto keyspace = v.keyspace();
+            const auto table = v.table();
+
+            if (table) {
+                return make_ready_future<bool>(db.has_schema(sstring(*keyspace), sstring(*table)));
+            }
+
+            if (keyspace) {
+                return make_ready_future<bool>(db.has_keyspace(sstring(*keyspace)));
+            }
+
+            return make_ready_future<bool>(true);
+        }
+
+        case resource_kind::role: {
+            role_resource_view v(r);
+            const auto role = v.role();
+
+            if (role) {
+                return _role_manager->exists(*role);
+            }
+
+            return make_ready_future<bool>(true);
+        }
+    }
+
+    return make_ready_future<bool>(false);
+}
+
 //
 // Free functions.
 //

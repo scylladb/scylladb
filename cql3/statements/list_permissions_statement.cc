@@ -82,12 +82,10 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
     return f.then([this, &state] {
         if (_resource) {
             maybe_correct_resource(*_resource, state);
-
-            if ((_resource->kind() == auth::resource_kind::data)
-                    && !auth::resource_exists(auth::data_resource_view(*_resource))) {
-                throw exceptions::invalid_request_exception(sprint("%s doesn't exist", *_resource));
-            }
+            return state.ensure_exists(*_resource);
         }
+
+        return make_ready_future<>();
     }).then([this, &state] {
         const auto& as = *state.get_auth_service();
 

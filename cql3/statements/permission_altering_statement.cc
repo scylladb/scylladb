@@ -76,19 +76,18 @@ future<> cql3::statements::permission_altering_statement::check_access(const ser
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }
+
         maybe_correct_resource(_resource, state);
 
-        if ((_resource.kind() == auth::resource_kind::data)
-                && !auth::resource_exists(auth::data_resource_view(_resource))) {
-            throw exceptions::invalid_request_exception(sprint("%s doesn't exist", _resource));
-        }
-
-        // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject GRANT/REVOKE.
-        return state.ensure_has_permission(auth::permission::AUTHORIZE, _resource).then([this, &state] {
-            return do_for_each(_permissions, [this, &state](auth::permission p) {
-                // TODO: how about we re-write the access check to check a set
-                // right away.
-                return state.ensure_has_permission(p, _resource);
+        return state.ensure_exists(_resource).then([this, &state] {
+            // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject
+            // GRANT/REVOKE.
+            return state.ensure_has_permission(auth::permission::AUTHORIZE, _resource).then([this, &state] {
+                return do_for_each(_permissions, [this, &state](auth::permission p) {
+                    // TODO: how about we re-write the access check to check a set
+                    // right away.
+                    return state.ensure_has_permission(p, _resource);
+                });
             });
         });
     });

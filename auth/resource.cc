@@ -204,23 +204,6 @@ std::ostream& operator<<(std::ostream& os, const data_resource_view& v) {
     return os;
 }
 
-bool resource_exists(const data_resource_view& v) {
-    // TODO(jhaberku) This dependency on global data is a remnant from the previous version, and needs to be fixed in a
-    // dedicated patch.
-    auto& local_db = service::get_local_storage_proxy().get_db().local();
-
-    const auto keyspace = v.keyspace();
-    const auto table = v.table();
-
-    if (table) {
-        return local_db.has_schema(sstring(*keyspace), sstring(*table));
-    } else if (keyspace) {
-        return local_db.has_keyspace(sstring(*keyspace));
-    } else {
-        return true;
-    }
-}
-
 role_resource_view::role_resource_view(const resource& r) : _resource(r) {
     if (r._kind != resource_kind::role) {
         throw resource_kind_mismatch(resource_kind::role, r._kind);
