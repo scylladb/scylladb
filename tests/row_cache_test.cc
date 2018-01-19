@@ -2773,23 +2773,21 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] {
-            auto rd = cache.make_reader(s.schema());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+        auto make_reader = [&] {
+            auto rd = cache.make_flat_reader(s.schema());
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         apply(cache, underlying, m1);
         populate_range(cache, pr, s.make_ckey_range(0, 3));
 
-        auto sm1 = make_sm();
+        auto rd1 = make_reader();
 
         apply(cache, underlying, m2);
 
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces(m1 + m2)
             .produces_end_of_stream();
     });
