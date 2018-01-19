@@ -2197,18 +2197,16 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+        auto make_reader = [&] (const query::partition_slice& slice) {
+            auto rd = cache.make_flat_reader(s.schema(), pr, slice);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
         {
             populate_range(cache, pr, s.make_ckey_range(0, 1));
-            auto rd = make_sm(s.schema()->full_slice()); // to keep current version alive
+            auto rd = make_reader(s.schema()->full_slice()); // to keep current version alive
 
             mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(2), "v");
@@ -2220,28 +2218,32 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
                 .with_range(s.make_ckey_range(0, 5))
                 .build();
 
-            auto sma1 = make_sm(slice1);
-            sma1.produces_row_with_key(s.make_ckey(0));
+            auto rd1 = make_reader(slice1);
+            rd1.produces_partition_start(pk);
+            rd1.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(3, 3));
 
-            auto sma2 = make_sm(slice1);
+            auto rd2 = make_reader(slice1);
 
-            sma2.produces_row_with_key(s.make_ckey(0));
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(2, 3));
 
-            sma2.produces_row_with_key(s.make_ckey(1));
-            sma2.produces_row_with_key(s.make_ckey(2));
-            sma2.produces_row_with_key(s.make_ckey(3));
-            sma2.produces_row_with_key(s.make_ckey(4));
-            sma2.produces_end_of_stream();
+            rd2.produces_row_with_key(s.make_ckey(1));
+            rd2.produces_row_with_key(s.make_ckey(2));
+            rd2.produces_row_with_key(s.make_ckey(3));
+            rd2.produces_row_with_key(s.make_ckey(4));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
-            sma1.produces_row_with_key(s.make_ckey(1));
-            sma1.produces_row_with_key(s.make_ckey(2));
-            sma1.produces_row_with_key(s.make_ckey(3));
-            sma1.produces_row_with_key(s.make_ckey(4));
-            sma1.produces_end_of_stream();
+            rd1.produces_row_with_key(s.make_ckey(1));
+            rd1.produces_row_with_key(s.make_ckey(2));
+            rd1.produces_row_with_key(s.make_ckey(3));
+            rd1.produces_row_with_key(s.make_ckey(4));
+            rd1.produces_partition_end();
+            rd1.produces_end_of_stream();
         }
 
         {
@@ -2252,15 +2254,17 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
                 .with_range(s.make_ckey_range(0, 1))
                 .with_range(s.make_ckey_range(3, 3))
                 .build();
-            auto sma1 = make_sm(slice1);
+            auto rd1 = make_reader(slice1);
 
-            sma1.produces_row_with_key(s.make_ckey(0));
+            rd1.produces_partition_start(pk);
+            rd1.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(2, 4));
 
-            sma1.produces_row_with_key(s.make_ckey(1));
-            sma1.produces_row_with_key(s.make_ckey(3));
-            sma1.produces_end_of_stream();
+            rd1.produces_row_with_key(s.make_ckey(1));
+            rd1.produces_row_with_key(s.make_ckey(3));
+            rd1.produces_partition_end();
+            rd1.produces_end_of_stream();
         }
     });
 }
