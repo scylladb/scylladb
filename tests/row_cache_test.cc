@@ -2355,13 +2355,11 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
-            auto rd = cache.make_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+        auto make_reader = [&] (const query::partition_slice* slice = nullptr) {
+            auto rd = cache.make_flat_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         std::vector<query::clustering_range> ranges;
@@ -2380,21 +2378,21 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
         struct read {
             std::unique_ptr<query::partition_slice> slice;
-            streamed_mutation sm;
+            flat_mutation_reader reader;
             mutation result;
         };
 
         std::vector<read> readers;
         for (auto&& r : ranges) {
             auto slice = std::make_unique<query::partition_slice>(partition_slice_builder(*s.schema()).with_range(r).build());
-            auto sm = make_sm(slice.get());
-            readers.push_back(read{std::move(slice), std::move(sm), mutation(s.schema(), pk)});
+            auto rd = make_reader(slice.get());
+            readers.push_back(read{std::move(slice), std::move(rd), mutation(s.schema(), pk)});
         }
 
         while (!readers.empty()) {
             auto i = readers.begin();
             while (i != readers.end()) {
-                auto mfo = i->sm().get0();
+                auto mfo = i->reader().get0();
                 if (!mfo) {
                     auto&& ranges = i->slice->row_ranges(*s.schema(), pk.key());
                     assert_that(i->result).is_equal_to(m1, ranges);
