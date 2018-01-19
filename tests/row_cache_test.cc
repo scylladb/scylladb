@@ -2170,7 +2170,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
                 populate_range(cache, dht::partition_range::make({pkeys[3]}, {pkeys[5]}));
 
                 injector.fail_after(i++);
-                assert_that(cache.make_reader(s.schema()))
+                assert_that(cache.make_flat_reader(s.schema()))
                     .produces(muts)
                     .produces_end_of_stream();
                 injector.cancel();
