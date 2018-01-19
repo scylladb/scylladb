@@ -227,13 +227,13 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
             return make_counting_reader(make_empty_flat_reader(s), secondary_calls_count);
         })), tracker);
 
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
                 .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
 
         auto range = make_single_partition_range(s, 100);
 
-        assert_that(cache.make_reader(s, range))
+        assert_that(cache.make_flat_reader(s, range))
                 .produces_end_of_stream();
         BOOST_REQUIRE_EQUAL(secondary_calls_count, 1);
     });
