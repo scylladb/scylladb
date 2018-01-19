@@ -44,7 +44,7 @@ elif is_gentoo_variant; then
         systemctl start sntpd.service
     else
         rc-update add ntpd default
-        service ntpd start
+        rc-service ntpd start
     fi
 else
     yum install -y ntp ntpdate || true

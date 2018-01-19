@@ -35,7 +35,7 @@ if is_gentoo_variant; then
        echo "net-analyzer/prometheus-node_exporter does not install systemd service files, please fill a bug if you need them."
     else
         rc-update add prometheus-node_exporter default
-        service prometheus-node_exporter start
+        rc-service prometheus-node_exporter start
     fi
 else
     version=0.14.0
