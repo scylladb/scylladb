@@ -616,7 +616,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
                 .then([dk = std::move(dk), s](foreign_ptr<lw_shared_ptr<reconcilable_result>> res, cache_temperature hit_rate) {
                     auto&& partitions = res->partitions();
                     if (partitions.size() == 0) {
-                        return mutation(std::move(dk), s);
+                        return mutation(s, std::move(dk));
                     } else if (partitions.size() == 1) {
                         return partitions[0].mut().unfreeze(s);
                     } else {
@@ -1233,7 +1233,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     std::vector<mutation> mutations;
     schema_ptr s = keyspaces();
     auto pkey = partition_key::from_singular(*s, keyspace->name());
-    mutation m(pkey, s);
+    mutation m(s, pkey);
     auto ckey = clustering_key_prefix::make_empty();
     m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
 
@@ -1261,13 +1261,13 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
     std::vector<mutation> mutations;
     for (auto&& schema_table : all_tables()) {
         auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
-        mutation m{pkey, schema_table};
+        mutation m{schema_table, pkey};
         m.partition().apply(tombstone{timestamp, gc_clock::now()});
         mutations.emplace_back(std::move(m));
     }
     auto&& schema = db::system_keyspace::built_indexes();
     auto pkey = partition_key::from_exploded(*schema, {utf8_type->decompose(keyspace->name())});
-    mutation m{pkey, schema};
+    mutation m{schema, pkey};
     m.partition().apply(tombstone{timestamp, gc_clock::now()});
     mutations.emplace_back(std::move(m));
     return mutations;
@@ -1379,7 +1379,7 @@ void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, 
     schema_ptr s = types();
     auto pkey = partition_key::from_singular(*s, type->_keyspace);
     auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
-    mutation m{pkey, s};
+    mutation m{s, pkey};
 
     auto field_names_column = s->get_column_definition("field_names");
     auto field_names = make_list_mutation(type->field_names(), *field_names_column, timestamp, [](auto&& name) {
@@ -1411,7 +1411,7 @@ future<std::vector<mutation>> make_drop_type_mutations(lw_shared_ptr<keyspace_me
     schema_ptr s = types();
     auto pkey = partition_key::from_singular(*s, type->_keyspace);
     auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
-    mutation m{pkey, s};
+    mutation m{s, pkey};
     m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(std::move(m));
 
@@ -1527,7 +1527,7 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     schema_ptr s = tables();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
-    mutation m(pkey, scylla_tables());
+    mutation m(scylla_tables(), pkey);
     m.set_clustered_cell(ckey, "version", utils::UUID(table->version()), timestamp);
     return m;
 }
@@ -1541,7 +1541,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
     // we don't keep a property the user has removed
     schema_ptr s = tables();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
-    mutation m{pkey, s};
+    mutation m{s, pkey};
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     m.set_clustered_cell(ckey, "id", table->id(), timestamp);
 
@@ -1567,9 +1567,9 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
 
     add_table_params_to_mutations(m, ckey, table, timestamp);
 
-    mutation columns_mutation(pkey, columns());
-    mutation dropped_columns_mutation(pkey, dropped_columns());
-    mutation indices_mutation(pkey, indexes());
+    mutation columns_mutation(columns(), pkey);
+    mutation dropped_columns_mutation(dropped_columns(), pkey);
+    mutation indices_mutation(indexes(), pkey);
 
     if (with_columns_and_triggers) {
         for (auto&& column : table->v3().all_columns()) {
@@ -1603,7 +1603,7 @@ static void make_update_indices_mutations(
         api::timestamp_type timestamp,
         std::vector<mutation>& mutations)
 {
-    mutation indices_mutation(partition_key::from_singular(*indexes(), old_table->ks_name()), indexes());
+    mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
 
@@ -1633,7 +1633,7 @@ static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, 
     schema_ptr s = dropped_columns();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(name)});
-    mutation m(pkey, s);
+    mutation m(s, pkey);
     add_dropped_column_to_schema_mutation(table, name, dc, timestamp, m);
     mutations.emplace_back(std::move(m));
 }
@@ -1643,7 +1643,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
         api::timestamp_type timestamp,
         bool from_thrift,
         std::vector<mutation>& mutations) {
-    mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
+    mutation columns_mutation(columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
 
     auto diff = difference(old_table->v3().columns_by_name(), new_table->v3().columns_by_name());
 
@@ -1710,7 +1710,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
             api::timestamp_type timestamp,
             std::vector<mutation>& mutations) {
     auto pkey = partition_key::from_singular(*schema_table, table_or_view->ks_name());
-    mutation m{pkey, schema_table};
+    mutation m{schema_table, pkey};
     auto ckey = clustering_key::from_singular(*schema_table, table_or_view->cf_name());
     m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
@@ -1721,7 +1721,7 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
         drop_column_from_schema_mutation(dropped_columns(), table_or_view, column, timestamp, mutations);
     }
     {
-        mutation m{pkey, scylla_tables()};
+        mutation m{scylla_tables(), pkey};
         m.partition().apply_delete(*scylla_tables(), ckey, tombstone(timestamp, gc_clock::now()));
         mutations.emplace_back(m);
     }
@@ -2086,7 +2086,7 @@ static void drop_index_from_schema_mutation(schema_ptr table, const index_metada
     schema_ptr s = indexes();
     auto pkey = partition_key::from_singular(*s, table->ks_name());
     auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), utf8_type->decompose(index.name())});
-    mutation m{pkey, s};
+    mutation m{s, pkey};
     m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.push_back(std::move(m));
 }
@@ -2102,7 +2102,7 @@ static void drop_column_from_schema_mutation(
     auto ckey = clustering_key::from_exploded(*schema_table, {utf8_type->decompose(table->cf_name()),
                                                               utf8_type->decompose(column_name)});
 
-    mutation m{pkey, schema_table};
+    mutation m{schema_table, pkey};
     m.partition().apply_delete(*schema_table, ckey, tombstone(timestamp, gc_clock::now()));
     mutations.emplace_back(m);
 }
@@ -2230,7 +2230,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     // we don't keep a property the user has removed
     schema_ptr s = views();
     auto pkey = partition_key::from_singular(*s, view->ks_name());
-    mutation m{pkey, s};
+    mutation m{s, pkey};
     auto ckey = clustering_key::from_singular(*s, view->cf_name());
 
     m.set_clustered_cell(ckey, "base_table_id", view->view_info()->base_id(), timestamp);
@@ -2243,9 +2243,9 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
     add_table_params_to_mutations(m, ckey, view, timestamp);
 
 
-    mutation columns_mutation(pkey, columns());
-    mutation dropped_columns_mutation(pkey, dropped_columns());
-    mutation indices_mutation(pkey, indexes());
+    mutation columns_mutation(columns(), pkey);
+    mutation dropped_columns_mutation(dropped_columns(), pkey);
+    mutation indices_mutation(indexes(), pkey);
 
     if (with_columns) {
         for (auto&& column : view->v3().all_columns()) {

@@ -109,7 +109,7 @@ public:
         auto idx = boost::irange(0, int(_cfg.partitions / _cfg.sstables));
         return do_for_each(idx.begin(), idx.end(), [this] (auto iteration) {
             auto key = partition_key::from_deeply_exploded(*s, { this->random_key() });
-            auto mut = mutation(key, this->s);
+            auto mut = mutation(this->s, key);
             for (auto& cdef: this->s->regular_columns()) {
                 mut.set_clustered_cell(clustering_key::make_empty(), cdef, atomic_cell::make_live(0, utf8_type->decompose(this->random_column())));
             }

@@ -1491,7 +1491,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             auto schema = _p._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
             auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(_batch_uuid)});
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-            mutation m(key, schema);
+            mutation m(schema, key);
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
@@ -2369,7 +2369,7 @@ public:
             auto it = boost::range::find_if(v, [] (auto&& ver) {
                     return bool(ver.par);
             });
-            auto m = boost::accumulate(v, mutation(it->par->mut().key(*schema), schema), [this, schema] (mutation& m, const version& ver) {
+            auto m = boost::accumulate(v, mutation(schema, it->par->mut().key(*schema)), [this, schema] (mutation& m, const version& ver) {
                 if (ver.par) {
                     m.partition().apply(*schema, ver.par->mut().partition(), *schema);
                 }

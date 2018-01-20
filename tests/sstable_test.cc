@@ -1225,7 +1225,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         auto s = large_partition_schema();
         auto mtp = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
-        mutation m(key, s);
+        mutation m(s, key);
         auto col = s->get_column_definition("t3");
         BOOST_REQUIRE(col && !col->is_static());
         for (char i = 'a'; i <= 'z'; i++) {

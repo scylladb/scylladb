@@ -146,7 +146,7 @@ static void test_streamed_mutation_forwarding_guarantees(populate_fn populate) {
     const int n_keys = 1001;
     assert(!contains_key(n_keys - 1)); // so that we can form a range with position greater than all keys
 
-    mutation m(table.make_pkey(), s);
+    mutation m(s, table.make_pkey());
     std::vector<clustering_key> keys;
     for (int i = 0; i < n_keys; ++i) {
         keys.push_back(table.make_ckey(i));
@@ -284,7 +284,7 @@ static void test_fast_forwarding_across_partitions_to_empty_range(populate_fn po
     unsigned next_ckey = 0;
 
     for (auto&& key : keys) {
-        mutation m(key, s);
+        mutation m(s, key);
         sstring val(sstring::initialized_later(), 1024);
         for (auto i : boost::irange(0u, ckeys_per_part)) {
             table.add_row(m, table.make_ckey(next_ckey + i), val);
@@ -343,7 +343,7 @@ static void test_streamed_mutation_slicing_returns_only_relevant_tombstones(popu
     simple_schema table;
     schema_ptr s = table.schema();
 
-    mutation m(table.make_pkey(), s);
+    mutation m(s, table.make_pkey());
 
     std::vector<clustering_key> keys;
     for (int i = 0; i < 20; ++i) {
@@ -434,7 +434,7 @@ static void test_streamed_mutation_forwarding_across_range_tombstones(populate_f
     simple_schema table;
     schema_ptr s = table.schema();
 
-    mutation m(table.make_pkey(), s);
+    mutation m(s, table.make_pkey());
 
     std::vector<clustering_key> keys;
     for (int i = 0; i < 20; ++i) {
@@ -527,7 +527,7 @@ static void test_range_queries(populate_fn populate) {
         .build();
 
     auto make_partition_mutation = [s] (bytes key) -> mutation {
-        mutation m(partition_key::from_single_value(*s, key), s);
+        mutation m(s, partition_key::from_single_value(*s, key));
         m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
         return m;
     };
@@ -696,13 +696,13 @@ static void test_clustering_slices(populate_fn populate) {
     auto pk = keys[1];
 
     auto make_row = [&] (clustering_key k, int v) {
-        mutation m(pk, s);
+        mutation m(s, pk);
         m.set_clustered_cell(k, "v", data_value(bytes("v1")), v);
         return m;
     };
 
     auto make_delete = [&] (const query::clustering_range& r) {
-        mutation m(pk, s);
+        mutation m(s, pk);
         auto bv_range = bound_view::from_range(r);
         range_tombstone rt(bv_range.first, bv_range.second, tombstone(new_timestamp(), gc_clock::now()));
         m.partition().apply_delete(*s, rt);
@@ -821,7 +821,7 @@ static void test_query_only_static_row(populate_fn populate) {
 
     auto pkeys = s.make_pkeys(1);
 
-    mutation m1(pkeys[0], s.schema());
+    mutation m1(s.schema(), pkeys[0]);
     s.add_static_row(m1, "s1");
     s.add_row(m1, s.make_ckey(0), "v1");
     s.add_row(m1, s.make_ckey(1), "v2");
@@ -853,7 +853,7 @@ void test_streamed_mutation_forwarding_succeeds_with_no_data(populate_fn populat
     auto cks = s.make_ckeys(6);
 
     auto pkey = s.make_pkey();
-    mutation m(pkey, s.schema());
+    mutation m(s.schema(), pkey);
     s.add_row(m, cks[0], "data");
 
     auto source = populate(s.schema(), {m});
@@ -909,7 +909,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
         auto rd = ds.make_reader(s, query::full_partition_range, slice);
 
         auto prange = position_range(range);
-        mutation result(m1.decorated_key(), m1.schema());
+        mutation result(m1.schema(), m1.decorated_key());
 
         rd.consume_pausable([&] (mutation_fragment&& mf) {
             if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
@@ -928,7 +928,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
             nullptr, streamed_mutation::forwarding::yes);
 
         auto prange = position_range(range);
-        mutation result(m1.decorated_key(), m1.schema());
+        mutation result(m1.schema(), m1.decorated_key());
 
         rd.consume_pausable([&](mutation_fragment&& mf) {
             BOOST_REQUIRE(!mf.position().has_clustering_key());
@@ -992,7 +992,7 @@ void test_next_partition(populate_fn populate) {
 
     std::vector<mutation> mutations;
     for (auto key : pkeys) {
-        mutation m(key, s.schema());
+        mutation m(s.schema(), key);
         s.add_static_row(m, "s1");
         s.add_row(m, s.make_ckey(0), "v1");
         s.add_row(m, s.make_ckey(1), "v2");
@@ -1069,12 +1069,12 @@ static mutation_sets generate_mutation_sets() {
 
         // Differing keys
         result.unequal.emplace_back(mutations{
-            mutation(partition_key::from_single_value(*s1, to_bytes(key1)), s1),
-            mutation(partition_key::from_single_value(*s2, to_bytes(key2)), s2)
+            mutation(s1, partition_key::from_single_value(*s1, to_bytes(key1))),
+            mutation(s2, partition_key::from_single_value(*s2, to_bytes(key2)))
         });
 
-        auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes(key1)), s1);
-        auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes(key1)), s2);
+        auto m1 = mutation(s1, partition_key::from_single_value(*s1, to_bytes(key1)));
+        auto m2 = mutation(s2, partition_key::from_single_value(*s2, to_bytes(key1)));
         result.equal.emplace_back(mutations{m1, m2});
 
         clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
@@ -1376,7 +1376,7 @@ public:
         std::uniform_int_distribution<api::timestamp_type> timestamp_dist(api::min_timestamp, api::min_timestamp + 2); // 3 values
 
         auto pkey = partition_key::from_single_value(*_schema, _blobs[0]);
-        mutation m(pkey, _schema);
+        mutation m(_schema, pkey);
 
         std::map<counter_id, std::set<int64_t>> counter_used_clock_values;
         std::vector<counter_id> counter_ids;

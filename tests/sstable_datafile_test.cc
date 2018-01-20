@@ -103,7 +103,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1"), to_bytes("key2")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -241,7 +241,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc"), to_bytes("cde")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -313,7 +313,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_static_cell(s1_col, make_atomic_cell(int32_type->decompose(10)));
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
@@ -386,7 +386,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1), 3600, 3600));
         mt->apply(std::move(m));
 
@@ -461,7 +461,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
         mt->apply(std::move(m));
 
@@ -530,14 +530,14 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         auto c_key2 = clustering_key::from_exploded(*s, {to_bytes("cde")});
 
-        mutation m2(key2, s);
+        mutation m2(s, key2);
         m2.set_clustered_cell(c_key2, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m2));
 
@@ -592,7 +592,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
             mt->apply(std::move(m));
         }
@@ -652,7 +652,7 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -700,7 +700,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -775,7 +775,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
 
-        mutation m(key, s);
+        mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         set_type_impl::mutation set_mut{{ tomb }, {
@@ -791,7 +791,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         m.set_static_cell(static_set_col, static_set_type->serialize_mutation_form(set_mut));
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
-        mutation m2(key2, s);
+        mutation m2(s, key2);
         set_type_impl::mutation set_mut_single{{}, {{ to_bytes("4"), make_atomic_cell({}) }}};
 
         m2.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut_single));
@@ -867,7 +867,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
-        mutation m(key, s);
+        mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
@@ -903,7 +903,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
 
-        mutation m(key, s);
+        mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
@@ -948,7 +948,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
         for (int i = 0; i < 0x80; ++i) {
             sstring k = "key" + to_sstring(i);
             auto key = partition_key::from_exploded(*s, {to_bytes(k)});
-            mutation m(key, s);
+            mutation m(s, key);
 
             auto c_key = clustering_key::make_empty();
             m.set_clustered_cell(c_key, to_bytes("col2"), i, api::max_timestamp);
@@ -1041,7 +1041,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         auto key = partition_key::from_exploded(*s, {to_bytes(k)});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
@@ -1226,7 +1226,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             auto key = partition_key::from_exploded(*s, {to_bytes(k)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
 
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(bytes(min_sstable_size, 'a')));
             mt->apply(std::move(m));
 
@@ -1376,7 +1376,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         auto mtp = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        mutation m(key, s);
+        mutation m(s, key);
 
         auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1")});
         const column_definition& cl2 = *s->get_column_definition("cl2");
@@ -1411,7 +1411,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         auto mtp = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        mutation m(key, s);
+        mutation m(s, key);
 
         auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("cl1"), to_bytes("cl2")});
 
@@ -1445,7 +1445,7 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         auto mtp = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        mutation m(key, s);
+        mutation m(s, key);
 
         auto c_key = clustering_key::make_empty();
 
@@ -1497,7 +1497,7 @@ SEASTAR_TEST_CASE(datafile_generation_40) {
 
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-        mutation m(key, s);
+        mutation m(s, key);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto ca = clustering_key::from_exploded(*s, {to_bytes("a")});
@@ -1545,7 +1545,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-        mutation m(key, s);
+        mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, std::move(c_key), tomb);
@@ -1606,7 +1606,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(bytes(512*1024, 'a')));
         mt->apply(std::move(m));
 
@@ -1645,7 +1645,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
             auto c_key2 = clustering_key::from_exploded(*s, {to_bytes("c2")});
 
-            mutation m(key, s);
+            mutation m(s, key);
 
             std::vector<counter_id> ids;
             std::generate_n(std::back_inserter(ids), 3, counter_id::generate_random);
@@ -2329,20 +2329,20 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         };
 
         auto make_insert = [&] (partition_key key) {
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), next_timestamp());
             return m;
         };
 
         auto make_expiring = [&] (partition_key key, int ttl) {
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)),
                 gc_clock::now().time_since_epoch().count(), gc_clock::duration(ttl));
             return m;
         };
 
         auto make_delete = [&] (partition_key key) {
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(next_timestamp(), gc_clock::now());
             m.partition().apply(tomb);
             return m;
@@ -2554,7 +2554,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
         auto apply_key = [mt, s, &r1_col] (sstring key_to_write) {
             auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(bytes("a")));
             mt->apply(std::move(m));
         };
@@ -2889,7 +2889,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time) {
 
         for (auto i = 0; i < 10; i++) {
             auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-            mutation m(key, s);
+            mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
             last_expiry = (gc_clock::now() + gc_clock::duration(3600 + i)).time_since_epoch().count();
             m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes("a"), 3600 + i, last_expiry));
@@ -2931,7 +2931,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
                 });
             };
 
-            mutation m(partition_key::from_exploded(*s, {to_bytes("deletetest")}), s);
+            mutation m(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
             for (auto i = 0; i < 5; i++) {
                 add_row(m, to_bytes("deletecolumn" + to_sstring(i)), 100);
             }
@@ -2940,7 +2940,7 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
             BOOST_REQUIRE(last_expiry == sst1->get_stats_metadata().max_local_deletion_time);
 
             mt = make_lw_shared<memtable>(s);
-            m = mutation(partition_key::from_exploded(*s, {to_bytes("deletetest")}), s);
+            m = mutation(s, partition_key::from_exploded(*s, {to_bytes("deletetest")}));
             tombstone tomb(api::new_timestamp(), now);
             m.partition().apply_delete(*s, clustering_key::from_exploded(*s, {to_bytes("todelete")}), tomb);
             mt->apply(std::move(m));
@@ -3024,7 +3024,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
         };
 
         auto mt = make_lw_shared<memtable>(s);
-        mutation m(key, s);
+        mutation m(s, key);
         tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(3600));
         m.partition().apply_delete(*s, c_key, tomb);
         mt->apply(std::move(m));
@@ -3185,7 +3185,7 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         };
 
         auto make_insert = [&] (partition_key key, api::timestamp_type t) {
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), t);
             return m;
         };
@@ -3341,14 +3341,14 @@ static void test_min_max_clustering_key(schema_ptr s, std::vector<bytes> explode
         if (!exploded_ck.empty()) {
             c_key = clustering_key::from_exploded(*s, exploded_ck);
         }
-        mutation m(key, s);
+        mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
     };
     auto remove_data = [&mt, &s] (std::vector<bytes>& exploded_pk, std::vector<bytes>&& exploded_ck) {
         auto key = partition_key::from_exploded(*s, exploded_pk);
         auto c_key = clustering_key::from_exploded(*s, exploded_ck);
-        mutation m(key, s);
+        mutation m(s, key);
         tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, c_key, tomb);
         mt->apply(std::move(m));
@@ -3437,7 +3437,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 
         for (auto j = 0; j < 8; j++) {
             auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(j))});
-            mutation m(key, s);
+            mutation m(s, key);
             for (auto i = 100; i < 150; i++) {
                 auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(j) + "ck" + to_sstring(i))});
                 m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
@@ -3451,7 +3451,7 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2) {
 
         mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key9")});
-        mutation m(key, s);
+        mutation m(s, key);
         for (auto i = 101; i < 299; i++) {
             auto c_key = clustering_key::from_exploded(*s, {to_bytes(to_sstring(9) + "ck" + to_sstring(i))});
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
@@ -3484,7 +3484,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
         {
             auto mt = make_lw_shared<memtable>(s);
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(api::new_timestamp(), gc_clock::now());
             m.partition().apply_delete(*s, c_key, tomb);
             mt->apply(std::move(m));
@@ -3496,7 +3496,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
         {
             auto mt = make_lw_shared<memtable>(s);
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
             mt->apply(std::move(m));
             auto sst = make_sstable(s, tmp->path, 2, la, big);
@@ -3507,7 +3507,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
         {
             auto mt = make_lw_shared<memtable>(s);
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
             mt->apply(std::move(m));
             auto sst = make_sstable(s, tmp->path, 3, la, big);
@@ -3519,13 +3519,13 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
         {
             auto mt = make_lw_shared<memtable>(s);
 
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(api::new_timestamp(), gc_clock::now());
             m.partition().apply_delete(*s, c_key, tomb);
             mt->apply(std::move(m));
 
             auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
-            mutation m2(key2, s);
+            mutation m2(s, key2);
             m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
             mt->apply(std::move(m2));
 
@@ -3537,7 +3537,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
         {
             auto mt = make_lw_shared<memtable>(s);
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(api::new_timestamp(), gc_clock::now());
             m.partition().apply(tomb);
             mt->apply(std::move(m));
@@ -3549,7 +3549,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
         {
             auto mt = make_lw_shared<memtable>(s);
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(api::new_timestamp(), gc_clock::now());
             range_tombstone rt(clustering_key_prefix::from_single_value(*s, bytes("a")), clustering_key_prefix::from_single_value(*s, bytes("a")), tomb);
             m.partition().apply_delete(*s, std::move(rt));
@@ -3667,7 +3667,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 100;
-        auto mut = mutation(table.make_pkey("key"), table.schema());
+        auto mut = mutation(table.schema(), table.make_pkey("key"));
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
@@ -3720,7 +3720,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         std::vector<mutation> partitions;
         uint32_t row_id = 0;
         for (auto&& key : keys) {
-            mutation m(key, table.schema());
+            mutation m(table.schema(), key);
             for (unsigned j = 0; j < rows_per_part; ++j) {
                 table.add_row(m, table.make_ckey(row_id++), make_random_string(1));
             }
@@ -3991,7 +3991,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
         };
 
         auto make_delete = [&] (partition_key key) {
-            mutation m(key, s);
+            mutation m(s, key);
             tombstone tomb(next_timestamp(), gc_clock::now());
             m.partition().apply(tomb);
             return m;
@@ -4045,7 +4045,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
 
         auto insert_key = [&] (bytes k, uint32_t ttl, uint32_t expiration_time) {
             auto key = partition_key::from_exploded(*s, {k});
-            mutation m(key, s);
+            mutation m(s, key);
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
             m.set_clustered_cell(c_key, *s->get_column_definition("r1"), make_atomic_cell(bytes("a"), ttl, expiration_time));
             mt->apply(std::move(m));
@@ -4152,7 +4152,7 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
         };
         auto make_insert = [&] (auto p) {
             auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1);
             BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
@@ -4218,7 +4218,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
         for (auto i = 0; i < s->min_index_interval()*1.5; i++) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
             mutations.push_back(std::move(m));
             keys_written++;
@@ -4361,7 +4361,7 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
 
         auto make_insert = [&] (auto p) {
             auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
             BOOST_REQUIRE(m.decorated_key().token() == p.second);
             return m;
@@ -4493,7 +4493,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
         auto dk = dht::global_partitioner().decorate_key(*s, pk);
         auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
-        mutation m(dk, s);
+        mutation m(s, dk);
         m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(1511270919978349, int32_type->decompose(1), { }));
         m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
 
@@ -4517,7 +4517,7 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         const column_definition& col = *s->get_column_definition("value");
 
         auto make_insert = [&] (partition_key key) {
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(bytes(1024, 'a')));
             return m;
         };

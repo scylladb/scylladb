@@ -249,7 +249,7 @@ void test_single_row(int ck,
                      std::deque<expected_row> expected_cache_rows) {
     const int value = 12;
 
-    mutation underlying(PK, SCHEMA);
+    mutation underlying(SCHEMA, PK);
     add_row(underlying, ck, value);
 
     auto m = make_incomplete_mutation();
@@ -560,7 +560,7 @@ void test_two_rows(int ck1,
     const int value1 = 12;
     const int value2 = 34;
 
-    mutation underlying(PK, SCHEMA);
+    mutation underlying(SCHEMA, PK);
     add_row(underlying, ck1, value1);
     add_row(underlying, ck2, value2);
 
@@ -1140,7 +1140,7 @@ void test_three_rows(int ck1,
     const int value2 = 34;
     const int value3 = 56;
 
-    mutation underlying(PK, SCHEMA);
+    mutation underlying(SCHEMA, PK);
     add_row(underlying, ck1, value1);
     add_row(underlying, ck2, value2);
     add_row(underlying, ck3, value3);
@@ -1283,7 +1283,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range1) {
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
 
-        mutation underlying(PK, SCHEMA);
+        mutation underlying(SCHEMA, PK);
         add_row(underlying, ck1, value1);
         add_tombstone(underlying, rt);
 
@@ -1306,7 +1306,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range2) {
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
 
-        mutation underlying(PK, SCHEMA);
+        mutation underlying(SCHEMA, PK);
         add_row(underlying, ck1, value1);
         add_tombstone(underlying, rt);
 
@@ -1329,7 +1329,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range3) {
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
 
-        mutation underlying(PK, SCHEMA);
+        mutation underlying(SCHEMA, PK);
         add_row(underlying, ck1, value1);
         add_tombstone(underlying, rt);
 
@@ -1354,7 +1354,7 @@ SEASTAR_TEST_CASE(test_single_row_and_tombstone_not_cached_single_row_range4) {
         const int value1 = 12;
         range_tombstone rt(make_ck(0), bound_kind::incl_start, make_ck(2), bound_kind::incl_end, new_tombstone());
 
-        mutation underlying(PK, SCHEMA);
+        mutation underlying(SCHEMA, PK);
         add_row(underlying, ck1, value1);
         add_tombstone(underlying, rt);
 

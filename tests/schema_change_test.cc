@@ -111,7 +111,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                 BOOST_TEST_MESSAGE("Applying a no-op tombstone to v1 column definition");
                 auto s = db::schema_tables::columns();
                 auto pkey = partition_key::from_singular(*s, table_schema->ks_name());
-                mutation m(pkey, s);
+                mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
                 m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
                 service::get_local_migration_manager().announce(std::vector<mutation>({m}), true).get();

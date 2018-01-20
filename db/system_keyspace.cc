@@ -1769,7 +1769,7 @@ future<int> increment_and_get_generation() {
 mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates) {
     auto&& schema = db::system_keyspace::size_estimates();
     auto timestamp = api::new_timestamp();
-    mutation m_to_apply{partition_key::from_single_value(*schema, utf8_type->decompose(ks)), schema};
+    mutation m_to_apply{schema, partition_key::from_single_value(*schema, utf8_type->decompose(ks))};
 
     for (auto&& e : estimates) {
         auto ck = clustering_key_prefix(std::vector<bytes>{

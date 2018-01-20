@@ -56,7 +56,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
 
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(100)));
 
             using namespace std::chrono_literals;

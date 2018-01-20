@@ -75,7 +75,7 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
     auto version = mv.schema_version();
     auto pk = mv.key();
 
-    mutation m(std::move(pk), std::move(s));
+    mutation m(std::move(s), std::move(pk));
 
     if (version == m.schema()->version()) {
         auto partition_view = mutation_partition_view::from_view(mv.partition());

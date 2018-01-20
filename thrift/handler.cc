@@ -474,7 +474,7 @@ public:
                 throw make_exception<InvalidRequestException>("Cannot modify Materialized Views directly");
             }
 
-            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
@@ -488,7 +488,7 @@ public:
                 fail(unimplemented::cause::SUPER);
             }
 
-            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
             add_to_mutation(*schema, column, m_to_apply);
             return _query_state.get_client_state().has_schema_access(*schema, auth::permission::MODIFY).then([m_to_apply = std::move(m_to_apply), consistency_level] {
                 return service::get_local_storage_proxy().mutate({std::move(m_to_apply)}, cl_from_thrift(consistency_level), nullptr);
@@ -509,7 +509,7 @@ public:
                 throw make_exception<InvalidRequestException>("Cannot modify Materialized Views directly");
             }
 
-            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
 
             if (column_path.__isset.super_column) {
                 fail(unimplemented::cause::SUPER);
@@ -532,7 +532,7 @@ public:
 
     void remove_counter(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
         with_schema(std::move(cob), std::move(exn_cob), column_path.column_family, [&](schema_ptr schema) {
-            mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key)), schema);
+            mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key)));
 
             auto timestamp = api::new_timestamp();
             if (column_path.__isset.super_column) {
@@ -1889,7 +1889,7 @@ private:
             }
             schemas.emplace_back(schema);
             for (auto&& key_mutations : cf_key.second) {
-                mutation m_to_apply(key_from_thrift(*schema, to_bytes_view(key_mutations.first)), schema);
+                mutation m_to_apply(schema, key_from_thrift(*schema, to_bytes_view(key_mutations.first)));
                 for (auto&& m : key_mutations.second) {
                     add_to_mutation(*schema, m, m_to_apply);
                 }

@@ -55,10 +55,10 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
     return seastar::async([] {
         auto s = make_schema();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        mutation m2(partition_key::from_single_value(*s, "key1"), s);
+        mutation m2(s, partition_key::from_single_value(*s, "key1"));
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
         assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2})))
@@ -71,10 +71,10 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
     return seastar::async([] {
         auto s = make_schema();
 
-        mutation m1(partition_key::from_single_value(*s, "keyB"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "keyB"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        mutation m2(partition_key::from_single_value(*s, "keyA"), s);
+        mutation m2(s, partition_key::from_single_value(*s, "keyA"));
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 2);
 
         auto cr = make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), flat_mutation_reader_from_mutations({m2}));
@@ -89,13 +89,13 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
     return seastar::async([] {
         auto s = make_schema();
 
-        mutation m1(partition_key::from_single_value(*s, "keyA"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "keyA"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        mutation m2(partition_key::from_single_value(*s, "keyB"), s);
+        mutation m2(s, partition_key::from_single_value(*s, "keyB"));
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 1);
 
-        mutation m3(partition_key::from_single_value(*s, "keyC"), s);
+        mutation m3(s, partition_key::from_single_value(*s, "keyC"));
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
         assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1, m2}), flat_mutation_reader_from_mutations({m2, m3})))
@@ -110,13 +110,13 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
     return seastar::async([] {
         auto s = make_schema();
 
-        mutation m1(partition_key::from_single_value(*s, "keyA"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "keyA"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        mutation m2(partition_key::from_single_value(*s, "keyB"), s);
+        mutation m2(s, partition_key::from_single_value(*s, "keyB"));
         m2.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v2")), 1);
 
-        mutation m3(partition_key::from_single_value(*s, "keyC"), s);
+        mutation m3(s, partition_key::from_single_value(*s, "keyC"));
         m3.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v3")), 1);
 
         std::vector<flat_mutation_reader> v;
@@ -130,7 +130,7 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
 }
 
 static mutation make_mutation_with_key(schema_ptr s, dht::decorated_key dk) {
-    mutation m(std::move(dk), s);
+    mutation m(s, std::move(dk));
     m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
     return m;
 }
@@ -209,7 +209,7 @@ SEASTAR_TEST_CASE(test_filtering) {
 SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
     return seastar::async([] {
         auto s = make_schema();
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
         assert_that(make_combined_reader(s, flat_mutation_reader_from_mutations({m1}), make_empty_flat_reader(s)))
@@ -327,7 +327,7 @@ SEASTAR_TEST_CASE(test_sm_fast_forwarding_combining_reader) {
         const auto ckeys = s.make_ckeys(4);
 
         auto make_mutation = [&] (uint32_t n) {
-            mutation m(pkeys[n], s.schema());
+            mutation m(s.schema(), pkeys[n]);
 
             int i{0};
             s.add_row(m, ckeys[i], sprint("val_%i", i));
@@ -411,7 +411,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         const auto ckeys = s.make_ckeys(4);
 
         std::vector<mutation> base_mutations = boost::copy_range<std::vector<mutation>>(
-                pkeys | boost::adaptors::transformed([&s](const auto& k) { return mutation(k, s.schema()); }));
+                pkeys | boost::adaptors::transformed([&s](const auto& k) { return mutation(s.schema(), k); }));
 
         // Data layout:
         //   d[xx]
@@ -511,7 +511,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
 
         // merge c[0] with d[1]
         i = 2;
-        auto c_d_merged = mutation(pkeys[i], s.schema());
+        auto c_d_merged = mutation(s.schema(), pkeys[i]);
         s.add_row(c_d_merged, ckeys[i], sprint("val_c_%i", i), t_row);
         s.add_static_row(c_d_merged, sprint("%i_static_val", i), t_static_row);
 
@@ -532,7 +532,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
 static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) {
     static int i{0};
 
-    mutation m(std::move(dk), s.schema());
+    mutation m(s.schema(), std::move(dk));
     s.add_row(m, s.make_ckey(++i), sprint("val_%i", i));
     return m;
 }
@@ -726,7 +726,7 @@ sstables::shared_sstable create_sstable(simple_schema& sschema, const sstring& p
     mutations.reserve(1 << 14);
 
     for (std::size_t p = 0; p < (1 << 10); ++p) {
-        mutation m(sschema.make_pkey(p), sschema.schema());
+        mutation m(sschema.schema(), sschema.make_pkey(p));
         sschema.add_static_row(m, sprint("%i_static_val", p));
 
         for (std::size_t c = 0; c < (1 << 4); ++c) {
@@ -1171,7 +1171,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
         std::vector<query::clustering_range> ranges = gen.make_random_ranges(3);
 
         auto check_next_partition = [&] (const mutation& expected) {
-            mutation result(expected.decorated_key(), expected.schema());
+            mutation result(expected.schema(), expected.decorated_key());
 
             rd.consume_pausable([&](mutation_fragment&& mf) {
                 position_in_partition::less_compare less(*s);
@@ -1239,7 +1239,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
 
             auto prange = position_range(range);
-            mutation result(m1.decorated_key(), m1.schema());
+            mutation result(m1.schema(), m1.decorated_key());
 
             rd.consume_pausable([&] (mutation_fragment&& mf) {
                 if (mf.position().has_clustering_key() && !mf.range().overlaps(*s, prange.start(), prange.end())) {
@@ -1264,7 +1264,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
 
             auto prange = position_range(range);
-            mutation result(m1.decorated_key(), m1.schema());
+            mutation result(m1.schema(), m1.decorated_key());
 
             rd.consume_pausable([&](mutation_fragment&& mf) {
                 BOOST_REQUIRE(!mf.position().has_clustering_key());
@@ -1308,7 +1308,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
                 int source_index = 0;
                 for (auto&& m : muts) {
                     flat_mutation_reader_from_mutations({m}).consume_pausable([&] (mutation_fragment&& mf) {
-                        mutation mf_m(m.decorated_key(), m.schema());
+                        mutation mf_m(m.schema(), m.decorated_key());
                         mf_m.partition().apply(*s, mf);
                         memtables[source_index++ % memtables.size()]->apply(mf_m);
                         return stop_iteration::no;

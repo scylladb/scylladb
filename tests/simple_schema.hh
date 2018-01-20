@@ -138,7 +138,7 @@ public:
     }
 
     mutation new_mutation(sstring pk) {
-        return mutation(make_pkey(pk), _s);
+        return mutation(_s, make_pkey(pk));
     }
 
     schema_ptr schema() {

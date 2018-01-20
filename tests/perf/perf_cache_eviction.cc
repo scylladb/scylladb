@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
             auto mutator = seastar::async([&] {
                 int32_t ckey_seq = 0;
                 while (!cancelled) {
-                    mutation m(pkey, s);
+                    mutation m(s, pkey);
                     auto ck = clustering_key::from_single_value(*s, data_value(ckey_seq++).serialize());
                     auto&& col = *s->get_column_definition(to_bytes("v"));
                     m.set_clustered_cell(ck, col, atomic_cell::make_live(api::new_timestamp(), data_value(value).serialize()));

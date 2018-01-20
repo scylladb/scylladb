@@ -66,7 +66,7 @@ std::vector<mutation> combined::create_one_row(simple_schema& s)
     return boost::copy_range<std::vector<mutation>>(
         s.make_pkeys(1)
         | boost::adaptors::transformed([&] (auto& dkey) {
-            auto m = mutation(dkey, s.schema());
+            auto m = mutation(s.schema(), dkey);
             m.apply(s.make_row(s.make_ckey(0), "value"));
             return m;
         })
@@ -78,7 +78,7 @@ std::vector<mutation> combined::create_single_stream(simple_schema& s)
     return boost::copy_range<std::vector<mutation>>(
         s.make_pkeys(32)
         | boost::adaptors::transformed([&] (auto& dkey) {
-            auto m = mutation(dkey, s.schema());
+            auto m = mutation(s.schema(), dkey);
             for (auto i = 0; i < 16; i++) {
                 m.apply(s.make_row(s.make_ckey(i), "value"));
             }
@@ -158,7 +158,7 @@ PERF_TEST_F(combined, many_overlapping)
 
 PERF_TEST_F(combined, disjoint_interleaved)
 {
-    return consume_all(make_combined_reader(schema().schema(), 
+    return consume_all(make_combined_reader(schema().schema(),
         boost::copy_range<std::vector<flat_mutation_reader>>(
             disjoint_interleaved_streams()
             | boost::adaptors::transformed([] (auto&& ms) {
@@ -170,7 +170,7 @@ PERF_TEST_F(combined, disjoint_interleaved)
 
 PERF_TEST_F(combined, disjoint_ranges)
 {
-    return consume_all(make_combined_reader(schema().schema(), 
+    return consume_all(make_combined_reader(schema().schema(),
         boost::copy_range<std::vector<flat_mutation_reader>>(
             disjoint_ranges_streams()
             | boost::adaptors::transformed([] (auto&& ms) {

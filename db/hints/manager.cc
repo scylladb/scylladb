@@ -371,7 +371,7 @@ mutation manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<se
     auto& cf = _db.find_column_family(fm.column_family_id());
 
     if (cf.schema()->version() != fm.schema_version()) {
-        mutation m(fm.decorated_key(*cf.schema()), cf.schema());
+        mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
         converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
         fm.partition().accept(cm, v);
 

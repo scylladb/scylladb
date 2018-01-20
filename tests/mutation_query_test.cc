@@ -84,7 +84,7 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
         auto s = make_schema();
         auto now = gc_clock::now();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", data_value(bytes("C:v")), 1);
@@ -137,7 +137,7 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
         auto s = make_schema();
         auto now = gc_clock::now();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
 
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")),
             *s->get_column_definition("v1"),
@@ -185,7 +185,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
         auto s = make_schema();
         auto now = gc_clock::now();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
 
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
@@ -381,7 +381,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
         auto s = make_schema();
         auto now = gc_clock::now();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
 
         m1.partition().apply(tombstone(api::timestamp_type(1), now));
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
@@ -416,7 +416,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
         auto make_ring = [&] (int n) {
             std::vector<mutation> ring;
             while (n--) {
-                ring.push_back(mutation(new_key(), s));
+                ring.push_back(mutation(s, new_key()));
             }
             std::sort(ring.begin(), ring.end(), mutation_decorated_key_less_comparator());
             return ring;
@@ -454,7 +454,7 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             auto now = gc_clock::now();
             auto slice = partition_slice_builder(*s).build();
 
-            mutation m1(partition_key::from_single_value(*s, "key1"), s);
+            mutation m1(s, partition_key::from_single_value(*s, "key1"));
 
             auto src = make_source({m1});
 
@@ -473,7 +473,7 @@ SEASTAR_TEST_CASE(test_result_row_count) {
             r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 2);
 
-            mutation m2(partition_key::from_single_value(*s, "key2"), s);
+            mutation m2(s, partition_key::from_single_value(*s, "key2"));
             m2.set_static_cell("s1", data_value(bytes("S_v1")), 1);
             r = to_data_query_result(mutation_query(s, make_source({m1, m2}), query::full_partition_range, slice, 10000, query::max_partitions, now).get0(), s, slice, inf32, inf32);
             BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
@@ -486,11 +486,11 @@ SEASTAR_TEST_CASE(test_partition_limit) {
         auto s = make_schema();
         auto now = gc_clock::now();
 
-        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        mutation m1(s, partition_key::from_single_value(*s, "key1"));
         m1.partition().apply(tombstone(api::timestamp_type(1), now));
-        mutation m2(partition_key::from_single_value(*s, "key2"), s);
+        mutation m2(s, partition_key::from_single_value(*s, "key2"));
         m2.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
-        mutation m3(partition_key::from_single_value(*s, "key3"), s);
+        mutation m3(s, partition_key::from_single_value(*s, "key3"));
         m3.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
 
         auto src = make_source({m1, m2, m3});

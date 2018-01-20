@@ -52,7 +52,7 @@ static void set_column(mutation& m, const sstring& column_name) {
 
 static
 mutation make_unique_mutation(schema_ptr s) {
-    return mutation(partition_key::from_single_value(*s, make_unique_bytes()), s);
+    return mutation(s, partition_key::from_single_value(*s, make_unique_bytes()));
 }
 
 // Returns a vector of empty mutations in ring order

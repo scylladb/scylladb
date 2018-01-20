@@ -76,7 +76,7 @@ void run_sstable_resharding_test() {
         auto mt = make_lw_shared<memtable>(s);
         auto get_mutation = [mt, s] (sstring key_to_write, auto value) {
             auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
-            mutation m(key, s);
+            mutation m(s, key);
             m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(value)), api::timestamp_type(0));
             return m;
         };

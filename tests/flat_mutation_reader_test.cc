@@ -453,7 +453,7 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
         }));
 
         auto ms = boost::copy_range<std::vector<mutation>>(keys | boost::adaptors::transformed([&] (auto& key) {
-            auto m = mutation(key, s.schema());
+            auto m = mutation(s.schema(), key);
             for (auto& mf : crs) {
                 m.apply(mf);
             }
@@ -537,7 +537,7 @@ public:
     void consume_new_partition(dht::decorated_key dk) {
         BOOST_REQUIRE(!_inside_partition);
         BOOST_REQUIRE(!_previous_position);
-        _mutations.emplace_back(dk, _schema);
+        _mutations.emplace_back(_schema, dk);
         _inside_partition = true;
     }
     void consume(tombstone pt) {
@@ -669,7 +669,7 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
                    }));
 
         auto ms = boost::copy_range < std::vector < mutation >> (keys | boost::adaptors::transformed([&](auto &key) {
-            auto m = mutation(key, s.schema());
+            auto m = mutation(s.schema(), key);
             for (auto &mf : crs) {
                 m.apply(mf);
             }

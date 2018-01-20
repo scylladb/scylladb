@@ -55,7 +55,7 @@ static thread_local api::timestamp_type next_timestamp = 1;
 
 static
 mutation make_new_mutation(schema_ptr s, partition_key key) {
-    mutation m(key, s);
+    mutation m(s, key);
     static thread_local int next_value = 1;
     m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
     return m;
@@ -63,7 +63,7 @@ mutation make_new_mutation(schema_ptr s, partition_key key) {
 
 static inline
 mutation make_new_large_mutation(schema_ptr s, partition_key key) {
-    mutation m(key, s);
+    mutation m(s, key);
     static thread_local int next_value = 1;
     static constexpr size_t blob_size = 64 * 1024;
     std::vector<int> data;
@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             .build();
 
         auto make_partition_mutation = [s] (bytes key) -> mutation {
-            mutation m(partition_key::from_single_value(*s, key), s);
+            mutation m(s, partition_key::from_single_value(*s, key));
             m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
             return m;
         };
@@ -784,7 +784,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
         auto ck7 = make_ck(7);
         memtable_snapshot_source cache_mt(s);
         {
-            mutation m(pk, s);
+            mutation m(s, pk);
             m.set_clustered_cell(ck1, "v", data_value(101), 1);
             m.set_clustered_cell(ck2, "v", data_value(101), 1);
             m.set_clustered_cell(ck4, "v", data_value(101), 1);
@@ -806,7 +806,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
 
         auto mt = make_lw_shared<memtable>(s);
         cache.update([&] {
-            mutation m(pk, s);
+            mutation m(s, pk);
             m.set_clustered_cell(ck3, "v", data_value(101), 1);
             mt->apply(m);
             cache_mt.apply(m);
@@ -1415,7 +1415,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto m1 = m1_;
             m1.partition().make_fully_continuous();
 
-            auto m2 = mutation(m1.decorated_key(), m1.schema());
+            auto m2 = mutation(m1.schema(), m1.decorated_key());
             m2.partition().apply(*s, m2_.partition(), *s);
             m2.partition().make_fully_continuous();
 
@@ -1434,7 +1434,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
             .build();
 
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(0) });
-        mutation m(pk, s);
+        mutation m(s, pk);
         constexpr auto row_count = 8;
         for (auto i = 0; i < row_count; i++) {
             m.set_clustered_cell(clustering_key_prefix::from_single_value(*s, int32_type->decompose(i)),
@@ -1579,7 +1579,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         memtable_snapshot_source underlying(s.schema());
 
         auto mutation_for_key = [&] (dht::decorated_key key) {
-            mutation m(key, s.schema());
+            mutation m(s.schema(), key);
             s.add_row(m, s.make_ckey(0), "val");
             return m;
         };
@@ -1629,20 +1629,20 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
 
         auto pkeys = s.make_pkeys(3);
 
-        mutation m1(pkeys[0], s.schema());
+        mutation m1(s.schema(), pkeys[0]);
         s.add_row(m1, s.make_ckey(0), "v1");
         s.add_row(m1, s.make_ckey(1), "v2");
         s.add_row(m1, s.make_ckey(2), "v3");
         s.add_row(m1, s.make_ckey(3), "v4");
         cache_mt->apply(m1);
 
-        mutation m2(pkeys[1], s.schema());
+        mutation m2(s.schema(), pkeys[1]);
         s.add_row(m2, s.make_ckey(0), "v5");
         s.add_row(m2, s.make_ckey(1), "v6");
         s.add_row(m2, s.make_ckey(2), "v7");
         cache_mt->apply(m2);
 
-        mutation m3(pkeys[2], s.schema());
+        mutation m3(s.schema(), pkeys[2]);
         s.add_row(m3, s.make_ckey(0), "v8");
         s.add_row(m3, s.make_ckey(1), "v9");
         s.add_row(m3, s.make_ckey(2), "v10");
@@ -1696,12 +1696,12 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
 
         auto pkeys = s.make_pkeys(2);
 
-        mutation m1(pkeys[0], s.schema());
+        mutation m1(s.schema(), pkeys[0]);
         s.add_static_row(m1, "val");
         m1.partition().apply(tombstone(s.new_timestamp(), gc_clock::now()));
         cache_mt->apply(m1);
 
-        mutation m2(pkeys[1], s.schema());
+        mutation m2(s.schema(), pkeys[1]);
         s.add_static_row(m2, "val");
         m2.partition().apply(tombstone(s.new_timestamp(), gc_clock::now()));
         cache_mt->apply(m2);
@@ -1751,12 +1751,12 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
         tombstone t0{s.new_timestamp(), gc_clock::now()};
         tombstone t1{s.new_timestamp(), gc_clock::now()};
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         m1.partition().apply_delete(*s.schema(),
             s.make_range_tombstone(query::clustering_range::make(s.make_ckey(0), s.make_ckey(10)), t0));
         underlying.apply(m1);
 
-        mutation m2(pk, s.schema());
+        mutation m2(s.schema(), pk);
         m2.partition().apply_delete(*s.schema(),
             s.make_range_tombstone(query::clustering_range::make(s.make_ckey(3), s.make_ckey(6)), t1));
         m2.partition().apply_delete(*s.schema(),
@@ -1886,7 +1886,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(0), "v0");
         auto rt1 = s.make_range_tombstone(query::clustering_range::make(s.make_ckey(1), s.make_ckey(2)),
             s.new_tombstone());
@@ -1945,7 +1945,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
             sma.produces_row_with_key(s.make_ckey(0));
             sma.produces_range_tombstone(rt1);
 
-            mutation m2(pk, s.schema());
+            mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(7), "v7");
 
             cache.invalidate([&] {
@@ -2038,7 +2038,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation mut(pk, s.schema());
+        mutation mut(s.schema(), pk);
         s.add_row(mut, s.make_ckey(6), "v");
         auto rt = s.make_range_tombstone(s.make_ckey_range(3, 4));
         mut.partition().apply_row_tombstone(*s.schema(), rt);
@@ -2090,7 +2090,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_partition_scan) {
         std::vector<mutation> muts;
 
         for (auto&& pk : pkeys) {
-            mutation mut(pk, s.schema());
+            mutation mut(s.schema(), pk);
             s.add_row(mut, s.make_ckey(1), "v");
             muts.push_back(mut);
             underlying.apply(mut);
@@ -2128,7 +2128,7 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(0), "v");
         s.add_row(m1, s.make_ckey(1), "v");
         underlying.apply(m1);
@@ -2148,7 +2148,7 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
             populate_range(cache, pr, s.make_ckey_range(0, 1));
             auto rd = make_sm(s.schema()->full_slice()); // to keep current version alive
 
-            mutation m2(pk, s.schema());
+            mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(2), "v");
             s.add_row(m2, s.make_ckey(3), "v");
             s.add_row(m2, s.make_ckey(4), "v");
@@ -2213,7 +2213,7 @@ SEASTAR_TEST_CASE(test_concurrent_populating_partition_range_reads) {
         std::vector<mutation> muts;
 
         for (auto&& k : keys) {
-            mutation m(k, s.schema());
+            mutation m(s.schema(), k);
             m.partition().apply(s.new_tombstone());
             muts.push_back(m);
             underlying.apply(m);
@@ -2282,7 +2282,7 @@ SEASTAR_TEST_CASE(test_random_row_population) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(0), "v0");
         s.add_row(m1, s.make_ckey(2), "v2");
         s.add_row(m1, s.make_ckey(4), "v4");
@@ -2326,7 +2326,7 @@ SEASTAR_TEST_CASE(test_random_row_population) {
         for (auto&& r : ranges) {
             auto slice = std::make_unique<query::partition_slice>(partition_slice_builder(*s.schema()).with_range(r).build());
             auto sm = make_sm(slice.get());
-            readers.push_back(read{std::move(slice), std::move(sm), mutation(pk, s.schema())});
+            readers.push_back(read{std::move(slice), std::move(sm), mutation(s.schema(), pk)});
         }
 
         while (!readers.empty()) {
@@ -2386,20 +2386,20 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(2), "v2");
         s.add_row(m1, s.make_ckey(4), "v4");
         underlying.apply(m1);
 
-        mutation m2(pk, s.schema());
+        mutation m2(s.schema(), pk);
         s.add_row(m2, s.make_ckey(6), "v6");
         s.add_row(m2, s.make_ckey(8), "v8");
 
-        mutation m3(pk, s.schema());
+        mutation m3(s.schema(), pk);
         s.add_row(m3, s.make_ckey(10), "v");
         s.add_row(m3, s.make_ckey(12), "v");
 
-        mutation m4(pk, s.schema());
+        mutation m4(s.schema(), pk);
         s.add_row(m4, s.make_ckey(14), "v");
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
@@ -2520,16 +2520,16 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             return tombstone(api::new_timestamp(), gc_clock::now());
         };
 
-        mutation m34(pk, s);
+        mutation m34(s, pk);
         m34.partition().clustered_row(*s, ck3).apply(new_tombstone());
         m34.partition().clustered_row(*s, ck4).apply(new_tombstone());
 
-        mutation m1(pk, s);
+        mutation m1(s, pk);
         m1.partition().clustered_row(*s, ck2).apply(new_tombstone());
         m1.apply(m34);
         underlying.apply(m1);
 
-        mutation m2(pk, s);
+        mutation m2(s, pk);
         m2.partition().clustered_row(*s, ck6).apply(new_tombstone());
 
         row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
@@ -2591,7 +2591,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_for_single_row_reads) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(2), "v2");
         s.add_row(m1, s.make_ckey(4), "v4");
         s.add_row(m1, s.make_ckey(6), "v6");
@@ -2635,14 +2635,14 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         s.add_row(m1, s.make_ckey(0), "v1");
         s.add_row(m1, s.make_ckey(1), "v1");
         s.add_row(m1, s.make_ckey(2), "v1");
         s.add_row(m1, s.make_ckey(3), "v1");
         underlying.apply(m1);
 
-        mutation m2(pk, s.schema());
+        mutation m2(s.schema(), pk);
         s.add_row(m2, s.make_ckey(4), "v2");
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
@@ -2698,14 +2698,14 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         m1.partition().apply_delete(*s.schema(),
             s.make_range_tombstone(s.make_ckey_range(2, 107), s.new_tombstone()));
         s.add_row(m1, s.make_ckey(5), "val");
 
         // What is important here is that it contains a newer range tombstone
         // which trims [2, 107] from m1 into (100, 107], which starts after ck=5.
-        mutation m2(pk, s.schema());
+        mutation m2(s.schema(), pk);
         m2.partition().apply_delete(*s.schema(),
             s.make_range_tombstone(s.make_ckey_range(1, 100), s.new_tombstone()));
 

@@ -152,7 +152,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
         auto&& s = *table.schema();
 
         auto new_mutation = [&] {
-            return mutation(table.make_pkey(0), table.schema());
+            return mutation(table.schema(), table.make_pkey(0));
         };
 
         auto mutation_with_row = [&] (clustering_key ck) {
@@ -216,7 +216,7 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         simple_schema table;
 
         auto new_mutation = [&] {
-            return mutation(table.make_pkey(0), table.schema());
+            return mutation(table.schema(), table.make_pkey(0));
         };
 
         auto mutation_with_row = [&] (clustering_key ck) {

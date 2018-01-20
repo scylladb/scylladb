@@ -76,7 +76,7 @@ struct table {
     }
 
     mutation get_mutation(int key, api::timestamp_type t, const sstring& tag) {
-        mutation m(p_keys[key], s.schema());
+        mutation m(s.schema(), p_keys[key]);
         for (auto ck : c_keys) {
             s.add_row(m, ck, tag, t);
         }

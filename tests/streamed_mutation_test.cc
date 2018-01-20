@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
             for (auto&& m : partitions) {
                 std::vector<mutation> muts;
                 for (int i = 0; i < n; ++i) {
-                    muts.push_back(mutation(m.decorated_key(), m.schema()));
+                    muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
                 fragment_scatterer c{muts};
                 auto sm = streamed_mutation_from_mutation(m);

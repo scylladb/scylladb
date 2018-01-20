@@ -1969,7 +1969,7 @@ class counter_write_query_result_builder {
 public:
     counter_write_query_result_builder(const schema& s) : _schema(s) { }
     void consume_new_partition(const dht::decorated_key& dk) {
-        _mutation = mutation(dk, _schema.shared_from_this());
+        _mutation = mutation(_schema.shared_from_this(), dk);
     }
     void consume(tombstone) { }
     stop_iteration consume(static_row&& sr, tombstone, bool) {

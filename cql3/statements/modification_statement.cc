@@ -159,7 +159,7 @@ modification_statement::get_mutations(distributed<service::storage_proxy>& proxy
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
                     // We know key.start() must be defined since we only allow EQ relations on the partition key.
-                    mutations.emplace_back(std::move(*key.start()->value().key()), s);
+                    mutations.emplace_back(s, std::move(*key.start()->value().key()));
                     auto& m = mutations.back();
                     for (auto&& r : *ranges) {
                         this->add_update_for_key(m, r, *params_ptr);

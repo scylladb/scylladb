@@ -295,7 +295,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
                     cm_it = local_cm.emplace(fm.schema_version(), src_cm).first;
                 }
                 const column_mapping& cm = cm_it->second;
-                mutation m(fm.decorated_key(*cf.schema()), cf.schema());
+                mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
                 converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
                 fm.partition().accept(cm, v);
                 cf.apply(std::move(m));

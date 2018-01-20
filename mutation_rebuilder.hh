@@ -29,7 +29,7 @@ class mutation_rebuilder {
 
 public:
     mutation_rebuilder(dht::decorated_key dk, schema_ptr s)
-        : _m(std::move(dk), std::move(s)), _remaining_limit(0) {
+        : _m(std::move(s), std::move(dk)), _remaining_limit(0) {
     }
 
     stop_iteration consume(tombstone t) {

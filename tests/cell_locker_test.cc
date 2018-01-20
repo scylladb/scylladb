@@ -82,7 +82,7 @@ static auto make_row(const sstring& key, std::initializer_list<sstring> cells) {
 static mutation make_mutation(schema_ptr s, const sstring& pk, std::initializer_list<sstring> static_cells,
                               std::initializer_list<std::pair<sstring, std::initializer_list<sstring>>> clustering_cells)
 {
-    auto m = mutation(partition_key::from_single_value(*s, to_bytes(pk)), s);
+    auto m = mutation(s, partition_key::from_single_value(*s, to_bytes(pk)));
     for (auto&& c : static_cells) {
         m.set_static_cell(to_bytes(c), empty_value, api::new_timestamp());
     }
@@ -132,7 +132,7 @@ SEASTAR_TEST_CASE(test_disjoint_mutations) {
                 make_row("one", { "r3" }),
         });
 
-        auto m3 = mutation(partition_key::from_single_value(*s, to_bytes("1")), s);
+        auto m3 = mutation(s, partition_key::from_single_value(*s, to_bytes("1")));
         m3.partition() = m1.partition();
 
         auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();

@@ -50,10 +50,10 @@ private:
     explicit operator bool() const { return bool(_ptr); }
     friend class optimized_optional<mutation>;
 public:
-    mutation(dht::decorated_key key, schema_ptr schema)
+    mutation(schema_ptr schema, dht::decorated_key key)
         : _ptr(std::make_unique<data>(std::move(key), std::move(schema)))
     { }
-    mutation(partition_key key_, schema_ptr schema)
+    mutation(schema_ptr schema, partition_key key_)
         : _ptr(std::make_unique<data>(std::move(key_), std::move(schema)))
     { }
     mutation(schema_ptr schema, dht::decorated_key key, const mutation_partition& mp)
