@@ -1992,7 +1992,7 @@ class data_read_resolver : public abstract_read_resolver {
             bool _is_reversed;
             clustering_key::less_compare _ck_cmp;
         public:
-            less_compare_clustering(const schema s, bool is_reversed)
+            less_compare_clustering(const schema& s, bool is_reversed)
                 : _is_reversed(is_reversed), _ck_cmp(s) { }
 
             bool operator()(const primary_key& a, const primary_key& b) const {
