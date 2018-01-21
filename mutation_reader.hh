@@ -250,8 +250,6 @@ partition_presence_checker make_default_partition_presence_checker() {
     return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
 }
 
-mutation_reader mutation_reader_from_flat_mutation_reader(flat_mutation_reader&&);
-
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
 // independent mutation_reader.
