@@ -1085,13 +1085,13 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
 
         // Bring ring[2]and ring[3] to cache.
         auto range = dht::partition_range::make_starting_with({ ring[2].ring_position(), true });
-        assert_that(cache.make_reader(s, range))
+        assert_that(cache.make_flat_reader(s, range))
                 .produces(ring[2])
                 .produces(ring[3])
                 .produces_end_of_stream();
 
         // Start reader with full range.
-        auto rd = assert_that(cache.make_reader(s, query::full_partition_range));
+        auto rd = assert_that(cache.make_flat_reader(s, query::full_partition_range));
         rd.produces(ring[0]);
 
         // Invalidate ring[2] and ring[3]
@@ -1104,7 +1104,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
           .produces_end_of_stream();
 
         // Start another reader with full range.
-        rd = assert_that(cache.make_reader(s, query::full_partition_range));
+        rd = assert_that(cache.make_flat_reader(s, query::full_partition_range));
         rd.produces(ring[0])
           .produces(ring[1])
           .produces(ring[2]);
@@ -1116,7 +1116,7 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
           .produces_end_of_stream();
 
         // Start yet another reader with full range.
-        assert_that(cache.make_reader(s, query::full_partition_range))
+        assert_that(cache.make_flat_reader(s, query::full_partition_range))
                 .produces(ring[0])
                 .produces(ring[1])
                 .produces(ring[2])
