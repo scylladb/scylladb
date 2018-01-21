@@ -2931,7 +2931,6 @@ struct query_state {
     bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
     dht::partition_range_vector::const_iterator current_partition_range;
     dht::partition_range_vector::const_iterator range_end;
-    mutation_reader reader;
     uint32_t remaining_rows() const {
         return limit - builder.row_count();
     }
