@@ -143,11 +143,6 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
 // reads from the input readers, in order
 mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning(streamed_mutation);
-mutation_reader make_reader_returning_many(std::vector<mutation>,
-    const query::partition_slice& slice,
-    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range& = query::full_partition_range);
-mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
 
 template <typename MutationFilter>
 GCC6_CONCEPT(

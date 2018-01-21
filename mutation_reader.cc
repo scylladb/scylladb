@@ -576,59 +576,6 @@ mutation_reader make_reader_returning(streamed_mutation m) {
     return make_mutation_reader<reader_returning>(std::move(m));
 }
 
-class reader_returning_many final : public mutation_reader::impl {
-    std::vector<streamed_mutation> _m;
-    dht::partition_range _pr;
-public:
-    reader_returning_many(std::vector<streamed_mutation> m, const dht::partition_range& pr) : _m(std::move(m)), _pr(pr) {
-        boost::range::reverse(_m);
-    }
-    virtual future<streamed_mutation_opt> operator()() override {
-        while (!_m.empty()) {
-            auto& sm = _m.back();
-            dht::ring_position_comparator cmp(*sm.schema());
-            if (_pr.before(sm.decorated_key(), cmp)) {
-                _m.pop_back();
-            } else if (_pr.after(sm.decorated_key(), cmp)) {
-                break;
-            } else {
-                auto m = std::move(sm);
-                _m.pop_back();
-                return make_ready_future<streamed_mutation_opt>(std::move(m));
-            }
-        }
-        return make_ready_future<streamed_mutation_opt>();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-        _pr = pr;
-        return make_ready_future<>();
-    }
-};
-
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const query::partition_slice& slice, streamed_mutation::forwarding fwd) {
-    std::vector<streamed_mutation> streamed_mutations;
-    streamed_mutations.reserve(mutations.size());
-    for (auto& m : mutations) {
-        auto ck_ranges = query::clustering_key_filter_ranges::get_ranges(*m.schema(), slice, m.key());
-        auto mp = mutation_partition(std::move(m.partition()), *m.schema(), std::move(ck_ranges));
-        auto sm = streamed_mutation_from_mutation(mutation(m.schema(), m.decorated_key(), std::move(mp)), fwd);
-        streamed_mutations.emplace_back(std::move(sm));
-    }
-    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), query::full_partition_range);
-}
-
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations, const dht::partition_range& pr) {
-    std::vector<streamed_mutation> streamed_mutations;
-    boost::range::transform(mutations, std::back_inserter(streamed_mutations), [] (auto& m) {
-        return streamed_mutation_from_mutation(std::move(m));
-    });
-    return make_mutation_reader<reader_returning_many>(std::move(streamed_mutations), pr);
-}
-
-mutation_reader make_reader_returning_many(std::vector<streamed_mutation> mutations) {
-    return make_mutation_reader<reader_returning_many>(std::move(mutations), query::full_partition_range);
-}
-
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
