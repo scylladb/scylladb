@@ -1594,7 +1594,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces(m1)
             .produces(m2)
             .produces_end_of_stream();
@@ -1613,7 +1613,7 @@ SEASTAR_TEST_CASE(test_update_invalidating) {
         mt_copy->apply(*mt).get();
         cache.update_invalidating([&] { underlying.apply(mt_copy); }, *mt).get();
 
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces(m5)
             .produces(m1 + m3)
             .produces(m4)
