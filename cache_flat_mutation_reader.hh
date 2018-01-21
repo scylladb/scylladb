@@ -420,12 +420,19 @@ inline
 void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", this, _next_row.position(), _next_row_in_range);
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
-    for (auto&& rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
-        add_to_buffer(std::move(rts));
-        if (is_buffer_full()) {
-            return;
+    for (auto &&rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
+        // This guarantees that rts starts after any emitted clustering_row
+        // and not before any emitted range tombstone.
+        if (rts.trim_front(*_schema, _lower_bound)) {
+            _lower_bound = position_in_partition(rts.position());
+            if (is_buffer_full()) {
+                return;
+            }
+            push_mutation_fragment(std::move(rts));
         }
     }
+    // We add the row to the buffer even when it's full.
+    // This simplifies the code. For more info see #3139.
     if (_next_row_in_range) {
         _last_row = _next_row;
         add_to_buffer(_next_row);
