@@ -735,8 +735,8 @@ void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
 
 void verify_has(row_cache& cache, const mutation& m) {
     auto range = dht::partition_range::make_singular(m.decorated_key());
-    auto reader = cache.make_reader(cache.schema(), range);
-    assert_that(reader().get0()).has_mutation().is_equal_to(m);
+    auto reader = cache.make_flat_reader(cache.schema(), range);
+    assert_that(std::move(reader)).next_mutation().is_equal_to(m);
 }
 
 void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, std::deque<int> expected)
