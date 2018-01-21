@@ -31,26 +31,7 @@
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
 
-// A mutation_reader is an object which allows iterating on mutations: invoke
-// the function to get a future for the next mutation, with an unset optional
-// marking the end of iteration. After calling mutation_reader's operator(),
-// caller must keep the object alive until the returned future is fulfilled.
-//
-// streamed_mutation object emitted by mutation_reader remains valid after the
-// destruction of the mutation_reader.
-//
-// Asking mutation_reader for another streamed_mutation (i.e. invoking
-// mutation_reader::operator()) invalidates all streamed_mutation objects
-// previously produced by that reader.
-//
-// The mutations returned have strictly monotonically increasing keys. Two
-// consecutive mutations never have equal keys.
-//
-// TODO: When iterating over mutations, we don't need a schema_ptr for every
-// single one as it is normally the same for all of them. So "mutation" might
-// not be the optimal object to use here.
-class mutation_reader final {
-public:
+namespace mutation_reader {
     // mutation_reader::forwarding determines whether fast_forward_to() may
     // be used on the mutation reader to change the partition range being
     // read. Enabling forwarding also changes read policy: forwarding::no
@@ -63,46 +44,6 @@ public:
     // a different partition range, while the latter is about skipping
     // inside a large partition.
     using forwarding = flat_mutation_reader::partition_range_forwarding;
-
-    class impl {
-    public:
-        virtual ~impl() {}
-        virtual future<streamed_mutation_opt> operator()() = 0;
-        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) {
-            throw std::bad_function_call();
-        }
-    };
-private:
-    class null_impl final : public impl {
-    public:
-        virtual future<streamed_mutation_opt> operator()() override { throw std::bad_function_call(); }
-    };
-private:
-    std::unique_ptr<impl> _impl;
-public:
-    mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
-    mutation_reader() : mutation_reader(std::make_unique<null_impl>()) {}
-    mutation_reader(mutation_reader&&) = default;
-    mutation_reader(const mutation_reader&) = delete;
-    mutation_reader& operator=(mutation_reader&&) = default;
-    mutation_reader& operator=(const mutation_reader&) = delete;
-    future<streamed_mutation_opt> operator()() { return _impl->operator()(); }
-
-    // Changes the range of partitions to pr. The range can only be moved
-    // forwards. pr.begin() needs to be larger than pr.end() of the previousl
-    // used range (i.e. either the initial one passed to the constructor or a
-    // previous fast forward target).
-    // pr needs to be valid until the reader is destroyed or fast_forward_to()
-    // is called again.
-    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout = db::no_timeout) { return _impl->fast_forward_to(pr, timeout); }
-};
-
-// Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
-template <typename Impl, typename... Args>
-inline
-mutation_reader
-make_mutation_reader(Args&&... args) {
-    return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
 class reader_selector {

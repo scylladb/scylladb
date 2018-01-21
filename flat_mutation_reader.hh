@@ -402,8 +402,6 @@ flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
     return flat_mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
-class mutation_reader;
-
 // Consumes mutation fragments until StopCondition is true.
 // The consumer will stop iff StopCondition returns true, in particular
 // reaching the end of stream alone won't stop the reader.
