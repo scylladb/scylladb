@@ -184,6 +184,12 @@ uint64_t consume_all(mutation_reader& rd) {
     return fragments;
 }
 
+static void assert_partition_start(flat_mutation_reader& rd) {
+    auto mfopt = rd().get0();
+    assert(mfopt);
+    assert(mfopt->is_partition_start());
+}
+
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
     auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
