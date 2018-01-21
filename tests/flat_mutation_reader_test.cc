@@ -30,7 +30,6 @@
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "memtable.hh"
-#include "mutation_reader_assertions.hh"
 #include "row_cache.hh"
 #include "sstables/sstables.hh"
 #include "tmpdir.hh"

@@ -30,7 +30,6 @@
 #include "core/thread.hh"
 #include "memtable.hh"
 #include "mutation_source_test.hh"
-#include "mutation_reader_assertions.hh"
 #include "mutation_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "flat_mutation_reader.hh"

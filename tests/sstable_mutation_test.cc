@@ -31,7 +31,6 @@
 #include "timestamp.hh"
 #include "schema_builder.hh"
 #include "mutation_reader.hh"
-#include "mutation_reader_assertions.hh"
 #include "mutation_source_test.hh"
 #include "partition_slice_builder.hh"
 #include "tmpdir.hh"

@@ -45,7 +45,6 @@
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "sstables/time_window_compaction_strategy.hh"
 #include "mutation_assertions.hh"
-#include "mutation_reader_assertions.hh"
 #include "counters.hh"
 #include "cell_locking.hh"
 #include "simple_schema.hh"

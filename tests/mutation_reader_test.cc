@@ -29,7 +29,6 @@
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
-#include "tests/mutation_reader_assertions.hh"
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"

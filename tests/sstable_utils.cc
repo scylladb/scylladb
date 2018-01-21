@@ -25,7 +25,6 @@
 
 #include "database.hh"
 #include "memtable-sstable.hh"
-#include "mutation_reader_assertions.hh"
 #include "dht/i_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
