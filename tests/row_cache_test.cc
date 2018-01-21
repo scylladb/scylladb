@@ -1772,7 +1772,7 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
                 .with_range(query::clustering_range::make_singular(s.make_ckey(4)))
                 .build();
 
-            assert_that(cache.make_reader(s.schema(), pr, slice))
+            assert_that(cache.make_flat_reader(s.schema(), pr, slice))
                 .produces(m1 + m2, slice.row_ranges(*s.schema(), pk.key()))
                 .produces_end_of_stream();
         }
@@ -1782,14 +1782,11 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
                 .with_range(query::clustering_range::make_starting_with(s.make_ckey(4)))
                 .build();
 
-            assert_that(cache.make_reader(s.schema(), pr, slice))
+            assert_that(cache.make_flat_reader(s.schema(), pr, slice))
                 .produces(m1 + m2, slice.row_ranges(*s.schema(), pk.key()))
                 .produces_end_of_stream();
 
-            auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            assert_that_stream(std::move(*smo)).has_monotonic_positions();
+            assert_that(cache.make_flat_reader(s.schema(), pr, slice)).has_monotonic_positions();
         }
     });
 }
