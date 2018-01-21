@@ -269,23 +269,20 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
 }
 
 static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1) {
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes));
+        streamed_mutation::forwarding::yes);
 
     metrics_snapshot before;
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
-    sm.fast_forward_to(position_range(
+    assert_partition_start(rd);
+
+    rd.fast_forward_to(position_range(
             position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
             position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
-    uint64_t fragments = consume_all(sm);
-
-    fragments += consume_all(rd);
+    uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
 }
