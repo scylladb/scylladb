@@ -204,30 +204,6 @@ flat_mutation_reader make_filtering_reader(flat_mutation_reader rd, MutationFilt
     return make_flat_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
-// Calls the consumer for each element of the reader's stream until end of stream
-// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
-// The consumer should accept mutation as the argument and return stop_iteration.
-// The returned future<> resolves when consumption ends.
-template <typename Consumer>
-inline
-future<> consume(mutation_reader& reader, Consumer consumer) {
-    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
-    using futurator = futurize<std::result_of_t<Consumer(mutation&&)>>;
-
-    return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
-        return repeat([&reader, &c] () {
-            return reader().then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
-                if (!mo) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return futurator::apply(c, std::move(*mo));
-            });
-        });
-    });
-}
-
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
 enum class partition_presence_checker_result {
