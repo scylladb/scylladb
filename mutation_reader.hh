@@ -148,7 +148,6 @@ mutation_reader make_reader_returning_many(std::vector<mutation>,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range& = query::full_partition_range);
 mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
-mutation_reader make_empty_reader();
 
 template <typename MutationFilter>
 GCC6_CONCEPT(

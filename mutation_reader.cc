@@ -629,20 +629,6 @@ mutation_reader make_reader_returning_many(std::vector<streamed_mutation> mutati
     return make_mutation_reader<reader_returning_many>(std::move(mutations), query::full_partition_range);
 }
 
-class empty_reader final : public mutation_reader::impl {
-public:
-    virtual future<streamed_mutation_opt> operator()() override {
-        return make_ready_future<streamed_mutation_opt>();
-    }
-    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) override {
-        return make_ready_future<>();
-    }
-};
-
-mutation_reader make_empty_reader() {
-    return make_mutation_reader<empty_reader>();
-}
-
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
