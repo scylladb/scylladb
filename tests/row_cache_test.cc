@@ -1288,8 +1288,9 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
 
         thr.block();
 
-        auto rd1 = cache.make_reader(s);
-        auto rd1_result = rd1();
+        auto rd1 = cache.make_flat_reader(s);
+        rd1.set_max_buffer_size(1);
+        auto rd1_fill_buffer = rd1.fill_buffer();
 
         sleep(10ms).get();
 
@@ -1298,7 +1299,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
             memtables.apply(mt2);
         });
 
-        auto rd2 = cache.make_reader(s);
+        auto rd2 = cache.make_flat_reader(s);
 
         // rd1, which is in progress, should not prevent forward progress of clear()
         thr.unblock();
@@ -1307,10 +1308,12 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         // Reads started before memtable flush should return previous value, otherwise this test
         // doesn't trigger the conditions it is supposed to protect against.
 
-        assert_that(rd1_result.get0()).has_mutation().is_equal_to(ring[0]);
-        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[1]);
-        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[2]);
-        assert_that(rd1().get0()).has_no_mutation();
+        rd1_fill_buffer.get();
+
+        assert_that(std::move(rd1)).produces(ring[0])
+            .produces(ring2[1])
+            .produces(ring2[2])
+            .produces_end_of_stream();
 
         // Reads started after clear but before previous populations completed
         // should already see the new data
@@ -1321,7 +1324,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
                 .produces_end_of_stream();
 
         // Reads started after clear should see new data
-        assert_that(cache.make_reader(s))
+        assert_that(cache.make_flat_reader(s))
                 .produces(ring2[0])
                 .produces(ring2[1])
                 .produces(ring2[2])
