@@ -287,7 +287,7 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
     return {before, fragments};
 }
 
-static test_result test_reading_all(mutation_reader& rd) {
+static test_result test_reading_all(flat_mutation_reader& rd) {
     metrics_snapshot before;
     return {before, consume_all(rd)};
 }
@@ -299,9 +299,9 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     }
 
     auto slice = sb.build();
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
-        slice));
+        slice);
 
     return test_reading_all(rd);
 }
@@ -313,7 +313,7 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, slice));
+    auto rd = cf.make_reader(cf.schema(), pr, slice);
     return test_reading_all(rd);
 }
 
