@@ -391,6 +391,9 @@ public:
     friend std::ostream& operator<<(std::ostream& out, partition_entry& e);
 };
 
+// Monotonic exception guarantees
+void merge_versions(const schema&, mutation_partition& newer, mutation_partition&& older);
+
 inline partition_version_ref& partition_snapshot::version()
 {
     if (_version) {

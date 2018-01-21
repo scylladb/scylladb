@@ -256,7 +256,9 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         e.upgrade(table.schema(), new_schema);
         rd1 = {};
 
-        assert_entry_equal(new_schema, e, m1 + m2);
+        auto expected = m1 + m2;
+        expected.partition().set_static_row_continuous(false); // apply_to_incomplete()
+        assert_entry_equal(new_schema, e, expected);
 
         auto m3 = mutation_with_row(table.make_ckey(2));
         apply(new_schema, e, m3);
@@ -265,7 +267,9 @@ SEASTAR_TEST_CASE(test_schema_upgrade_preserves_continuity) {
         table.add_static_row(m4, "s_val");
         apply(new_schema, e, m4);
 
-        assert_entry_equal(new_schema, e, m1 + m2 + m3);
+        expected += m3;
+        expected.partition().set_static_row_continuous(false); // apply_to_incomplete()
+        assert_entry_equal(new_schema, e, expected);
       });
     });
 }
@@ -369,7 +373,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
             mutation to_apply = gen();
             to_apply.partition().make_fully_continuous();
 
-            auto e_combined = (m1 + m2 + m3).partition();
+            auto e_combined = (m3 + m2 + m1).partition();
             auto e_continuity = e_combined.get_continuity(*s);
 
             auto expected_to_apply_slice = to_apply.partition();
@@ -377,7 +381,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 expected_to_apply_slice.static_row() = {};
             }
 
-            auto expected = (m1 + m2 + m3).partition();
+            auto expected = (m3 + m2 + m1).partition();
             expected.apply_weak(*s, std::move(expected_to_apply_slice));
 
             // Without active reader
@@ -430,7 +434,7 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
             mutation m2 = gen();
             mutation m3 = gen();
 
-            auto expected = (m1 + m2 + m3).partition();
+            auto expected = (m3 + m2 + m1).partition();
 
             {
                 logalloc::reclaim_lock rl(r);

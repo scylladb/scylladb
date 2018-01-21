@@ -1492,7 +1492,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
             right.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
             result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
 
-            assert_that(left + right).has_same_continuity(result);
+            assert_that(right + left).has_same_continuity(result);
         }
 
         // static row continuity
@@ -1502,8 +1502,8 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
             incomplete.partition().set_static_row_continuous(false);
 
             assert_that(complete + complete).has_same_continuity(complete);
-            assert_that(complete + incomplete).has_same_continuity(complete);
-            assert_that(incomplete + complete).has_same_continuity(incomplete);
+            assert_that(complete + incomplete).has_same_continuity(incomplete);
+            assert_that(incomplete + complete).has_same_continuity(complete);
             assert_that(incomplete + incomplete).has_same_continuity(incomplete);
         }
     });

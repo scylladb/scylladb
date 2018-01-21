@@ -101,11 +101,12 @@ GCC6_CONCEPT(
 requires Mapper<Map, mutation_partition, Result>() && Reducer<Reduce, Result>()
 )
 inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduce) {
-    Result r = map(v->partition());
-    auto it = v->next();
-    while (it) {
+    const partition_version* this_v = &*v;
+    partition_version* it = v->last();
+    Result r = map(it->partition());
+    while (it != this_v) {
+        it = it->prev();
         reduce(r, map(it->partition()));
-        it = it->next();
     }
     return r;
 }
@@ -152,6 +153,11 @@ partition_snapshot::~partition_snapshot() {
     });
 }
 
+void merge_versions(const schema& s, mutation_partition& newer, mutation_partition&& older) {
+    older.apply_monotonically(s, std::move(newer));
+    newer = std::move(older);
+}
+
 void partition_snapshot::merge_partition_versions() {
     if (_version && !_version.is_unique_owner()) {
         auto v = &*_version;
@@ -165,7 +171,7 @@ void partition_snapshot::merge_partition_versions() {
         while (current && !current->is_referenced()) {
             auto next = current->next();
             try {
-                first_used->partition().apply_monotonically(*_schema, std::move(current->partition()));
+                merge_versions(*_schema, first_used->partition(), std::move(current->partition()));
                 current_allocator().destroy(current);
             } catch (...) {
                 // Set _version so that the merge can be retried.
@@ -441,7 +447,11 @@ mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
     mutation_partition mp(to);
     mp.set_static_row_continuous(_version->partition().static_row_continuous());
     for (auto&& v : _version->all_elements()) {
-        mp.apply(*to, v.partition(), *from);
+        auto older = v.partition();
+        if (from->version() != to->version()) {
+            older.upgrade(*from, *to);
+        }
+        merge_versions(*to, mp, std::move(older));
     }
     return mp;
 }
@@ -453,17 +463,7 @@ mutation_partition partition_entry::squashed(const schema& s)
 
 void partition_entry::upgrade(schema_ptr from, schema_ptr to)
 {
-    auto new_version = current_allocator().construct<partition_version>(mutation_partition(to));
-    new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
-    try {
-        for (auto&& v : _version->all_elements()) {
-            new_version->partition().apply(*to, v.partition(), *from);
-        }
-    } catch (...) {
-        current_allocator().destroy(new_version);
-        throw;
-    }
-
+    auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
     auto old_version = &*_version;
     set_version(new_version);
     remove_or_mark_as_unique_owner(old_version);

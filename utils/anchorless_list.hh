@@ -136,6 +136,14 @@ public:
     T* prev() const {
         return static_cast<T*>(_prev);
     }
+    T* last() const {
+        // FIXME: Optimize
+        auto v = this;
+        while (v->_next) {
+            v = v->_next;
+        }
+        return const_cast<T*>(static_cast<const T*>(v));
+    }
     iterator iterator_to() {
         return iterator(this);
     }
