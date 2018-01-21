@@ -1794,11 +1794,8 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
     });
 }
 
-static void consume_all(mutation_reader& rd) {
-    while (streamed_mutation_opt smo = rd().get0()) {
-        auto&& sm = *smo;
-        while (sm().get0()) ;
-    }
+static void consume_all(flat_mutation_reader& rd) {
+    while (auto mfopt = rd().get0()) {}
 }
 
 static void populate_range(row_cache& cache,
@@ -1806,7 +1803,7 @@ static void populate_range(row_cache& cache,
     const query::clustering_range& r = query::full_clustering_range)
 {
     auto slice = partition_slice_builder(*cache.schema()).with_range(r).build();
-    auto rd = cache.make_reader(cache.schema(), pr, slice);
+    auto rd = cache.make_flat_reader(cache.schema(), pr, slice);
     consume_all(rd);
 }
 
