@@ -192,29 +192,26 @@ static void assert_partition_start(flat_mutation_reader& rd) {
 
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no));
+        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
 
     metrics_snapshot before;
-
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
+    assert_partition_start(rd);
 
     uint64_t fragments = 0;
     int ck = 0;
     while (ck < n_rows) {
         if (n_skip) {
-            sm.fast_forward_to(position_range(
+            rd.fast_forward_to(position_range(
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck)),
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck + n_read))
             )).get();
         }
-        fragments += consume_all(sm);
+        fragments += consume_all(rd);
         ck += n_read + n_skip;
     }
 
