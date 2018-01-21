@@ -552,30 +552,6 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
     return make_combined_reader(std::move(schema), std::move(v), fwd_sm, fwd_mr);
 }
 
-class reader_returning final : public mutation_reader::impl {
-    streamed_mutation _m;
-    bool _done = false;
-public:
-    reader_returning(streamed_mutation m) : _m(std::move(m)) {
-    }
-    virtual future<streamed_mutation_opt> operator()() override {
-        if (_done) {
-            return make_ready_future<streamed_mutation_opt>();
-        } else {
-            _done = true;
-            return make_ready_future<streamed_mutation_opt>(std::move(_m));
-        }
-    }
-};
-
-mutation_reader make_reader_returning(mutation m, streamed_mutation::forwarding fwd) {
-    return make_mutation_reader<reader_returning>(streamed_mutation_from_mutation(std::move(m), std::move(fwd)));
-}
-
-mutation_reader make_reader_returning(streamed_mutation m) {
-    return make_mutation_reader<reader_returning>(std::move(m));
-}
-
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {

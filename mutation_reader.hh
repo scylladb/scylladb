@@ -140,9 +140,6 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         flat_mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-// reads from the input readers, in order
-mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-mutation_reader make_reader_returning(streamed_mutation);
 
 template <typename MutationFilter>
 GCC6_CONCEPT(
