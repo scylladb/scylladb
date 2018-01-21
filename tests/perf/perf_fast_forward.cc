@@ -156,8 +156,15 @@ public:
     stop_iteration consume(tombstone) { return stop_iteration::no; }
     template<typename Fragment>
     stop_iteration consume(Fragment&& f) { _fragments++; return stop_iteration::no; }
+    void consume_new_partition(const dht::decorated_key&) {}
+    stop_iteration consume_end_of_partition() { return stop_iteration::no; }
     uint64_t consume_end_of_stream() { return _fragments; }
 };
+
+static
+uint64_t consume_all(flat_mutation_reader& rd) {
+    return rd.consume(counting_consumer()).get0();
+}
 
 static
 uint64_t consume_all(streamed_mutation& sm) {
