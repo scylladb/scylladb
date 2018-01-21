@@ -960,9 +960,9 @@ SEASTAR_TEST_CASE(test_update_failure) {
         memory_hog.clear();
 
         auto has_only = [&] (const partitions_type& partitions) {
-            auto reader = cache.make_reader(s, query::full_partition_range);
+            auto reader = cache.make_flat_reader(s, query::full_partition_range);
             for (int i = 0; i < partition_count; i++) {
-                auto mopt = mutation_from_streamed_mutation(reader().get0()).get0();
+                auto mopt = read_mutation_from_flat_mutation_reader(reader).get0();
                 if (!mopt) {
                     break;
                 }
