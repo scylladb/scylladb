@@ -237,14 +237,9 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
 
     metrics_snapshot before;
-
-    if (n_skip) {
-        // FIXME: fast_forward_to() cannot be called on a reader from which nothing was read yet.
-        consume_all(rd);
-    }
 
     uint64_t fragments = 0;
     while (pk < n) {
