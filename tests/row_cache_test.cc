@@ -1869,6 +1869,68 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
     });
 }
 
+// Reproduces #3139
+SEASTAR_TEST_CASE(test_single_tombstone_with_small_buffer) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        mutation m1(pk, s.schema());
+        auto rt1 = s.make_range_tombstone(query::clustering_range::make(s.make_ckey(1), s.make_ckey(2)),
+            s.new_tombstone());
+        m1.partition().apply_delete(*s.schema(), rt1);
+
+        underlying.apply(m1);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        populate_range(cache);
+
+        auto rd = cache.make_flat_reader(s.schema(), pr);
+        rd.set_max_buffer_size(1);
+
+        assert_that(std::move(rd)).produces_partition_start(pk)
+            .produces_range_tombstone(rt1)
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
+// Reproduces #3139
+SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+
+        auto pk = s.make_pkey(0);
+        auto pr = dht::partition_range::make_singular(pk);
+
+        mutation m1(pk, s.schema());
+        auto rt1 = s.make_range_tombstone(query::clustering_range::make(s.make_ckey(1), s.make_ckey(2)),
+                                          s.new_tombstone());
+        m1.partition().apply_delete(*s.schema(), rt1);
+        s.add_row(m1, s.make_ckey(1), "v1");
+
+        underlying.apply(m1);
+
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        populate_range(cache);
+
+        auto rd = cache.make_flat_reader(s.schema(), pr);
+        rd.set_max_buffer_size(1);
+
+        assert_that(std::move(rd)).produces_partition_start(pk)
+            .produces_range_tombstone(rt1)
+            .produces_row_with_key(s.make_ckey(1));
+    });
+}
+
 //
 // Tests the following case of eviction and re-population:
 //
