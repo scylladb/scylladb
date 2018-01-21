@@ -177,24 +177,6 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
     return fragments;
 }
 
-static
-uint64_t consume_all(streamed_mutation& sm) {
-    return consume(sm, counting_consumer()).get0();
-}
-
-static
-uint64_t consume_all(mutation_reader& rd) {
-    uint64_t fragments = 0;
-    while (1) {
-        streamed_mutation_opt smo = rd().get0();
-        if (!smo) {
-            break;
-        }
-        fragments += consume_all(*smo);
-    }
-    return fragments;
-}
-
 static void assert_partition_start(flat_mutation_reader& rd) {
     auto mfopt = rd().get0();
     assert(mfopt);
