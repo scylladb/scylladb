@@ -1530,7 +1530,7 @@ SEASTAR_TEST_CASE(test_lru) {
         }
 
         auto pr = dht::partition_range::make_ending_with(dht::ring_position(partitions[2].decorated_key()));
-        auto rd = cache.make_reader(s, pr);
+        auto rd = cache.make_flat_reader(s, pr);
         assert_that(std::move(rd))
                 .produces(partitions[0])
                 .produces(partitions[1])
@@ -1541,7 +1541,7 @@ SEASTAR_TEST_CASE(test_lru) {
         BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
 
         pr = dht::partition_range::make_ending_with(dht::ring_position(partitions[4].decorated_key()));
-        rd = cache.make_reader(s, pr);
+        rd = cache.make_flat_reader(s, pr);
         assert_that(std::move(rd))
                 .produces(partitions[0])
                 .produces(partitions[1])
@@ -1550,7 +1550,7 @@ SEASTAR_TEST_CASE(test_lru) {
                 .produces_end_of_stream();
 
         pr = dht::partition_range::make_singular(dht::ring_position(partitions[5].decorated_key()));
-        rd = cache.make_reader(s, pr);
+        rd = cache.make_flat_reader(s, pr);
         assert_that(std::move(rd))
                 .produces(partitions[5])
                 .produces_end_of_stream();
@@ -1558,7 +1558,7 @@ SEASTAR_TEST_CASE(test_lru) {
         ret = tracker.region().evict_some();
         BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
 
-        rd = cache.make_reader(s);
+        rd = cache.make_flat_reader(s);
         assert_that(std::move(rd))
                 .produces(partitions[0])
                 .produces(partitions[1])
