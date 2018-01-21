@@ -3442,7 +3442,7 @@ template<typename FromType>
 std::function<data_value(data_value)> make_castas_fctn_from_integer_to_decimal() {
     return [](data_value from) -> data_value {
         auto val_from = value_cast<FromType>(from);
-        return big_decimal(0, static_cast<boost::multiprecision::cpp_int>(val_from));
+        return big_decimal(1, 10*static_cast<boost::multiprecision::cpp_int>(val_from));
     };
 }
 
