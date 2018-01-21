@@ -1349,13 +1349,11 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto pk = m1.key();
             cache.populate(m1);
 
-            auto sm1 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm1);
-            BOOST_REQUIRE(eq(sm1->key(), pk));
+            auto rd1 = cache.make_flat_reader(s);
+            rd1.fill_buffer().get();
 
-            auto sm2 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm2);
-            BOOST_REQUIRE(eq(sm2->key(), pk));
+            auto rd2 = cache.make_flat_reader(s);
+            rd2.fill_buffer().get();
 
             auto mt1 = make_lw_shared<memtable>(s);
             mt1->apply(m2);
@@ -1373,19 +1371,16 @@ SEASTAR_TEST_CASE(test_mvcc) {
             mt1_copy->apply(*mt1).get();
             cache.update([&] { underlying.apply(mt1_copy); }, *mt1).get();
 
-            auto sm3 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm3);
-            BOOST_REQUIRE(eq(sm3->key(), pk));
+            auto rd3 = cache.make_flat_reader(s);
+            rd3.fill_buffer().get();
 
-            auto sm4 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm4);
-            BOOST_REQUIRE(eq(sm4->key(), pk));
+            auto rd4 = cache.make_flat_reader(s);
+            rd4.fill_buffer().get();
 
-            auto sm5 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm5);
-            BOOST_REQUIRE(eq(sm5->key(), pk));
+            auto rd5 = cache.make_flat_reader(s);
+            rd5.fill_buffer().get();
 
-            assert_that_stream(std::move(*sm3)).has_monotonic_positions();
+            assert_that(std::move(rd3)).has_monotonic_positions();
 
             if (with_active_memtable_reader) {
                 assert(mt1_reader_opt);
@@ -1394,19 +1389,13 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 assert_that(*mt1_reader_mutation).is_equal_to(m2);
             }
 
-            auto m_4 = mutation_from_streamed_mutation(std::move(sm4)).get0();
-            assert_that(*m_4).is_equal_to(m12);
-
-            auto m_1 = mutation_from_streamed_mutation(std::move(sm1)).get0();
-            assert_that(*m_1).is_equal_to(m1);
+            assert_that(std::move(rd4)).produces(m12);
+            assert_that(std::move(rd1)).produces(m1);
 
             cache.invalidate([] {}).get0();
 
-            auto m_2 = mutation_from_streamed_mutation(std::move(sm2)).get0();
-            assert_that(*m_2).is_equal_to(m1);
-
-            auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
-            assert_that(*m_5).is_equal_to(m12);
+            assert_that(std::move(rd2)).produces(m1);
+            assert_that(std::move(rd5)).produces(m12);
         };
 
         for_each_mutation_pair([&] (const mutation& m1_, const mutation& m2_, are_equal) {
