@@ -1153,11 +1153,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         thr.block();
 
         auto m0_range = dht::partition_range::make_singular(ring[0].ring_position());
-        auto rd1 = cache.make_reader(s, m0_range);
-        auto rd1_result = rd1();
+        auto rd1 = cache.make_flat_reader(s, m0_range);
+        rd1.set_max_buffer_size(1);
+        auto rd1_fill_buffer = rd1.fill_buffer();
 
-        auto rd2 = cache.make_reader(s);
-        auto rd2_result = rd2();
+        auto rd2 = cache.make_flat_reader(s);
+        rd2.set_max_buffer_size(1);
+        auto rd2_fill_buffer = rd2.fill_buffer();
 
         sleep(10ms).get();
 
@@ -1166,20 +1168,23 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         mt2_copy->apply(*mt2).get();
         auto update_future = cache.update([&] { memtables.apply(mt2_copy); }, *mt2);
 
-        auto rd3 = cache.make_reader(s);
+        auto rd3 = cache.make_flat_reader(s);
 
         // rd2, which is in progress, should not prevent forward progress of update()
         thr.unblock();
         update_future.get();
 
+        rd1_fill_buffer.get();
+        rd2_fill_buffer.get();
+
         // Reads started before memtable flush should return previous value, otherwise this test
         // doesn't trigger the conditions it is supposed to protect against.
-        assert_that(rd1_result.get0()).has_mutation().is_equal_to(ring[0]);
+        assert_that(std::move(rd1)).produces(ring[0]);
 
-        assert_that(rd2_result.get0()).has_mutation().is_equal_to(ring[0]);
-        assert_that(rd2().get0()).has_mutation().is_equal_to(ring2[1]);
-        assert_that(rd2().get0()).has_mutation().is_equal_to(ring2[2]);
-        assert_that(rd2().get0()).has_no_mutation();
+        assert_that(std::move(rd2)).produces(ring[0])
+            .produces(ring2[1])
+            .produces(ring2[2])
+            .produces_end_of_stream();
 
         // Reads started after update was started but before previous populations completed
         // should already see the new data
@@ -1190,7 +1195,7 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
                 .produces_end_of_stream();
 
         // Reads started after flush should see new data
-        assert_that(cache.make_reader(s))
+        assert_that(cache.make_flat_reader(s))
                 .produces(ring2[0])
                 .produces(ring2[1])
                 .produces(ring2[2])
