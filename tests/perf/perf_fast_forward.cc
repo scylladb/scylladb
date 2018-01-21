@@ -167,6 +167,17 @@ uint64_t consume_all(flat_mutation_reader& rd) {
 }
 
 static
+uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
+    uint64_t fragments = 0;
+    do {
+        fragments += consume_all(rd);
+        rd.next_partition();
+        rd.fill_buffer().get();
+    } while(!rd.is_end_of_stream() || !rd.is_buffer_empty());
+    return fragments;
+}
+
+static
 uint64_t consume_all(streamed_mutation& sm) {
     return consume(sm, counting_consumer()).get0();
 }
