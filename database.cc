@@ -671,7 +671,7 @@ column_family::make_reader(schema_ptr s,
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_flat_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     } else {
         readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
     }

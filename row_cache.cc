@@ -729,13 +729,13 @@ row_cache::make_scanning_reader(const dht::partition_range& range, lw_shared_ptr
 }
 
 flat_mutation_reader
-row_cache::make_flat_reader(schema_ptr s,
-                            const dht::partition_range& range,
-                            const query::partition_slice& slice,
-                            const io_priority_class& pc,
-                            tracing::trace_state_ptr trace_state,
-                            streamed_mutation::forwarding fwd,
-                            mutation_reader::forwarding fwd_mr)
+row_cache::make_reader(schema_ptr s,
+                       const dht::partition_range& range,
+                       const query::partition_slice& slice,
+                       const io_priority_class& pc,
+                       tracing::trace_state_ptr trace_state,
+                       streamed_mutation::forwarding fwd,
+                       mutation_reader::forwarding fwd_mr)
 {
     auto ctx = make_lw_shared<read_context>(*this, s, range, slice, pc, trace_state, fwd, fwd_mr);
 
