@@ -1839,33 +1839,33 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
             ::apply(cache, underlying, m);
         };
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s, query::full_partition_range, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+        auto make_reader = [&] (const query::partition_slice& slice) {
+            auto rd = cache.make_flat_reader(s, query::full_partition_range, slice);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
-        auto sm1 = make_sm(s->full_slice());
+        auto rd1 = make_reader(s->full_slice());
 
         apply(m2);
 
-        auto sm2 = make_sm(s->full_slice());
+        auto rd2 = make_reader(s->full_slice());
 
         auto slice_with_key2 = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(table.make_ckey(2)))
             .build();
-        auto sm3 = make_sm(slice_with_key2);
+        auto rd3 = make_reader(slice_with_key2);
 
         cache.evict();
 
-        sm3.produces_row_with_key(table.make_ckey(2))
+        rd3.produces_partition_start(m1.decorated_key())
+            .produces_row_with_key(table.make_ckey(2))
+            .produces_partition_end()
             .produces_end_of_stream();
 
-        sm1.produces(m1);
-        sm2.produces(m1 + m2);
+        rd1.produces(m1);
+        rd2.produces(m1 + m2);
     });
 }
 
