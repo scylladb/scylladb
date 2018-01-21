@@ -348,6 +348,58 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
     });
 }
 
+SEASTAR_TEST_CASE(test_integers_to_decimal_casts_in_selection_clause) {
+    return do_with_cql_env_thread([&] (auto& e) {
+        e.execute_cql("CREATE TABLE test (a tinyint primary key,"
+                      " b smallint,"
+                      " c int,"
+                      " d bigint,"
+                      " h varint)").get();
+
+        e.execute_cql("INSERT INTO test (a, b, c, d, h) VALUES (1, 2, 3, 4, 8)").get();
+        auto msg = e.execute_cql("SELECT CAST(a AS decimal), "
+                                 "CAST(b AS decimal), "
+                                 "CAST(c AS decimal), "
+                                 "CAST(d AS decimal), "
+                                 "CAST(h AS decimal) FROM test").get0();
+
+        auto cmp = [&](::size_t index, auto x) {
+            auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+            auto val = value_cast<big_decimal>( decimal_type->deserialize(row[index].value()) );
+            BOOST_CHECK_EQUAL(val.unscaled_value(), x*10);
+            BOOST_CHECK_EQUAL(val.scale(), 1);
+        };
+        cmp(0, 1);
+        cmp(1, 2);
+        cmp(2, 3);
+        cmp(3, 4);
+        cmp(4, 8);
+    });
+}
+
+SEASTAR_TEST_CASE(test_integers_to_decimal_casts_with_avg_in_selection_clause) {
+    return do_with_cql_env_thread([&] (auto& e) {
+        e.execute_cql("CREATE TABLE test (a tinyint primary key,"
+                      " b smallint,"
+                      " c int,"
+                      " d bigint,"
+                      " h varint)").get();
+
+        e.execute_cql("INSERT INTO test (a, b, c, d, h) VALUES (1, 2, 3, 4, 8)").get();
+        e.execute_cql("INSERT INTO test (a, b, c, d, h) VALUES (2, 3, 4, 5, 9)").get();
+        auto msg = e.execute_cql("SELECT CAST(avg(CAST(a AS decimal)) AS text), "
+                                 "CAST(avg(CAST(b AS decimal)) AS text), "
+                                 "CAST(avg(CAST(c AS decimal)) AS text), "
+                                 "CAST(avg(CAST(d AS decimal)) AS text), "
+                                 "CAST(avg(CAST(h AS decimal)) AS text) FROM test").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({{utf8_type->decompose("1.5")},
+                                                              {utf8_type->decompose("2.5")},
+                                                              {utf8_type->decompose("3.5")},
+                                                              {utf8_type->decompose("4.5")},
+                                                              {utf8_type->decompose("8.5")}});
+    });
+}
+
 SEASTAR_TEST_CASE(test_time_casts_in_selection_clause) {
     return do_with_cql_env_thread([&] (auto& e) {
         e.execute_cql("CREATE TABLE test (a timeuuid primary key,"
