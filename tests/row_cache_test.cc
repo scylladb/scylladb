@@ -717,13 +717,12 @@ SEASTAR_TEST_CASE(test_eviction) {
 
 bool has_key(row_cache& cache, const dht::decorated_key& key) {
     auto range = dht::partition_range::make_singular(key);
-    auto reader = cache.make_reader(cache.schema(), range);
-    auto mo = reader().get0();
+    auto reader = cache.make_flat_reader(cache.schema(), range);
+    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
     if (!bool(mo)) {
         return false;
     }
-    auto m = mutation_from_streamed_mutation(*mo).get0();
-    return !m.partition().empty();
+    return !mo->partition().empty();
 }
 
 void verify_has(row_cache& cache, const dht::decorated_key& key) {
