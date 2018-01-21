@@ -340,10 +340,10 @@ static test_result slice_partitions(column_family& cf, int n, int offset = 0, in
         dht::partition_range::bound(keys[std::min(n, offset + n_read) - 1], true)
     );
 
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
     metrics_snapshot before;
 
-    uint64_t fragments = consume_all(rd);
+    uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
 }
