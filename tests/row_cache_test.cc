@@ -740,14 +740,13 @@ void verify_has(row_cache& cache, const mutation& m) {
     assert_that(reader().get0()).has_mutation().is_equal_to(m);
 }
 
-void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
+void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, std::deque<int> expected)
 {
     clustering_key::equality ck_eq(*s);
 
-    auto smopt = reader().get0();
-    BOOST_REQUIRE(smopt);
-    auto mfopt = (*smopt)().get0();
-    while (mfopt) {
+    auto mfopt = reader().get0();
+    BOOST_REQUIRE(mfopt->is_partition_start());
+    while ((mfopt = reader().get0()) && !mfopt->is_end_of_partition()) {
         if (mfopt->is_clustering_row()) {
             BOOST_REQUIRE(!expected.empty());
             auto expected_ck = expected.front();
@@ -758,9 +757,9 @@ void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::de
                 BOOST_FAIL(sprint("Expected %s, but got %s", ck, cr.key()));
             }
         }
-        mfopt = (*smopt)().get0();
     }
     BOOST_REQUIRE(expected.empty());
+    BOOST_REQUIRE(mfopt && mfopt->is_end_of_partition());
     BOOST_REQUIRE(!reader().get0());
 }
 
@@ -800,7 +799,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
                 .with_range(query::clustering_range::make_ending_with(ck1))
                 .with_range(query::clustering_range::make_starting_with(ck4))
                 .build();
-            auto reader = cache.make_reader(s, range, slice);
+            auto reader = cache.make_flat_reader(s, range, slice);
             test_sliced_read_row_presence(std::move(reader), s, {1, 4, 7});
         }
 
@@ -813,7 +812,7 @@ SEASTAR_TEST_CASE(test_single_partition_update) {
         }, *mt).get();
 
         {
-            auto reader = cache.make_reader(s, range);
+            auto reader = cache.make_flat_reader(s, range);
             test_sliced_read_row_presence(std::move(reader), s, {1, 2, 3, 4, 7});
         }
 
@@ -1450,21 +1449,21 @@ SEASTAR_TEST_CASE(test_slicing_mutation_reader) {
         auto run_tests = [&] (auto& ps, std::deque<int> expected) {
             cache.invalidate([] {}).get0();
 
-            auto reader = cache.make_reader(s, query::full_partition_range, ps);
+            auto reader = cache.make_flat_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
-            reader = cache.make_reader(s, query::full_partition_range, ps);
+            reader = cache.make_flat_reader(s, query::full_partition_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
             auto dk = dht::global_partitioner().decorate_key(*s, pk);
             auto singular_range = dht::partition_range::make_singular(dk);
 
-            reader = cache.make_reader(s, singular_range, ps);
+            reader = cache.make_flat_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
 
             cache.invalidate([] {}).get0();
 
-            reader = cache.make_reader(s, singular_range, ps);
+            reader = cache.make_flat_reader(s, singular_range, ps);
             test_sliced_read_row_presence(std::move(reader), s, expected);
         };
 
