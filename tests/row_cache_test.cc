@@ -1712,23 +1712,23 @@ SEASTAR_TEST_CASE(test_cache_populates_partition_tombstone) {
         // singular range case
         {
             auto prange = dht::partition_range::make_singular(dht::ring_position(m1.decorated_key()));
-            assert_that(cache.make_reader(s.schema(), prange))
+            assert_that(cache.make_flat_reader(s.schema(), prange))
                 .produces(m1)
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s.schema(), prange)) // over populated
+            assert_that(cache.make_flat_reader(s.schema(), prange)) // over populated
                 .produces(m1)
                 .produces_end_of_stream();
         }
 
         // range scan case
         {
-            assert_that(cache.make_reader(s.schema()))
+            assert_that(cache.make_flat_reader(s.schema()))
                 .produces(m1)
                 .produces(m2)
                 .produces_end_of_stream();
 
-            assert_that(cache.make_reader(s.schema())) // over populated
+            assert_that(cache.make_flat_reader(s.schema())) // over populated
                 .produces(m1)
                 .produces(m2)
                 .produces_end_of_stream();
