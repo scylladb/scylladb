@@ -479,8 +479,6 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
-flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
-
 inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
 
 template <typename Underlying>
