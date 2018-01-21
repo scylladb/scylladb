@@ -1965,13 +1965,11 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
-            auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+        auto make_reader = [&] (const query::partition_slice& slice) {
+            auto rd = cache.make_flat_reader(s.schema(), pr, slice);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
         // populate using reader in same snapshot
@@ -1982,30 +1980,35 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
                 .with_range(query::clustering_range::make_starting_with(s.make_ckey(7)))
                 .build();
 
-            auto sma2 = make_sm(slice_after_7);
+            auto rd2 = make_reader(slice_after_7);
 
-            auto sma = make_sm(s.schema()->full_slice());
-            sma.produces_row_with_key(s.make_ckey(0));
-            sma.produces_range_tombstone(rt1);
+            auto rd = make_reader(s.schema()->full_slice());
+            rd.produces_partition_start(pk);
+            rd.produces_row_with_key(s.make_ckey(0));
+            rd.produces_range_tombstone(rt1);
 
             cache.evict();
 
-            sma2.produces_row_with_key(s.make_ckey(8));
-            sma2.produces_end_of_stream();
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(8));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
-            sma.produces_range_tombstone(rt2);
-            sma.produces_range_tombstone(rt3);
-            sma.produces_row_with_key(s.make_ckey(8));
-            sma.produces_end_of_stream();
+            rd.produces_range_tombstone(rt2);
+            rd.produces_range_tombstone(rt3);
+            rd.produces_row_with_key(s.make_ckey(8));
+            rd.produces_partition_end();
+            rd.produces_end_of_stream();
         }
 
         // populate using reader created after invalidation
         {
             populate_range(cache);
 
-            auto sma = make_sm(s.schema()->full_slice());
-            sma.produces_row_with_key(s.make_ckey(0));
-            sma.produces_range_tombstone(rt1);
+            auto rd = make_reader(s.schema()->full_slice());
+            rd.produces_partition_start(pk);
+            rd.produces_row_with_key(s.make_ckey(0));
+            rd.produces_range_tombstone(rt1);
 
             mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(7), "v7");
@@ -2016,10 +2019,11 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
             populate_range(cache, pr, query::clustering_range::make_starting_with(s.make_ckey(5)));
 
-            sma.produces_range_tombstone(rt2);
-            sma.produces_range_tombstone(rt3);
-            sma.produces_row_with_key(s.make_ckey(8));
-            sma.produces_end_of_stream();
+            rd.produces_range_tombstone(rt2);
+            rd.produces_range_tombstone(rt3);
+            rd.produces_row_with_key(s.make_ckey(8));
+            rd.produces_partition_end();
+            rd.produces_end_of_stream();
         }
     });
 }
