@@ -967,9 +967,3 @@ mutation_reader mutation_reader_from_flat_mutation_reader(flat_mutation_reader&&
     };
     return make_mutation_reader<converting_reader>(std::move(mr));
 }
-
-future<streamed_mutation_opt> streamed_mutation_from_flat_mutation_reader(flat_mutation_reader&& r) {
-    return do_with(mutation_reader_from_flat_mutation_reader(std::move(r)), [] (auto&& rd) {
-        return rd();
-    });
-}
