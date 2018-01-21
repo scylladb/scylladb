@@ -1657,7 +1657,7 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
                 .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
                 .build();
             auto prange = dht::partition_range::make_ending_with(dht::ring_position(m1.decorated_key()));
-            assert_that(cache.make_reader(s.schema(), prange, slice))
+            assert_that(cache.make_flat_reader(s.schema(), prange, slice))
                 .produces(m1, slice.row_ranges(*s.schema(), m1.key()))
                 .produces_end_of_stream();
         }
@@ -1668,20 +1668,20 @@ SEASTAR_TEST_CASE(test_scan_with_partial_partitions) {
                 .with_range(query::clustering_range::make_ending_with(s.make_ckey(1)))
                 .build();
             auto prange = dht::partition_range::make_singular(m3.decorated_key());
-            assert_that(cache.make_reader(s.schema(), prange, slice))
+            assert_that(cache.make_flat_reader(s.schema(), prange, slice))
                 .produces(m3, slice.row_ranges(*s.schema(), m3.key()))
                 .produces_end_of_stream();
         }
 
         // full scan
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces(m1)
             .produces(m2)
             .produces(m3)
             .produces_end_of_stream();
 
         // full scan after full scan
-        assert_that(cache.make_reader(s.schema()))
+        assert_that(cache.make_flat_reader(s.schema()))
             .produces(m1)
             .produces(m2)
             .produces(m3)
