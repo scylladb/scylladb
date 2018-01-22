@@ -29,7 +29,6 @@
 #include "flat_mutation_reader.hh"
 
 class mutation;
-class streamed_mutation;
 
 namespace ser {
 class mutation_view;

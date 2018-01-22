@@ -285,17 +285,6 @@ position_range::position_range(query::clustering_range&& range)
     : position_range(range) // FIXME: optimize
 { }
 
-void streamed_mutation::impl::forward_buffer_to(const position_in_partition& pos) {
-    _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos] (mutation_fragment& f) {
-        return !f.relevant_for_range_assuming_after(*_schema, pos);
-    }), _buffer.end());
-
-    _buffer_size = 0;
-    for (auto&& f : _buffer) {
-        _buffer_size += f.memory_usage();
-    }
-}
-
 bool mutation_fragment::relevant_for_range(const schema& s, position_in_partition_view pos) const {
     position_in_partition::less_compare cmp(s);
     if (!cmp(position(), pos)) {
