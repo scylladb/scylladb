@@ -1938,9 +1938,10 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count, uint3
 
 static void seal_summary(summary& s,
         std::experimental::optional<key>&& first_key,
-        std::experimental::optional<key>&& last_key) {
+        std::experimental::optional<key>&& last_key,
+        const index_sampling_state& state) {
     s.header.size = s.entries.size();
-    s.header.size_at_full_sampling = s.header.size;
+    s.header.size_at_full_sampling = sstable::get_size_at_full_sampling(state.partition_count, s.header.min_index_interval);
 
     s.header.memory_size = s.header.size * sizeof(uint32_t);
     for (auto& e: s.entries) {
@@ -2034,18 +2035,19 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 }
 
 void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost) {
+        uint64_t index_offset, index_sampling_state& state) {
+    state.partition_count++;
     // generates a summary entry when possible (= keep summary / data size ratio within reasonable limits)
-    if (data_offset >= next_data_offset_to_write_summary) {
+    if (data_offset >= state.next_data_offset_to_write_summary) {
         auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
-        next_data_offset_to_write_summary += summary_byte_cost * entry_size;
+        state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
         s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
     }
 }
 
-void components_writer::maybe_add_summary_entry(const dht::token& token,  bytes_view key) {
+void components_writer::maybe_add_summary_entry(const dht::token& token, bytes_view key) {
     return maybe_add_summary_entry(_sst._components->summary, token, key, get_offset(),
-        _index.offset(), _next_data_offset_to_write_summary, _summary_byte_cost);
+        _index.offset(), _index_sampling_state);
 }
 
 // Returns offset into data component.
@@ -2096,12 +2098,12 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _index_needs_close(true)
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
-    , _summary_byte_cost(summary_byte_cost())
     , _range_tombstones(s)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
+    _index_sampling_state.summary_byte_cost = summary_byte_cost();
 
     prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
 
@@ -2241,7 +2243,8 @@ stop_iteration components_writer::consume_end_of_partition() {
 }
 
 void components_writer::consume_end_of_stream() {
-    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key)); // what if there is only one partition? what if it is empty?
+    // what if there is only one partition? what if it is empty?
+    seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
 
     _index_needs_close = false;
     _index.close().get();
@@ -2429,24 +2432,27 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
     sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
     class summary_generator {
         summary& _summary;
-        size_t _summary_byte_cost;
-        uint64_t _next_data_offset_to_write_summary = 0;
+        index_sampling_state _state;
     public:
         std::experimental::optional<key> first_key, last_key;
 
-        summary_generator(summary& s) : _summary(s), _summary_byte_cost(summary_byte_cost()) {}
+        summary_generator(summary& s) : _summary(s) {
+            _state.summary_byte_cost = summary_byte_cost();
+        }
         bool should_continue() {
             return true;
         }
         void consume_entry(index_entry&& ie, uint64_t index_offset) {
             auto token = dht::global_partitioner().get_token(ie.get_key());
-            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset,
-                _next_data_offset_to_write_summary, _summary_byte_cost);
+            components_writer::maybe_add_summary_entry(_summary, token, ie.get_key_bytes(), ie.position(), index_offset, _state);
             if (!first_key) {
                 first_key = key(to_bytes(ie.get_key_bytes()));
             } else {
                 last_key = key(to_bytes(ie.get_key_bytes()));
             }
+        }
+        const index_sampling_state& state() const {
+            return _state;
         }
     };
 
@@ -2468,7 +2474,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     return ctx->consume_input(*ctx).finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
-                        seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key));
+                        seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());
                     });
                 });
             }).then([index_file] () mutable {

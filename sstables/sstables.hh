@@ -339,9 +339,16 @@ public:
 
     future<> seal_sstable(bool backup);
 
+    static uint64_t get_estimated_key_count(const uint32_t size_at_full_sampling, const uint32_t min_index_interval) {
+        return ((uint64_t)size_at_full_sampling + 1) * min_index_interval;
+    }
+    // Size at full sampling is calculated as if sampling were static, using minimum index as a strict sampling interval.
+    static uint64_t get_size_at_full_sampling(const uint64_t key_count, const uint32_t min_index_interval) {
+        return std::ceil(float(key_count) / min_index_interval) - 1;
+    }
+
     uint64_t get_estimated_key_count() const {
-        return ((uint64_t)_components->summary.header.size_at_full_sampling + 1) *
-                _components->summary.header.min_index_interval;
+        return get_estimated_key_count(_components->summary.header.size_at_full_sampling, _components->summary.header.min_index_interval);
     }
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
@@ -817,6 +824,15 @@ void cancel_prior_atomic_deletions();
 // Like cancel_prior_atomic_deletions(), but will also cause any later deletion attempts to fail.
 void cancel_atomic_deletions();
 
+struct index_sampling_state {
+    static constexpr size_t default_summary_byte_cost = 2000;
+
+    uint64_t next_data_offset_to_write_summary = 0;
+    uint64_t partition_count = 0;
+    // Enforces ratio of summary to data of 1 to N.
+    size_t summary_byte_cost = default_summary_byte_cost;
+};
+
 class components_writer {
     sstable& _sst;
     const schema& _schema;
@@ -828,9 +844,7 @@ class components_writer {
     // Remember first and last keys, which we need for the summary file.
     stdx::optional<key> _first_key, _last_key;
     stdx::optional<key> _partition_key;
-    uint64_t _next_data_offset_to_write_summary = 0;
-    // Enforces ratio of summary to data of 1 to N.
-    size_t _summary_byte_cost = default_summary_byte_cost;
+    index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
@@ -851,8 +865,7 @@ public:
     components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
             _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
             _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-            _next_data_offset_to_write_summary(o._next_data_offset_to_write_summary), _summary_byte_cost(o._summary_byte_cost),
-            _range_tombstones(std::move(o._range_tombstones)) {
+            _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)) {
         o._index_needs_close = false;
     }
 
@@ -864,9 +877,9 @@ public:
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 
-    static constexpr size_t default_summary_byte_cost = 2000;
+    static constexpr size_t default_summary_byte_cost = index_sampling_state::default_summary_byte_cost;
     static void maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
-        uint64_t index_offset, uint64_t& next_data_offset_to_write_summary, size_t summary_byte_cost);
+        uint64_t index_offset, index_sampling_state& state);
 };
 
 class sstable_writer {
