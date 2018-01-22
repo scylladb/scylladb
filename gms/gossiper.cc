@@ -1184,7 +1184,11 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) {
     if (!uses_host_id(endpoint)) {
         throw std::runtime_error(sprint("Host %s does not use new-style tokens!", endpoint));
     }
-    return utils::UUID(get_application_state_ptr(endpoint, application_state::HOST_ID)->value);
+    auto app_state = get_application_state_ptr(endpoint, application_state::HOST_ID);
+    if (!app_state) {
+        throw std::runtime_error(sprint("Host %s does not have HOST_ID application_state", endpoint));
+    }
+    return utils::UUID(app_state->value);
 }
 
 std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
