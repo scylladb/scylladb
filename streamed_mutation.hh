@@ -696,8 +696,6 @@ public:
     }
 };
 
-std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
-
 template<typename Impl, typename... Args>
 streamed_mutation make_streamed_mutation(Args&&... args) {
     return streamed_mutation(std::make_unique<Impl>(std::forward<Args>(args)...));

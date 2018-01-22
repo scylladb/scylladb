@@ -190,12 +190,6 @@ position_range mutation_fragment::range() const {
     abort();
 }
 
-std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm) {
-    auto& s = *sm.schema();
-    fprint(os, "{%s.%s key %s streamed mutation}", s.ks_name(), s.cf_name(), sm.decorated_key());
-    return os;
-}
-
 std::ostream& operator<<(std::ostream& os, mutation_fragment::kind k)
 {
     switch (k) {
