@@ -790,37 +790,3 @@ GCC6_CONCEPT(
         };
     }
 )
-
-// Creates a stream which is like sm but with transformation applied to the elements.
-template<typename T>
-GCC6_CONCEPT(
-    requires StreamedMutationTranformer<T>()
-)
-streamed_mutation transform(streamed_mutation sm, T t) {
-    class reader : public streamed_mutation::impl {
-        streamed_mutation _sm;
-        T _t;
-    public:
-        explicit reader(streamed_mutation sm, T&& t)
-            : impl(t(sm.schema()), sm.decorated_key(), sm.partition_tombstone())
-            , _sm(std::move(sm))
-            , _t(std::move(t))
-        { }
-
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return _sm.fill_buffer(timeout).then([this] {
-                while (!_sm.is_buffer_empty()) {
-                    push_mutation_fragment(_t(_sm.pop_mutation_fragment()));
-                }
-                _end_of_stream = _sm.is_end_of_stream();
-            });
-        }
-
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) override {
-            _end_of_stream = false;
-            forward_buffer_to(pr.start());
-            return _sm.fast_forward_to(std::move(pr), timeout);
-        }
-    };
-    return make_streamed_mutation<reader>(std::move(sm), std::move(t));
-}
