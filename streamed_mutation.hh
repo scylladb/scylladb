@@ -696,9 +696,6 @@ public:
     }
 };
 
-// Adapts streamed_mutation to a streamed_mutation which is in forwarding mode.
-streamed_mutation make_forwardable(streamed_mutation);
-
 std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
 
 template<typename Impl, typename... Args>

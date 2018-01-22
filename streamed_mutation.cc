@@ -217,65 +217,6 @@ std::ostream& operator<<(std::ostream& os, const mutation_fragment& mf) {
     return os;
 }
 
-streamed_mutation make_forwardable(streamed_mutation m) {
-    class reader : public streamed_mutation::impl {
-        streamed_mutation _sm;
-        position_range _current = position_range::for_static_row();
-        mutation_fragment_opt _next;
-    private:
-        // When resolves, _next is engaged or _end_of_stream is set.
-        future<> ensure_next() {
-            if (_next) {
-                return make_ready_future<>();
-            }
-            return _sm().then([this] (auto&& mfo) {
-                _next = std::move(mfo);
-                if (!_next) {
-                    _end_of_stream = true;
-                }
-            });
-        }
-    public:
-        explicit reader(streamed_mutation sm)
-            : impl(sm.schema(), std::move(sm.decorated_key()), sm.partition_tombstone())
-            , _sm(std::move(sm))
-        { }
-
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return repeat([this] {
-                if (is_buffer_full()) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return ensure_next().then([this] {
-                    if (is_end_of_stream()) {
-                        return stop_iteration::yes;
-                    }
-                    position_in_partition::less_compare cmp(*_sm.schema());
-                    if (!cmp(_next->position(), _current.end())) {
-                        _end_of_stream = true;
-                        // keep _next, it may be relevant for next range
-                        return stop_iteration::yes;
-                    }
-                    if (_next->relevant_for_range(*_schema, _current.start())) {
-                        push_mutation_fragment(std::move(*_next));
-                    }
-                    _next = {};
-                    return stop_iteration::no;
-                });
-            });
-        }
-
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-            _current = std::move(pr);
-            _end_of_stream = false;
-            forward_buffer_to(_current.start());
-            return make_ready_future<>();
-        }
-    };
-
-    return make_streamed_mutation<reader>(std::move(m));
-}
-
 mutation_fragment_opt range_tombstone_stream::do_get_next()
 {
     auto& rt = *_list.tombstones().begin();
