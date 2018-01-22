@@ -176,12 +176,6 @@ mutation_opt_assertions assert_that(mutation_opt mo) {
     return { std::move(mo) };
 }
 
-static inline
-mutation_opt_assertions assert_that(streamed_mutation_opt smo) {
-    auto mo = mutation_from_streamed_mutation(std::move(smo)).get0();
-    return { std::move(mo) };
-}
-
 class streamed_mutation_assertions {
     streamed_mutation _sm;
     clustering_key::equality _ck_eq;
