@@ -74,6 +74,8 @@ public:
         : _mutations(muts)
     { }
 
+    void consume_new_partition(const dht::decorated_key&) {}
+
     stop_iteration consume(tombstone t) {
         for_each_target([&] (mutation& m) {
             m.partition().apply(t);
@@ -132,9 +134,8 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
-                fragment_scatterer c{muts};
-                auto sm = streamed_mutation_from_mutation(m);
-                do_consume_streamed_mutation_flattened(sm, c).get();
+                auto rd = flat_mutation_reader_from_mutations({m});
+                rd.consume(fragment_scatterer{muts}).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
                 }
