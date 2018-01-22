@@ -185,8 +185,6 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
     const std::vector<mutation>& partitions,
     const dht::partition_range&);
 
-future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
-
 class flat_mutation_reader;
 
 // Reads a single partition from a reader. Returns empty optional if there are no more partitions to be read.
