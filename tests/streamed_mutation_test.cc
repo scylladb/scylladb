@@ -173,22 +173,6 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     });
 }
 
-SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
-    return seastar::async([] {
-        storage_service_for_tests ssft;
-
-        for_each_mutation([&] (const mutation& m) {
-            auto fm = freeze(streamed_mutation_from_mutation(mutation(m))).get0();
-
-            auto m1 = fm.unfreeze(m.schema());
-            BOOST_REQUIRE_EQUAL(m, m1);
-
-            auto fm1 = freeze(m);
-            BOOST_REQUIRE(fm.representation() == fm1.representation());
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_range_tombstones_stream) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")
