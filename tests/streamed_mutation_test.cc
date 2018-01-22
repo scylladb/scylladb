@@ -33,20 +33,6 @@
 
 #include "mutation_assertions.hh"
 
-void check_order_of_fragments(streamed_mutation sm)
-{
-    stdx::optional<position_in_partition> previous;
-    position_in_partition::less_compare cmp(*sm.schema());
-    auto mf = sm().get0();
-    while (mf) {
-        if (previous) {
-            BOOST_REQUIRE(!cmp(mf->position(), *previous));
-        }
-        previous = position_in_partition(mf->position());
-        mf = sm().get0();
-    }
-}
-
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
     std::vector<mutation>& _mutations;
