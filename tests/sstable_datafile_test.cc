@@ -3689,19 +3689,6 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     });
 }
 
-inline
-uint64_t consume_all(streamed_mutation& sm) {
-    uint64_t fragments = 0;
-    while (1) {
-        mutation_fragment_opt mfo = sm().get0();
-        if (!mfo) {
-            break;
-        }
-        ++fragments;
-    }
-    return fragments;
-}
-
 SEASTAR_TEST_CASE(test_skipping_using_index) {
     return seastar::async([] {
         storage_service_for_tests ssft;
