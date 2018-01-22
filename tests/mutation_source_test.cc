@@ -650,12 +650,12 @@ static void test_range_queries(populate_fn populate) {
     test_slice(inclusive_token_range(128, partitions.size() - 1));
 }
 
-void test_streamed_mutation_fragments_have_monotonic_positions(populate_fn populate) {
+void test_mutation_reader_fragments_have_monotonic_positions(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
 
     for_each_mutation([] (const mutation& m) {
-        streamed_mutation sm = streamed_mutation_from_mutation(m);
-        assert_that_stream(std::move(sm)).has_monotonic_positions();
+        auto rd = flat_mutation_reader_from_mutations({m});
+        assert_that(std::move(rd)).has_monotonic_positions();
     });
 }
 
@@ -960,7 +960,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 void run_mutation_reader_tests(populate_fn populate) {
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
-    test_streamed_mutation_fragments_have_monotonic_positions(populate);
+    test_mutation_reader_fragments_have_monotonic_positions(populate);
     test_streamed_mutation_forwarding_across_range_tombstones(populate);
     test_streamed_mutation_forwarding_guarantees(populate);
     test_streamed_mutation_slicing_returns_only_relevant_tombstones(populate);
