@@ -310,28 +310,6 @@ inline flat_mutation_reader make_restricted_flat_reader(const restricted_mutatio
 
 using mutation_source_opt = optimized_optional<mutation_source>;
 
-template<typename Consumer>
-future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation& sm, Consumer& c)
-{
-    do {
-        if (sm.is_buffer_empty()) {
-            if (sm.is_end_of_stream()) {
-                break;
-            }
-            auto f = sm.fill_buffer();
-            if (!f.available()) {
-                return f.then([&] { return do_consume_streamed_mutation_flattened(sm, c); });
-            }
-            f.get();
-        } else {
-            if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
-                break;
-            }
-        }
-    } while (true);
-    return make_ready_future<stop_iteration>(c.consume_end_of_partition());
-}
-
 // Adapts a non-movable FlattenedConsumer to a movable one.
 template<typename FlattenedConsumer>
 class stable_flattened_mutations_consumer {
