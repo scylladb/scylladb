@@ -706,8 +706,6 @@ streamed_mutation make_streamed_mutation(Args&&... args) {
     return streamed_mutation(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
-using streamed_mutation_opt = optimized_optional<streamed_mutation>;
-
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
 // Tombstones are added using apply() and retrieved using get_next().
