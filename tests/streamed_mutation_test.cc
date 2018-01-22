@@ -73,32 +73,6 @@ SEASTAR_TEST_CASE(test_abandoned_streamed_mutation_from_mutation) {
     });
 }
 
-SEASTAR_TEST_CASE(test_mutation_merger) {
-    return seastar::async([] {
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal) {
-            if (m1.schema()->version() != m2.schema()->version()) {
-                return;
-            }
-
-            auto m12 = m1;
-            m12.apply(m2);
-
-            auto get_sm = [&] {
-                std::vector<streamed_mutation> sms;
-                sms.emplace_back(streamed_mutation_from_mutation(mutation(m1)));
-                sms.emplace_back(streamed_mutation_from_mutation(mutation(m2.schema(), m1.decorated_key(), m2.partition())));
-                return merge_mutations(std::move(sms));
-            };
-
-            check_order_of_fragments(get_sm());
-            auto mopt = mutation_from_streamed_mutation(get_sm()).get0();
-            BOOST_REQUIRE(mopt);
-            BOOST_REQUIRE(m12.partition().difference(m1.schema(), mopt->partition()).empty());
-            BOOST_REQUIRE(mopt->partition().difference(m1.schema(), m12.partition()).empty());
-        });
-    });
-}
-
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
     std::vector<mutation>& _mutations;
