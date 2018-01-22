@@ -735,9 +735,6 @@ class mutation;
 
 streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
-//Requires all streamed_mutations to have the same schema.
-streamed_mutation merge_mutations(std::vector<streamed_mutation>);
-
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
 // Tombstones are added using apply() and retrieved using get_next().
