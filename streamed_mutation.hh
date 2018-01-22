@@ -779,31 +779,6 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 
-// Consumes mutation fragments until StopCondition is true.
-// The consumer will stop iff StopCondition returns true, in particular
-// reaching the end of stream alone won't stop the reader.
-template<typename StopCondition, typename ConsumeMutationFragment, typename ConsumeEndOfStream>
-GCC6_CONCEPT(requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
-    { stop() } -> bool;
-    { consume_mf(std::move(mf)) } -> void;
-    { consume_eos() } -> future<>;
-})
-future<> consume_mutation_fragments_until(streamed_mutation& sm, StopCondition&& stop,
-                                          ConsumeMutationFragment&& consume_mf, ConsumeEndOfStream&& consume_eos) {
-    return do_until([stop] { return stop(); }, [&sm, stop, consume_mf, consume_eos] {
-        while (!sm.is_buffer_empty()) {
-            consume_mf(sm.pop_mutation_fragment());
-            if (stop()) {
-                return make_ready_future<>();
-            }
-        }
-        if (sm.is_end_of_stream()) {
-            return consume_eos();
-        }
-        return sm.fill_buffer();
-    });
-}
-
 GCC6_CONCEPT(
     // F gets a stream element as an argument and returns the new value which replaces that element
     // in the transformed stream.
