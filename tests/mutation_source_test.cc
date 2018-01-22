@@ -969,23 +969,6 @@ void run_mutation_reader_tests(populate_fn populate) {
     test_query_only_static_row(populate);
 }
 
-void run_conversion_to_mutation_reader_tests(populate_fn populate) {
-    populate_fn populate_with_flat_mutation_reader_conversion = [&populate] (schema_ptr s, const std::vector<mutation>& m) {
-        auto source = populate(s, m);
-        return mutation_source([source] (schema_ptr s,
-                                         const dht::partition_range& range,
-                                         const query::partition_slice& slice,
-                                         const io_priority_class& pc,
-                                         tracing::trace_state_ptr trace_state,
-                                         streamed_mutation::forwarding fwd,
-                                         mutation_reader::forwarding fwd_mr)
-                               {
-                                   return source.make_reader(std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
-                               });
-    };
-    run_mutation_reader_tests(populate_with_flat_mutation_reader_conversion);
-}
-
 void test_next_partition(populate_fn populate) {
     simple_schema s;
     auto pkeys = s.make_pkeys(4);
@@ -1020,7 +1003,6 @@ void test_next_partition(populate_fn populate) {
 }
 
 void run_flat_mutation_reader_tests(populate_fn populate) {
-    run_conversion_to_mutation_reader_tests(populate);
     test_next_partition(populate);
     test_streamed_mutation_forwarding_succeeds_with_no_data(populate);
     test_slicing_with_overlapping_range_tombstones(populate);
