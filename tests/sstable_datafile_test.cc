@@ -4490,3 +4490,60 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         BOOST_REQUIRE(s1.last_key.value == s2.last_key.value);
     });
 }
+
+SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        auto builder = schema_builder("tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", utf8_type);
+        builder.set_compressor_params(compression_parameters({ }));
+        auto s = builder.build(schema_builder::compact_storage::no);
+        const column_definition& col = *s->get_column_definition("value");
+
+        auto summary_byte_cost = sstables::components_writer::default_summary_byte_cost;
+
+        auto make_large_partition = [&] (partition_key key) {
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(bytes(20 * summary_byte_cost, 'a')));
+            return m;
+        };
+
+        auto make_small_partition = [&] (partition_key key) {
+            mutation m(key, s);
+            m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(bytes(100, 'a')));
+            return m;
+        };
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_sstable(s, tmp->path, (*gen)++, la, big);
+        };
+
+        {
+            auto total_partitions = s->min_index_interval()*2;
+
+            std::vector<mutation> mutations;
+            for (auto i = 0; i < total_partitions; i++) {
+                auto key = to_bytes("key" + to_sstring(i));
+                mutations.push_back(make_large_partition(partition_key::from_exploded(*s, {std::move(key)})));
+            }
+            auto sst = make_sstable_containing(sst_gen, mutations);
+
+            BOOST_REQUIRE(std::abs(int64_t(total_partitions) - int64_t(sst->get_estimated_key_count())) <= s->min_index_interval());
+        }
+
+        {
+            auto total_partitions = s->min_index_interval()*2;
+
+            std::vector<mutation> mutations;
+            for (auto i = 0; i < total_partitions; i++) {
+                auto key = to_bytes("key" + to_sstring(i));
+                mutations.push_back(make_small_partition(partition_key::from_exploded(*s, {std::move(key)})));
+            }
+            auto sst = make_sstable_containing(sst_gen, mutations);
+
+            BOOST_REQUIRE(std::abs(int64_t(total_partitions) - int64_t(sst->get_estimated_key_count())) <= s->min_index_interval());
+        }
+    });
+}
