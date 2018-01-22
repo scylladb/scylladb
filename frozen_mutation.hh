@@ -103,8 +103,6 @@ public:
     frozen_mutation consume_end_of_stream();
 };
 
-future<frozen_mutation> freeze(streamed_mutation sm);
-
 static constexpr size_t default_frozen_fragment_size = 128 * 1024;
 
 using frozen_mutation_consumer_fn = std::function<future<stop_iteration>(frozen_mutation, bool)>;
