@@ -47,21 +47,6 @@ void check_order_of_fragments(streamed_mutation sm)
     }
 }
 
-SEASTAR_TEST_CASE(test_mutation_from_streamed_mutation_from_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            auto get_sm = [&] {
-                return streamed_mutation_from_mutation(mutation(m));
-            };
-
-            check_order_of_fragments(get_sm());
-            auto mopt = mutation_from_streamed_mutation(get_sm()).get0();
-            BOOST_REQUIRE(mopt);
-            BOOST_REQUIRE_EQUAL(m, *mopt);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_abandoned_streamed_mutation_from_mutation) {
     return seastar::async([] {
         for_each_mutation([&] (const mutation& m) {
