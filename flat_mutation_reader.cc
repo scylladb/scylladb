@@ -167,7 +167,6 @@ future<bool> flat_mutation_reader::impl::fill_buffer_from(Source& source, db::ti
     }
 }
 
-template future<bool> flat_mutation_reader::impl::fill_buffer_from<streamed_mutation>(streamed_mutation&, db::timeout_clock::time_point);
 template future<bool> flat_mutation_reader::impl::fill_buffer_from<flat_mutation_reader>(flat_mutation_reader&, db::timeout_clock::time_point);
 
 flat_mutation_reader& to_reference(reference_wrapper<flat_mutation_reader>& wrapper) {
