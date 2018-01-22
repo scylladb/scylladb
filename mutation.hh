@@ -186,7 +186,6 @@ boost::iterator_range<std::vector<mutation>::const_iterator> slice(
     const dht::partition_range&);
 
 future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
-future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm);
 
 class flat_mutation_reader;
 
