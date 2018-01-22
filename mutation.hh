@@ -28,7 +28,7 @@
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 #include <seastar/util/optimized_optional.hh>
 

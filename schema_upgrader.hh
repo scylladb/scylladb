@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "converting_mutation_partition_applier.hh"
 
 // A StreamedMutationTransformer which transforms the stream to a different schema

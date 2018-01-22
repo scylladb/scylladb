@@ -24,7 +24,7 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "mutation.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "mutation_source_test.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"

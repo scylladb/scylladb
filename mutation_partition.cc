@@ -28,7 +28,7 @@
 #include "query-result-writer.hh"
 #include "atomic_cell_hash.hh"
 #include "reversibly_mergeable.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "mutation_query.hh"
 #include "service/priority_manager.hh"
 #include "mutation_compactor.hh"

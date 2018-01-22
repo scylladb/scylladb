@@ -25,7 +25,7 @@
 #include "gc_clock.hh"
 #include "query-request.hh"
 #include "schema.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
 #include "stdx.hh"
 

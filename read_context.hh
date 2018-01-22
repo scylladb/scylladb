@@ -23,7 +23,7 @@
 
 #include "schema.hh"
 #include "query-request.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "partition_version.hh"
 #include "tracing/tracing.hh"
 #include "row_cache.hh"

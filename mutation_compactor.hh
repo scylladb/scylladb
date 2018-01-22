@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 static inline bool has_ck_selector(const query::clustering_row_ranges& ranges) {
     // Like PK range, an empty row range, should be considered an "exclude all" restriction

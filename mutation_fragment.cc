@@ -24,7 +24,7 @@
 #include <seastar/util/defer.hh>
 
 #include "mutation.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 std::ostream&
 operator<<(std::ostream& os, const clustering_row& row) {

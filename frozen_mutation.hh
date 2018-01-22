@@ -25,7 +25,7 @@
 #include "atomic_cell.hh"
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
 
 class mutation;

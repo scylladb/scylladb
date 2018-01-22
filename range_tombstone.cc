@@ -20,7 +20,7 @@
  */
 
 #include "range_tombstone.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 std::ostream& operator<<(std::ostream& out, const range_tombstone& rt) {
     if (rt) {

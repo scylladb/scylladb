@@ -35,7 +35,7 @@
 #include "range.hh"
 #include "service/storage_service.hh"
 #include "stdx.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "db/timeout_clock.hh"
 

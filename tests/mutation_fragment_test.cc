@@ -24,7 +24,7 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "mutation_source_test.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "frozen_mutation.hh"
 #include "tests/test_services.hh"
 #include "schema_builder.hh"

@@ -25,7 +25,7 @@
 
 #include "schema.hh"
 #include "query-request.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 // Utility for in-order checking of overlap with position ranges.
 class clustering_ranges_walker {
