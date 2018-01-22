@@ -708,29 +708,6 @@ streamed_mutation make_streamed_mutation(Args&&... args) {
 
 using streamed_mutation_opt = optimized_optional<streamed_mutation>;
 
-template<typename Consumer>
-GCC6_CONCEPT(
-    requires StreamedMutationConsumer<Consumer>()
-)
-auto consume(streamed_mutation& m, Consumer consumer) {
-    return do_with(std::move(consumer), [&m] (Consumer& c) {
-        if (c.consume(m.partition_tombstone()) == stop_iteration::yes) {
-            return make_ready_future().then([&] { return c.consume_end_of_stream(); });
-        }
-        return repeat([&m, &c] {
-            if (m.is_buffer_empty()) {
-                if (m.is_end_of_stream()) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return m.fill_buffer().then([] { return stop_iteration::no; });
-            }
-            return make_ready_future<stop_iteration>(m.pop_mutation_fragment().consume_streamed_mutation(c));
-        }).then([&c] {
-            return c.consume_end_of_stream();
-        });
-    });
-}
-
 class mutation;
 
 streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
