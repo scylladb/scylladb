@@ -233,9 +233,8 @@ public:
     continuous_data_consumer(input_stream<char>&& input, uint64_t start, uint64_t maxlen)
             : _input(std::move(input)), _stream_position(sstables::reader_position_tracker{start, maxlen}), _remain(maxlen) {}
 
-    template<typename Consumer>
-    future<> consume_input(Consumer& c) {
-        return _input.consume(c);
+    future<> consume_input() {
+        return _input.consume(state_processor());
     }
 
     // some states do not consume input (its only exists to perform some

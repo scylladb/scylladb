@@ -2470,7 +2470,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                             s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size);
-                    return ctx->consume_input(*ctx).finally([ctx] {
+                    return ctx->consume_input().finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
                         seal_summary(_components->summary, std::move(s.first_key), std::move(s.last_key), s.state());

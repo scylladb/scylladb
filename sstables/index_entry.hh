@@ -230,7 +230,7 @@ public:
         if (!blocks.empty()) {
             erase_all_but_last(blocks);
         }
-        return _reader->consume_input(*_reader).then([this] {
+        return _reader->consume_input().then([this] {
             return make_ready_future<size_t>(_reader->get_current_pi_index());
         });
     }
@@ -244,7 +244,7 @@ public:
         promoted_index_blocks& blocks = _reader->get_pi_blocks();
         blocks = promoted_index_blocks{};
         _reader->switch_to_consume_next_mode();
-        return _reader->consume_input(*_reader);
+        return _reader->consume_input();
     }
 
     uint32_t get_total_pi_blocks_count() const { return _reader ? _reader->get_total_num_blocks() : 0; }

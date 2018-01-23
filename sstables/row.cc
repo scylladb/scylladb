@@ -404,7 +404,7 @@ data_consume_context::operator bool() const noexcept {
     return bool(_ctx);
 }
 future<> data_consume_context::read() {
-    return _ctx->consume_input(*_ctx);
+    return _ctx->consume_input();
 }
 future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
     _ctx->reset(indexable_element::partition);

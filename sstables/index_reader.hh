@@ -318,7 +318,7 @@ private:
                     _reader = stdx::nullopt;
                     throw;
                 }
-                return _reader->_context.consume_input(_reader->_context).then([this] {
+                return _reader->_context.consume_input().then([this] {
                     return std::move(_reader->_consumer.indexes);
                 });
             });
