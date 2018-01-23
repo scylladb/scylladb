@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "authorizer.hh"
+#include "auth/authorizer.hh"
 #include "exceptions/exceptions.hh"
 #include "stdx.hh"
 

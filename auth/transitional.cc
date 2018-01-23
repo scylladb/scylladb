@@ -39,13 +39,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "authenticator.hh"
-#include "authenticated_user.hh"
-#include "authenticator.hh"
-#include "authorizer.hh"
-#include "password_authenticator.hh"
-#include "default_authorizer.hh"
-#include "permission.hh"
+#include "auth/authenticated_user.hh"
+#include "auth/authenticator.hh"
+#include "auth/authorizer.hh"
+#include "auth/default_authorizer.hh"
+#include "auth/password_authenticator.hh"
+#include "auth/permission.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 

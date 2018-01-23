@@ -45,8 +45,9 @@
 #include <functional>
 #include <iosfwd>
 #include <optional>
+
 #include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
+
 #include "seastarx.hh"
 #include "stdx.hh"
 

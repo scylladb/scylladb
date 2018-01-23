@@ -41,9 +41,10 @@
 
 #pragma once
 
-#include "authenticator.hh"
-#include "cql3/query_processor.hh"
 #include <seastar/core/abort_source.hh>
+
+#include "auth/authenticator.hh"
+#include "cql3/query_processor.hh"
 
 namespace service {
 class migration_manager;

@@ -39,19 +39,23 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <algorithm>
-#include <unistd.h>
+#include "auth/password_authenticator.hh"
+
+extern "C" {
 #include <crypt.h>
-#include <random>
+#include <unistd.h>
+}
+
+#include <algorithm>
 #include <chrono>
+#include <random>
 
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/reactor.hh>
 
+#include "auth/authenticated_user.hh"
+#include "auth/common.hh"
 #include "auth/roles-metadata.hh"
-#include "common.hh"
-#include "password_authenticator.hh"
-#include "authenticated_user.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"

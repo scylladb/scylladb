@@ -42,21 +42,21 @@
 #pragma once
 
 #include <memory>
-#include <unordered_map>
 #include <set>
 #include <stdexcept>
-#include <boost/any.hpp>
+#include <unordered_map>
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
-#include <seastar/core/shared_ptr.hh>
+#include <boost/any.hpp>
 #include <seastar/core/enum.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/core/shared_ptr.hh>
 
 #include "auth/authentication_options.hh"
+#include "auth/resource.hh"
 #include "bytes.hh"
 #include "enum_set.hh"
 #include "exceptions/exceptions.hh"
-#include "resource.hh"
 
 namespace db {
     class config;

@@ -44,13 +44,11 @@
 #include <vector>
 #include <tuple>
 
-#include <experimental/optional>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
-#include "permission.hh"
-#include "resource.hh"
-
+#include "auth/permission.hh"
+#include "auth/resource.hh"
 #include "seastarx.hh"
 
 namespace auth {

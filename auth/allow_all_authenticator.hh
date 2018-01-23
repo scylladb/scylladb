@@ -23,8 +23,8 @@
 
 #include <stdexcept>
 
-#include "auth/authenticator.hh"
 #include "auth/authenticated_user.hh"
+#include "auth/authenticator.hh"
 #include "auth/common.hh"
 
 namespace cql3 {

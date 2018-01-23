@@ -39,7 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "authenticated_user.hh"
+#include "auth/authenticated_user.hh"
 
 #include <iostream>
 

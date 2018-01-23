@@ -39,9 +39,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <unordered_map>
+#include "auth/permission.hh"
+
 #include <boost/algorithm/string.hpp>
-#include "permission.hh"
+
+#include <unordered_map>
 
 const auth::permission_set auth::permissions::ALL =
                 auth::permission_set::of<auth::permission::CREATE,
