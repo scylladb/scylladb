@@ -47,17 +47,6 @@ void check_order_of_fragments(streamed_mutation sm)
     }
 }
 
-SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            auto rd = flat_mutation_reader_from_mutations({mutation(m)});
-            rd().get();
-            rd().get();
-            // We rely on AddressSanitizer telling us if nothing was leaked.
-        });
-    });
-}
-
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
     std::vector<mutation>& _mutations;
