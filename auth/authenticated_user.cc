@@ -48,8 +48,8 @@ auth::authenticated_user::authenticated_user()
                 : _anon(true)
 {}
 
-auth::authenticated_user::authenticated_user(sstring name)
-                : _name(name), _anon(false)
+auth::authenticated_user::authenticated_user(stdx::string_view name)
+                : _name(sstring(name)), _anon(false)
 {}
 
 auth::authenticated_user::authenticated_user(authenticated_user&&) = default;

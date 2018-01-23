@@ -41,9 +41,11 @@
 
 #pragma once
 
+#include <experimental/string_view>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
+#include "stdx.hh"
 
 namespace auth {
 
@@ -52,7 +54,7 @@ public:
     static const sstring ANONYMOUS_USERNAME;
 
     authenticated_user();
-    authenticated_user(sstring name);
+    authenticated_user(stdx::string_view name);
     authenticated_user(authenticated_user&&);
     authenticated_user(const authenticated_user&);
 
