@@ -113,7 +113,7 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
         { }
 
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return repeat([&] {
+            return repeat([&, timeout] {
                 if (_partition_end) {
                     // We have consumed full partition from source, now it is
                     // time to emit it.
