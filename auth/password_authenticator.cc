@@ -168,12 +168,14 @@ future<> password_authenticator::start() {
          _stopped = do_after_system_ready(_as, [this] {
              return has_existing_users().then([this](bool existing) {
                  if (!existing) {
+                     static const sstring query = sprint(
+                             "UPDATE %s SET %s = ? WHERE %s = ?",
+                             meta::roles_table::qualified_name(),
+                             SALTED_HASH,
+                             meta::roles_table::role_col_name);
+
                      return _qp.process(
-                             sprint(
-                                     "UPDATE %s SET %s = ? WHERE %s = ?",
-                                     meta::roles_table::qualified_name(),
-                                     SALTED_HASH,
-                                     meta::roles_table::role_col_name),
+                             query,
                              db::consistency_level::ONE,
                              {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto) {
                          plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
@@ -234,12 +236,14 @@ future<authenticated_user> password_authenticator::authenticate(
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
     return futurize_apply([this, username, password] {
+        static const sstring query = sprint(
+                "SELECT %s FROM %s WHERE %s = ?",
+                SALTED_HASH,
+                meta::roles_table::qualified_name(),
+                meta::roles_table::role_col_name);
+
         return _qp.process(
-                sprint(
-                        "SELECT %s FROM %s WHERE %s = ?",
-                        SALTED_HASH,
-                        meta::roles_table::qualified_name(),
-                        meta::roles_table::role_col_name),
+                query,
                 consistency_for_user(username),
                 {username},
                 true);
@@ -265,7 +269,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
         return make_ready_future<>();
     }
 
-    auto query = sprint(
+    static const sstring query = sprint(
             "UPDATE %s SET %s = ? WHERE %s = ?",
             meta::roles_table::qualified_name(),
             SALTED_HASH,
@@ -282,7 +286,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
         return make_ready_future<>();
     }
 
-    auto query = sprint(
+    static const sstring query = sprint(
             "UPDATE %s SET %s = ? WHERE %s = ?",
             meta::roles_table::qualified_name(),
             SALTED_HASH,
@@ -295,7 +299,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
 }
 
 future<> password_authenticator::drop(stdx::string_view name) {
-    auto query = sprint(
+    static const sstring query = sprint(
             "DELETE %s FROM %s WHERE %s = ?",
             SALTED_HASH,
             meta::roles_table::qualified_name(),

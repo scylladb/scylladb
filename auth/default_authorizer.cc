@@ -175,20 +175,22 @@ default_authorizer::modify(
         permission_set set,
         const resource& resource,
         stdx::string_view op) {
-    auto query = sprint(
-            "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
-            meta::AUTH_KS,
-            PERMISSIONS_CF,
-            PERMISSIONS_NAME,
-            PERMISSIONS_NAME,
-            op,
-            ROLE_NAME,
-            RESOURCE_NAME);
-
-    return _qp.process(
-            query,
-            db::consistency_level::ONE,
-            {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
+    return do_with(
+            sprint(
+                    "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
+                    meta::AUTH_KS,
+                    PERMISSIONS_CF,
+                    PERMISSIONS_NAME,
+                    PERMISSIONS_NAME,
+                    op,
+                    ROLE_NAME,
+                    RESOURCE_NAME),
+            [this, &role_name, set, &resource](const auto& query) {
+        return _qp.process(
+                query,
+                db::consistency_level::ONE,
+                {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
+    });
 }
 
 
@@ -222,17 +224,34 @@ future<std::vector<permission_details>> default_authorizer::list(
                 std::unordered_set<sstring> all_roles) mutable {
             if (resource) {
                 query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
-                return _qp.process(query, db::consistency_level::ONE, {all_roles, resource->name()});
+
+                return do_with(
+                        std::move(query),
+                        std::move(all_roles),
+                        [this, &resource](const auto& query, const auto& all_roles) {
+                    return _qp.process(query, db::consistency_level::ONE, {all_roles, resource->name()});
+                });
             }
 
             query += sprint(" WHERE %s IN ?", ROLE_NAME);
-            return _qp.process(query, db::consistency_level::ONE, {all_roles});
+
+            return do_with(
+                    std::move(query),
+                    std::move(all_roles),
+                    [this](const auto& query, const auto& all_roles) {
+                return _qp.process(query, db::consistency_level::ONE, {all_roles});
+            });
         });
     } else if (resource) {
         query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
-        f = _qp.process(query, db::consistency_level::ONE, {resource->name()});
+
+        f = do_with(std::move(query), [this, &resource](const auto& query) {
+            return _qp.process(query, db::consistency_level::ONE, {resource->name()});
+        });
     } else {
-        f = _qp.process(query, db::consistency_level::ONE, {});
+        f = do_with(std::move(query), [this, &resource](const auto& query) {
+            return _qp.process(query, db::consistency_level::ONE, {});
+        });
     }
 
     return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
@@ -253,7 +272,7 @@ future<std::vector<permission_details>> default_authorizer::list(
 }
 
 future<> default_authorizer::revoke_all(stdx::string_view role_name) {
-    auto query = sprint(
+    static const sstring query = sprint(
             "DELETE FROM %s.%s WHERE %s = ?",
             meta::AUTH_KS,
             PERMISSIONS_CF,
@@ -272,7 +291,7 @@ future<> default_authorizer::revoke_all(stdx::string_view role_name) {
 }
 
 future<> default_authorizer::revoke_all(const resource& resource) {
-    auto query = sprint(
+    static const sstring query = sprint(
             "SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
             ROLE_NAME,
             meta::AUTH_KS,
@@ -289,7 +308,7 @@ future<> default_authorizer::revoke_all(const resource& resource) {
                     res->begin(),
                     res->end(),
                     [this, res, resource](const cql3::untyped_result_set::row& r) {
-                auto query = sprint(
+                static const sstring query = sprint(
                         "DELETE FROM %s.%s WHERE %s = ? AND %s = ?",
                         meta::AUTH_KS,
                         PERMISSIONS_CF,
