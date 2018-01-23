@@ -449,8 +449,8 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto from_upgrader = mutation_from_streamed_mutation(
-                    transform(streamed_mutation_from_mutation(m1), schema_upgrader(m2.schema()))).get0();
+                auto reader = transform(flat_mutation_reader_from_mutations({m1}), schema_upgrader(m2.schema()));
+                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get0();
 
                 auto regular = m1;
                 regular.upgrade(m2.schema());
