@@ -47,12 +47,12 @@ void check_order_of_fragments(streamed_mutation sm)
     }
 }
 
-SEASTAR_TEST_CASE(test_abandoned_streamed_mutation_from_mutation) {
+SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
         for_each_mutation([&] (const mutation& m) {
-            auto sm = streamed_mutation_from_mutation(mutation(m));
-            sm().get();
-            sm().get();
+            auto rd = flat_mutation_reader_from_mutations({mutation(m)});
+            rd().get();
+            rd().get();
             // We rely on AddressSanitizer telling us if nothing was leaked.
         });
     });
