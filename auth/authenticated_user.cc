@@ -39,7 +39,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include "authenticated_user.hh"
 
 const sstring auth::authenticated_user::ANONYMOUS_USERNAME("anonymous");
