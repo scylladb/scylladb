@@ -42,6 +42,7 @@
 #pragma once
 
 #include <experimental/string_view>
+#include <optional>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
@@ -57,14 +58,13 @@ public:
     const sstring& name() const;
 
     bool is_anonymous() const noexcept {
-        return _anon;
+        return !_name;
     }
 
     bool operator==(const authenticated_user&) const noexcept;
     bool operator!=(const authenticated_user& other) const noexcept { return !(*this == other); }
 private:
-    sstring _name;
-    bool _anon;
+    std::optional<sstring> _name;
 };
 
 }

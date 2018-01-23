@@ -44,20 +44,20 @@
 namespace auth {
 
 authenticated_user::authenticated_user() noexcept
-                : _anon(true)
+                : _name()
 {}
 
 authenticated_user::authenticated_user(stdx::string_view name)
-                : _name(sstring(name)), _anon(false)
+                : _name(sstring(name))
 {}
 
 const sstring& authenticated_user::name() const {
     static const sstring anonymous_username{"anonymous"};
-    return _anon ? anonymous_username : _name;
+    return _name ? *_name : anonymous_username;
 }
 
 bool authenticated_user::operator==(const authenticated_user& v) const noexcept {
-    return _anon ? v._anon : _name == v._name;
+    return _name == v._name;
 }
 
 }
