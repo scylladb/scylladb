@@ -72,8 +72,9 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
     }
 
     const auto& as = *state.get_auth_service();
+    const auto user = state.user();
 
-    return auth::has_superuser(as, *state.user()).then([this, &state, &as](bool has_super) {
+    return auth::has_superuser(as, *user).then([this, &state, &as, user](bool has_super) {
         if (has_super) {
             return make_ready_future<>();
         }
@@ -83,7 +84,7 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
                     exceptions::unauthorized_exception("You are not authorized to view everyone's permissions"));
         }
 
-        return auth::has_role(as, *state.user(), *_role_name).then([this](bool has_role) {
+        return auth::has_role(as, *user, *_role_name).then([this](bool has_role) {
             if (!has_role) {
                 return make_exception_future<>(
                         exceptions::unauthorized_exception(
