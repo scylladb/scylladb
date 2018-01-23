@@ -2053,9 +2053,7 @@ dirty_memory_manager::setup_collectd(sstring namestr) {
     });
 }
 
-static const metrics::label user_label("user");
-static const metrics::label streaming_label("streaming");
-static const metrics::label system_label("system");
+static const metrics::label class_label("class");
 
 void
 database::setup_metrics() {
@@ -2065,9 +2063,9 @@ database::setup_metrics() {
 
     namespace sm = seastar::metrics;
 
-    auto user_label_instance = user_label("reads");
-    auto streaming_label_instance = streaming_label("reads");
-    auto system_label_instance = system_label("reads");
+    auto user_label_instance = class_label("user");
+    auto streaming_label_instance = class_label("streaming");
+    auto system_label_instance = class_label("system");
 
     _metrics.add_group("memory", {
         sm::make_gauge("dirty_bytes", [this] { return _dirty_memory_manager.real_dirty_memory() + _system_dirty_memory_manager.real_dirty_memory() + _streaming_dirty_memory_manager.real_dirty_memory(); },
