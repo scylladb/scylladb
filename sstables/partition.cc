@@ -741,17 +741,6 @@ public:
     stdx::optional<position_in_partition_view> maybe_skip();
 };
 
-static inline void ensure_len(bytes_view v, size_t len) {
-    if (v.size() < len) {
-        throw malformed_sstable_exception(sprint("Expected {} bytes, but remaining is {}", len, v.size()));
-    }
-}
-
-template <typename T>
-static inline T read_be(const signed char* p) {
-    return ::read_be<T>(reinterpret_cast<const char*>(p));
-}
-
 class sstable_mutation_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer;
     shared_sstable _sst;
