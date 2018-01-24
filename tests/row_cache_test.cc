@@ -1879,7 +1879,7 @@ SEASTAR_TEST_CASE(test_single_tombstone_with_small_buffer) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         auto rt1 = s.make_range_tombstone(query::clustering_range::make(s.make_ckey(1), s.make_ckey(2)),
             s.new_tombstone());
         m1.partition().apply_delete(*s.schema(), rt1);
@@ -1910,7 +1910,7 @@ SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
         auto pk = s.make_pkey(0);
         auto pr = dht::partition_range::make_singular(pk);
 
-        mutation m1(pk, s.schema());
+        mutation m1(s.schema(), pk);
         auto rt1 = s.make_range_tombstone(query::clustering_range::make(s.make_ckey(1), s.make_ckey(2)),
                                           s.new_tombstone());
         m1.partition().apply_delete(*s.schema(), rt1);
