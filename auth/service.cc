@@ -445,7 +445,10 @@ future<> alter_role(
 }
 
 future<> drop_role(service& ser, stdx::string_view name) {
-    return ser.underlying_authorizer().revoke_all(name).then([&ser, name] {
+    return do_with(make_role_resource(name), [&ser, name](const resource& r) {
+        auto& a = ser.underlying_authorizer();
+        return when_all_succeed(a.revoke_all(name), a.revoke_all(r));
+    }).then([&ser, name] {
         return ser.underlying_authenticator().drop(name);
     }).then([&ser, name] {
         return ser.underlying_role_manager().drop(name);
