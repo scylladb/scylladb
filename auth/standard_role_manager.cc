@@ -44,15 +44,6 @@ namespace auth {
 
 namespace meta {
 
-namespace roles_table {
-
-stdx::string_view qualified_name() noexcept {
-    static const sstring instance = AUTH_KS + "." + sstring(name);
-    return instance;
-}
-
-}
-
 namespace role_members_table {
 
 constexpr stdx::string_view name{"role_members" , 12};

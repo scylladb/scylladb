@@ -32,6 +32,19 @@
 
 namespace auth {
 
+namespace meta {
+
+namespace roles_table {
+
+stdx::string_view qualified_name() noexcept {
+    static const sstring instance = AUTH_KS + "." + sstring(name);
+    return instance;
+}
+
+}
+
+}
+
 future<bool> default_role_row_satisfies(
         cql3::query_processor& qp,
         std::function<bool(const cql3::untyped_result_set_row&)> p) {
