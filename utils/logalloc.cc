@@ -940,7 +940,7 @@ segment::occupancy() const {
 // Per-segment metadata is kept in a separate array, managed by segment_pool
 // object.
 //
-class region_impl : public allocation_strategy {
+class region_impl final : public basic_region_impl {
     // Serialized object descriptor format:
     //  byte0 byte1 ... byte[n-1]
     //  bit0-bit5: ULEB64 significand
@@ -1079,7 +1079,6 @@ private:
     // occupancy. We could actually just present this as a scalar as well and never use occupancies,
     // but consistency is good.
     size_t _evictable_space = 0;
-    bool _reclaiming_enabled = true;
     bool _evictable = false;
     uint64_t _id;
     eviction_fn _eviction_fn;
@@ -1493,14 +1492,6 @@ public:
         return _id;
     }
 
-    void set_reclaiming_enabled(bool enabled) {
-        _reclaiming_enabled = enabled;
-    }
-
-    bool reclaiming_enabled() const {
-        return _reclaiming_enabled;
-    }
-
     // Returns true if this pool is evictable, so that evict_some() can be called.
     bool is_evictable() const {
         return _evictable && _reclaiming_enabled;
@@ -1592,14 +1583,21 @@ region::region(region_group& group)
         : _impl(make_shared<impl>(this, &group)) {
 }
 
+region_impl& region::get_impl() {
+    return *static_cast<region_impl*>(_impl.get());
+}
+const region_impl& region::get_impl() const {
+    return *static_cast<const region_impl*>(_impl.get());
+}
+
 region::region(region&& other) {
     this->_impl = std::move(other._impl);
-    this->_impl->_region = this;
+    get_impl()._region = this;
 }
 
 region& region::operator=(region&& other) {
     this->_impl = std::move(other._impl);
-    this->_impl->_region = this;
+    get_impl()._region = this;
     return *this;
 }
 
@@ -1607,53 +1605,37 @@ region::~region() {
 }
 
 occupancy_stats region::occupancy() const {
-    return _impl->occupancy();
+    return get_impl().occupancy();
 }
 
 region_group* region::group() {
-    return _impl->group();
+    return get_impl().group();
 }
 
 void region::merge(region& other) noexcept {
     if (_impl != other._impl) {
-        _impl->merge(*other._impl);
+        get_impl().merge(other.get_impl());
         other._impl = _impl;
     }
 }
 
 void region::full_compaction() {
-    _impl->full_compaction();
+    get_impl().full_compaction();
 }
 
 memory::reclaiming_result region::evict_some() {
-    if (_impl->is_evictable()) {
-        return _impl->evict_some();
+    if (get_impl().is_evictable()) {
+        return get_impl().evict_some();
     }
     return memory::reclaiming_result::reclaimed_nothing;
 }
 
 void region::make_evictable(eviction_fn fn) {
-    _impl->make_evictable(std::move(fn));
+    get_impl().make_evictable(std::move(fn));
 }
 
 const eviction_fn& region::evictor() const {
-    return _impl->evictor();
-}
-
-allocation_strategy& region::allocator() {
-    return *_impl;
-}
-
-const allocation_strategy& region::allocator() const {
-    return *_impl;
-}
-
-void region::set_reclaiming_enabled(bool compactible) {
-    _impl->set_reclaiming_enabled(compactible);
-}
-
-bool region::reclaiming_enabled() const {
-    return _impl->reclaiming_enabled();
+    return get_impl().evictor();
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {

@@ -533,6 +533,19 @@ public:
     friend std::ostream& operator<<(std::ostream&, const occupancy_stats&);
 };
 
+class basic_region_impl : public allocation_strategy {
+protected:
+    bool _reclaiming_enabled = true;
+public:
+    void set_reclaiming_enabled(bool enabled) {
+        _reclaiming_enabled = enabled;
+    }
+
+    bool reclaiming_enabled() const {
+        return _reclaiming_enabled;
+    }
+};
+
 //
 // Log-structured allocator region.
 //
@@ -552,7 +565,10 @@ class region {
 public:
     using impl = region_impl;
 private:
-    shared_ptr<impl> _impl;
+    shared_ptr<basic_region_impl> _impl;
+private:
+    region_impl& get_impl();
+    const region_impl& get_impl() const;
 public:
     region();
     explicit region(region_group& group);
@@ -563,8 +579,12 @@ public:
 
     occupancy_stats occupancy() const;
 
-    allocation_strategy& allocator();
-    const allocation_strategy& allocator() const;
+    allocation_strategy& allocator() {
+        return *_impl;
+    }
+    const allocation_strategy& allocator() const {
+        return *_impl;
+    }
 
     region_group* group();
 
@@ -582,10 +602,10 @@ public:
     // Changes the reclaimability state of this region. When region is not
     // reclaimable, it won't be considered by tracker::reclaim(). By default region is
     // reclaimable after construction.
-    void set_reclaiming_enabled(bool);
+    void set_reclaiming_enabled(bool e) { _impl->set_reclaiming_enabled(e); }
 
     // Returns the reclaimability state of this region.
-    bool reclaiming_enabled() const;
+    bool reclaiming_enabled() const { return _impl->reclaiming_enabled(); }
 
     // Returns a value which is increased when this region is either compacted or
     // evicted from, which invalidates references into the region.
