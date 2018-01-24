@@ -532,15 +532,9 @@ inline
 void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&& mf) {
     clogger.trace("csm {}: add_clustering_row_to_buffer({})", this, mf);
     auto& row = mf.as_clustering_row();
-    auto key = row.key();
-    try {
-        push_mutation_fragment(std::move(mf));
-        _lower_bound = position_in_partition::after_key(std::move(key));
-    } catch (...) {
-        // We may have emitted some of the range tombstones which start after the old _lower_bound
-        _lower_bound = position_in_partition::for_key(std::move(key));
-        throw;
-    }
+    auto new_lower_bound = position_in_partition::after_key(row.key());
+    push_mutation_fragment(std::move(mf));
+    _lower_bound = std::move(new_lower_bound);
 }
 
 inline
