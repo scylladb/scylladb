@@ -2177,16 +2177,16 @@ allocating_section::guard::~guard() {
 
 #ifndef DEFAULT_ALLOCATOR
 
-void allocating_section::guard::enter(allocating_section& self) {
-    shard_segment_pool.set_emergency_reserve_max(std::max(self._lsa_reserve, _prev));
+void allocating_section::reserve() {
+    shard_segment_pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));
     shard_segment_pool.refill_emergency_reserve();
 
     while (true) {
         size_t free = memory::stats().free_memory();
-        if (free >= self._std_reserve) {
+        if (free >= _std_reserve) {
             break;
         }
-        if (!tracker_instance.reclaim(self._std_reserve - free)) {
+        if (!tracker_instance.reclaim(_std_reserve - free)) {
             throw std::bad_alloc();
         }
     }
@@ -2194,7 +2194,8 @@ void allocating_section::guard::enter(allocating_section& self) {
     shard_segment_pool.clear_allocation_failure_flag();
 }
 
-void allocating_section::on_alloc_failure() {
+void allocating_section::on_alloc_failure(logalloc::region& r) {
+    r.allocator().invalidate_references();
     if (shard_segment_pool.allocation_failure_flag()) {
         _lsa_reserve *= 2; // FIXME: decay?
         llogger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", this, _lsa_reserve);
@@ -2202,14 +2203,15 @@ void allocating_section::on_alloc_failure() {
         _std_reserve *= 2; // FIXME: decay?
         llogger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
     }
+    reserve();
 }
 
 #else
 
-void allocating_section::guard::enter(allocating_section& self) {
+void allocating_section::reserve() {
 }
 
-void allocating_section::on_alloc_failure() {
+void allocating_section::on_alloc_failure(logalloc::region&) {
     throw std::bad_alloc();
 }
 

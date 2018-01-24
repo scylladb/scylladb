@@ -629,17 +629,43 @@ struct reclaim_lock {
 class allocating_section {
     size_t _lsa_reserve = 10; // in segments
     size_t _std_reserve = 1024; // in bytes
+    size_t _minimum_lsa_emergency_reserve = 0;
 private:
     struct guard {
         size_t _prev;
         guard();
         ~guard();
-        void enter(allocating_section&);
     };
-    void on_alloc_failure();
+    void reserve();
+    void on_alloc_failure(logalloc::region&);
 public:
+
     void set_lsa_reserve(size_t);
     void set_std_reserve(size_t);
+
+    //
+    // Reserves standard allocator and LSA memory for subsequent operations that
+    // have to be performed with memory reclamation disabled.
+    //
+    // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
+    //
+    template<typename Func>
+    decltype(auto) with_reserve(Func&& fn) {
+        auto prev_lsa_reserve = _lsa_reserve;
+        auto prev_std_reserve = _std_reserve;
+        try {
+            guard g;
+            _minimum_lsa_emergency_reserve = g._prev;
+            reserve();
+            return fn();
+        } catch (const std::bad_alloc&) {
+            // roll-back limits to protect against pathological requests
+            // preventing future requests from succeeding.
+            _lsa_reserve = prev_lsa_reserve;
+            _std_reserve = prev_std_reserve;
+            throw;
+        }
+    }
 
     //
     // Invokes func with reclaim_lock on region r. If LSA allocation fails
@@ -653,29 +679,35 @@ public:
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
-    decltype(auto) operator()(logalloc::region& r, Func&& func) {
-        auto prev_lsa_reserve = _lsa_reserve;
-        auto prev_std_reserve = _std_reserve;
-        try {
-            while (true) {
-                assert(r.reclaiming_enabled());
-                guard g;
-                g.enter(*this);
-                try {
-                    logalloc::reclaim_lock _(r);
-                    return func();
-                } catch (const std::bad_alloc&) {
-                    r.allocator().invalidate_references();
-                    on_alloc_failure();
-                }
+    decltype(auto) with_reclaiming_disabled(logalloc::region& r, Func&& fn) {
+        assert(r.reclaiming_enabled());
+        while (true) {
+            try {
+                logalloc::reclaim_lock _(r);
+                return fn();
+            } catch (const std::bad_alloc&) {
+                on_alloc_failure(r);
             }
-        } catch (const std::bad_alloc&) {
-            // roll-back limits to protect against pathological requests
-            // preventing future requests from succeeding.
-            _lsa_reserve = prev_lsa_reserve;
-            _std_reserve = prev_std_reserve;
-            throw;
         }
+    }
+
+    //
+    // Reserves standard allocator and LSA memory and
+    // invokes func with reclaim_lock on region r. If LSA allocation fails
+    // inside func it is retried after increasing LSA segment reserve. The
+    // memory reserves are increased with region lock off allowing for memory
+    // reclamation to take place in the region.
+    //
+    // References in the region are invalidated when allocating section is re-entered
+    // on allocation failure.
+    //
+    // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
+    //
+    template<typename Func>
+    decltype(auto) operator()(logalloc::region& r, Func&& func) {
+        return with_reserve([this, &r, &func] {
+            return with_reclaiming_disabled(r, func);
+        });
     }
 };
 
