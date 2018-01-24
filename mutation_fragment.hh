@@ -303,6 +303,16 @@ private:
 
     friend class position_in_partition;
 public:
+    struct clustering_row_tag_t { };
+    
+    template<typename... Args>
+    mutation_fragment(clustering_row_tag_t, Args&&... args)
+        : _kind(kind::clustering_row)
+        , _data(std::make_unique<data>())
+    {
+        new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
+    }
+
     mutation_fragment(static_row&& r);
     mutation_fragment(clustering_row&& r);
     mutation_fragment(range_tombstone&& r);
