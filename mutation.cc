@@ -216,21 +216,6 @@ mutation mutation::sliced(const query::clustering_row_ranges& ranges) const {
     return mutation(schema(), decorated_key(), partition().sliced(*schema(), ranges));
 }
 
-future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm) {
-    if (!sm) {
-        return make_ready_future<mutation_opt>();
-    }
-    return do_with(std::move(*sm), [] (auto& sm) {
-        return consume(sm, mutation_rebuilder(sm.decorated_key(), sm.schema()));
-    });
-}
-
-future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm) {
-    return consume(sm, mutation_rebuilder(sm.decorated_key(), sm.schema())).then([] (mutation_opt&& mo) {
-        return std::move(*mo);
-    });
-}
-
 future<mutation_opt> read_mutation_from_flat_mutation_reader(flat_mutation_reader& r) {
     if (r.is_buffer_empty()) {
         if (r.is_end_of_stream()) {

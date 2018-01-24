@@ -156,52 +156,55 @@ public:
     stop_iteration consume(tombstone) { return stop_iteration::no; }
     template<typename Fragment>
     stop_iteration consume(Fragment&& f) { _fragments++; return stop_iteration::no; }
+    void consume_new_partition(const dht::decorated_key&) {}
+    stop_iteration consume_end_of_partition() { return stop_iteration::no; }
     uint64_t consume_end_of_stream() { return _fragments; }
 };
 
 static
-uint64_t consume_all(streamed_mutation& sm) {
-    return consume(sm, counting_consumer()).get0();
+uint64_t consume_all(flat_mutation_reader& rd) {
+    return rd.consume(counting_consumer()).get0();
 }
 
 static
-uint64_t consume_all(mutation_reader& rd) {
+uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
     uint64_t fragments = 0;
-    while (1) {
-        streamed_mutation_opt smo = rd().get0();
-        if (!smo) {
-            break;
-        }
-        fragments += consume_all(*smo);
-    }
+    do {
+        fragments += consume_all(rd);
+        rd.next_partition();
+        rd.fill_buffer().get();
+    } while(!rd.is_end_of_stream() || !rd.is_buffer_empty());
     return fragments;
+}
+
+static void assert_partition_start(flat_mutation_reader& rd) {
+    auto mfopt = rd().get0();
+    assert(mfopt);
+    assert(mfopt->is_partition_start());
 }
 
 // cf should belong to ks.test
 static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_read = 1, int n_skip = 0) {
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no));
+        n_skip ? streamed_mutation::forwarding::yes : streamed_mutation::forwarding::no);
 
     metrics_snapshot before;
-
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
+    assert_partition_start(rd);
 
     uint64_t fragments = 0;
     int ck = 0;
     while (ck < n_rows) {
         if (n_skip) {
-            sm.fast_forward_to(position_range(
+            rd.fast_forward_to(position_range(
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck)),
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck + n_read))
             )).get();
         }
-        fragments += consume_all(sm);
+        fragments += consume_all(rd);
         ck += n_read + n_skip;
     }
 
@@ -227,14 +230,9 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
     int pk = 0;
     auto pr = n_skip ? dht::partition_range::make_ending_with(dht::partition_range::bound(keys[0], false)) // covering none
                      : query::full_partition_range;
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
 
     metrics_snapshot before;
-
-    if (n_skip) {
-        // FIXME: fast_forward_to() cannot be called on a reader from which nothing was read yet.
-        consume_all(rd);
-    }
 
     uint64_t fragments = 0;
     while (pk < n) {
@@ -253,28 +251,25 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
 }
 
 static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1) {
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
         cf.schema()->full_slice(),
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes));
+        streamed_mutation::forwarding::yes);
 
     metrics_snapshot before;
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
-    sm.fast_forward_to(position_range(
+    assert_partition_start(rd);
+
+    rd.fast_forward_to(position_range(
             position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
             position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
-    uint64_t fragments = consume_all(sm);
-
-    fragments += consume_all(rd);
+    uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
 }
 
-static test_result test_reading_all(mutation_reader& rd) {
+static test_result test_reading_all(flat_mutation_reader& rd) {
     metrics_snapshot before;
     return {before, consume_all(rd)};
 }
@@ -286,9 +281,9 @@ static test_result select_spread_rows(column_family& cf, int stride = 0, int n_r
     }
 
     auto slice = sb.build();
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         query::full_partition_range,
-        slice));
+        slice);
 
     return test_reading_all(rd);
 }
@@ -300,24 +295,20 @@ static test_result test_slicing_using_restrictions(column_family& cf, int_range 
         }))
         .build();
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, slice));
+    auto rd = cf.make_reader(cf.schema(), pr, slice);
     return test_reading_all(rd);
 }
 
 static test_result slice_rows_single_key(column_family& cf, int offset = 0, int n_read = 1) {
     auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes));
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice(), default_priority_class(), nullptr, streamed_mutation::forwarding::yes);
 
     metrics_snapshot before;
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
-    sm.fast_forward_to(position_range(
+    assert_partition_start(rd);
+    rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
-    uint64_t fragments = consume_all(sm);
-
-    fragments += consume_all(rd);
+    uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
 }
@@ -331,10 +322,10 @@ static test_result slice_partitions(column_family& cf, int n, int offset = 0, in
         dht::partition_range::bound(keys[std::min(n, offset + n_read) - 1], true)
     );
 
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(), pr, cf.schema()->full_slice()));
+    auto rd = cf.make_reader(cf.schema(), pr, cf.schema()->full_slice());
     metrics_snapshot before;
 
-    uint64_t fragments = consume_all(rd);
+    uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
 }
@@ -362,34 +353,30 @@ static test_result test_forwarding_with_restriction(column_family& cf, table_con
         .build();
 
     auto pr = single_partition ? dht::partition_range::make_singular(make_pkey(*cf.schema(), 0)) : query::full_partition_range;
-    auto rd = mutation_reader_from_flat_mutation_reader(cf.make_reader(cf.schema(),
+    auto rd = cf.make_reader(cf.schema(),
         pr,
         slice,
         default_priority_class(),
         nullptr,
-        streamed_mutation::forwarding::yes));
+        streamed_mutation::forwarding::yes);
 
     uint64_t fragments = 0;
     metrics_snapshot before;
-    streamed_mutation_opt smo = rd().get0();
-    assert(smo);
-    streamed_mutation& sm = *smo;
+    assert_partition_start(rd);
 
-    fragments += consume_all(sm);
+    fragments += consume_all(rd);
 
-    sm.fast_forward_to(position_range(
+    rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 1)),
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2)))).get();
 
-    fragments += consume_all(sm);
+    fragments += consume_all(rd);
 
-    sm.fast_forward_to(position_range(
+    rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key - 2)),
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2)))).get();
 
-    fragments += consume_all(sm);
-
-    fragments += consume_all(rd);
+    fragments += consume_all_with_next_partition(rd);
     return {before, fragments};
 }
 

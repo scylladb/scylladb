@@ -167,12 +167,6 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
     return frozen_mutation(std::move(out), std::move(_key));
 }
 
-future<frozen_mutation> freeze(streamed_mutation sm) {
-    return do_with(streamed_mutation(std::move(sm)), [] (auto& sm) mutable {
-        return consume(sm, streamed_mutation_freezer(*sm.schema(), sm.key()));
-    });
-}
-
 class fragmenting_mutation_freezer {
     const schema& _schema;
     stdx::optional<partition_key> _key;

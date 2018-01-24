@@ -24,7 +24,7 @@
 #include <vector>
 #include "row_cache.hh"
 #include "mutation_reader.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "partition_version.hh"
 #include "utils/logalloc.hh"
 #include "query-request.hh"

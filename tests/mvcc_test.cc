@@ -30,7 +30,6 @@
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
-#include "tests/mutation_reader_assertions.hh"
 #include "tests/simple_schema.hh"
 #include "tests/mutation_source_test.hh"
 #include "tests/failure_injecting_allocation_strategy.hh"

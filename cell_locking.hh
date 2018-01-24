@@ -39,7 +39,7 @@ using small_vector = std::vector<T>;
 #endif
 
 #include "fnv1a_hasher.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "mutation_partition.hh"
 
 #include "db/timeout_clock.hh"

@@ -29,7 +29,6 @@
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
-#include "tests/mutation_reader_assertions.hh"
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
@@ -549,7 +548,7 @@ class dummy_incremental_selector : public reader_selector {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
         _selector_position = _readers_mutations.empty() ? dht::ring_position::max() : dht::ring_position::starting_at(position());
-        return flat_mutation_reader_from_mutation_reader(_s, make_reader_returning_many(std::move(muts), _pr), _fwd);
+        return flat_mutation_reader_from_mutations(std::move(muts), _pr, _fwd);
     }
 public:
     // readers_mutations is expected to be sorted on both levels.

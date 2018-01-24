@@ -24,7 +24,7 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "mutation_source_test.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "frozen_mutation.hh"
 #include "tests/test_services.hh"
 #include "schema_builder.hh"
@@ -32,72 +32,6 @@
 #include "schema_upgrader.hh"
 
 #include "mutation_assertions.hh"
-
-void check_order_of_fragments(streamed_mutation sm)
-{
-    stdx::optional<position_in_partition> previous;
-    position_in_partition::less_compare cmp(*sm.schema());
-    auto mf = sm().get0();
-    while (mf) {
-        if (previous) {
-            BOOST_REQUIRE(!cmp(mf->position(), *previous));
-        }
-        previous = position_in_partition(mf->position());
-        mf = sm().get0();
-    }
-}
-
-SEASTAR_TEST_CASE(test_mutation_from_streamed_mutation_from_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            auto get_sm = [&] {
-                return streamed_mutation_from_mutation(mutation(m));
-            };
-
-            check_order_of_fragments(get_sm());
-            auto mopt = mutation_from_streamed_mutation(get_sm()).get0();
-            BOOST_REQUIRE(mopt);
-            BOOST_REQUIRE_EQUAL(m, *mopt);
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_abandoned_streamed_mutation_from_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            auto sm = streamed_mutation_from_mutation(mutation(m));
-            sm().get();
-            sm().get();
-            // We rely on AddressSanitizer telling us if nothing was leaked.
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_mutation_merger) {
-    return seastar::async([] {
-        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal) {
-            if (m1.schema()->version() != m2.schema()->version()) {
-                return;
-            }
-
-            auto m12 = m1;
-            m12.apply(m2);
-
-            auto get_sm = [&] {
-                std::vector<streamed_mutation> sms;
-                sms.emplace_back(streamed_mutation_from_mutation(mutation(m1)));
-                sms.emplace_back(streamed_mutation_from_mutation(mutation(m2.schema(), m1.decorated_key(), m2.partition())));
-                return merge_mutations(std::move(sms));
-            };
-
-            check_order_of_fragments(get_sm());
-            auto mopt = mutation_from_streamed_mutation(get_sm()).get0();
-            BOOST_REQUIRE(mopt);
-            BOOST_REQUIRE(m12.partition().difference(m1.schema(), mopt->partition()).empty());
-            BOOST_REQUIRE(mopt->partition().difference(m1.schema(), m12.partition()).empty());
-        });
-    });
-}
 
 // A StreamedMutationConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
@@ -114,6 +48,8 @@ public:
     fragment_scatterer(std::vector<mutation>& muts)
         : _mutations(muts)
     { }
+
+    void consume_new_partition(const dht::decorated_key&) {}
 
     stop_iteration consume(tombstone t) {
         for_each_target([&] (mutation& m) {
@@ -173,9 +109,8 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 for (int i = 0; i < n; ++i) {
                     muts.push_back(mutation(m.schema(), m.decorated_key()));
                 }
-                fragment_scatterer c{muts};
-                auto sm = streamed_mutation_from_mutation(m);
-                do_consume_streamed_mutation_flattened(sm, c).get();
+                auto rd = flat_mutation_reader_from_mutations({m});
+                rd.consume(fragment_scatterer{muts}).get();
                 for (int i = 0; i < n; ++i) {
                     memtables[i]->apply(std::move(muts[i]));
                 }
@@ -195,22 +130,6 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                 }
                 return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
             });
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_freezing_streamed_mutations) {
-    return seastar::async([] {
-        storage_service_for_tests ssft;
-
-        for_each_mutation([&] (const mutation& m) {
-            auto fm = freeze(streamed_mutation_from_mutation(mutation(m))).get0();
-
-            auto m1 = fm.unfreeze(m.schema());
-            BOOST_REQUIRE_EQUAL(m, m1);
-
-            auto fm1 = freeze(m);
-            BOOST_REQUIRE(fm.representation() == fm1.representation());
         });
     });
 }
@@ -475,8 +394,8 @@ SEASTAR_TEST_CASE(test_schema_upgrader_is_equivalent_with_mutation_upgrade) {
             if (m1.schema()->version() != m2.schema()->version()) {
                 // upgrade m1 to m2's schema
 
-                auto from_upgrader = mutation_from_streamed_mutation(
-                    transform(streamed_mutation_from_mutation(m1), schema_upgrader(m2.schema()))).get0();
+                auto reader = transform(flat_mutation_reader_from_mutations({m1}), schema_upgrader(m2.schema()));
+                auto from_upgrader = read_mutation_from_flat_mutation_reader(reader).get0();
 
                 auto regular = m1;
                 regular.upgrade(m2.schema());

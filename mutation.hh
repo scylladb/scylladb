@@ -28,7 +28,7 @@
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "hashing.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -184,9 +184,6 @@ void apply(mutation_opt& dst, mutation_opt&& src) {
 boost::iterator_range<std::vector<mutation>::const_iterator> slice(
     const std::vector<mutation>& partitions,
     const dht::partition_range&);
-
-future<mutation_opt> mutation_from_streamed_mutation(streamed_mutation_opt sm);
-future<mutation> mutation_from_streamed_mutation(streamed_mutation& sm);
 
 class flat_mutation_reader;
 

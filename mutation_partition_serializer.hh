@@ -26,7 +26,7 @@
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
 #include "bytes_ostream.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 
 namespace ser {
 template<typename Output>

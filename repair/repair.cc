@@ -579,22 +579,19 @@ public:
 future<partition_checksum> partition_checksum::compute_legacy(flat_mutation_reader mr)
 {
     auto s = mr.schema();
-    return do_with(mutation_reader_from_flat_mutation_reader(std::move(mr)),
+    return do_with(std::move(mr),
                    partition_checksum(), [] (auto& reader, auto& checksum) {
         return repeat([&reader, &checksum] () {
-            return reader().then([&checksum] (auto smopt) {
-                if (!smopt) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
+            return read_mutation_from_flat_mutation_reader(reader).then([&checksum] (auto mopt) {
+                if (!mopt) {
+                    return stop_iteration::yes;
                 }
-                return mutation_from_streamed_mutation(std::move(*smopt)).then([&checksum] (auto mopt) {
-                    assert(mopt);
-                    std::array<uint8_t, 32> digest;
-                    sha256_hasher h;
-                    feed_hash(h, *mopt);
-                    h.finalize(digest);
-                    checksum.add(partition_checksum(digest));
-                    return stop_iteration::no;
-                });
+                std::array<uint8_t, 32> digest;
+                sha256_hasher h;
+                feed_hash(h, *mopt);
+                h.finalize(digest);
+                checksum.add(partition_checksum(digest));
+                return stop_iteration::no;
             });
         }).then([&checksum] {
             return checksum;

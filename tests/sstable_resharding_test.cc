@@ -15,7 +15,6 @@
 #include "sstable_test.hh"
 #include "tmpdir.hh"
 #include "cell_locking.hh"
-#include "mutation_reader_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "memtable-sstable.hh"
 

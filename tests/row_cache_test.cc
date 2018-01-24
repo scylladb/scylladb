@@ -28,7 +28,6 @@
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
-#include "tests/mutation_reader_assertions.hh"
 #include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
@@ -353,7 +352,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             auto cache = make_cache(s, secondary_calls_count);
             return mutation_source([cache] (schema_ptr s, const dht::partition_range& range,
                     const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-                return cache->make_flat_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
+                return cache->make_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
             });
         };
 
@@ -478,7 +477,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             auto cache = make_cache(s, secondary_calls_count);
             auto ds = mutation_source([cache] (schema_ptr s, const dht::partition_range& range,
                     const query::partition_slice& slice, const io_priority_class& pc, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-                    return cache->make_flat_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
+                    return cache->make_reader(s, range, slice, pc, std::move(trace), std::move(fwd));
             });
 
             test(ds, query::full_partition_range, partitions.size() + 1);
@@ -610,7 +609,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd,
                     mutation_reader::forwarding fwd_mr) {
-                return cache->make_flat_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+                return cache->make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
             });
         });
     });
@@ -644,7 +643,7 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         cache.populate(m1); // m1 is supposed to have random continuity and populate() should preserve it
 
         auto rd1 = cache.make_reader(gen.schema());
-        auto sm1 = rd1().get0();
+        rd1.fill_buffer().get();
 
         // Merge m2 into cache
         auto mt = make_lw_shared<memtable>(gen.schema());
@@ -652,10 +651,10 @@ SEASTAR_TEST_CASE(test_reading_from_random_partial_partition) {
         cache.update([&] { underlying.apply(m2); }, *mt).get();
 
         auto rd2 = cache.make_reader(gen.schema());
-        auto sm2 = rd2().get0();
+        rd2.fill_buffer().get();
 
-        assert_that(std::move(sm1)).has_mutation().is_equal_to(m1);
-        assert_that(std::move(sm2)).has_mutation().is_equal_to(m1 + m2);
+        assert_that(std::move(rd1)).next_mutation().is_equal_to(m1);
+        assert_that(std::move(rd2)).next_mutation().is_equal_to(m1 + m2);
     });
 }
 
@@ -718,12 +717,11 @@ SEASTAR_TEST_CASE(test_eviction) {
 bool has_key(row_cache& cache, const dht::decorated_key& key) {
     auto range = dht::partition_range::make_singular(key);
     auto reader = cache.make_reader(cache.schema(), range);
-    auto mo = reader().get0();
+    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
     if (!bool(mo)) {
         return false;
     }
-    auto m = mutation_from_streamed_mutation(*mo).get0();
-    return !m.partition().empty();
+    return !mo->partition().empty();
 }
 
 void verify_has(row_cache& cache, const dht::decorated_key& key) {
@@ -737,17 +735,16 @@ void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
 void verify_has(row_cache& cache, const mutation& m) {
     auto range = dht::partition_range::make_singular(m.decorated_key());
     auto reader = cache.make_reader(cache.schema(), range);
-    assert_that(reader().get0()).has_mutation().is_equal_to(m);
+    assert_that(std::move(reader)).next_mutation().is_equal_to(m);
 }
 
-void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::deque<int> expected)
+void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, std::deque<int> expected)
 {
     clustering_key::equality ck_eq(*s);
 
-    auto smopt = reader().get0();
-    BOOST_REQUIRE(smopt);
-    auto mfopt = (*smopt)().get0();
-    while (mfopt) {
+    auto mfopt = reader().get0();
+    BOOST_REQUIRE(mfopt->is_partition_start());
+    while ((mfopt = reader().get0()) && !mfopt->is_end_of_partition()) {
         if (mfopt->is_clustering_row()) {
             BOOST_REQUIRE(!expected.empty());
             auto expected_ck = expected.front();
@@ -758,9 +755,9 @@ void test_sliced_read_row_presence(mutation_reader reader, schema_ptr s, std::de
                 BOOST_FAIL(sprint("Expected %s, but got %s", ck, cr.key()));
             }
         }
-        mfopt = (*smopt)().get0();
     }
     BOOST_REQUIRE(expected.empty());
+    BOOST_REQUIRE(mfopt && mfopt->is_end_of_partition());
     BOOST_REQUIRE(!reader().get0());
 }
 
@@ -964,7 +961,7 @@ SEASTAR_TEST_CASE(test_update_failure) {
         auto has_only = [&] (const partitions_type& partitions) {
             auto reader = cache.make_reader(s, query::full_partition_range);
             for (int i = 0; i < partition_count; i++) {
-                auto mopt = mutation_from_streamed_mutation(reader().get0()).get0();
+                auto mopt = read_mutation_from_flat_mutation_reader(reader).get0();
                 if (!mopt) {
                     break;
                 }
@@ -1156,10 +1153,12 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
 
         auto m0_range = dht::partition_range::make_singular(ring[0].ring_position());
         auto rd1 = cache.make_reader(s, m0_range);
-        auto rd1_result = rd1();
+        rd1.set_max_buffer_size(1);
+        auto rd1_fill_buffer = rd1.fill_buffer();
 
         auto rd2 = cache.make_reader(s);
-        auto rd2_result = rd2();
+        rd2.set_max_buffer_size(1);
+        auto rd2_fill_buffer = rd2.fill_buffer();
 
         sleep(10ms).get();
 
@@ -1174,14 +1173,17 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
         thr.unblock();
         update_future.get();
 
+        rd1_fill_buffer.get();
+        rd2_fill_buffer.get();
+
         // Reads started before memtable flush should return previous value, otherwise this test
         // doesn't trigger the conditions it is supposed to protect against.
-        assert_that(rd1_result.get0()).has_mutation().is_equal_to(ring[0]);
+        assert_that(std::move(rd1)).produces(ring[0]);
 
-        assert_that(rd2_result.get0()).has_mutation().is_equal_to(ring[0]);
-        assert_that(rd2().get0()).has_mutation().is_equal_to(ring2[1]);
-        assert_that(rd2().get0()).has_mutation().is_equal_to(ring2[2]);
-        assert_that(rd2().get0()).has_no_mutation();
+        assert_that(std::move(rd2)).produces(ring[0])
+            .produces(ring2[1])
+            .produces(ring2[2])
+            .produces_end_of_stream();
 
         // Reads started after update was started but before previous populations completed
         // should already see the new data
@@ -1286,7 +1288,8 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         thr.block();
 
         auto rd1 = cache.make_reader(s);
-        auto rd1_result = rd1();
+        rd1.set_max_buffer_size(1);
+        auto rd1_fill_buffer = rd1.fill_buffer();
 
         sleep(10ms).get();
 
@@ -1304,10 +1307,12 @@ SEASTAR_TEST_CASE(test_cache_population_and_clear_race) {
         // Reads started before memtable flush should return previous value, otherwise this test
         // doesn't trigger the conditions it is supposed to protect against.
 
-        assert_that(rd1_result.get0()).has_mutation().is_equal_to(ring[0]);
-        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[1]);
-        assert_that(rd1().get0()).has_mutation().is_equal_to(ring2[2]);
-        assert_that(rd1().get0()).has_no_mutation();
+        rd1_fill_buffer.get();
+
+        assert_that(std::move(rd1)).produces(ring[0])
+            .produces(ring2[1])
+            .produces(ring2[2])
+            .produces_end_of_stream();
 
         // Reads started after clear but before previous populations completed
         // should already see the new data
@@ -1343,13 +1348,11 @@ SEASTAR_TEST_CASE(test_mvcc) {
             auto pk = m1.key();
             cache.populate(m1);
 
-            auto sm1 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm1);
-            BOOST_REQUIRE(eq(sm1->key(), pk));
+            auto rd1 = cache.make_reader(s);
+            rd1.fill_buffer().get();
 
-            auto sm2 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm2);
-            BOOST_REQUIRE(eq(sm2->key(), pk));
+            auto rd2 = cache.make_reader(s);
+            rd2.fill_buffer().get();
 
             auto mt1 = make_lw_shared<memtable>(s);
             mt1->apply(m2);
@@ -1367,19 +1370,16 @@ SEASTAR_TEST_CASE(test_mvcc) {
             mt1_copy->apply(*mt1).get();
             cache.update([&] { underlying.apply(mt1_copy); }, *mt1).get();
 
-            auto sm3 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm3);
-            BOOST_REQUIRE(eq(sm3->key(), pk));
+            auto rd3 = cache.make_reader(s);
+            rd3.fill_buffer().get();
 
-            auto sm4 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm4);
-            BOOST_REQUIRE(eq(sm4->key(), pk));
+            auto rd4 = cache.make_reader(s);
+            rd4.fill_buffer().get();
 
-            auto sm5 = cache.make_reader(s)().get0();
-            BOOST_REQUIRE(sm5);
-            BOOST_REQUIRE(eq(sm5->key(), pk));
+            auto rd5 = cache.make_reader(s);
+            rd5.fill_buffer().get();
 
-            assert_that_stream(std::move(*sm3)).has_monotonic_positions();
+            assert_that(std::move(rd3)).has_monotonic_positions();
 
             if (with_active_memtable_reader) {
                 assert(mt1_reader_opt);
@@ -1388,19 +1388,13 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 assert_that(*mt1_reader_mutation).is_equal_to(m2);
             }
 
-            auto m_4 = mutation_from_streamed_mutation(std::move(sm4)).get0();
-            assert_that(*m_4).is_equal_to(m12);
-
-            auto m_1 = mutation_from_streamed_mutation(std::move(sm1)).get0();
-            assert_that(*m_1).is_equal_to(m1);
+            assert_that(std::move(rd4)).produces(m12);
+            assert_that(std::move(rd1)).produces(m1);
 
             cache.invalidate([] {}).get0();
 
-            auto m_2 = mutation_from_streamed_mutation(std::move(sm2)).get0();
-            assert_that(*m_2).is_equal_to(m1);
-
-            auto m_5 = mutation_from_streamed_mutation(std::move(sm5)).get0();
-            assert_that(*m_5).is_equal_to(m12);
+            assert_that(std::move(rd2)).produces(m1);
+            assert_that(std::move(rd5)).produces(m12);
         };
 
         for_each_mutation_pair([&] (const mutation& m1_, const mutation& m2_, are_equal) {
@@ -1786,19 +1780,13 @@ SEASTAR_TEST_CASE(test_tombstone_merging_in_partial_partition) {
                 .produces(m1 + m2, slice.row_ranges(*s.schema(), pk.key()))
                 .produces_end_of_stream();
 
-            auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            assert_that_stream(std::move(*smo)).has_monotonic_positions();
+            assert_that(cache.make_reader(s.schema(), pr, slice)).has_monotonic_positions();
         }
     });
 }
 
-static void consume_all(mutation_reader& rd) {
-    while (streamed_mutation_opt smo = rd().get0()) {
-        auto&& sm = *smo;
-        while (sm().get0()) ;
-    }
+static void consume_all(flat_mutation_reader& rd) {
+    while (auto mfopt = rd().get0()) {}
 }
 
 static void populate_range(row_cache& cache,
@@ -1839,33 +1827,33 @@ SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
             ::apply(cache, underlying, m);
         };
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
+        auto make_reader = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s, query::full_partition_range, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
-        auto sm1 = make_sm(s->full_slice());
+        auto rd1 = make_reader(s->full_slice());
 
         apply(m2);
 
-        auto sm2 = make_sm(s->full_slice());
+        auto rd2 = make_reader(s->full_slice());
 
         auto slice_with_key2 = partition_slice_builder(*s)
             .with_range(query::clustering_range::make_singular(table.make_ckey(2)))
             .build();
-        auto sm3 = make_sm(slice_with_key2);
+        auto rd3 = make_reader(slice_with_key2);
 
         cache.evict();
 
-        sm3.produces_row_with_key(table.make_ckey(2))
+        rd3.produces_partition_start(m1.decorated_key())
+            .produces_row_with_key(table.make_ckey(2))
+            .produces_partition_end()
             .produces_end_of_stream();
 
-        sm1.produces(m1);
-        sm2.produces(m1 + m2);
+        rd1.produces(m1);
+        rd2.produces(m1 + m2);
     });
 }
 
@@ -1890,7 +1878,7 @@ SEASTAR_TEST_CASE(test_single_tombstone_with_small_buffer) {
 
         populate_range(cache);
 
-        auto rd = cache.make_flat_reader(s.schema(), pr);
+        auto rd = cache.make_reader(s.schema(), pr);
         rd.set_max_buffer_size(1);
 
         assert_that(std::move(rd)).produces_partition_start(pk)
@@ -1922,7 +1910,7 @@ SEASTAR_TEST_CASE(test_tombstone_and_row_with_small_buffer) {
 
         populate_range(cache);
 
-        auto rd = cache.make_flat_reader(s.schema(), pr);
+        auto rd = cache.make_reader(s.schema(), pr);
         rd.set_max_buffer_size(1);
 
         assert_that(std::move(rd)).produces_partition_start(pk)
@@ -1965,13 +1953,11 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
+        auto make_reader = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
         // populate using reader in same snapshot
@@ -1982,30 +1968,35 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
                 .with_range(query::clustering_range::make_starting_with(s.make_ckey(7)))
                 .build();
 
-            auto sma2 = make_sm(slice_after_7);
+            auto rd2 = make_reader(slice_after_7);
 
-            auto sma = make_sm(s.schema()->full_slice());
-            sma.produces_row_with_key(s.make_ckey(0));
-            sma.produces_range_tombstone(rt1);
+            auto rd = make_reader(s.schema()->full_slice());
+            rd.produces_partition_start(pk);
+            rd.produces_row_with_key(s.make_ckey(0));
+            rd.produces_range_tombstone(rt1);
 
             cache.evict();
 
-            sma2.produces_row_with_key(s.make_ckey(8));
-            sma2.produces_end_of_stream();
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(8));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
-            sma.produces_range_tombstone(rt2);
-            sma.produces_range_tombstone(rt3);
-            sma.produces_row_with_key(s.make_ckey(8));
-            sma.produces_end_of_stream();
+            rd.produces_range_tombstone(rt2);
+            rd.produces_range_tombstone(rt3);
+            rd.produces_row_with_key(s.make_ckey(8));
+            rd.produces_partition_end();
+            rd.produces_end_of_stream();
         }
 
         // populate using reader created after invalidation
         {
             populate_range(cache);
 
-            auto sma = make_sm(s.schema()->full_slice());
-            sma.produces_row_with_key(s.make_ckey(0));
-            sma.produces_range_tombstone(rt1);
+            auto rd = make_reader(s.schema()->full_slice());
+            rd.produces_partition_start(pk);
+            rd.produces_row_with_key(s.make_ckey(0));
+            rd.produces_range_tombstone(rt1);
 
             mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(7), "v7");
@@ -2016,10 +2007,11 @@ SEASTAR_TEST_CASE(test_tombstones_are_not_missed_when_range_is_invalidated) {
 
             populate_range(cache, pr, query::clustering_range::make_starting_with(s.make_ckey(5)));
 
-            sma.produces_range_tombstone(rt2);
-            sma.produces_range_tombstone(rt3);
-            sma.produces_row_with_key(s.make_ckey(8));
-            sma.produces_end_of_stream();
+            rd.produces_range_tombstone(rt2);
+            rd.produces_range_tombstone(rt3);
+            rd.produces_row_with_key(s.make_ckey(8));
+            rd.produces_partition_end();
+            rd.produces_end_of_stream();
         }
     });
 }
@@ -2045,14 +2037,12 @@ SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
                 try {
                     injector.fail_after(i++);
                     auto rd = cache.make_reader(s, query::full_partition_range, slice);
-                    auto smo = rd().get0();
-                    BOOST_REQUIRE(smo);
-                    auto got = mutation_from_streamed_mutation(*smo).get0();
-                    smo = rd().get0();
-                    BOOST_REQUIRE(!smo);
+                    auto got_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                    BOOST_REQUIRE(got_opt);
+                    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(rd).get0());
                     injector.cancel();
 
-                    assert_that(got).is_equal_to(mut, ranges);
+                    assert_that(*got_opt).is_equal_to(mut, ranges);
                     assert_that(cache.make_reader(s, query::full_partition_range, slice))
                         .produces(mut, ranges);
 
@@ -2123,14 +2113,13 @@ SEASTAR_TEST_CASE(test_exception_safety_of_transitioning_from_underlying_read_to
 
                 injector.fail_after(i++);
                 auto rd = cache.make_reader(s.schema(), pr, slice);
-                auto smo = rd().get0();
-                BOOST_REQUIRE(smo);
-                auto got = mutation_from_streamed_mutation(*smo).get0();
-                smo = rd().get0();
-                BOOST_REQUIRE(!smo);
+                auto got_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                BOOST_REQUIRE(got_opt);
+                auto mfopt = rd().get0();
+                BOOST_REQUIRE(!mfopt);
                 injector.cancel();
 
-                assert_that(got).is_equal_to(mut);
+                assert_that(*got_opt).is_equal_to(mut);
 
                 if (!injector.failed()) {
                     break;
@@ -2197,18 +2186,16 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice& slice) {
+        auto make_reader = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s.schema(), pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return assert_that_stream(std::move(sm));
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return assert_that(std::move(rd));
         };
 
         {
             populate_range(cache, pr, s.make_ckey_range(0, 1));
-            auto rd = make_sm(s.schema()->full_slice()); // to keep current version alive
+            auto rd = make_reader(s.schema()->full_slice()); // to keep current version alive
 
             mutation m2(s.schema(), pk);
             s.add_row(m2, s.make_ckey(2), "v");
@@ -2220,28 +2207,32 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
                 .with_range(s.make_ckey_range(0, 5))
                 .build();
 
-            auto sma1 = make_sm(slice1);
-            sma1.produces_row_with_key(s.make_ckey(0));
+            auto rd1 = make_reader(slice1);
+            rd1.produces_partition_start(pk);
+            rd1.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(3, 3));
 
-            auto sma2 = make_sm(slice1);
+            auto rd2 = make_reader(slice1);
 
-            sma2.produces_row_with_key(s.make_ckey(0));
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(2, 3));
 
-            sma2.produces_row_with_key(s.make_ckey(1));
-            sma2.produces_row_with_key(s.make_ckey(2));
-            sma2.produces_row_with_key(s.make_ckey(3));
-            sma2.produces_row_with_key(s.make_ckey(4));
-            sma2.produces_end_of_stream();
+            rd2.produces_row_with_key(s.make_ckey(1));
+            rd2.produces_row_with_key(s.make_ckey(2));
+            rd2.produces_row_with_key(s.make_ckey(3));
+            rd2.produces_row_with_key(s.make_ckey(4));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
-            sma1.produces_row_with_key(s.make_ckey(1));
-            sma1.produces_row_with_key(s.make_ckey(2));
-            sma1.produces_row_with_key(s.make_ckey(3));
-            sma1.produces_row_with_key(s.make_ckey(4));
-            sma1.produces_end_of_stream();
+            rd1.produces_row_with_key(s.make_ckey(1));
+            rd1.produces_row_with_key(s.make_ckey(2));
+            rd1.produces_row_with_key(s.make_ckey(3));
+            rd1.produces_row_with_key(s.make_ckey(4));
+            rd1.produces_partition_end();
+            rd1.produces_end_of_stream();
         }
 
         {
@@ -2252,15 +2243,17 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
                 .with_range(s.make_ckey_range(0, 1))
                 .with_range(s.make_ckey_range(3, 3))
                 .build();
-            auto sma1 = make_sm(slice1);
+            auto rd1 = make_reader(slice1);
 
-            sma1.produces_row_with_key(s.make_ckey(0));
+            rd1.produces_partition_start(pk);
+            rd1.produces_row_with_key(s.make_ckey(0));
 
             populate_range(cache, pr, s.make_ckey_range(2, 4));
 
-            sma1.produces_row_with_key(s.make_ckey(1));
-            sma1.produces_row_with_key(s.make_ckey(3));
-            sma1.produces_end_of_stream();
+            rd1.produces_row_with_key(s.make_ckey(1));
+            rd1.produces_row_with_key(s.make_ckey(3));
+            rd1.produces_partition_end();
+            rd1.produces_end_of_stream();
         }
     });
 }
@@ -2355,13 +2348,11 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
+        auto make_reader = [&] (const query::partition_slice* slice = nullptr) {
             auto rd = cache.make_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         std::vector<query::clustering_range> ranges;
@@ -2380,21 +2371,21 @@ SEASTAR_TEST_CASE(test_random_row_population) {
 
         struct read {
             std::unique_ptr<query::partition_slice> slice;
-            streamed_mutation sm;
+            flat_mutation_reader reader;
             mutation result;
         };
 
         std::vector<read> readers;
         for (auto&& r : ranges) {
             auto slice = std::make_unique<query::partition_slice>(partition_slice_builder(*s.schema()).with_range(r).build());
-            auto sm = make_sm(slice.get());
-            readers.push_back(read{std::move(slice), std::move(sm), mutation(s.schema(), pk)});
+            auto rd = make_reader(slice.get());
+            readers.push_back(read{std::move(slice), std::move(rd), mutation(s.schema(), pk)});
         }
 
         while (!readers.empty()) {
             auto i = readers.begin();
             while (i != readers.end()) {
-                auto mfo = i->sm().get0();
+                auto mfo = i->reader().get0();
                 if (!mfo) {
                     auto&& ranges = i->slice->row_ranges(*s.schema(), pk.key());
                     assert_that(i->result).is_equal_to(m1, ranges);
@@ -2472,17 +2463,15 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             cache.update([&] { underlying.apply(m); }, *mt).get();
         };
 
-        auto make_sm = [&] {
+        auto make_reader = [&] {
             auto rd = cache.make_reader(s.schema(), pr);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             populate_range(cache, pr, query::clustering_range::make({s.make_ckey(2)}, {s.make_ckey(4)}));
 
@@ -2522,7 +2511,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             populate_range(cache, pr, s.make_ckey_range(5, 5));
             populate_range(cache, pr, s.make_ckey_range(8, 8));
 
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             apply(m3);
 
@@ -2540,7 +2529,7 @@ SEASTAR_TEST_CASE(test_continuity_is_populated_when_read_overlaps_with_older_ver
             populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(4)));
             populate_range(cache, pr, query::clustering_range::make_singular(s.make_ckey(7)));
 
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_reader(); // to keep the old version around
 
             apply(m4);
 
@@ -2602,13 +2591,11 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             cache.update([&] { underlying.apply(m); }, *mt).get();
         };
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
+        auto make_reader = [&] (const query::partition_slice* slice = nullptr) {
             auto rd = cache.make_reader(s, pr, slice ? *slice : s->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
@@ -2619,15 +2606,17 @@ SEASTAR_TEST_CASE(test_continuity_population_with_multicolumn_clustering_key) {
             auto slice1 = partition_slice_builder(*s)
                 .with_range(query::clustering_range::make_singular(ck2))
                 .build();
-            auto sm1 = make_sm(&slice1);
+            auto rd1 = make_reader(&slice1);
 
             apply(m2);
 
             populate_range(cache, pr, query::full_clustering_range);
             check_continuous(cache, pr, query::full_clustering_range);
 
-            assert_that_stream(std::move(sm1))
+            assert_that(std::move(rd1))
+                .produces_partition_start(pk)
                 .produces_row_with_key(ck2)
+                .produces_partition_end()
                 .produces_end_of_stream();
 
             assert_that(cache.make_reader(s, pr))
@@ -2709,17 +2698,15 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] (const query::partition_slice* slice = nullptr) {
+        auto make_rd = [&] (const query::partition_slice* slice = nullptr) {
             auto rd = cache.make_reader(s.schema(), pr, slice ? *slice : s.schema()->full_slice());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         {
-            auto sm1 = make_sm(); // to keep the old version around
+            auto rd1 = make_rd(); // to keep the old version around
 
             populate_range(cache, pr, s.make_ckey_range(0, 0));
             populate_range(cache, pr, s.make_ckey_range(3, 3));
@@ -2729,17 +2716,19 @@ SEASTAR_TEST_CASE(test_concurrent_setting_of_continuity_on_read_upper_bound) {
             auto slice1 = partition_slice_builder(*s.schema())
                 .with_range(s.make_ckey_range(0, 4))
                 .build();
-            auto sm2 = assert_that_stream(make_sm(&slice1));
+            auto rd2 = assert_that(make_rd(&slice1));
 
-            sm2.produces_row_with_key(s.make_ckey(0));
-            sm2.produces_row_with_key(s.make_ckey(1));
+            rd2.produces_partition_start(pk);
+            rd2.produces_row_with_key(s.make_ckey(0));
+            rd2.produces_row_with_key(s.make_ckey(1));
 
             populate_range(cache, pr, s.make_ckey_range(2, 4));
 
-            sm2.produces_row_with_key(s.make_ckey(2));
-            sm2.produces_row_with_key(s.make_ckey(3));
-            sm2.produces_row_with_key(s.make_ckey(4));
-            sm2.produces_end_of_stream();
+            rd2.produces_row_with_key(s.make_ckey(2));
+            rd2.produces_row_with_key(s.make_ckey(3));
+            rd2.produces_row_with_key(s.make_ckey(4));
+            rd2.produces_partition_end();
+            rd2.produces_end_of_stream();
 
             // FIXME: [1, 2] will not be continuous due to concurrent population.
             // check_continuous(cache, pr, s.make_ckey_range(0, 4));
@@ -2773,19 +2762,17 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
 
         row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
 
-        auto make_sm = [&] {
+        auto make_reader = [&] {
             auto rd = cache.make_reader(s.schema());
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(1);
-            return std::move(sm);
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         apply(cache, underlying, m1);
         populate_range(cache, pr, s.make_ckey_range(0, 3));
 
-        auto sm1 = make_sm();
+        auto rd1 = make_reader();
 
         apply(cache, underlying, m2);
 
@@ -2814,11 +2801,9 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         auto pr = dht::partition_range::make_singular(m0.decorated_key());
         auto make_reader = [&] (const query::partition_slice& slice) {
             auto rd = cache.make_reader(s, pr, slice);
-            auto smo = rd().get0();
-            BOOST_REQUIRE(smo);
-            streamed_mutation& sm = *smo;
-            sm.set_max_buffer_size(3);
-            return std::move(sm);
+            rd.set_max_buffer_size(3);
+            rd.fill_buffer().get();
+            return std::move(rd);
         };
 
         const int n_readers = 3;
@@ -2844,7 +2829,9 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                         .build();
 
                     auto rd = make_reader(slice);
-                    auto actual = mutation_from_streamed_mutation(rd).get0();
+                    auto actual_opt = read_mutation_from_flat_mutation_reader(rd).get0();
+                    BOOST_REQUIRE(actual_opt);
+                    auto actual = *actual_opt;
 
                     auto&& ranges = slice.row_ranges(*s, actual.key());
                     actual.partition().row_tombstones().trim(*s, ranges);

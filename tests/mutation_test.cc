@@ -44,7 +44,6 @@
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
-#include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
 #include "tests/test_services.hh"
 #include "tests/failure_injecting_allocation_strategy.hh"

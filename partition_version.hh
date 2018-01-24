@@ -22,7 +22,7 @@
 #pragma once
 
 #include "mutation_partition.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 

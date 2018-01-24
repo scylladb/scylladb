@@ -24,13 +24,12 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "mutation.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "mutation_source_test.hh"
 #include "flat_mutation_reader.hh"
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
 #include "memtable.hh"
-#include "mutation_reader_assertions.hh"
 #include "row_cache.hh"
 #include "sstables/sstables.hh"
 #include "tmpdir.hh"
@@ -39,116 +38,6 @@
 #include "tests/test_services.hh"
 #include "tests/simple_schema.hh"
 #include "flat_mutation_reader_assertions.hh"
-
-static void test_double_conversion_through_mutation_reader(const std::vector<mutation>& mutations) {
-    BOOST_REQUIRE(!mutations.empty());
-    auto schema = mutations[0].schema();
-    auto base_reader = make_reader_returning_many(mutations);
-    auto flat_reader = flat_mutation_reader_from_mutation_reader(schema,
-                                                                 std::move(base_reader),
-                                                                 streamed_mutation::forwarding::no);
-    auto normal_reader = mutation_reader_from_flat_mutation_reader(std::move(flat_reader));
-    for (auto& m : mutations) {
-        auto smopt = normal_reader().get0();
-        BOOST_REQUIRE(smopt);
-        auto mopt = mutation_from_streamed_mutation(std::move(*smopt)).get0();
-        BOOST_REQUIRE(mopt);
-        BOOST_REQUIRE_EQUAL(m, *mopt);
-    }
-    BOOST_REQUIRE(!normal_reader().get0());
-}
-
-static void check_two_readers_are_the_same(schema_ptr schema, mutation_reader& normal_reader, flat_mutation_reader& flat_reader) {
-    auto smopt = normal_reader().get0();
-    BOOST_REQUIRE(smopt);
-    auto mfopt = flat_reader().get0();
-    BOOST_REQUIRE(mfopt);
-    BOOST_REQUIRE(mfopt->is_partition_start());
-    BOOST_REQUIRE(smopt->decorated_key().equal(*schema, mfopt->as_mutable_partition_start().key()));
-    BOOST_REQUIRE_EQUAL(smopt->partition_tombstone(), mfopt->as_mutable_partition_start().partition_tombstone());
-    mutation_fragment_opt sm_mfopt;
-    while (bool(sm_mfopt = (*smopt)().get0())) {
-        mfopt = flat_reader().get0();
-        BOOST_REQUIRE(mfopt);
-        BOOST_REQUIRE(sm_mfopt->equal(*schema, *mfopt));
-    }
-    mfopt = flat_reader().get0();
-    BOOST_REQUIRE(mfopt);
-    BOOST_REQUIRE(mfopt->is_end_of_partition());
-}
-
-static void test_conversion_to_flat_mutation_reader_through_mutation_reader(const std::vector<mutation>& mutations) {
-    BOOST_REQUIRE(!mutations.empty());
-    auto schema = mutations[0].schema();
-    auto base_reader = make_reader_returning_many(mutations);
-    auto flat_reader = flat_mutation_reader_from_mutation_reader(schema,
-                                                                 std::move(base_reader),
-                                                                 streamed_mutation::forwarding::no);
-    for (auto& m : mutations) {
-        auto normal_reader = make_reader_returning(m);
-        check_two_readers_are_the_same(schema, normal_reader, flat_reader);
-    }
-}
-
-static void test_conversion(const std::vector<mutation>& mutations) {
-    BOOST_REQUIRE(!mutations.empty());
-    auto flat_reader = flat_mutation_reader_from_mutations(std::vector<mutation>(mutations));
-    for (auto& m : mutations) {
-        mutation_opt m2 = read_mutation_from_flat_mutation_reader(flat_reader).get0();
-        BOOST_REQUIRE(m2);
-        BOOST_REQUIRE_EQUAL(m, *m2);
-    }
-    BOOST_REQUIRE(!read_mutation_from_flat_mutation_reader(flat_reader).get0());
-}
-
-/*
- * =================
- * ===== Tests =====
- * =================
- */
-
-SEASTAR_TEST_CASE(test_conversions_through_mutation_reader_single_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            test_double_conversion_through_mutation_reader({m});
-            test_conversion_to_flat_mutation_reader_through_mutation_reader({m});
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_double_conversion_through_mutation_reader_two_mutations) {
-    return seastar::async([] {
-        for_each_mutation_pair([&] (auto&& m, auto&& m2, are_equal) {
-            if (m.decorated_key().less_compare(*m.schema(), m2.decorated_key())) {
-                test_double_conversion_through_mutation_reader({m, m2});
-                test_conversion_to_flat_mutation_reader_through_mutation_reader({m, m2});
-            } else if (m2.decorated_key().less_compare(*m.schema(), m.decorated_key())) {
-                test_double_conversion_through_mutation_reader({m2, m});
-                test_conversion_to_flat_mutation_reader_through_mutation_reader({m2, m});
-            }
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_conversions_single_mutation) {
-    return seastar::async([] {
-        for_each_mutation([&] (const mutation& m) {
-            test_conversion({m});
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_double_conversion_two_mutations) {
-    return seastar::async([] {
-        for_each_mutation_pair([&] (auto&& m, auto&& m2, are_equal) {
-            if (m.decorated_key().less_compare(*m.schema(), m2.decorated_key())) {
-                test_conversion({m, m2});
-            } else if (m2.decorated_key().less_compare(*m.schema(), m.decorated_key())) {
-                test_conversion({m2, m});
-            }
-        });
-    });
-}
 
 struct mock_consumer {
     struct result {
@@ -715,5 +604,16 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
         for (int i = 1; i < ms.size(); ++i) {
             test(rd2, ms[i]);
         }
+    });
+}
+
+SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
+    return seastar::async([] {
+        for_each_mutation([&] (const mutation& m) {
+            auto rd = flat_mutation_reader_from_mutations({mutation(m)});
+            rd().get();
+            rd().get();
+            // We rely on AddressSanitizer telling us if nothing was leaked.
+        });
     });
 }

@@ -536,20 +536,7 @@ std::ostream& operator<<(std::ostream&, const mutation_fragment& mf);
 
 using mutation_fragment_opt = optimized_optional<mutation_fragment>;
 
-// streamed_mutation represents a mutation in a form of a stream of
-// mutation_fragments. streamed_mutation emits mutation fragments in the order
-// they should appear in the sstables, i.e. static row is always the first one,
-// then clustering rows and range tombstones are emitted according to the
-// lexicographical ordering of their clustering keys and bounds of the range
-// tombstones.
-//
-// The ordering of mutation_fragments also guarantees that by the time the
-// consumer sees a clustering row it has already received all relevant tombstones.
-//
-// Partition key and partition tombstone are not streamed and is part of the
-// streamed_mutation itself.
-class streamed_mutation {
-public:
+namespace streamed_mutation {
     // Determines whether streamed_mutation is in forwarding mode or not.
     //
     // In forwarding mode the stream does not return all fragments right away,
@@ -572,174 +559,7 @@ public:
     // cannot be used.
     class forwarding_tag;
     using forwarding = bool_class<forwarding_tag>;
-
-    // streamed_mutation uses batching. The mutation implementations are
-    // supposed to fill a buffer with mutation fragments until is_buffer_full()
-    // or end of stream is encountered.
-    class impl {
-        circular_buffer<mutation_fragment> _buffer;
-        size_t _buffer_size = 0;
-    protected:
-        size_t max_buffer_size_in_bytes = 8 * 1024;
-
-        schema_ptr _schema;
-        dht::decorated_key _key;
-        tombstone _partition_tombstone;
-
-        bool _end_of_stream = false;
-
-        friend class streamed_mutation;
-    protected:
-        template<typename... Args>
-        void push_mutation_fragment(Args&&... args) {
-            _buffer.emplace_back(std::forward<Args>(args)...);
-            _buffer_size += _buffer.back().memory_usage();
-        }
-    public:
-        // When succeeds, makes sure that the next push_mutation_fragment() will not fail.
-        void reserve_one() {
-            if (_buffer.capacity() == _buffer.size()) {
-                _buffer.reserve(_buffer.size() * 2 + 1);
-            }
-        }
-        explicit impl(schema_ptr s, dht::decorated_key dk, tombstone pt)
-            : _schema(std::move(s)), _key(std::move(dk)), _partition_tombstone(pt)
-        { }
-
-        virtual ~impl() { }
-        virtual future<> fill_buffer(db::timeout_clock::time_point) = 0;
-
-        // See streamed_mutation::fast_forward_to().
-        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) {
-            throw std::bad_function_call(); // FIXME: make pure virtual after implementing everywhere.
-        }
-
-        bool is_end_of_stream() const { return _end_of_stream; }
-        bool is_buffer_empty() const { return _buffer.empty(); }
-        bool is_buffer_full() const { return _buffer_size >= max_buffer_size_in_bytes; }
-
-        mutation_fragment pop_mutation_fragment() {
-            auto mf = std::move(_buffer.front());
-            _buffer.pop_front();
-            _buffer_size -= mf.memory_usage();
-            return mf;
-        }
-
-        future<mutation_fragment_opt> operator()() {
-            if (is_buffer_empty()) {
-                if (is_end_of_stream()) {
-                    return make_ready_future<mutation_fragment_opt>();
-                }
-                return fill_buffer(db::no_timeout).then([this] { return operator()(); });
-            }
-            return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
-        }
-
-        // Removes all fragments from the buffer which are not relevant for any range starting at given position.
-        // It is assumed that pos is greater than positions of fragments already in the buffer.
-        void forward_buffer_to(const position_in_partition& pos);
-    };
-private:
-    std::unique_ptr<impl> _impl;
-
-    streamed_mutation() = default;
-    explicit operator bool() const { return bool(_impl); }
-    friend class optimized_optional<streamed_mutation>;
-public:
-    explicit streamed_mutation(std::unique_ptr<impl> i)
-        : _impl(std::move(i)) { }
-
-    const partition_key& key() const { return _impl->_key.key(); }
-    const dht::decorated_key& decorated_key() const { return _impl->_key; }
-
-    const schema_ptr& schema() const { return _impl->_schema; }
-
-    tombstone partition_tombstone() const { return _impl->_partition_tombstone; }
-
-    bool is_end_of_stream() const { return _impl->is_end_of_stream(); }
-    bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
-    bool is_buffer_full() const { return _impl->is_buffer_full(); }
-
-    mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
-
-    future<> fill_buffer(db::timeout_clock::time_point timeout = db::no_timeout) { return _impl->fill_buffer(timeout); }
-
-    // Skips to a later range of rows.
-    // The new range must not overlap with the current range.
-    //
-    // See docs of streamed_mutation::forwarding for semantics.
-    future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) {
-        return _impl->fast_forward_to(std::move(pr), timeout);
-    }
-
-    future<mutation_fragment_opt> operator()() {
-        return _impl->operator()();
-    }
-
-    // Resolves with a pointer to the next fragment in the stream without consuming it from the stream,
-    // or nullptr if there are no more fragments.
-    // The returned pointer is invalidated by any other call to this object.
-    future<mutation_fragment*> peek() {
-        if (!is_buffer_empty()) {
-            return make_ready_future<mutation_fragment*>(&_impl->_buffer.front());
-        }
-        if (is_end_of_stream()) {
-            return make_ready_future<mutation_fragment*>(nullptr);
-        }
-        return fill_buffer().then([this] {
-            return peek();
-        });
-    }
-
-    void set_max_buffer_size(size_t size) {
-        _impl->max_buffer_size_in_bytes = size;
-    }
-};
-
-// Adapts streamed_mutation to a streamed_mutation which is in forwarding mode.
-streamed_mutation make_forwardable(streamed_mutation);
-
-std::ostream& operator<<(std::ostream& os, const streamed_mutation& sm);
-
-template<typename Impl, typename... Args>
-streamed_mutation make_streamed_mutation(Args&&... args) {
-    return streamed_mutation(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
-
-using streamed_mutation_opt = optimized_optional<streamed_mutation>;
-
-template<typename Consumer>
-GCC6_CONCEPT(
-    requires StreamedMutationConsumer<Consumer>()
-)
-auto consume(streamed_mutation& m, Consumer consumer) {
-    return do_with(std::move(consumer), [&m] (Consumer& c) {
-        if (c.consume(m.partition_tombstone()) == stop_iteration::yes) {
-            return make_ready_future().then([&] { return c.consume_end_of_stream(); });
-        }
-        return repeat([&m, &c] {
-            if (m.is_buffer_empty()) {
-                if (m.is_end_of_stream()) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return m.fill_buffer().then([] { return stop_iteration::no; });
-            }
-            return make_ready_future<stop_iteration>(m.pop_mutation_fragment().consume_streamed_mutation(c));
-        }).then([&c] {
-            return c.consume_end_of_stream();
-        });
-    });
-}
-
-class mutation;
-
-streamed_mutation streamed_mutation_from_mutation(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-streamed_mutation streamed_mutation_from_forwarding_streamed_mutation(streamed_mutation&&);
-
-//Requires all streamed_mutations to have the same schema.
-streamed_mutation merge_mutations(std::vector<streamed_mutation>);
-
-streamed_mutation make_empty_streamed_mutation(schema_ptr, dht::decorated_key, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 // range_tombstone_stream is a helper object that simplifies producing a stream
 // of range tombstones and merging it with a stream of clustering rows.
@@ -785,31 +605,6 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 
-// Consumes mutation fragments until StopCondition is true.
-// The consumer will stop iff StopCondition returns true, in particular
-// reaching the end of stream alone won't stop the reader.
-template<typename StopCondition, typename ConsumeMutationFragment, typename ConsumeEndOfStream>
-GCC6_CONCEPT(requires requires(StopCondition stop, ConsumeMutationFragment consume_mf, ConsumeEndOfStream consume_eos, mutation_fragment mf) {
-    { stop() } -> bool;
-    { consume_mf(std::move(mf)) } -> void;
-    { consume_eos() } -> future<>;
-})
-future<> consume_mutation_fragments_until(streamed_mutation& sm, StopCondition&& stop,
-                                          ConsumeMutationFragment&& consume_mf, ConsumeEndOfStream&& consume_eos) {
-    return do_until([stop] { return stop(); }, [&sm, stop, consume_mf, consume_eos] {
-        while (!sm.is_buffer_empty()) {
-            consume_mf(sm.pop_mutation_fragment());
-            if (stop()) {
-                return make_ready_future<>();
-            }
-        }
-        if (sm.is_end_of_stream()) {
-            return consume_eos();
-        }
-        return sm.fill_buffer();
-    });
-}
-
 GCC6_CONCEPT(
     // F gets a stream element as an argument and returns the new value which replaces that element
     // in the transformed stream.
@@ -821,37 +616,3 @@ GCC6_CONCEPT(
         };
     }
 )
-
-// Creates a stream which is like sm but with transformation applied to the elements.
-template<typename T>
-GCC6_CONCEPT(
-    requires StreamedMutationTranformer<T>()
-)
-streamed_mutation transform(streamed_mutation sm, T t) {
-    class reader : public streamed_mutation::impl {
-        streamed_mutation _sm;
-        T _t;
-    public:
-        explicit reader(streamed_mutation sm, T&& t)
-            : impl(t(sm.schema()), sm.decorated_key(), sm.partition_tombstone())
-            , _sm(std::move(sm))
-            , _t(std::move(t))
-        { }
-
-        virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return _sm.fill_buffer(timeout).then([this] {
-                while (!_sm.is_buffer_empty()) {
-                    push_mutation_fragment(_t(_sm.pop_mutation_fragment()));
-                }
-                _end_of_stream = _sm.is_end_of_stream();
-            });
-        }
-
-        virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout = db::no_timeout) override {
-            _end_of_stream = false;
-            forward_buffer_to(pr.start());
-            return _sm.fast_forward_to(std::move(pr), timeout);
-        }
-    };
-    return make_streamed_mutation<reader>(std::move(sm), std::move(t));
-}

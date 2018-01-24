@@ -25,11 +25,10 @@
 #include "atomic_cell.hh"
 #include "database_fwd.hh"
 #include "mutation_partition_view.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "flat_mutation_reader.hh"
 
 class mutation;
-class streamed_mutation;
 
 namespace ser {
 class mutation_view;
@@ -102,8 +101,6 @@ public:
 
     frozen_mutation consume_end_of_stream();
 };
-
-future<frozen_mutation> freeze(streamed_mutation sm);
 
 static constexpr size_t default_frozen_fragment_size = 128 * 1024;
 

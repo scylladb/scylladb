@@ -45,7 +45,6 @@
 #include "sstables/date_tiered_compaction_strategy.hh"
 #include "sstables/time_window_compaction_strategy.hh"
 #include "mutation_assertions.hh"
-#include "mutation_reader_assertions.hh"
 #include "counters.hh"
 #include "cell_locking.hh"
 #include "simple_schema.hh"
@@ -3688,19 +3687,6 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             assert_that(std::move(rd)).has_monotonic_positions();
         }
     });
-}
-
-inline
-uint64_t consume_all(streamed_mutation& sm) {
-    uint64_t fragments = 0;
-    while (1) {
-        mutation_fragment_opt mfo = sm().get0();
-        if (!mfo) {
-            break;
-        }
-        ++fragments;
-    }
-    return fragments;
 }
 
 SEASTAR_TEST_CASE(test_skipping_using_index) {

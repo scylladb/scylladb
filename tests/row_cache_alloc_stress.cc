@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mo = mutation_from_streamed_mutation(reader().get0()).get0();
+                auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
@@ -202,8 +202,9 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mo = reader().get0();
-                assert(mo);
+                auto mfopt = reader().get0();
+                assert(mfopt);
+                assert(mfopt->is_partition_start());
             }
 
             std::cout << "Testing reading when memory can't be reclaimed.\n";

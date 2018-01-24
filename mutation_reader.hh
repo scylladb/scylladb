@@ -31,26 +31,7 @@
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
 
-// A mutation_reader is an object which allows iterating on mutations: invoke
-// the function to get a future for the next mutation, with an unset optional
-// marking the end of iteration. After calling mutation_reader's operator(),
-// caller must keep the object alive until the returned future is fulfilled.
-//
-// streamed_mutation object emitted by mutation_reader remains valid after the
-// destruction of the mutation_reader.
-//
-// Asking mutation_reader for another streamed_mutation (i.e. invoking
-// mutation_reader::operator()) invalidates all streamed_mutation objects
-// previously produced by that reader.
-//
-// The mutations returned have strictly monotonically increasing keys. Two
-// consecutive mutations never have equal keys.
-//
-// TODO: When iterating over mutations, we don't need a schema_ptr for every
-// single one as it is normally the same for all of them. So "mutation" might
-// not be the optimal object to use here.
-class mutation_reader final {
-public:
+namespace mutation_reader {
     // mutation_reader::forwarding determines whether fast_forward_to() may
     // be used on the mutation reader to change the partition range being
     // read. Enabling forwarding also changes read policy: forwarding::no
@@ -63,46 +44,6 @@ public:
     // a different partition range, while the latter is about skipping
     // inside a large partition.
     using forwarding = flat_mutation_reader::partition_range_forwarding;
-
-    class impl {
-    public:
-        virtual ~impl() {}
-        virtual future<streamed_mutation_opt> operator()() = 0;
-        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) {
-            throw std::bad_function_call();
-        }
-    };
-private:
-    class null_impl final : public impl {
-    public:
-        virtual future<streamed_mutation_opt> operator()() override { throw std::bad_function_call(); }
-    };
-private:
-    std::unique_ptr<impl> _impl;
-public:
-    mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
-    mutation_reader() : mutation_reader(std::make_unique<null_impl>()) {}
-    mutation_reader(mutation_reader&&) = default;
-    mutation_reader(const mutation_reader&) = delete;
-    mutation_reader& operator=(mutation_reader&&) = default;
-    mutation_reader& operator=(const mutation_reader&) = delete;
-    future<streamed_mutation_opt> operator()() { return _impl->operator()(); }
-
-    // Changes the range of partitions to pr. The range can only be moved
-    // forwards. pr.begin() needs to be larger than pr.end() of the previousl
-    // used range (i.e. either the initial one passed to the constructor or a
-    // previous fast forward target).
-    // pr needs to be valid until the reader is destroyed or fast_forward_to()
-    // is called again.
-    future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout = db::no_timeout) { return _impl->fast_forward_to(pr, timeout); }
-};
-
-// Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
-template <typename Impl, typename... Args>
-inline
-mutation_reader
-make_mutation_reader(Args&&... args) {
-    return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
 class reader_selector {
@@ -140,15 +81,6 @@ flat_mutation_reader make_combined_reader(schema_ptr schema,
         flat_mutation_reader&& b,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
-// reads from the input readers, in order
-mutation_reader make_reader_returning(mutation, streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-mutation_reader make_reader_returning(streamed_mutation);
-mutation_reader make_reader_returning_many(std::vector<mutation>,
-    const query::partition_slice& slice,
-    streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
-mutation_reader make_reader_returning_many(std::vector<mutation>, const dht::partition_range& = query::full_partition_range);
-mutation_reader make_reader_returning_many(std::vector<streamed_mutation>);
-mutation_reader make_empty_reader();
 
 template <typename MutationFilter>
 GCC6_CONCEPT(
@@ -213,30 +145,6 @@ flat_mutation_reader make_filtering_reader(flat_mutation_reader rd, MutationFilt
     return make_flat_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
-// Calls the consumer for each element of the reader's stream until end of stream
-// is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
-// The consumer should accept mutation as the argument and return stop_iteration.
-// The returned future<> resolves when consumption ends.
-template <typename Consumer>
-inline
-future<> consume(mutation_reader& reader, Consumer consumer) {
-    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
-    using futurator = futurize<std::result_of_t<Consumer(mutation&&)>>;
-
-    return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
-        return repeat([&reader, &c] () {
-            return reader().then([] (auto sm) {
-                return mutation_from_streamed_mutation(std::move(sm));
-            }).then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
-                if (!mo) {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-                return futurator::apply(c, std::move(*mo));
-            });
-        });
-    });
-}
-
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
 enum class partition_presence_checker_result {
@@ -249,8 +157,6 @@ inline
 partition_presence_checker make_default_partition_presence_checker() {
     return [] (const dht::decorated_key&) { return partition_presence_checker_result::maybe_exists; };
 }
-
-mutation_reader mutation_reader_from_flat_mutation_reader(flat_mutation_reader&&);
 
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
@@ -404,28 +310,6 @@ inline flat_mutation_reader make_restricted_flat_reader(const restricted_mutatio
 
 using mutation_source_opt = optimized_optional<mutation_source>;
 
-template<typename Consumer>
-future<stop_iteration> do_consume_streamed_mutation_flattened(streamed_mutation& sm, Consumer& c)
-{
-    do {
-        if (sm.is_buffer_empty()) {
-            if (sm.is_end_of_stream()) {
-                break;
-            }
-            auto f = sm.fill_buffer();
-            if (!f.available()) {
-                return f.then([&] { return do_consume_streamed_mutation_flattened(sm, c); });
-            }
-            f.get();
-        } else {
-            if (sm.pop_mutation_fragment().consume_streamed_mutation(c) == stop_iteration::yes) {
-                break;
-            }
-        }
-    } while (true);
-    return make_ready_future<stop_iteration>(c.consume_end_of_partition());
-}
-
 // Adapts a non-movable FlattenedConsumer to a movable one.
 template<typename FlattenedConsumer>
 class stable_flattened_mutations_consumer {
@@ -445,5 +329,3 @@ template<typename FlattenedConsumer, typename... Args>
 stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mutations_consumer(Args&&... args) {
     return { std::make_unique<FlattenedConsumer>(std::forward<Args>(args)...) };
 }
-
-future<streamed_mutation_opt> streamed_mutation_from_flat_mutation_reader(flat_mutation_reader&&);

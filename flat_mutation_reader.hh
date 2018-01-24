@@ -26,7 +26,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "position_in_partition.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "tracing/trace_state.hh"
 
 #include <seastar/util/gcc6-concepts.hh>
@@ -402,8 +402,6 @@ flat_mutation_reader make_flat_mutation_reader(Args &&... args) {
     return flat_mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
-class mutation_reader;
-
 // Consumes mutation fragments until StopCondition is true.
 // The consumer will stop iff StopCondition returns true, in particular
 // reaching the end of stream alone won't stop the reader.
@@ -478,8 +476,6 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
     };
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
-
-flat_mutation_reader flat_mutation_reader_from_mutation_reader(schema_ptr, mutation_reader&&, streamed_mutation::forwarding);
 
 inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
 

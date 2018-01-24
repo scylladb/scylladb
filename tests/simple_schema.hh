@@ -26,10 +26,9 @@
 #include "make_random_string.hh"
 #include "schema.hh"
 #include "keys.hh"
-#include "streamed_mutation.hh"
+#include "mutation_fragment.hh"
 #include "mutation.hh"
 #include "schema_builder.hh"
-#include "streamed_mutation.hh"
 #include "sstable_utils.hh"
 
 // Helper for working with the following table:
