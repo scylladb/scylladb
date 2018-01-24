@@ -186,9 +186,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         for (auto& s : { _auth_service->underlying_authorizer().protected_resources(),
                         _auth_service->underlying_authorizer().protected_resources() }) {
             if (s.count(resource)) {
-                throw exceptions::unauthorized_exception(
-                                sprint("%s schema is protected",
-                                                resource));
+                throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
             }
         }
     }
