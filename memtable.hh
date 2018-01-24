@@ -61,6 +61,7 @@ public:
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
     flat_mutation_reader read(lw_shared_ptr<memtable> mtbl, const schema_ptr&, const query::partition_slice&, streamed_mutation::forwarding);
+    lw_shared_ptr<partition_snapshot> snapshot(memtable& mtbl);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();
