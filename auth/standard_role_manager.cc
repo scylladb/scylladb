@@ -136,6 +136,14 @@ stdx::string_view standard_role_manager::qualified_java_name() const noexcept {
     return standard_role_manager_name();
 }
 
+const resource_set& standard_role_manager::protected_resources() const {
+    static const resource_set resources({
+            make_data_resource(meta::AUTH_KS, meta::roles_table::name),
+            make_data_resource(meta::AUTH_KS, meta::role_members_table::name)});
+
+    return resources;
+}
+
 future<> standard_role_manager::create_metadata_tables_if_missing() {
     static const sstring create_roles_query = sprint(
             "CREATE TABLE %s ("

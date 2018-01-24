@@ -60,6 +60,8 @@ public:
 
     virtual stdx::string_view qualified_java_name() const noexcept override;
 
+    virtual const resource_set& protected_resources() const override;
+
     virtual future<> start() override;
 
     virtual future<> stop() override;

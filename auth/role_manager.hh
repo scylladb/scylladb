@@ -102,6 +102,8 @@ public:
 
     virtual stdx::string_view qualified_java_name() const noexcept = 0;
 
+    virtual const resource_set& protected_resources() const = 0;
+
     virtual future<> start() = 0;
 
     virtual future<> stop() = 0;

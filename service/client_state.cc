@@ -183,11 +183,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         return make_ready_future();
     }
     if (alteration_permissions.contains(p)) {
-        for (auto& s : { _auth_service->underlying_authorizer().protected_resources(),
-                        _auth_service->underlying_authenticator().protected_resources() }) {
-            if (s.count(resource)) {
-                throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
-            }
+        if (auth::is_protected(*_auth_service, resource)) {
+            throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
         }
     }
 
