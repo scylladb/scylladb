@@ -144,6 +144,10 @@ public:
         return _s;
     }
 
+    const schema_ptr schema() const {
+        return _s;
+    }
+
     // Creates a sequence of keys in ring order
     std::vector<dht::decorated_key> make_pkeys(int n) {
         auto local_keys = make_local_keys(n, _s);

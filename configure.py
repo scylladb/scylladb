@@ -292,6 +292,7 @@ scylla_tests = [
     'tests/enum_set_test',
     'tests/extensions_test',
     'tests/cql_auth_syntax_test',
+    'tests/querier_cache',
 ]
 
 perf_tests = [
