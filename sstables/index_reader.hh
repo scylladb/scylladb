@@ -502,6 +502,56 @@ public:
         });
     }
 
+    // Forwards the cursor to a position which is greater than given position in current partition.
+    //
+    // Note that the index within partition, unlike the partition index, doesn't cover all keys.
+    // So this may not forward to the smallest position which is greater than pos.
+    //
+    // May advance to the next partition if it's not possible to find a suitable position inside
+    // current partition.
+    //
+    // Must be called only when !eof().
+    future<> advance_past(position_in_partition_view pos) {
+        sstlog.trace("index {}: advance_past({}), current data_file_pos={}", this, pos, _data_file_position);
+
+        if (!partition_data_ready()) {
+            return read_partition_data().then([this, pos] {
+                assert(partition_data_ready());
+                return advance_past(pos);
+            });
+        }
+
+        index_entry& e = current_partition_entry();
+        if (e.get_total_pi_blocks_count() == 0) {
+            sstlog.trace("index {}: no promoted index", this);
+            return advance_to_next_partition();
+        }
+
+        if (e.get_read_pi_blocks_count() == 0) {
+            return e.get_next_pi_blocks().then([this, pos] {
+                return advance_past(pos);
+            });
+        }
+
+        const schema& s = *_sstable->_schema;
+        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s), s]
+                (position_in_partition_view pos, const promoted_index_block& info) -> bool {
+            return pos_cmp(pos, info.start(s));
+        };
+        promoted_index_blocks* pi_blocks = e.get_pi_blocks();
+        assert(pi_blocks);
+        auto i = std::upper_bound(pi_blocks->begin() + _current_pi_idx, pi_blocks->end(), pos, cmp_with_start);
+        _current_pi_idx = std::distance(pi_blocks->begin(), i);
+        if (i == pi_blocks->end()) {
+            return advance_to_next_partition();
+        }
+
+        _data_file_position = e.position() + i->offset();
+        _element = indexable_element::cell;
+        sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}", this, _current_pi_idx, _data_file_position);
+        return make_ready_future<>();
+    }
+
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
     future<bool> advance_and_check_if_present(dht::ring_position_view key) {
         return advance_to(key).then([this, key] {

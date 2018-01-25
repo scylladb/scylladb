@@ -741,6 +741,16 @@ public:
     stdx::optional<position_in_partition_view> maybe_skip();
 };
 
+static
+future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
+    auto& ranges = slice.row_ranges(s, *key.key());
+    if (ranges.empty()) {
+        return ix.advance_past(position_in_partition_view::for_static_row());
+    } else {
+        return ix.advance_past(position_in_partition_view::for_range_end(ranges[ranges.size() - 1]));
+    }
+}
+
 class sstable_mutation_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer;
     shared_sstable _sst;
@@ -828,7 +838,7 @@ public:
                 _sst->get_filter_tracker().add_true_positive();
 
                 _rh_index = std::make_unique<index_reader>(*_lh_index);
-                auto f = _rh_index->advance_to_next_partition();
+                auto f = advance_to_upper_bound(*_rh_index, *_schema, slice, key);
                 return f.then([this, &slice, &pc] () mutable {
                     _read_enabled = _lh_index->data_file_position() != _rh_index->data_file_position();
                     _context = _sst->data_consume_single_partition(_consumer,
