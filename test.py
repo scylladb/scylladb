@@ -77,7 +77,7 @@ boost_tests = [
     'auth_test',
     'idl_test',
     'range_tombstone_list_test',
-    'streamed_mutation_test',
+    'mutation_fragment_test',
     'flat_mutation_reader_test',
     'anchorless_list_test',
     'database_test',
