@@ -211,10 +211,11 @@ public:
         emplace_back(std::move(value));
     }
     template<typename... Args>
-    void emplace_back(Args&&... args) {
+    T& emplace_back(Args&&... args) {
         maybe_grow(_size + 1);
-        new (_data + _size) T(std::forward<Args>(args)...);
+        T* elem = new (_data + _size) T(std::forward<Args>(args)...);
         _size++;
+        return *elem;
     }
     void pop_back() {
         _data[_size - 1].~T();
