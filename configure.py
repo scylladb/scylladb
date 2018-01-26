@@ -913,6 +913,11 @@ libs = ' '.join(['-lyaml-cpp', '-llz4', '-lz', '-lsnappy', pkg_config("--libs", 
                  maybe_static(args.staticboost, '-lboost_date_time'),
                 ])
 
+xxhash_dir = 'xxHash'
+
+if not os.path.exists(xxhash_dir) or not os.listdir(xxhash_dir):
+    raise Exception(xxhash_dir + ' is empty. Run "git submodule update --init".')
+
 if not args.staticboost:
     args.user_cflags += ' -DBOOST_TEST_DYN_LINK'
 
@@ -971,7 +976,7 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
+            cxxflags_{mode} = -DXXH_PRIVATE_API -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen -I$full_builddir/{mode}/xxhash
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -c -o $out $in
               description = CXX $out
