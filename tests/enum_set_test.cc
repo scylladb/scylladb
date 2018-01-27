@@ -23,9 +23,25 @@
 
 #include "enum_set.hh"
 
+#include <iostream>
+#include <iterator>
+#include <unordered_set>
+
 #include <boost/test/unit_test.hpp>
 
+#include "to_string.hh"
+
 enum class fruit { apple = 3, pear = 7, banana = 8 };
+
+static std::ostream& operator<<(std::ostream& os, fruit f) {
+    switch (f) {
+        case fruit::apple: os << "apple"; break;
+        case fruit::pear: os << "pear"; break;
+        case fruit::banana: os << "banana"; break;
+    }
+
+    return os;
+}
 
 using fruit_enum = super_enum<fruit, fruit::apple, fruit::pear, fruit::banana>;
 
@@ -90,4 +106,23 @@ BOOST_AUTO_TEST_CASE(set_remove) {
     auto fs = fruit_set::of<fruit::pear>();
     fs.remove(fruit::pear);
     BOOST_REQUIRE(!fs.contains(fruit::pear));
+}
+
+BOOST_AUTO_TEST_CASE(set_iterator) {
+    const auto fs1 = fruit_set::of<fruit::pear, fruit::banana>();
+
+    std::unordered_set<fruit> us1;
+    std::copy(fs1.begin(), fs1.end(), std::inserter(us1, us1.begin()));
+
+    BOOST_REQUIRE_EQUAL(us1, (std::unordered_set<fruit>{fruit::pear, fruit::banana}));
+
+    //
+    // Empty set.
+    //
+
+    const auto fs2 = fruit_set();
+    std::unordered_set<fruit> us2;
+    std::copy(fs2.begin(), fs2.end(), std::inserter(us2, us2.begin()));
+
+    BOOST_REQUIRE(us2.empty());
 }

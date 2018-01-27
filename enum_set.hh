@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <boost/iterator/transform_iterator.hpp>
 #include <seastar/core/bitset-iter.hh>
 
 #include <algorithm>
@@ -146,7 +147,16 @@ private:
     static constexpr unsigned shift_for() {
         return Enum::template sequence_for<Elem>();
     }
+
+    static auto make_iterator(mask_iterator iter) {
+        return boost::make_transform_iterator(std::move(iter), [](typename Enum::sequence_type s) {
+            return enum_type(s);
+        });
+    }
+
 public:
+    using iterator = std::invoke_result_t<decltype(&enum_set::make_iterator), mask_iterator>;
+
     constexpr enum_set() : _mask(0) {}
 
     /**
@@ -227,6 +237,14 @@ public:
 
     mask_type mask() const {
         return _mask;
+    }
+
+    iterator begin() const {
+        return make_iterator(mask_iterator(_mask));
+    }
+
+    iterator end() const {
+        return make_iterator(mask_iterator(0));
     }
 
     template<enum_type... items>
