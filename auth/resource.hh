@@ -43,7 +43,6 @@
 
 #include <experimental/string_view>
 #include <iostream>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -61,16 +60,9 @@
 namespace auth {
 
 class invalid_resource_name : public std::invalid_argument {
-    std::shared_ptr<sstring> _name;
-
 public:
     explicit invalid_resource_name(stdx::string_view name)
-            : std::invalid_argument(sprint("The resource name '%s' is invalid.", name))
-            , _name(std::make_shared<sstring>(name)) {
-    }
-
-    stdx::string_view name() const noexcept {
-        return *_name;
+            : std::invalid_argument(sprint("The resource name '%s' is invalid.", name)) {
     }
 };
 
