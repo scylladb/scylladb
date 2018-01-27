@@ -41,6 +41,16 @@ BOOST_AUTO_TEST_CASE(enum_min_sequence) {
     BOOST_REQUIRE_EQUAL(fruit_enum::min_sequence, 3);
 }
 
+BOOST_AUTO_TEST_CASE(enum_valid_sequence) {
+    BOOST_REQUIRE(fruit_enum::is_valid_sequence(3));
+    BOOST_REQUIRE(fruit_enum::is_valid_sequence(7));
+    BOOST_REQUIRE(fruit_enum::is_valid_sequence(8));
+
+    BOOST_REQUIRE(!fruit_enum::is_valid_sequence(0));
+    BOOST_REQUIRE(!fruit_enum::is_valid_sequence(4));
+    BOOST_REQUIRE(!fruit_enum::is_valid_sequence(9));
+}
+
 //
 // `enum_set`
 //
@@ -51,6 +61,13 @@ BOOST_AUTO_TEST_CASE(set_contains) {
     const auto fs = fruit_set::of<fruit::apple, fruit::banana>();
     BOOST_REQUIRE(fs.contains(fruit::apple));
     BOOST_REQUIRE(!fs.contains(fruit::pear));
+}
+
+BOOST_AUTO_TEST_CASE(set_from_mask) {
+    const auto fs = fruit_set::of<fruit::apple, fruit::banana>();
+    BOOST_REQUIRE_EQUAL(fs.mask(), fruit_set::from_mask(fs.mask()).mask());
+
+    BOOST_REQUIRE_THROW(fruit_set::from_mask(0xdead), bad_enum_set_mask);
 }
 
 BOOST_AUTO_TEST_CASE(set_enable) {
