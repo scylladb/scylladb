@@ -121,9 +121,9 @@ future<> default_authorizer::stop() {
 }
 
 future<permission_set> default_authorizer::authorize_role_directly(
-        const service& ser,
         stdx::string_view role_name,
-        const resource& r) const {
+        const resource& r,
+        const service& ser) const {
     return ser.has_superuser(role_name).then([this, role_name, &r](bool has_superuser) {
         if (has_superuser) {
             return make_ready_future<permission_set>(r.applicable_permissions());
@@ -151,14 +151,14 @@ future<permission_set> default_authorizer::authorize_role_directly(
 }
 
 future<permission_set> default_authorizer::authorize(
-        service& ser,
         stdx::string_view role_name,
-        const resource& r) const {
+        const resource& r,
+        service& ser) const {
     return do_with(permission_set(), [this, &ser, role_name, &r](auto& ps) {
         return ser.get_roles(role_name).then([this, &ser, &ps, &r](std::unordered_set<sstring> all_roles) {
             return do_with(std::move(all_roles), [this, &ser, &ps, &r](const auto& all_roles) {
                 return parallel_for_each(all_roles, [this, &ser, &ps, &r](stdx::string_view role_name) {
-                    return this->authorize_role_directly(ser, role_name, r).then([&ps](permission_set rp) {
+                    return this->authorize_role_directly(role_name, r, ser).then([&ps](permission_set rp) {
                         ps = permission_set::from_mask(ps.mask() | rp.mask());
                     });
                 });
@@ -171,9 +171,9 @@ future<permission_set> default_authorizer::authorize(
 
 future<>
 default_authorizer::modify(
+        stdx::string_view role_name,
         permission_set set,
         const resource& resource,
-        stdx::string_view role_name,
         stdx::string_view op) {
     // TODO: why does this not check super user?
     auto query = sprint(
@@ -193,19 +193,19 @@ default_authorizer::modify(
 }
 
 
-future<> default_authorizer::grant(permission_set set, const resource& resource, stdx::string_view role_name) {
-    return modify(std::move(set), resource, role_name, "+");
+future<> default_authorizer::grant(stdx::string_view role_name, permission_set set, const resource& resource) {
+    return modify(role_name, std::move(set), resource, "+");
 }
 
-future<> default_authorizer::revoke(permission_set set, const resource& resource, stdx::string_view role_name) {
-    return modify(std::move(set), resource, role_name, "-");
+future<> default_authorizer::revoke(stdx::string_view role_name, permission_set set, const resource& resource) {
+    return modify(role_name, std::move(set), resource, "-");
 }
 
 future<std::vector<permission_details>> default_authorizer::list(
-        service& ser,
         permission_set set,
         const std::optional<resource>& resource,
-        const std::optional<stdx::string_view>& role_name) const {
+        const std::optional<stdx::string_view>& role_name,
+        service& ser) const {
     sstring query = sprint(
             "SELECT %s, %s, %s FROM %s.%s",
             ROLE_NAME,

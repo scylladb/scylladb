@@ -56,23 +56,23 @@ public:
         return allow_all_authorizer_name();
     }
 
-    virtual future<permission_set> authorize(service&, stdx::string_view, const resource&) const override {
+    virtual future<permission_set> authorize(stdx::string_view, const resource&, service&) const override {
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    virtual future<> grant(permission_set, const resource&, stdx::string_view) override {
+    virtual future<> grant(stdx::string_view, permission_set, const resource&) override {
         throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
     }
 
-    virtual future<> revoke(permission_set, const resource&, stdx::string_view) override {
+    virtual future<> revoke(stdx::string_view, permission_set, const resource&) override {
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
     virtual future<std::vector<permission_details>> list(
-            service&,
             permission_set,
             const std::optional<resource>&,
-            const std::optional<stdx::string_view>&) const override {
+            const std::optional<stdx::string_view>&,
+            service&) const override {
         throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
     }
 
