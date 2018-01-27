@@ -120,16 +120,16 @@ public:
         });
     }
 
-    virtual future<> create(sstring username, const authentication_options& options) override {
-        return _authenticator->create(username, options);
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) override {
+        return _authenticator->create(role_name, options);
     }
 
-    virtual future<> alter(sstring username, const authentication_options& options) override {
-        return _authenticator->alter(username, options);
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) override {
+        return _authenticator->alter(role_name, options);
     }
 
-    virtual future<> drop(sstring username) override {
-        return _authenticator->drop(username);
+    virtual future<> drop(stdx::string_view role_name) override {
+        return _authenticator->drop(role_name);
     }
 
     virtual const resource_set& protected_resources() const override {
@@ -204,8 +204,9 @@ public:
         return transitional_authorizer_name();
     }
 
-    virtual future<permission_set> authorize(service& ser, sstring role, resource resource) const override {
-        return ser.has_superuser(role).then([resource](bool s) {
+    virtual future<permission_set>
+    authorize(service& ser, stdx::string_view role_name, resource resource) const override {
+        return ser.has_superuser(role_name).then([resource](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<
                                     permission::CREATE,
@@ -218,12 +219,12 @@ public:
         });
     }
 
-    virtual future<> grant(permission_set ps, resource r, sstring s) override {
-        return _authorizer->grant(std::move(ps), std::move(r), std::move(s));
+    virtual future<> grant(permission_set ps, resource r, stdx::string_view s) override {
+        return _authorizer->grant(std::move(ps), std::move(r), s);
     }
 
-    virtual future<> revoke(permission_set ps, resource r, sstring s) override {
-        return _authorizer->revoke(std::move(ps), std::move(r), std::move(s));
+    virtual future<> revoke(permission_set ps, resource r, stdx::string_view s) override {
+        return _authorizer->revoke(std::move(ps), std::move(r), s);
     }
 
     virtual future<std::vector<permission_details>>
@@ -231,12 +232,12 @@ public:
             service& ser,
             permission_set ps,
             std::optional<resource> r,
-            std::optional<sstring> s) const override {
+            std::optional<stdx::string_view> s) const override {
         return _authorizer->list(ser, std::move(ps), std::move(r), std::move(s));
     }
 
-    virtual future<> revoke_all(sstring s) override {
-        return _authorizer->revoke_all(std::move(s));
+    virtual future<> revoke_all(stdx::string_view s) override {
+        return _authorizer->revoke_all(s);
     }
 
     virtual future<> revoke_all(resource r) override {

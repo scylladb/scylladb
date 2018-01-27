@@ -45,7 +45,9 @@ permissions_cache::permissions_cache(const permissions_cache_config& c, service&
 }
 
 future<permission_set> permissions_cache::get(stdx::string_view role_name, resource r) {
-    return _cache.get(key_type(sstring(role_name), r));
+    return do_with(key_type(sstring(role_name), std::move(r)), [this](const auto& k) {
+        return _cache.get(k);
+    });
 }
 
 }

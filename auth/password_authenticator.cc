@@ -193,8 +193,8 @@ future<> password_authenticator::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
-db::consistency_level password_authenticator::consistency_for_user(const sstring& username) {
-    if (username == DEFAULT_USER_NAME) {
+db::consistency_level password_authenticator::consistency_for_user(stdx::string_view role_name) {
+    if (role_name == DEFAULT_USER_NAME) {
         return db::consistency_level::QUORUM;
     }
     return db::consistency_level::LOCAL_ONE;
@@ -260,7 +260,7 @@ future<authenticated_user> password_authenticator::authenticate(
     });
 }
 
-future<> password_authenticator::create(sstring username, const authentication_options& options) {
+future<> password_authenticator::create(stdx::string_view role_name, const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -271,11 +271,13 @@ future<> password_authenticator::create(sstring username, const authentication_o
             SALTED_HASH,
             meta::roles_table::role_col_name);
 
-    return _qp.process(query, consistency_for_user(username), {hashpw(*options.password), username}).discard_result();
+    return _qp.process(
+            query,
+            consistency_for_user(role_name),
+            {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::alter(sstring username,
-                const authentication_options& options) {
+future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -286,17 +288,20 @@ future<> password_authenticator::alter(sstring username,
             SALTED_HASH,
             meta::roles_table::role_col_name);
 
-    return _qp.process(query, consistency_for_user(username), {hashpw(*options.password), username}).discard_result();
+    return _qp.process(
+            query,
+            consistency_for_user(role_name),
+            {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::drop(sstring username) {
+future<> password_authenticator::drop(stdx::string_view name) {
     auto query = sprint(
             "DELETE %s FROM %s WHERE %s = ?",
             SALTED_HASH,
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
-    return _qp.process(query, consistency_for_user(username), {username}).discard_result();
+    return _qp.process(query, consistency_for_user(name), {sstring(name)}).discard_result();
 }
 
 const resource_set& password_authenticator::protected_resources() const {

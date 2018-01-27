@@ -358,7 +358,7 @@ future<> alter_role(
                 &validate_authentication_options_are_supported,
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().alter(sstring(name), options);
+            return ser.underlying_authenticator().alter(name, options);
         });
     });
 }

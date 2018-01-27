@@ -72,15 +72,15 @@ public:
         return make_ready_future<authenticated_user>(anonymous_user());
     }
 
-    virtual future<> create(sstring username, const authentication_options& options) override {
+    virtual future<> create(stdx::string_view, const authentication_options& options) override {
         return make_ready_future();
     }
 
-    virtual future<> alter(sstring username, const authentication_options& options) override {
+    virtual future<> alter(stdx::string_view, const authentication_options& options) override {
         return make_ready_future();
     }
 
-    virtual future<> drop(sstring username) override {
+    virtual future<> drop(stdx::string_view) override {
         return make_ready_future();
     }
 

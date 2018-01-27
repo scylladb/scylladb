@@ -152,7 +152,7 @@ future<permission_set> default_authorizer::authorize_role_directly(
 
 future<permission_set> default_authorizer::authorize(
         service& ser,
-        sstring role_name,
+        stdx::string_view role_name,
         resource resource) const {
     return do_with(permission_set(), std::move(resource), [this, &ser, role_name](auto& ps, const auto& r) {
         return ser.get_roles(role_name).then([this, &ser, &ps, &r](std::unordered_set<sstring> all_roles) {
@@ -169,7 +169,8 @@ future<permission_set> default_authorizer::authorize(
     });
 }
 
-future<> default_authorizer::modify(permission_set set, resource resource, sstring user, sstring op) {
+future<>
+default_authorizer::modify(permission_set set, resource resource, stdx::string_view role_name, stdx::string_view op) {
     // TODO: why does this not check super user?
     auto query = sprint(
             "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -184,23 +185,23 @@ future<> default_authorizer::modify(permission_set set, resource resource, sstri
     return _qp.process(
             query,
             db::consistency_level::ONE,
-            {permissions::to_strings(set), user, resource.name()}).discard_result();
+            {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
 }
 
 
-future<> default_authorizer::grant(permission_set set, resource resource, sstring to) {
-    return modify(std::move(set), std::move(resource), std::move(to), "+");
+future<> default_authorizer::grant(permission_set set, resource resource, stdx::string_view role_name) {
+    return modify(std::move(set), std::move(resource), role_name, "+");
 }
 
-future<> default_authorizer::revoke(permission_set set, resource resource, sstring from) {
-    return modify(std::move(set), std::move(resource), std::move(from), "-");
+future<> default_authorizer::revoke(permission_set set, resource resource, stdx::string_view role_name) {
+    return modify(std::move(set), std::move(resource), role_name, "-");
 }
 
 future<std::vector<permission_details>> default_authorizer::list(
         service& ser,
         permission_set set,
         std::optional<resource> resource,
-        std::optional<sstring> role) const {
+        std::optional<stdx::string_view> role_name) const {
     sstring query = sprint(
             "SELECT %s, %s, %s FROM %s.%s",
             ROLE_NAME,
@@ -213,8 +214,8 @@ future<std::vector<permission_details>> default_authorizer::list(
     // parameters to process in an initializer list.
     future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
 
-    if (role) {
-        f = ser.get_roles(*role).then([this, resource = std::move(resource), query, &f](
+    if (role_name) {
+        f = ser.get_roles(*role_name).then([this, resource = std::move(resource), query, &f](
                 std::unordered_set<sstring> all_roles) mutable {
             if (resource) {
                 query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
@@ -248,7 +249,7 @@ future<std::vector<permission_details>> default_authorizer::list(
     });
 }
 
-future<> default_authorizer::revoke_all(sstring dropped_user) {
+future<> default_authorizer::revoke_all(stdx::string_view role_name) {
     auto query = sprint(
             "DELETE FROM %s.%s WHERE %s = ?",
             meta::AUTH_KS,
@@ -258,11 +259,11 @@ future<> default_authorizer::revoke_all(sstring dropped_user) {
     return _qp.process(
             query,
             db::consistency_level::ONE,
-            {dropped_user}).discard_result().handle_exception([dropped_user](auto ep) {
+            {sstring(role_name)}).discard_result().handle_exception([role_name](auto ep) {
         try {
             std::rethrow_exception(ep);
         } catch (exceptions::request_execution_exception& e) {
-            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", dropped_user, e);
+            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
         }
     });
 }

@@ -41,6 +41,7 @@
 
 #pragma once
 
+#include <experimental/string_view>
 #include <memory>
 #include <set>
 #include <stdexcept>
@@ -57,6 +58,7 @@
 #include "bytes.hh"
 #include "enum_set.hh"
 #include "exceptions/exceptions.hh"
+#include "stdx.hh"
 
 namespace db {
     class config;
@@ -118,7 +120,7 @@ public:
     ///
     /// The options provided must be a subset of `supported_options()`.
     ///
-    virtual future<> create(sstring username, const authentication_options& options) = 0;
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) = 0;
 
     ///
     /// Alter the authentication record of an existing user.
@@ -127,12 +129,12 @@ public:
     ///
     /// Callers must ensure that the specification of `alterable_options()` is adhered to.
     ///
-    virtual future<> alter(sstring username, const authentication_options& options) = 0;
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) = 0;
 
     ///
     /// Delete the authentication record for a user. This will disallow the user from logging in.
     ///
-    virtual future<> drop(sstring username) = 0;
+    virtual future<> drop(stdx::string_view role_name) = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

@@ -41,9 +41,11 @@
 
 #pragma once
 
+#include <experimental/string_view>
+#include <functional>
 #include <optional>
-#include <vector>
 #include <tuple>
+#include <vector>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -88,17 +90,17 @@ public:
     ///
     /// The resulting permission set includes permissions obtained transitively through roles granted to this role.
     ///
-    virtual future<permission_set> authorize(service&, sstring role_name, resource) const = 0;
+    virtual future<permission_set> authorize(service&, stdx::string_view role_name, resource) const = 0;
 
     ///
     /// Grant a set of permissions to a user for a particular \ref resource.
     ///
-    virtual future<> grant(permission_set, resource, sstring to) = 0;
+    virtual future<> grant(permission_set, resource, stdx::string_view role_name) = 0;
 
     ///
     /// Revoke a set of permissions from a user for a particular \ref resource.
     ///
-    virtual future<> revoke(permission_set, resource, sstring from) = 0;
+    virtual future<> revoke(permission_set, resource, stdx::string_view role_name) = 0;
 
     ///
     /// Query for granted permissions.
@@ -107,15 +109,20 @@ public:
     ///
     /// If `resource` is empty, then query for permissions on all resources.
     ///
-    /// If `user` is empty, query for permissions of all users. Otherwise, query for permissions specific to that user.
+    /// If `role_name` is empty, query for permissions of all users. Otherwise, query for permissions specific to that
+    /// user.
     ///
     virtual future<std::vector<permission_details>>
-    list(service&, permission_set matching, std::optional<resource> resource, std::optional<sstring> user) const = 0;
+    list(
+            service&,
+            permission_set matching,
+            std::optional<resource> resource,
+            std::optional<stdx::string_view> role_name) const = 0;
 
     ///
     /// Revoke all permissions granted to a particular user.
     ///
-    virtual future<> revoke_all(sstring dropped_user) = 0;
+    virtual future<> revoke_all(stdx::string_view role_name) = 0;
 
     ///
     /// Revoke all permissions granted to any user for a particular resource.
