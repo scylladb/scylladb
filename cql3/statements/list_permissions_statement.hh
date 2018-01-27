@@ -62,10 +62,11 @@ public:
     list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
 
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+
     future<> check_access(const service::client_state&) override;
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(distributed<service::storage_proxy>&
-                    , service::query_state&
-                    , const query_options&) override;
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    execute(distributed<service::storage_proxy>& , service::query_state& , const query_options&) override;
 };
 
 }

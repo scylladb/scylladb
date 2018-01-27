@@ -49,14 +49,18 @@
 #include "transport/messages/result_message.hh"
 
 cql3::statements::list_permissions_statement::list_permissions_statement(
-                auth::permission_set permissions,
-                std::optional<auth::resource> resource,
-                std::optional<sstring> username, bool recursive)
-                : _permissions(permissions), _resource(std::move(resource)), _username(
-                                std::move(username)), _recursive(recursive) {
+        auth::permission_set permissions,
+        std::optional<auth::resource> resource,
+        std::optional<sstring> username, bool recursive)
+            : _permissions(permissions)
+            , _resource(std::move(resource))
+            , _username(std::move(username))
+            , _recursive(recursive) {
 }
 
-void cql3::statements::list_permissions_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
+void cql3::statements::list_permissions_statement::validate(
+        distributed<service::storage_proxy>& proxy,
+        const service::client_state& state) {
     // a check to ensure the existence of the user isn't being leaked by user existence check.
     state.ensure_not_anonymous();
 }
@@ -84,10 +88,18 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
 
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::list_permissions_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+cql3::statements::list_permissions_statement::execute(
+        distributed<service::storage_proxy>& proxy,
+        service::query_state& state,
+        const query_options& options) {
     static auto make_column = [](sstring name) {
-        return ::make_shared<column_specification>(auth::meta::AUTH_KS, "permissions", ::make_shared<column_identifier>(std::move(name), true), utf8_type);
+        return ::make_shared<column_specification>(
+                auth::meta::AUTH_KS,
+                "permissions",
+                ::make_shared<column_identifier>(std::move(name), true),
+                utf8_type);
     };
+
     static thread_local const std::vector<::shared_ptr<column_specification>> metadata({
         make_column("role"), make_column("resource"), make_column("permission")
     });
@@ -111,32 +123,45 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
         r = std::move(parent);
     }
 
-    return map_reduce(resources, [&state, this](opt_resource r) {
-        auto& auth_service = *state.get_client_state().get_auth_service();
-        return make_ready_future<>().then([this, r = std::move(r), &auth_service, user = state.get_client_state().user()] {
-            return auth_service.underlying_authorizer().list(auth_service, *user, _permissions, std::move(r), _username).finally([user] {});
-        });
-    }, std::vector<auth::permission_details>(), [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {
-        details.insert(details.end(), pd.begin(), pd.end());
-        return std::move(details);
-    }).then([this](std::vector<auth::permission_details> details) {
-        std::sort(details.begin(), details.end());
+    return map_reduce(
+            resources,
+            [&state, this](opt_resource r) {
+                auto& auth_service = *state.get_client_state().get_auth_service();
+                return make_ready_future<>().then([
+                        this,
+                        r = std::move(r),
+                        &auth_service,
+                        user = state.get_client_state().user()] {
+                    return auth_service.underlying_authorizer().list(
+                            auth_service,
+                            *user,
+                            _permissions,
+                            std::move(r),
+                            _username).finally([user] {});
+                });
+            },
+            std::vector<auth::permission_details>(),
+            [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {
+                details.insert(details.end(), pd.begin(), pd.end());
+                return std::move(details);
+            }).then([this](std::vector<auth::permission_details> details) {
+                std::sort(details.begin(), details.end());
 
-        auto rs = std::make_unique<result_set>(metadata);
+                auto rs = std::make_unique<result_set>(metadata);
 
-        for (auto& v : details) {
-            // Make sure names are sorted.
-            auto names = auth::permissions::to_strings(v.permissions);
-            for (auto& p : std::set<sstring>(names.begin(), names.end())) {
-                rs->add_row(
-                                std::vector<bytes_opt> { utf8_type->decompose(
-                                                v.user), utf8_type->decompose(
-                                                sstring(sprint("%s", v.resource))),
-                                                utf8_type->decompose(p), });
-            }
-        }
+                for (auto& v : details) {
+                    // Make sure names are sorted.
+                    auto names = auth::permissions::to_strings(v.permissions);
+                    for (auto& p : std::set<sstring>(names.begin(), names.end())) {
+                        rs->add_row(
+                                std::vector<bytes_opt>{
+                                        utf8_type->decompose(v.user),
+                                        utf8_type->decompose(sstring(sprint("%s", v.resource))),
+                                        utf8_type->decompose(p)});
+                    }
+                }
 
-        auto rows = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
-        return ::shared_ptr<cql_transport::messages::result_message>(std::move(rows));
-    });
+                auto rows = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+                return ::shared_ptr<cql_transport::messages::result_message>(std::move(rows));
+            });
 }
