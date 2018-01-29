@@ -145,9 +145,13 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
                 throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
             }
 
-            if (auth::has_role(as, user, _role).get0()) {
-                throw exceptions::unauthorized_exception(
+            try {
+                if (auth::has_role(as, user, _role).get0()) {
+                    throw exceptions::unauthorized_exception(
                         "You are not allowed to alter your own superuser status or that of a role granted to you.");
+                }
+            } catch (const auth::nonexistant_role& e) {
+                throw exceptions::invalid_request_exception(e.what());
             }
         }
 
@@ -189,7 +193,7 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
 
         return auth::alter_role(as, _role, update, authen_options).then([] {
             return void_result_message();
-        }).handle_exception_type([](const auth::roles_argument_exception& e) {
+        }).handle_exception_type([](const auth::nonexistant_role& e) {
             return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
             return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
@@ -266,15 +270,17 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
         //
 
         const auto user_has_grantee = [this, &state] {
-            return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get0();
+            try {
+                return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get0();
+            } catch (const auth::nonexistant_role& e) {
+                throw exceptions::invalid_request_exception(e.what());
+            }
         };
 
         if (_grantee && !user_has_grantee()) {
             throw exceptions::unauthorized_exception(
                     sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
         }
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
     });
 }
 
@@ -354,7 +360,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
         return rm.query_granted(*_grantee, query_mode).then([&rm](std::unordered_set<sstring> roles) {
             return make_results(rm, std::move(roles));
         });
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
+    }).handle_exception_type([](const auth::nonexistant_role& e) {
         return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
