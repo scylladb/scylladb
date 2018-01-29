@@ -77,7 +77,8 @@ public:
         using type_helper = retry_type_helper<std::result_of_t<Func()>>;
 
         auto r = exponential_backoff_retry(base_sleep_time, max_sleep_time);
-        return seastar::repeat_until_value([r = std::move(r), &as, f = std::move(f)] () mutable {
+      return seastar::do_with(std::move(r), [&as, f = std::move(f)] (exponential_backoff_retry& r) mutable {
+        return seastar::repeat_until_value([&r, &as, f = std::move(f)] () mutable {
             return f().then([&] (auto&& opt) -> typename type_helper::future_type {
                 if (opt) {
                     return make_ready_future<typename type_helper::optional_type>(std::move(opt));
@@ -87,5 +88,6 @@ public:
                 });
             });
         });
+      });
     }
 };
