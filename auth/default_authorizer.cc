@@ -209,66 +209,54 @@ future<> auth::default_authorizer::revoke(
 
 future<std::vector<auth::permission_details>> auth::default_authorizer::list(
         service& ser,
-        const authenticated_user& performer,
+        const authenticated_user&,
         permission_set set,
         std::optional<resource> resource,
         std::optional<sstring> role) const {
-    return when_all_succeed(
-            auth::has_superuser(ser, performer),
-            auth::get_roles(ser, performer)).then(
-                    [this, &ser, set = std::move(set), resource = std::move(resource), role = std::move(role)](
-                            bool is_super,
-                            std::unordered_set<sstring> performer_roles) {
-        if (!is_super && (!role || performer_roles.count(*role) == 0)) {
-            throw exceptions::unauthorized_exception(
-                    sprint("You are not authorized to view %s's permissions", role ? *role : "everyone"));
-        }
+    sstring query = sprint(
+            "SELECT %s, %s, %s FROM %s.%s",
+            ROLE_NAME,
+            RESOURCE_NAME,
+            PERMISSIONS_NAME,
+            meta::AUTH_KS,
+            PERMISSIONS_CF);
 
-        sstring query = sprint(
-                "SELECT %s, %s, %s FROM %s.%s",
-                ROLE_NAME,
-                RESOURCE_NAME,
-                PERMISSIONS_NAME,
-                meta::AUTH_KS,
-                PERMISSIONS_CF);
+    // Oh, look, it is a case where it does not pay off to have
+    // parameters to process in an initializer list.
+    future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
 
-        // Oh, look, it is a case where it does not pay off to have
-        // parameters to process in an initializer list.
-        future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
-
-        if (role) {
-            f = ser.get_roles(*role).then([this, resource = std::move(resource), query, &f](
-                    std::unordered_set<sstring> all_roles) mutable {
-                if (resource) {
-                    query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
-                    return _qp.process(query, db::consistency_level::ONE, {all_roles, resource->name()});
-                }
-
-                query += sprint(" WHERE %s IN ?", ROLE_NAME);
-                return _qp.process(query, db::consistency_level::ONE, {all_roles});
-            });
-        } else if (resource) {
-            query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
-            f = _qp.process(query, db::consistency_level::ONE, {resource->name()});
-        } else {
-            f = _qp.process(query, db::consistency_level::ONE, {});
-        }
-
-        return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
-            std::vector<permission_details> result;
-
-            for (auto& row : *res) {
-                if (row.has(PERMISSIONS_NAME)) {
-                    auto username = row.get_as<sstring>(ROLE_NAME);
-                    auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
-                    auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                    ps = permission_set::from_mask(ps.mask() & set.mask());
-
-                    result.emplace_back(permission_details {username, resource, ps});
-                }
+    if (role) {
+        f = ser.get_roles(*role).then([this, resource = std::move(resource), query, &f](
+                std::unordered_set<sstring> all_roles) mutable {
+            if (resource) {
+                query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
+                return _qp.process(query, db::consistency_level::ONE, {all_roles, resource->name()});
             }
-            return make_ready_future<std::vector<permission_details>>(std::move(result));
+
+            query += sprint(" WHERE %s IN ?", ROLE_NAME);
+            return _qp.process(query, db::consistency_level::ONE, {all_roles});
         });
+    } else if (resource) {
+        query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
+        f = _qp.process(query, db::consistency_level::ONE, {resource->name()});
+    } else {
+        f = _qp.process(query, db::consistency_level::ONE, {});
+    }
+
+    return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
+        std::vector<permission_details> result;
+
+        for (auto& row : *res) {
+            if (row.has(PERMISSIONS_NAME)) {
+                auto username = row.get_as<sstring>(ROLE_NAME);
+                auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
+                auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+                ps = permission_set::from_mask(ps.mask() & set.mask());
+
+                result.emplace_back(permission_details {username, resource, ps});
+            }
+        }
+        return make_ready_future<std::vector<permission_details>>(std::move(result));
     });
 }
 

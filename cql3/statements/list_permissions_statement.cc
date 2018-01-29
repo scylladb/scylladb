@@ -66,6 +66,11 @@ void cql3::statements::list_permissions_statement::validate(
 }
 
 future<> cql3::statements::list_permissions_statement::check_access(const service::client_state& state) {
+    //
+    // TODO(jhaberku): The existence checks should be in `execute()`. `check_access` should be restricted to
+    // authorization checking.
+    //
+
     auto f = make_ready_future();
     if (_username) {
         f = state.get_auth_service()->underlying_role_manager().exists(*_username).then([this](bool exists) {
@@ -83,6 +88,29 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
                 throw exceptions::invalid_request_exception(sprint("%s doesn't exist", *_resource));
             }
         }
+    }).then([this, &state] {
+        const auto& as = *state.get_auth_service();
+
+        return auth::has_superuser(as, *state.user()).then([this, &state, &as](bool has_super) {
+            if (has_super) {
+                return make_ready_future<>();
+            }
+
+            if (!_username) {
+                return make_exception_future<>(
+                        exceptions::unauthorized_exception("You are not authorized to view everyone's permissions"));
+            }
+
+            return auth::has_role(as, *state.user(), *_username).then([this](bool has_role) {
+                if (!has_role) {
+                    return make_exception_future<>(
+                            exceptions::unauthorized_exception(
+                                    sprint("You are not authorized to view %s's permissions", *_username)));
+                }
+
+                return make_ready_future<>();
+            });
+        });
     });
 }
 

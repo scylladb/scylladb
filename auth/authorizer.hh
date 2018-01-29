@@ -111,9 +111,6 @@ public:
     ///
     /// If `user` is empty, query for permissions of all users. Otherwise, query for permissions specific to that user.
     ///
-    /// \returns an exceptional future with \ref exceptions::unauthorized_exception if the performer does not have
-    /// permission to view the user's permissions.
-    ///
     virtual future<std::vector<permission_details>>
     list(
             service&,
