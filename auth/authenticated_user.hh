@@ -52,7 +52,11 @@
 
 namespace auth {
 
-struct authenticated_user final {
+///
+/// A type-safe wrapper for the name of a logged-in user, or a nameless (anonymous) user.
+///
+class authenticated_user final {
+public:
     ///
     /// An anonymous user has no name.
     ///
