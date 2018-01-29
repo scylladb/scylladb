@@ -215,7 +215,15 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
         auto& as = *state.get_auth_service();
 
         const bool user_is_superuser = auth::has_superuser(as, *state.user()).get0();
-        const bool role_has_superuser = as.role_has_superuser(_role).get0();
+
+        const bool role_has_superuser = [this, &as] {
+            try {
+                return as.role_has_superuser(_role).get0();
+            } catch (const auth::nonexistant_role&) {
+                // Handled as part of `execute`.
+                return false;
+            }
+        }();
 
         if (role_has_superuser && !user_is_superuser) {
             throw exceptions::unauthorized_exception("Only superusers can drop a superuser role.");
