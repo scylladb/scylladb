@@ -105,7 +105,7 @@ class row {
         boost::intrusive::compare<cell_entry::compare>, boost::intrusive::constant_time_size<false>>;
 public:
     static constexpr size_t max_vector_size = 32;
-    static constexpr size_t internal_count = (sizeof(map_type) + sizeof(cell_entry)) / sizeof(atomic_cell_or_collection);
+    static constexpr size_t internal_count = 5;
 private:
     using vector_type = managed_vector<atomic_cell_or_collection, internal_count, size_type>;
 
