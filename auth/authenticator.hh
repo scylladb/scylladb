@@ -107,7 +107,7 @@ public:
      *
      * @throws authentication_exception if credentials don't match any known user.
      */
-    virtual future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const = 0;
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const = 0;
 
     /**
      * Called during execution of CREATE USER query (also may be called on startup, see seedSuperuserOptions method).
@@ -157,7 +157,7 @@ public:
         virtual ~sasl_challenge() {}
         virtual bytes evaluate_response(bytes_view client_response) = 0;
         virtual bool is_complete() const = 0;
-        virtual future<::shared_ptr<authenticated_user>> get_authenticated_user() const = 0;
+        virtual future<authenticated_user> get_authenticated_user() const = 0;
     };
 
     /**

@@ -113,7 +113,9 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
 
     return map_reduce(resources, [&state, this](opt_resource r) {
         auto& auth_service = *state.get_client_state().get_auth_service();
-        return auth_service.underlying_authorizer().list(auth_service, state.get_client_state().user(), _permissions, std::move(r), _username);
+        return make_ready_future<>().then([this, r = std::move(r), &auth_service, user = state.get_client_state().user()] {
+            return auth_service.underlying_authorizer().list(auth_service, *user, _permissions, std::move(r), _username).finally([user] {});
+        });
     }, std::vector<auth::permission_details>(), [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {
         details.insert(details.end(), pd.begin(), pd.end());
         return std::move(details);

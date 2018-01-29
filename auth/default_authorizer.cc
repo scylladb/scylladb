@@ -158,7 +158,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
 #include <boost/range.hpp>
 
 future<> auth::default_authorizer::modify(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
+                const authenticated_user& performer, permission_set set,
                 resource resource, sstring user, sstring op) {
     // TODO: why does this not check super user?
     auto query = sprint("UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -170,23 +170,23 @@ future<> auth::default_authorizer::modify(
 
 
 future<> auth::default_authorizer::grant(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
+                const authenticated_user& performer, permission_set set,
                 resource resource, sstring to) {
-    return modify(std::move(performer), std::move(set), std::move(resource), std::move(to), "+");
+    return modify(performer, std::move(set), std::move(resource), std::move(to), "+");
 }
 
 future<> auth::default_authorizer::revoke(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
+                const authenticated_user& performer, permission_set set,
                 resource resource, sstring from) {
-    return modify(std::move(performer), std::move(set), std::move(resource), std::move(from), "-");
+    return modify(performer, std::move(set), std::move(resource), std::move(from), "-");
 }
 
 future<std::vector<auth::permission_details>> auth::default_authorizer::list(
-                service& ser, ::shared_ptr<authenticated_user> performer, permission_set set,
+                service& ser, const authenticated_user& performer, permission_set set,
                 optional<resource> resource, optional<sstring> role) const {
     return when_all_succeed(
-            auth::has_superuser(ser, *performer),
-            auth::get_roles(ser, *performer)).then([this, &ser, performer, set = std::move(set), resource = std::move(resource), role = std::move(role)](bool is_super, std::unordered_set<sstring> performer_roles) {
+            auth::has_superuser(ser, performer),
+            auth::get_roles(ser, performer)).then([this, &ser, set = std::move(set), resource = std::move(resource), role = std::move(role)](bool is_super, std::unordered_set<sstring> performer_roles) {
         if (!is_super && (!role || performer_roles.count(*role) == 0)) {
             throw exceptions::unauthorized_exception(sprint("You are not authorized to view %s's permissions", role ? *role : "everyone"));
         }

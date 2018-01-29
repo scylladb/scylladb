@@ -210,7 +210,7 @@ auth::authentication_option_set auth::password_authenticator::alterable_options(
     return authentication_option_set{authentication_option::password};
 }
 
-future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::authenticate(
+future<auth::authenticated_user> auth::password_authenticator::authenticate(
                 const credentials_map& credentials) const {
     if (!credentials.count(USERNAME_KEY)) {
         throw exceptions::authentication_exception(sprint("Required key '%s' is missing", USERNAME_KEY));
@@ -237,7 +237,7 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
             if (res->empty() || !checkpw(password, res->one().get_as<sstring>(SALTED_HASH))) {
                 throw exceptions::authentication_exception("Username and/or password are incorrect");
             }
-            return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>(username));
+            return make_ready_future<authenticated_user>(username);
         } catch (std::system_error &) {
             std::throw_with_nested(exceptions::authentication_exception("Could not verify password"));
         } catch (exceptions::request_execution_exception& e) {
@@ -345,7 +345,7 @@ const auth::resource_set& auth::password_authenticator::protected_resources() co
         bool is_complete() const override {
             return _complete;
         }
-        future<::shared_ptr<authenticated_user>> get_authenticated_user() const override {
+        future<authenticated_user> get_authenticated_user() const override {
             return _self.authenticate(_credentials);
         }
     private:

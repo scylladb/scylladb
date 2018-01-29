@@ -71,7 +71,7 @@ public:
     bool require_authentication() const override;
     authentication_option_set supported_options() const override;
     authentication_option_set alterable_options() const override;
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override;
+    future<authenticated_user> authenticate(const credentials_map& credentials) const override;
     future<> create(sstring username, const authentication_options& options) override;
     future<> alter(sstring username, const authentication_options& options) override;
     future<> drop(sstring username) override;

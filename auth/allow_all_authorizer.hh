@@ -60,17 +60,17 @@ public:
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
+    future<> grant(const authenticated_user&, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
     }
 
-    future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override {
+    future<> revoke(const authenticated_user&, permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
     future<std::vector<permission_details>> list(
             service&,
-            ::shared_ptr<authenticated_user> performer,
+            const authenticated_user& performer,
             permission_set,
             stdx::optional<resource>,
             stdx::optional<sstring>) const override {

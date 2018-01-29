@@ -47,7 +47,9 @@ cql3::statements::revoke_statement::execute(distributed<service::storage_proxy>&
     auto& client_state = state.get_client_state();
     auto& auth_service = *client_state.get_auth_service();
 
-    return auth_service.underlying_authorizer().revoke(client_state.user(), _permissions, _resource, _username).then([] {
+    return make_ready_future<>().then([this, &auth_service, user = client_state.user()] {
+        return auth_service.underlying_authorizer().revoke(*user, _permissions, _resource, _username).finally([user] {});
+    }).then([] {
         return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
     });
 }

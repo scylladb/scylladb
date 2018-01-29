@@ -94,11 +94,11 @@ public:
     authentication_option_set alterable_options() const override {
         return _authenticator->alterable_options();
     }
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
+    future<authenticated_user> authenticate(const credentials_map& credentials) const override {
         auto i = credentials.find(authenticator::USERNAME_KEY);
         if ((i == credentials.end() || i->second.empty()) && (!credentials.count(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
             // return anon user
-            return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+            return make_ready_future<authenticated_user>(anonymous_user());
         }
         return make_ready_future().then([this, &credentials] {
             return _authenticator->authenticate(credentials);
@@ -107,7 +107,7 @@ public:
                 std::rethrow_exception(ep);
             } catch (exceptions::authentication_exception&) {
                 // return anon user
-                return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+                return make_ready_future<authenticated_user>(anonymous_user());
             }
         });
     }
@@ -140,14 +140,14 @@ public:
             bool is_complete() const {
                 return _complete || _sasl->is_complete();
             }
-            future<::shared_ptr<authenticated_user>> get_authenticated_user() const {
+            future<authenticated_user> get_authenticated_user() const {
                 return futurize_apply([this] {
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);
                         } catch (exceptions::authentication_exception&) {
                             // return anon user
-                            return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+                            return make_ready_future<authenticated_user>(anonymous_user());
                         }
                     });
                 });
@@ -190,14 +190,14 @@ public:
             return make_ready_future<permission_set>(s ? resource.applicable_permissions() : transitional_permissions);
         });
     }
-    future<> grant(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->grant(std::move(user), std::move(ps), std::move(r), std::move(s));
+    future<> grant(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
+        return _authorizer->grant(user, std::move(ps), std::move(r), std::move(s));
     }
-    future<> revoke(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->revoke(std::move(user), std::move(ps), std::move(r), std::move(s));
+    future<> revoke(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
+        return _authorizer->revoke(user, std::move(ps), std::move(r), std::move(s));
     }
-    future<std::vector<permission_details>> list(service& ser, ::shared_ptr<authenticated_user> user, permission_set ps, optional<resource> r, optional<sstring> s) const override {
-        return _authorizer->list(ser, std::move(user), std::move(ps), std::move(r), std::move(s));
+    future<std::vector<permission_details>> list(service& ser, const authenticated_user& user, permission_set ps, optional<resource> r, optional<sstring> s) const override {
+        return _authorizer->list(ser, user, std::move(ps), std::move(r), std::move(s));
     }
     future<> revoke_all(sstring s) override {
         return _authorizer->revoke_all(std::move(s));

@@ -102,7 +102,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<> grant(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring to) = 0;
+    virtual future<> grant(const authenticated_user& performer, permission_set, resource, sstring to) = 0;
 
     /**
      * Revokes a set of permissions on a resource from a user.
@@ -116,7 +116,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<> revoke(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring from) = 0;
+    virtual future<> revoke(const authenticated_user& performer, permission_set, resource, sstring from) = 0;
 
     /**
      * Returns a list of permissions on a resource of a user.
@@ -132,7 +132,7 @@ public:
      * @throws RequestValidationException
      * @throws RequestExecutionException
      */
-    virtual future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user> performer, permission_set, optional<resource>, optional<sstring>) const = 0;
+    virtual future<std::vector<permission_details>> list(service&, const authenticated_user& performer, permission_set, optional<resource>, optional<sstring>) const = 0;
 
     /**
      * This method is called before deleting a user with DROP USER query so that a new user with the same

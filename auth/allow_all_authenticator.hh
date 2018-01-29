@@ -68,8 +68,8 @@ public:
         return authentication_option_set();
     }
 
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
-        return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+    future<authenticated_user> authenticate(const credentials_map& credentials) const override {
+        return make_ready_future<authenticated_user>(anonymous_user());
     }
 
     future<> create(sstring username, const authentication_options& options) override {

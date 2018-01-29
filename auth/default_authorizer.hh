@@ -70,11 +70,11 @@ public:
 
     future<permission_set> authorize(service&, sstring, resource) const override;
 
-    future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
+    future<> grant(const authenticated_user&, permission_set, resource, sstring) override;
 
-    future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
+    future<> revoke(const authenticated_user&, permission_set, resource, sstring) override;
 
-    future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user>, permission_set, optional<resource>, optional<sstring>) const override;
+    future<std::vector<permission_details>> list(service&, const authenticated_user&, permission_set, optional<resource>, optional<sstring>) const override;
 
     future<> revoke_all(sstring) override;
 
@@ -85,7 +85,7 @@ public:
     future<> validate_configuration() const override;
 
 private:
-    future<> modify(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring, sstring);
+    future<> modify(const authenticated_user& performer, permission_set, resource, sstring, sstring);
 
     ///
     /// Permissions granted directly to a role, rather than those inherited.

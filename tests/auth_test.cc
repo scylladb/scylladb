@@ -78,7 +78,6 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         sstring password("notter");
 
         using namespace auth;
-        using user_ptr = ::shared_ptr<authenticated_user>;
 
         auto USERNAME_KEY = authenticator::USERNAME_KEY;
         auto PASSWORD_KEY = authenticator::PASSWORD_KEY;
@@ -86,7 +85,7 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
         auto& a = env.local_auth_service().underlying_authenticator();
 
         // check non-existing user
-        return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([&a](future<user_ptr>&& f) {
+        return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([&a](future<auth::authenticated_user>&& f) {
             try {
                 f.get();
                 BOOST_FAIL("should not reach");
@@ -98,14 +97,14 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             options.password = password;
 
             return a.create(username, std::move(options)).then([=, &a] {
-                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
-                    BOOST_REQUIRE_EQUAL(auth::is_anonymous(*user), false);
-                    BOOST_REQUIRE_EQUAL(*user->name, username);
+                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](auth::authenticated_user user) {
+                    BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+                    BOOST_REQUIRE_EQUAL(*user.name, username);
                 });
             });
         }).then([=, &a] {
             // check wrong password
-            return a.authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<user_ptr>&& f) {
+            return a.authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<auth::authenticated_user>&& f) {
                 try {
                     f.get();
                     BOOST_FAIL("should not reach");
@@ -129,14 +128,14 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             sasl->evaluate_response(b);
             BOOST_REQUIRE_EQUAL(sasl->is_complete(), true);
 
-            return sasl->get_authenticated_user().then([=](user_ptr user) {
-                BOOST_REQUIRE_EQUAL(auth::is_anonymous(*user), false);
-                BOOST_REQUIRE_EQUAL(*user->name, username);
+            return sasl->get_authenticated_user().then([=](auth::authenticated_user user) {
+                BOOST_REQUIRE_EQUAL(auth::is_anonymous(user), false);
+                BOOST_REQUIRE_EQUAL(*user.name, username);
             });
         }).then([=, &a] {
             // check deleted user
             return a.drop(username).then([=, &a] {
-                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
+                return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user>&& f) {
                     try {
                         f.get();
                         BOOST_FAIL("should not reach");
@@ -175,10 +174,9 @@ SEASTAR_TEST_CASE(test_cassandra_hash) {
 
             auto USERNAME_KEY = auth::authenticator::USERNAME_KEY;
             auto PASSWORD_KEY = auth::authenticator::PASSWORD_KEY;
-            using user_ptr = ::shared_ptr<auth::authenticated_user>;
 
             // try to verify our user with a cassandra-originated salted_hash
-            return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr> f) {
+            return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<auth::authenticated_user> f) {
                 try {
                     f.get();
                 } catch (exceptions::authentication_exception& e) {
