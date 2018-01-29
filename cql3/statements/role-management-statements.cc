@@ -219,7 +219,7 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
 
         const bool role_has_superuser = [this, &as] {
             try {
-                return as.role_has_superuser(_role).get0();
+                return as.has_superuser(_role).get0();
             } catch (const auth::nonexistant_role&) {
                 // Handled as part of `execute`.
                 return false;

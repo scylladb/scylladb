@@ -205,7 +205,7 @@ public:
     }
 
     virtual future<permission_set> authorize(service& ser, sstring role, resource resource) const override {
-        return ser.role_has_superuser(role).then([resource](bool s) {
+        return ser.has_superuser(role).then([resource](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<
                                     permission::CREATE,

@@ -246,7 +246,7 @@ future<permission_set> service::get_permissions(stdx::string_view role_name, res
     });
 }
 
-future<bool> service::role_has_superuser(stdx::string_view role_name) const {
+future<bool> service::has_superuser(stdx::string_view role_name) const {
     return this->get_roles(std::move(role_name)).then([this](std::unordered_set<sstring> roles) {
         return do_with(std::move(roles), [this](const std::unordered_set<sstring>& roles) {
             return do_with(false, roles.begin(), [this, &roles](bool& any_super, auto& iter) {
@@ -281,7 +281,7 @@ future<bool> has_superuser(const service& ser, const authenticated_user& u) {
         return make_ready_future<bool>(false);
     }
 
-    return ser.role_has_superuser(*u.name);
+    return ser.has_superuser(*u.name);
 }
 
 future<std::unordered_set<sstring>> get_roles(const service& ser, const authenticated_user& u) {

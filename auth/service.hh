@@ -130,7 +130,7 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    future<bool> role_has_superuser(stdx::string_view role_name) const;
+    future<bool> has_superuser(stdx::string_view role_name) const;
 
     ///
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.

@@ -122,7 +122,7 @@ future<auth::permission_set> auth::default_authorizer::authorize_role_directly(
         const service& ser,
         stdx::string_view role_name,
         const resource& r) const {
-    return ser.role_has_superuser(role_name).then([this, role_name, &r](bool has_superuser) {
+    return ser.has_superuser(role_name).then([this, role_name, &r](bool has_superuser) {
         if (has_superuser) {
             return make_ready_future<permission_set>(r.applicable_permissions());
         }

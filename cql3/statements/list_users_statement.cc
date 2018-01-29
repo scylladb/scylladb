@@ -84,7 +84,7 @@ cql3::statements::list_users_statement::execute(distributed<service::storage_pro
                 [&as](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
             return do_for_each(sorted_roles, [&as, &results](const sstring& role) {
                 return when_all_succeed(
-                        as.role_has_superuser(role),
+                        as.has_superuser(role),
                         as.underlying_role_manager().can_login(role)).then([&results, &role](bool super, bool login) {
                     if (login) {
                         results->add_column_value(utf8_type->decompose(role));
