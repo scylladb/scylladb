@@ -664,21 +664,6 @@ bool memtable::is_flushed() const {
     return bool(_underlying);
 }
 
-flat_mutation_reader
-memtable_entry::read(lw_shared_ptr<memtable> mtbl,
-        const schema_ptr& target_schema,
-        const query::partition_slice& slice,
-        streamed_mutation::forwarding fwd) {
-    auto cr = query::clustering_key_filter_ranges::get_ranges(*_schema, slice, _key.key());
-    if (_schema->version() != target_schema->version()) {
-        auto mp = mutation_partition(_pe.squashed(_schema, target_schema), *target_schema, std::move(cr));
-        mutation m = mutation(target_schema, _key, std::move(mp));
-        return flat_mutation_reader_from_mutations({std::move(m)}, fwd);
-    }
-    auto snp = _pe.read(mtbl->region(), _schema);
-    return make_partition_snapshot_flat_reader(_schema, _key, std::move(cr), snp, *mtbl, mtbl->_read_section, mtbl, fwd);
-}
-
 void memtable::upgrade_entry(memtable_entry& e) {
     if (e._schema != _schema) {
         assert(!reclaiming_enabled());
