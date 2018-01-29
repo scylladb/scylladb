@@ -64,8 +64,11 @@
 #include "db/config.hh"
 #include "md5_hasher.hh"
 
+#include <seastar/util/noncopyable_function.hh>
+
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
+#include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/join.hpp>
 
@@ -126,7 +129,11 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& views_before,
     std::map<qualified_name, schema_mutations>&& views_after);
 
-static void merge_types(distributed<service::storage_proxy>& proxy,
+struct user_types_to_drop final {
+    seastar::noncopyable_function<void()> drop;
+};
+
+[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
     schema_result&& before,
     schema_result&& after);
 
@@ -832,7 +839,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
 #endif
 
        std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
-       merge_types(proxy, std::move(old_types), std::move(new_types));
+       auto types_to_drop = merge_types(proxy, std::move(old_types), std::move(new_types));
        merge_tables_and_views(proxy,
             std::move(old_column_families), std::move(new_column_families),
             std::move(old_views), std::move(new_views));
@@ -840,6 +847,8 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std:
        mergeFunctions(oldFunctions, newFunctions);
        mergeAggregates(oldAggregates, newAggregates);
 #endif
+       types_to_drop.drop();
+
        proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
            return do_for_each(keyspaces_to_drop, [&db] (auto keyspace_to_drop) {
@@ -996,30 +1005,37 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     }).get();
 }
 
-static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<user_type>& to)
+struct naked_user_type {
+    const sstring keyspace;
+    const sstring qualified_name;
+};
+
+static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<naked_user_type>& to)
 {
     for (auto&& key : keys) {
         auto&& value = result[key];
         auto types = create_types_from_schema_partition(schema_result_value_type{key, std::move(value)});
-        std::move(types.begin(), types.end(), std::back_inserter(to));
+        boost::transform(types, std::back_inserter(to), [] (user_type type) {
+            return naked_user_type{std::move(type->_keyspace), std::move(type->name())};
+        });
     }
 }
 
- // see the comments for merge_keyspaces()
-static void merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
+// see the comments for merge_keyspaces()
+[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
 {
-    std::vector<user_type> created, altered, dropped;
+    std::vector<naked_user_type> created, altered, dropped;
 
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     collect_types(diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
     collect_types(diff.entries_only_on_right, after, created); // New keyspaces with types
 
-    for (auto&& key : diff.entries_differing) {
+    for (auto&& keyspace : diff.entries_differing) {
         // The user types of this keyspace differ, so diff the current types with the updated ones
-        auto current_types = proxy.local().get_db().local().find_keyspace(key).metadata()->user_types()->get_all_types();
+        auto current_types = proxy.local().get_db().local().find_keyspace(keyspace).metadata()->user_types()->get_all_types();
         decltype(current_types) updated_types;
-        auto ts = create_types_from_schema_partition(schema_result_value_type{key, std::move(after[key])});
+        auto ts = create_types_from_schema_partition(schema_result_value_type{keyspace, std::move(after[keyspace])});
         updated_types.reserve(ts.size());
         for (auto&& type : ts) {
             updated_types[type->_name] = std::move(type);
@@ -1027,36 +1043,46 @@ static void merge_types(distributed<service::storage_proxy>& proxy, schema_resul
 
         auto delta = difference(current_types, updated_types, indirect_equal_to<user_type>());
 
-        for (auto&& key : delta.entries_only_on_left) {
-            dropped.emplace_back(current_types[key]);
+        for (auto&& type_name : delta.entries_only_on_left) {
+            dropped.emplace_back(naked_user_type{keyspace, current_types[type_name]->name()});
         }
-        for (auto&& key : delta.entries_only_on_right) {
-            created.emplace_back(std::move(updated_types[key]));
+        for (auto&& type_name : delta.entries_only_on_right) {
+            created.emplace_back(naked_user_type{keyspace, updated_types[type_name]->name()});
         }
-        for (auto&& key : delta.entries_differing) {
-            altered.emplace_back(std::move(updated_types[key]));
+        for (auto&& type_name : delta.entries_differing) {
+            altered.emplace_back(naked_user_type{keyspace, updated_types[type_name]->name()});
         }
     }
 
-    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
+    // Create and update user types before any tables/views are created that potentially
+    // use those types. Similarly, defer dropping until after tables/views that may use
+    // some of these user types are dropped.
+
+    proxy.local().get_db().invoke_on_all([&created, &altered] (database& db) {
         return seastar::async([&] {
             for (auto&& type : created) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type.qualified_name));
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
                 service::get_local_migration_manager().notify_create_user_type(user_type).get();
             }
-            for (auto&& type : dropped) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
-                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                service::get_local_migration_manager().notify_drop_user_type(user_type).get();
-            }
             for (auto&& type : altered) {
-                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type.qualified_name));
                 db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
                 service::get_local_migration_manager().notify_update_user_type(user_type).get();
             }
         });
     }).get();
+
+    return user_types_to_drop{[&proxy, dropped = std::move(dropped)] {
+        proxy.local().get_db().invoke_on_all([dropped = std::move(dropped)](database& db) {
+            return do_for_each(dropped, [&db](auto& user_type_to_drop) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(
+                        parse_type(std::move(user_type_to_drop.qualified_name)));
+                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+                return service::get_local_migration_manager().notify_drop_user_type(user_type);
+            });
+        }).get();
+    }};
 }
 
 #if 0
