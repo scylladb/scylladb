@@ -53,7 +53,7 @@ namespace auth {
 class authenticated_user final {
 public:
     authenticated_user() noexcept;
-    authenticated_user(stdx::string_view name);
+    explicit authenticated_user(stdx::string_view name);
 
     const sstring& name() const;
 
