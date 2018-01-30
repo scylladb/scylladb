@@ -432,26 +432,6 @@ public:
         abort();
     }
 
-    template<typename Consumer>
-    GCC6_CONCEPT(
-        requires StreamedMutationConsumer<Consumer>()
-    )
-    decltype(auto) consume_streamed_mutation(Consumer& consumer) && {
-        switch (_kind) {
-            case kind::static_row:
-                return consumer.consume(std::move(_data->_static_row));
-            case kind::clustering_row:
-                return consumer.consume(std::move(_data->_clustering_row));
-            case kind::range_tombstone:
-                return consumer.consume(std::move(_data->_range_tombstone));
-            case kind::partition_start:
-                abort();
-            case kind::partition_end:
-                abort();
-        }
-        abort();
-    }
-
     template<typename Visitor>
     GCC6_CONCEPT(
         requires MutationFragmentVisitor<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>()
