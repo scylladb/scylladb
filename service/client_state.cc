@@ -61,15 +61,15 @@ void service::client_state::set_login(::shared_ptr<auth::authenticated_user> use
 }
 
 future<> service::client_state::check_user_exists() {
-    if (_user->is_anonymous()) {
+    if (auth::is_anonymous(*_user)) {
         return make_ready_future();
     }
 
-    return _auth_service->underlying_role_manager().exists(_user->name()).then([user = _user](bool exists) mutable {
+    return _auth_service->underlying_role_manager().exists(*_user->name).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             sprint("User %s doesn't exist - create it with CREATE USER query first",
-                                            user->name()));
+                                            *user->name));
         }
         return make_ready_future();
     });
@@ -83,7 +83,7 @@ void service::client_state::validate_login() const {
 
 void service::client_state::ensure_not_anonymous() const {
     validate_login();
-    if (_user->is_anonymous()) {
+    if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
 }
@@ -189,7 +189,7 @@ future<bool> service::client_state::check_has_permission(auth::permission p, aut
 
     std::experimental::optional<auth::resource> parent = resource.parent();
 
-    return _auth_service->get_permissions(_user->name(), resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
+    return _auth_service->get_permissions(*_user->name, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
         if (set.contains(p)) {
             return make_ready_future<bool>(true);
         }
@@ -204,7 +204,7 @@ future<> service::client_state::ensure_has_permission(auth::permission p, auth::
     return check_has_permission(p, resource).then([this, p, resource](bool ok) {
         if (!ok) {
             throw exceptions::unauthorized_exception(sprint("User %s has no %s permission on %s or any of its parents",
-                                            _user->name(),
+                                            *_user,
                                             auth::permissions::to_string(p),
                                             resource));
         }

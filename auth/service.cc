@@ -267,19 +267,19 @@ future<std::unordered_set<sstring>> service::get_roles(stdx::string_view role_na
 //
 
 future<bool> has_superuser(const service& ser, const authenticated_user& u) {
-    if (u.is_anonymous()) {
+    if (is_anonymous(u)) {
         return make_ready_future<bool>(false);
     }
 
-    return ser.role_has_superuser(u.name());
+    return ser.role_has_superuser(*u.name);
 }
 
 future<std::unordered_set<sstring>> get_roles(const service& ser, const authenticated_user& u) {
-    if (u.is_anonymous()) {
+    if (is_anonymous(u)) {
         return make_ready_future<std::unordered_set<sstring>>();
     }
 
-    return ser.get_roles(u.name());
+    return ser.get_roles(*u.name);
 }
 
 bool is_enforcing(const service& ser)  {

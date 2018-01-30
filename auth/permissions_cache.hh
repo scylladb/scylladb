@@ -41,13 +41,6 @@
 
 namespace std {
 
-template <>
-struct hash<auth::authenticated_user> final {
-    size_t operator()(const auth::authenticated_user & v) const {
-        return utils::tuple_hash()(v.name(), v.is_anonymous());
-    }
-};
-
 inline std::ostream& operator<<(std::ostream& os, const std::pair<sstring, auth::resource>& p) {
     os << "{role: " << p.first << ", resource: " << p.second << "}";
     return os;

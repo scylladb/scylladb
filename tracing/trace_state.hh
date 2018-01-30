@@ -375,7 +375,7 @@ private:
 
     void set_username(shared_ptr<auth::authenticated_user> user) {
         if (user) {
-            _records->session_rec.username = user->name();
+            _records->session_rec.username = sprint("%s", *user);
         }
     }
 

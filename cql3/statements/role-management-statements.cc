@@ -144,14 +144,14 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
                 throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
             }
 
-            const bool granted_to_user = as.get_roles(user.name()).get0().count(_role) != 0;
+            const bool granted_to_user = as.get_roles(*user.name).get0().count(_role) != 0;
             if (granted_to_user) {
                 throw exceptions::unauthorized_exception(
                         "You are not allowed to alter your own superuser status or that of a role granted to you.");
             }
         }
 
-        if (user.name() != _role) {
+        if (*user.name != _role) {
             state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
         } else {
             const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
@@ -201,7 +201,7 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
 //
 
 void drop_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
-    if (state.user()->name() == _role) {
+    if (*state.user() == auth::authenticated_user(_role)) {
         throw request_validations::invalid_request("Cannot DROP primary role for current login.");
     }
 }
@@ -268,7 +268,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
         //
 
         const auto user_has_grantee = [this, &state] {
-            return state.get_auth_service()->get_roles(state.user()->name()).get0().count(*_grantee) != 0;
+            return state.get_auth_service()->get_roles(*state.user()->name).get0().count(*_grantee) != 0;
         };
 
         if (_grantee && !user_has_grantee()) {
@@ -347,7 +347,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
                 }
 
-                return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
+                return rm.query_granted(*cs.user()->name, query_mode).then([&rm](std::unordered_set<sstring> roles) {
                     return make_results(rm, std::move(roles));
                 });
             });

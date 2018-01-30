@@ -109,7 +109,7 @@ cql3::statements::list_users_statement::execute(distributed<service::storage_pro
             });
         }
 
-        return as.get_roles(user->name()).then([&as](std::unordered_set<sstring> granted_roles) {
+        return as.get_roles(*user->name).then([&as](std::unordered_set<sstring> granted_roles) {
             return make_results(as, std::move(granted_roles));
         });
     }).finally([user] {});

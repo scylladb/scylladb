@@ -99,8 +99,8 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
 
             return a.create(username, std::move(options)).then([=, &a] {
                 return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
-                    BOOST_REQUIRE_EQUAL(user->name(), username);
-                    BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
+                    BOOST_REQUIRE_EQUAL(auth::is_anonymous(*user), false);
+                    BOOST_REQUIRE_EQUAL(*user->name, username);
                 });
             });
         }).then([=, &a] {
@@ -130,8 +130,8 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             BOOST_REQUIRE_EQUAL(sasl->is_complete(), true);
 
             return sasl->get_authenticated_user().then([=](user_ptr user) {
-                BOOST_REQUIRE_EQUAL(user->name(), username);
-                BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
+                BOOST_REQUIRE_EQUAL(auth::is_anonymous(*user), false);
+                BOOST_REQUIRE_EQUAL(*user->name, username);
             });
         }).then([=, &a] {
             // check deleted user
