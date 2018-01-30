@@ -54,6 +54,24 @@ class result_set;
 }
 
 namespace db {
+
+class extensions;
+class config;
+
+class schema_ctxt {
+public:
+    schema_ctxt(const config&);
+    schema_ctxt(const database&);
+    schema_ctxt(distributed<database>&);
+    schema_ctxt(distributed<service::storage_proxy>&);
+
+    const db::extensions& extensions() const {
+        return _extensions;
+    }
+private:
+    const db::extensions& _extensions;
+};
+
 namespace schema_tables {
 
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;

@@ -83,6 +83,23 @@ using namespace std::chrono_literals;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
+
+schema_ctxt::schema_ctxt(const db::config& cfg)
+    : _extensions(cfg.extensions())
+{}
+
+schema_ctxt::schema_ctxt(const database& db)
+    : schema_ctxt(db.get_config())
+{}
+
+schema_ctxt::schema_ctxt(distributed<database>& db)
+    : schema_ctxt(db.local())
+{}
+
+schema_ctxt::schema_ctxt(distributed<service::storage_proxy>& proxy)
+    : schema_ctxt(proxy.local().get_db())
+{}
+
 namespace schema_tables {
 
 logging::logger slogger("schema_tables");
