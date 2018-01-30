@@ -72,12 +72,10 @@ void cql3::statements::permission_altering_statement::validate(distributed<servi
         throw exceptions::invalid_request_exception(
                 "You cannot modify access-control information until the cluster has fully upgraded.");
     }
-
-    // a check to ensure the existence of the user isn't being leaked by user existence check.
-    state.ensure_not_anonymous();
 }
 
 future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
     maybe_correct_resource(_resource, state);
 
     return state.ensure_exists(_resource).then([this, &state] {
