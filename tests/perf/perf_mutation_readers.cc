@@ -29,6 +29,9 @@
 
 #include "mutation_reader.hh"
 #include "flat_mutation_reader.hh"
+#include "memtable.hh"
+
+namespace tests {
 
 class combined {
     mutable simple_schema _schema;
@@ -178,4 +181,96 @@ PERF_TEST_F(combined, disjoint_ranges)
             })
         )
     ));
+}
+
+class memtable {
+    static constexpr size_t partition_count = 1000;
+    static constexpr size_t row_count = 50;
+    mutable simple_schema _schema;
+    std::vector<dht::decorated_key> _dkeys;
+    lw_shared_ptr<::memtable> _single_row;
+    lw_shared_ptr<::memtable> _multi_row;
+    std::optional<dht::partition_range> _partition_range;
+public:
+    memtable()
+        : _dkeys(_schema.make_pkeys(partition_count))
+        , _single_row(make_lw_shared<::memtable>(_schema.schema()))
+        , _multi_row(make_lw_shared<::memtable>(_schema.schema()))
+    {
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(_schema.schema(), dkey);
+                m.apply(_schema.make_row(_schema.make_ckey(0), "value"));
+                return m;
+            }),
+            [&] (mutation m) {
+                _single_row->apply(m);
+            }
+        );
+        boost::for_each(
+            _dkeys
+            | boost::adaptors::transformed([&] (auto& dkey) {
+                auto m = mutation(_schema.schema(), dkey);
+                for (auto i = 0u; i < row_count; i++) {
+                    m.apply(_schema.make_row(_schema.make_ckey(i), "value"));
+                }
+                return m;
+            }),
+            [&] (mutation m) {
+                _multi_row->apply(m);
+            }
+        );
+    }
+protected:
+    schema_ptr schema() const { return _schema.schema(); }
+
+    ::memtable& single_row_mt() { return *_single_row; }
+    ::memtable& multi_row_mt() { return *_multi_row; }
+
+    const dht::partition_range& single_partition_range() {
+        auto& dk = _dkeys[_dkeys.size() / 2];
+        _partition_range.emplace(dht::partition_range::make_singular(dk));
+        return *_partition_range;
+    }
+
+    const dht::partition_range& multi_partition_range(size_t n) {
+        auto start_idx = (_dkeys.size() - n) / 2;
+        auto& start_dk = _dkeys[start_idx];
+        auto& end_dk = _dkeys[start_idx + n];
+        _partition_range.emplace(dht::partition_range::make(dht::ring_position(start_dk),
+                                                            {dht::ring_position(end_dk), false}));
+        return *_partition_range;
+    }
+
+    future<> consume_all(flat_mutation_reader mr) const {
+        return do_with(std::move(mr), [] (auto& mr) {
+            return mr.consume_pausable([] (mutation_fragment mf) {
+                perf_tests::do_not_optimize(mf);
+                return stop_iteration::no;
+            });
+        });
+    }
+};
+
+PERF_TEST_F(memtable, one_partition_one_row)
+{
+    return consume_all(single_row_mt().make_flat_reader(schema(), single_partition_range()));
+}
+
+PERF_TEST_F(memtable, one_partition_many_rows)
+{
+    return consume_all(multi_row_mt().make_flat_reader(schema(), single_partition_range()));
+}
+
+PERF_TEST_F(memtable, many_partitions_one_row)
+{
+    return consume_all(single_row_mt().make_flat_reader(schema(), multi_partition_range(25)));
+}
+
+PERF_TEST_F(memtable, many_partitions_many_rows)
+{
+    return consume_all(multi_row_mt().make_flat_reader(schema(), multi_partition_range(25)));
+}
+
 }

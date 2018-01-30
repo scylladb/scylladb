@@ -3,7 +3,7 @@
 export PYBUILD_DISABLE=1
 
 override_dh_auto_configure:
-	./configure.py --enable-dpdk --mode=release --static-thrift --static-boost --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/" --ldflags="-Wl,-rpath=/opt/scylladb/lib"
+	./configure.py --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/" --ldflags="-Wl,-rpath=/opt/scylladb/lib"
 
 override_dh_auto_build:
 	PATH="/opt/scylladb/bin:$$PATH" ninja

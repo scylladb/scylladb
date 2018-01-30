@@ -416,3 +416,29 @@ SEASTAR_TEST_CASE(test_fast_forward_to_after_memtable_is_flushed) {
         rd.produces(ring[3]).produces(ring[4]).produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_exception_safety_of_reads) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+        std::vector<mutation> ms = gen(2);
+
+        auto mt = make_lw_shared<memtable>(s);
+        for (auto& m : ms) {
+            mt->apply(m);
+        }
+
+        auto& injector = memory::local_failure_injector();
+        uint64_t i = 0;
+        do {
+            try {
+                injector.fail_after(i++);
+                assert_that(mt->make_flat_reader(s, query::full_partition_range))
+                    .produces(ms);
+                injector.cancel();
+            } catch (const std::bad_alloc&) {
+                // expected
+            }
+        } while (injector.failed());
+    });
+}

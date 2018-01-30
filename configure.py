@@ -339,6 +339,8 @@ arg_parser.add_argument('--static-thrift', dest = 'staticthrift', action = 'stor
             help = 'Link libthrift statically')
 arg_parser.add_argument('--static-boost', dest = 'staticboost', action = 'store_true',
             help = 'Link boost statically')
+arg_parser.add_argument('--static-yaml-cpp', dest = 'staticyamlcpp', action = 'store_true',
+            help = 'Link libyaml-cpp statically')
 arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
                         help = 'Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
@@ -374,6 +376,7 @@ scylla_core = (['database.cc',
                  'supervisor.cc',
                  'utils/logalloc.cc',
                  'utils/large_bitset.cc',
+                 'utils/buffer_input_stream.cc',
                  'mutation_partition.cc',
                  'mutation_partition_view.cc',
                  'mutation_partition_serializer.cc',
@@ -391,6 +394,7 @@ scylla_core = (['database.cc',
                  'sstables/compaction_manager.cc',
                  'sstables/atomic_deletion.cc',
                  'sstables/integrity_checked_file_impl.cc',
+                 'sstables/prepended_input_stream.cc',
                  'transport/event.cc',
                  'transport/event_notifier.cc',
                  'transport/server.cc',
@@ -858,6 +862,8 @@ if args.staticcxx:
     seastar_flags += ['--static-stdc++']
 if args.staticboost:
     seastar_flags += ['--static-boost']
+if args.staticyamlcpp:
+    seastar_flags += ['--static-yaml-cpp']
 if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
 if args.alloc_failure_injector:

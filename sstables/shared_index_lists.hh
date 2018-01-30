@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "types.hh"
+#include "index_entry.hh"
 #include <vector>
 #include <seastar/core/future.hh>
 #include "utils/loading_shared_values.hh"

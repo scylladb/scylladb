@@ -303,6 +303,16 @@ private:
 
     friend class position_in_partition;
 public:
+    struct clustering_row_tag_t { };
+    
+    template<typename... Args>
+    mutation_fragment(clustering_row_tag_t, Args&&... args)
+        : _kind(kind::clustering_row)
+        , _data(std::make_unique<data>())
+    {
+        new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
+    }
+
     mutation_fragment(static_row&& r);
     mutation_fragment(clustering_row&& r);
     mutation_fragment(range_tombstone&& r);
@@ -428,26 +438,6 @@ public:
             return consumer.consume(std::move(_data->_partition_start));
         case kind::partition_end:
             return consumer.consume(std::move(_data->_partition_end));
-        }
-        abort();
-    }
-
-    template<typename Consumer>
-    GCC6_CONCEPT(
-        requires StreamedMutationConsumer<Consumer>()
-    )
-    decltype(auto) consume_streamed_mutation(Consumer& consumer) && {
-        switch (_kind) {
-            case kind::static_row:
-                return consumer.consume(std::move(_data->_static_row));
-            case kind::clustering_row:
-                return consumer.consume(std::move(_data->_clustering_row));
-            case kind::range_tombstone:
-                return consumer.consume(std::move(_data->_range_tombstone));
-            case kind::partition_start:
-                abort();
-            case kind::partition_end:
-                abort();
         }
         abort();
     }

@@ -76,18 +76,22 @@ struct blob_storage {
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
+    static thread_local std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>> _lc_state;
     struct linearization_context {
         unsigned _nesting = 0;
         // Map from first blob_storage address to linearized version
         // We use the blob_storage address to be insentive to moving
         // a managed_bytes object.
-        std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>> _state;
+        // linearization_context is entered often in the fast path, but it is
+        // actually used only in rare (slow) cases.
+        std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>>* _state_ptr = nullptr;
         void enter() {
             ++_nesting;
         }
         void leave() {
-            if (!--_nesting) {
-                _state.clear();
+            if (!--_nesting && _state_ptr) {
+                _state_ptr->clear();
+                _state_ptr = nullptr;
             }
         }
         void forget(const blob_storage* p) noexcept;
