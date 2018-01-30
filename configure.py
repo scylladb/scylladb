@@ -274,6 +274,7 @@ scylla_tests = [
     'tests/view_schema_test',
     'tests/counter_test',
     'tests/cell_locker_test',
+    'tests/row_locker_test',
     'tests/streaming_histogram_test',
     'tests/duration_test',
     'tests/vint_serialization_test',
