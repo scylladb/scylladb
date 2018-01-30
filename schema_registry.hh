@@ -28,6 +28,10 @@
 #include "schema.hh"
 #include "frozen_schema.hh"
 
+namespace db {
+class schema_ctxt;
+}
+
 class schema_registry;
 
 using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
@@ -111,6 +115,8 @@ public:
 //
 class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
+    std::unique_ptr<db::schema_ctxt> _ctxt;
+
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
     // Duration for which unused entries are kept alive to avoid
@@ -119,6 +125,10 @@ class schema_registry {
         return std::chrono::seconds(1);
     }
 public:
+    ~schema_registry();
+    // workaround to this object being magically appearing from nowhere.
+    void init(const db::schema_ctxt&);
+
     // Looks up schema by version or loads it using supplied loader.
     schema_ptr get_or_load(table_schema_version, const schema_loader&);
 

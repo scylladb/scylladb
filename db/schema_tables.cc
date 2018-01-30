@@ -189,7 +189,7 @@ static future<schema_ptr> create_table_from_table_row(
                 distributed<service::storage_proxy>&,
                 const query::result_set_row&);
 
-static void prepare_builder_from_table_row(schema_builder&, const query::result_set_row&);
+static void prepare_builder_from_table_row(const schema_ctxt&, schema_builder&, const query::result_set_row&);
 
 using namespace v3;
 
@@ -982,11 +982,11 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& views_before,
     std::map<qualified_name, schema_mutations>&& views_after)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [] (auto&& sm) {
-        return create_table_from_mutations(std::move(sm));
+    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (auto&& sm) {
+        return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [] (auto&& sm) {
-        return create_view_from_mutations(std::move(sm));
+    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), [&] (auto&& sm) {
+        return create_view_from_mutations(proxy, std::move(sm));
     });
 
     proxy.local().get_db().invoke_on_all([&] (database& db) {
@@ -1817,11 +1817,11 @@ static future<schema_mutations> read_table_mutations(distributed<service::storag
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
     return do_with(qualified_name(keyspace, table), [&proxy] (auto&& qn) {
-        return read_table_mutations(proxy, qn, tables()).then([qn] (schema_mutations sm) {
+        return read_table_mutations(proxy, qn, tables()).then([qn, &proxy] (schema_mutations sm) {
             if (!sm.live()) {
                throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
-            return create_table_from_mutations(std::move(sm));
+            return create_table_from_mutations(proxy, std::move(sm));
         });
     });
 }
@@ -1863,7 +1863,7 @@ static future<schema_ptr> create_table_from_table_row(distributed<service::stora
     return create_table_from_name(proxy, ks_name, cf_name);
 }
 
-static void prepare_builder_from_table_row(schema_builder& builder, const query::result_set_row& table_row)
+static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_builder& builder, const query::result_set_row& table_row)
 {
     // These row reads have been purposefully reordered to match the origin counterpart. For easier matching.
     if (table_row.has("bloom_filter_fp_chance")) {
@@ -1956,7 +1956,7 @@ static void prepare_builder_from_table_row(schema_builder& builder, const query:
     }
 }
 
-schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)
+schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::experimental::optional<table_schema_version> version)
 {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row table_row = table_rs.row(0);
@@ -1999,7 +1999,7 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
     builder.set_is_compound(is_compound);
     builder.set_is_counter(is_counter);
 
-    prepare_builder_from_table_row(builder, table_row);
+    prepare_builder_from_table_row(ctxt, builder, table_row);
 
     v3_columns columns(std::move(column_defs), is_dense, is_compound);
     columns.apply_to(builder);
@@ -2203,7 +2203,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
  * View metadata serialization/deserialization.
  */
 
-view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)  {
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::experimental::optional<table_schema_version> version)  {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row row = table_rs.row(0);
 
@@ -2212,7 +2212,7 @@ view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::opti
     auto id = row.get_nonnull<utils::UUID>("id");
 
     schema_builder builder{ks_name, cf_name, id};
-    prepare_builder_from_table_row(builder, row);
+    prepare_builder_from_table_row(ctxt, builder, row);
 
     auto column_defs = create_columns_from_column_rows(query::result_set(sm.columns_mutation()), ks_name, cf_name, false);
     for (auto&& cdef : column_defs) {
@@ -2237,11 +2237,11 @@ view_ptr create_view_from_mutations(schema_mutations sm, std::experimental::opti
 static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
     return do_with(std::move(qn), [&proxy] (auto&& qn) {
-        return read_table_mutations(proxy, qn, views()).then([&qn] (schema_mutations sm) {
+        return read_table_mutations(proxy, qn, views()).then([&] (schema_mutations sm) {
             if (!sm.live()) {
                 throw std::runtime_error(sprint("%s:%s not found in the view definitions keyspace.", qn.keyspace_name, qn.table_name));
             }
-            return create_view_from_mutations(std::move(sm));
+            return create_view_from_mutations(proxy, std::move(sm));
         });
     });
 }

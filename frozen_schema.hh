@@ -25,6 +25,10 @@
 #include "schema.hh"
 #include "frozen_mutation.hh"
 
+namespace db {
+class schema_ctxt;
+}
+
 // Transport for schema_ptr across shards/nodes.
 // It's safe to access from another shard by const&.
 class frozen_schema {
@@ -36,6 +40,6 @@ public:
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze() const;
+    schema_ptr unfreeze(const db::schema_ctxt&) const;
     bytes_view representation() const;
 };
