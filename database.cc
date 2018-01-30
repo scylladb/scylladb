@@ -66,6 +66,7 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
+#include "db/view/row_locking.hh"
 #include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
 #include "memtable-sstable.hh"
@@ -202,6 +203,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog* cl
     , _compaction_manager(compaction_manager)
     , _index_manager(*this)
     , _counter_cell_locks(std::make_unique<cell_locker>(_schema, cl_stats))
+    , _row_locker(_schema)
 {
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
@@ -3396,10 +3398,13 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
     }
-    auto f = cf.push_view_replica_updates(s, m);
-    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] {
+    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m);
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] (row_locker::lock_holder lock) {
         auto& cf = find_column_family(uuid);
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally(
+                // Hold the local lock on the base-table partition or row
+                // taken before the read, until the update is done.
+                [lock = std::move(lock)] { });
     });
 }
 
@@ -4217,18 +4222,22 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const {
+future<row_locker::lock_holder> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const {
     //FIXME: Avoid unfreezing here.
     auto m = fm.unfreeze(s);
     auto& base = schema();
     m.upgrade(base);
     auto views = affected_views(base, m);
     if (views.empty()) {
-        return make_ready_future<>();
+        return make_ready_future<row_locker::lock_holder>();
     }
     auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { });
+        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }).then([] {
+                // In this case we are not doing a read-before-write, just a
+                // write, so no lock is needed.
+                return make_ready_future<row_locker::lock_holder>();
+        });
     }
     // We read the whole set of regular columns in case the update now causes a base row to pass
     // a view's filters, and a view happens to include columns that have no value in this update.
@@ -4242,18 +4251,106 @@ future<> column_family::push_view_replica_updates(const schema_ptr& s, const fro
     opts.set(query::partition_slice::option::send_ttl);
     auto slice = query::partition_slice(
             std::move(cr_ranges), { }, std::move(columns), std::move(opts), { }, cql_serialization_format::internal(), query::max_rows);
-    return do_with(
+    // Take the shard-local lock on the base-table row or partition as needed.
+    // We'll return this lock to the caller, which will release it after
+    // writing the base-table update.
+    future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges());
+    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this] (row_locker::lock_holder lock) {
+      return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
-        [base, views = std::move(views), this] (auto& pk, auto& slice, auto& m) mutable {
+        [base, views = std::move(views), lock = std::move(lock), this] (auto& pk, auto& slice, auto& m) mutable {
             auto reader = this->as_mutation_source().make_reader(
                 base,
                 pk,
                 slice,
                 service::get_local_sstable_query_read_priority());
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader));
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader)).then([lock = std::move(lock)] () mutable {
+                // return the local partition/row lock we have taken so it
+                // remains locked until the caller is done modifying this
+                // partition/row and destroys the lock object.
+                return std::move(lock);
+            });
+      });
     });
+}
+
+/**
+ * Shard-local locking of clustering rows or entire partitions of the base
+ * table during a Materialized-View read-modify-update:
+ *
+ * Consider that two concurrent base-table updates set column C, a column
+ * added to a view's primary key, to two different values - V1 and V2.
+ * Say that that before the updates, C's value was V0. Both updates may remove
+ * from the view the old row with V0, one will add a view row with V1 and the
+ * second will add a view row with V2, and we end up with two rows, with the
+ * two different values, instead of just one row with the last value.
+ *
+ * The solution is to lock the base row which we read to ensure atomic read-
+ * modify-write to the view table: Under one locked section, the row with V0
+ * is deleted and a new one with V1 is created, and then under a second locked
+ * section the row with V1 is deleted and a new  one with V2 is created.
+ * Note that the lock is node-local (and in fact shard-local) and the locked
+ * section doesn't include the view table modifications - it includes just the
+ * read and the creation of the update commands - commands which will
+ * eventually be sent to the view replicas.
+ *
+ * We need to lock a base-table row even if an update does not modify the
+ * view's new key column C: Consider an update that only updates a non-key
+ * column (but also in the view) D. We still need to read the current base row
+ * to retrieve the view row's current key (column C), and then write the
+ * modification to *that* view row. Having several such modifications in
+ * parallel is fine. What is not fine is to have in parallel a modification
+ * of the value of C. So basically we need a reader-writer lock (a.k.a.
+ * shared-exclusive lock) on base rows:
+ * 1. Updates which do not modify the view's key column take a reader lock
+ *    on the base row.
+ * 2. Updates which do modify the view's key column take a writer lock.
+ *
+ * Further complicating matters is that some operations involve multiple
+ * base rows - such as a deletion of an entire partition or a range of rows.
+ * In that case, we should lock the entire partition, and forbid parallel
+ * work on the same partition or one of its rows. We can do this with a
+ * read-writer lock on base partitions:
+ * 1. Before we lock a row (as described above), we lock its partition key
+ *    with the reader lock.
+ * 2. When an operation involves an entire partition (or range of rows),
+ *    we lock the partition key with a writer lock.
+ *
+ * If an operation involves only a range of rows, not an entire partition,
+ * we could in theory lock only this range and not an entire partition.
+ * However, we expect this case to be rare enough to not care about and we
+ * currently just lock the entire partition.
+ *
+ * If a base table has *multiple* views, we still read the base table row
+ * only once, and have to keep a lock around this read and all the view
+ * updates generation. This lock needs to be the strictest of the above -
+ * i.e., if a column is modified which is not part of one view's key but is
+ * part of a second view's key - we should lock the base row with the
+ * stricter writer lock, not a reader lock.
+ */
+future<row_locker::lock_holder>
+column_family::local_base_lock(const schema_ptr& s, const dht::decorated_key& pk, const query::clustering_row_ranges& rows) const {
+    // FIXME: Optimization:
+    // Below we always pass "true" to the lock functions and take an exclusive
+    // lock on the affected row or partition. But as explained above, if all
+    // the modified columns are not key columns in *any* of the views, and
+    // shared lock is enough. We should test for this case and pass false.
+    // This will allow more parallelism in concurrent modifications to the
+    // same row - probably not a very urgent case.
+    _row_locker.upgrade(s);
+    if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
+        // A single clustering row is involved.
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true);
+    } else {
+        // More than a single clustering row is involved. Most commonly it's
+        // the entire partition, so let's lock the entire partition. We could
+        // lock less than the entire partition in more elaborate cases where
+        // just a few individual rows are involved, or row ranges, but we
+        // don't think this will make a practical difference.
+        return _row_locker.lock_pk(pk, true);
+    }
 }
 
 void column_family::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
