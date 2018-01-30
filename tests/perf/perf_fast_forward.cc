@@ -274,6 +274,17 @@ static test_result test_reading_all(flat_mutation_reader& rd) {
     return {before, consume_all(rd)};
 }
 
+static test_result slice_rows_by_ck(column_family& cf, int offset = 0, int n_read = 1) {
+    auto slice = partition_slice_builder(*cf.schema())
+        .with_range(query::clustering_range::make(
+            clustering_key::from_singular(*cf.schema(), offset),
+            clustering_key::from_singular(*cf.schema(), offset + n_read - 1)))
+        .build();
+    auto pr = dht::partition_range::make_singular(make_pkey(*cf.schema(), 0));
+    auto rd = cf.make_reader(cf.schema(), pr, slice);
+    return test_reading_all(rd);
+}
+
 static test_result select_spread_rows(column_family& cf, int stride = 0, int n_read = 1) {
     auto sb = partition_slice_builder(*cf.schema());
     for (int i = 0; i < n_read; ++i) {
@@ -678,6 +689,26 @@ void test_large_partition_slicing(column_family& cf) {
     test(cfg.n_rows / 2, 4096);
 }
 
+void test_large_partition_slicing_clustering_keys(column_family& cf) {
+    std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header() << "\n";
+    auto test = [&] (int offset, int read) {
+        on_test_case();
+        auto r = slice_rows_by_ck(cf, offset, read);
+        std::cout << sprint("%-7d %-7d ", offset, read) << r.table_row() << "\n";
+        check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+    };
+
+    test(0, 1);
+    test(0, 32);
+    test(0, 256);
+    test(0, 4096);
+
+    test(cfg.n_rows / 2, 1);
+    test(cfg.n_rows / 2, 32);
+    test(cfg.n_rows / 2, 256);
+    test(cfg.n_rows / 2, 4096);
+}
+
 void test_large_partition_slicing_single_partition_reader(column_family& cf) {
     std::cout << sprint("%-7s %-7s ", "offset", "read") << test_result::table_header()
               << "\n";
@@ -835,6 +866,13 @@ static std::initializer_list<test_group> test_groups = {
         test_group::requires_cache::no,
         test_group::type::large_partition,
         test_large_partition_slicing,
+    },
+    {
+        "large-partition-slicing-clustering-keys",
+        "Testing slicing of large partition using clustering keys",
+        test_group::requires_cache::no,
+        test_group::type::large_partition,
+        test_large_partition_slicing_clustering_keys,
     },
     {
         "large-partition-slicing-single-key-reader",

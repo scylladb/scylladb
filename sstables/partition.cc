@@ -741,62 +741,6 @@ public:
     stdx::optional<position_in_partition_view> maybe_skip();
 };
 
-static inline void ensure_len(bytes_view v, size_t len) {
-    if (v.size() < len) {
-        throw malformed_sstable_exception(sprint("Expected {} bytes, but remaining is {}", len, v.size()));
-    }
-}
-
-template <typename T>
-static inline T read_be(const signed char* p) {
-    return ::read_be<T>(reinterpret_cast<const char*>(p));
-}
-
-template<typename T>
-static inline T consume_be(bytes_view& p) {
-    ensure_len(p, sizeof(T));
-    T i = read_be<T>(p.data());
-    p.remove_prefix(sizeof(T));
-    return i;
-}
-
-static inline bytes_view consume_bytes(bytes_view& p, size_t len) {
-    ensure_len(p, len);
-    auto ret = bytes_view(p.data(), len);
-    p.remove_prefix(len);
-    return ret;
-}
-
-promoted_index promoted_index_view::parse(const schema& s) const {
-    bytes_view data = _bytes;
-
-    sstables::deletion_time del_time;
-    del_time.local_deletion_time = consume_be<uint32_t>(data);
-    del_time.marked_for_delete_at = consume_be<uint64_t>(data);
-
-    auto num_blocks = consume_be<uint32_t>(data);
-    std::deque<promoted_index::entry> entries;
-    while (num_blocks--) {
-        uint16_t len = consume_be<uint16_t>(data);
-        auto start_ck = composite_view(consume_bytes(data, len), s.is_compound());
-        len = consume_be<uint16_t>(data);
-        auto end_ck = composite_view(consume_bytes(data, len), s.is_compound());
-        uint64_t offset = consume_be<uint64_t>(data);
-        uint64_t width = consume_be<uint64_t>(data);
-        entries.emplace_back(promoted_index::entry{start_ck, end_ck, offset, width});
-    }
-
-    return promoted_index{del_time, std::move(entries)};
-}
-
-sstables::deletion_time promoted_index_view::get_deletion_time() const {
-    bytes_view data = _bytes;
-    sstables::deletion_time del_time;
-    del_time.local_deletion_time = consume_be<uint32_t>(data);
-    del_time.marked_for_delete_at = consume_be<uint64_t>(data);
-    return del_time;
-}
-
 static
 future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
     auto& ranges = slice.row_ranges(s, *key.key());

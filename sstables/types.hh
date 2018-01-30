@@ -93,91 +93,43 @@ enum class indexable_element {
     cell
 };
 
-// Exploded view of promoted index.
-// Contains pointers into external buffer, so that buffer must be kept alive
-// as long as this is used.
-struct promoted_index {
-    struct entry {
-        composite_view start;
-        composite_view end;
-        uint64_t offset;
-        uint64_t width;
-    };
-    deletion_time del_time;
-    std::deque<entry> entries;
-};
-
-class promoted_index_view {
-    bytes_view _bytes;
+class promoted_index_block {
 public:
-    explicit promoted_index_view(bytes_view v) : _bytes(v) {}
-    sstables::deletion_time get_deletion_time() const;
-    promoted_index parse(const schema&) const;
-    explicit operator bool() const { return !_bytes.empty(); }
+    promoted_index_block(temporary_buffer<char>&& start, temporary_buffer<char>&& end,
+            uint64_t offset, uint64_t width)
+        : _start(std::move(start)), _end(std::move(end))
+        , _offset(offset), _width(width)
+    {}
+    promoted_index_block(const promoted_index_block& rhs)
+        : _start(rhs._start.get(), rhs._start.size()), _end(rhs._end.get(), rhs._end.size())
+        , _offset(rhs._offset), _width(rhs._width)
+    {}
+    promoted_index_block(promoted_index_block&&) noexcept = default;
+
+    promoted_index_block& operator=(const promoted_index_block& rhs) {
+        if (this != &rhs) {
+            _start = temporary_buffer<char>(rhs._start.get(), rhs._start.size());
+            _end = temporary_buffer<char>(rhs._end.get(), rhs._end.size());
+            _offset = rhs._offset;
+            _width = rhs._width;
+        }
+        return *this;
+    }
+    promoted_index_block& operator=(promoted_index_block&&) noexcept = default;
+
+    composite_view start(const schema& s) const { return composite_view(to_bytes_view(_start), s.is_compound());}
+    composite_view end(const schema& s) const { return composite_view(to_bytes_view(_end), s.is_compound());}
+    uint64_t offset() const { return _offset; }
+    uint64_t width() const { return _width; }
+
+private:
+    temporary_buffer<char> _start;
+    temporary_buffer<char> _end;
+    uint64_t _offset;
+    uint64_t _width;
 };
 
-class index_entry {
-    temporary_buffer<char> _key;
-    mutable stdx::optional<dht::token> _token;
-    uint64_t _position;
-    temporary_buffer<char> _promoted_index_bytes;
-    stdx::optional<promoted_index> _promoted_index;
-public:
-
-    bytes_view get_key_bytes() const {
-        return to_bytes_view(_key);
-    }
-
-    key_view get_key() const {
-        return key_view{get_key_bytes()};
-    }
-
-    decorated_key_view get_decorated_key() const {
-        if (!_token) {
-            _token.emplace(dht::global_partitioner().get_token(get_key()));
-        }
-        return decorated_key_view(*_token, get_key());
-    }
-
-    uint64_t position() const {
-        return _position;
-    }
-
-    bytes_view get_promoted_index_bytes() const {
-        return to_bytes_view(_promoted_index_bytes);
-    }
-
-    promoted_index_view get_promoted_index_view() const {
-        return promoted_index_view(get_promoted_index_bytes());
-    }
-
-    index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
-        : _key(std::move(key)), _position(position), _promoted_index_bytes(std::move(promoted_index)) {}
-
-    index_entry(const index_entry& o)
-        : _key(o._key.get(), o._key.size())
-        , _position(o._position)
-        , _promoted_index_bytes(o._promoted_index_bytes.get(), o._promoted_index_bytes.size())
-    { }
-
-    index_entry(index_entry&&) = default;
-
-    index_entry& operator=(const index_entry& x) {
-        return operator=(index_entry(x));
-    }
-
-    index_entry& operator=(index_entry&&) = default;
-
-    promoted_index* get_promoted_index(const schema& s) {
-        if (!_promoted_index) {
-            auto v = get_promoted_index_view();
-            if (v) {
-                _promoted_index = v.parse(s);
-            }
-        }
-        return _promoted_index ? &*_promoted_index : nullptr;
-    }
-};
+using promoted_index_blocks = seastar::circular_buffer<promoted_index_block>;
 
 struct summary_entry {
     dht::token token;

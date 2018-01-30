@@ -83,7 +83,7 @@ public:
     // row) to stop the processing, in which case we trim the buffer to
     // leave only the unprocessed part. The caller must handle calling
     // process() again, and/or refilling the buffer, as needed.
-    row_consumer::proceed process_state(temporary_buffer<char>& data) {
+    data_consumer::processing_result process_state(temporary_buffer<char>& data) {
 #if 0
         // Testing hack: call process() for tiny chunks separately, to verify
         // that primitive types crossing input buffer are handled correctly.
@@ -404,7 +404,7 @@ data_consume_context::operator bool() const noexcept {
     return bool(_ctx);
 }
 future<> data_consume_context::read() {
-    return _ctx->consume_input(*_ctx);
+    return _ctx->consume_input();
 }
 future<> data_consume_context::fast_forward_to(uint64_t begin, uint64_t end) {
     _ctx->reset(indexable_element::partition);
