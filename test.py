@@ -125,7 +125,10 @@ def alarm_handler(signum, frame):
 
 def boost_test_wants_double_dash(path):
     magic = b'All the arguments after the -- are ignored'
-    return magic in subprocess.check_output([path, '--help'], stderr=subprocess.STDOUT)
+    try:
+        return magic in subprocess.check_output([path, '--help'], stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError:
+        return False
 
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
