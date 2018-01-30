@@ -105,6 +105,7 @@ boost_tests = [
 
 other_tests = [
     'memory_footprint',
+    'querier_cache_resource_based_eviction',
 ]
 
 last_len = 0

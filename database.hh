@@ -1320,6 +1320,10 @@ public:
         _querier_cache.set_entry_ttl(entry_ttl);
     }
 
+    const querier_cache::stats& get_querier_cache_stats() const {
+        return _querier_cache.get_stats();
+    }
+
     friend class distributed_loader;
 };
 
