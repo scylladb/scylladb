@@ -1080,9 +1080,7 @@ private:
 
     db::timeout_semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
     db::timeout_semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
-    restricted_mutation_reader_config _read_concurrency_config;
     db::timeout_semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
-    restricted_mutation_reader_config _system_read_concurrency_config;
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
