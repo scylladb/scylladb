@@ -76,6 +76,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include "tracing/trace_state.hh"
 #include "db/view/view.hh"
+#include "db/view/row_locking.hh"
 #include "lister.hh"
 #include "utils/phased_barrier.hh"
 #include "backlog_controller.hh"
@@ -776,7 +777,7 @@ public:
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
-    future<> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
+    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
     void add_coordinator_read_latency(utils::estimated_histogram::duration latency);
     std::chrono::milliseconds get_coordinator_read_latency_percentile(double percentile);
 
@@ -789,6 +790,9 @@ private:
             std::vector<view_ptr>&& views,
             mutation&& m,
             flat_mutation_reader_opt existings) const;
+
+    mutable row_locker _row_locker;
+    future<row_locker::lock_holder> local_base_lock(const schema_ptr& s, const dht::decorated_key& pk, const query::clustering_row_ranges& rows) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
