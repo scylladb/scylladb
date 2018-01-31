@@ -214,10 +214,12 @@ protected:
         }
     }
 
-    void advance() {
-        memtable_entry& e = *_i;
-        _last = e.key();
+    void advance_iterator() {
         ++_i;
+    }
+
+    void update_last(dht::decorated_key last) {
+        _last = std::move(last);
     }
 
     logalloc::allocating_section& read_section() {
@@ -321,12 +323,13 @@ public:
                                 // virtual calls, intermediate buffers and futures.
                                 auto key = e->key();
                                 auto snp = e->snapshot(*mtbl());
-                                advance();
+                                advance_iterator();
                                 return std::make_pair(std::move(key), std::move(snp));
                             }
                         });
                     });
                     if (key_and_snp) {
+                        update_last(key_and_snp->first);
                         auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), _slice, key_and_snp->first.key());
                         auto snp_schema = key_and_snp->second->schema();
                         auto mpsr = make_partition_snapshot_flat_reader(snp_schema, std::move(key_and_snp->first), std::move(cr),
@@ -471,13 +474,14 @@ private:
                     auto snp = e->snapshot(*mtbl());
                     _flushed_memory.account_component(*e);
                     _flushed_memory.account_component(*snp);
-                    advance();
+                    advance_iterator();
                     return std::make_pair(std::move(dk), std::move(snp));
                 }
                 return { };
             });
         });
         if (key_and_snp) {
+            update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
             auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, std::move(key_and_snp->first), std::move(cr),
