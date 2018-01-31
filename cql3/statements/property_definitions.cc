@@ -87,8 +87,8 @@ std::experimental::optional<sstring> property_definitions::get_simple(const sstr
         return std::experimental::nullopt;
     }
     try {
-        return boost::any_cast<sstring>(it->second);
-    } catch (const boost::bad_any_cast& e) {
+        return std::get<sstring>(it->second);
+    } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a string", name));
     }
 }
@@ -99,8 +99,8 @@ std::experimental::optional<std::map<sstring, sstring>> property_definitions::ge
         return std::experimental::nullopt;
     }
     try {
-        return boost::any_cast<std::map<sstring, sstring>>(it->second);
-    } catch (const boost::bad_any_cast& e) {
+        return std::get<map_type>(it->second);
+    } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
     }
 }
@@ -188,10 +188,10 @@ void property_definitions::remove_from_map_if_exists(const sstring& name, const 
         return;
     }
     try {
-        auto map = boost::any_cast<std::map<sstring, sstring>>(it->second);
+        auto map = std::get<map_type>(it->second);
         map.erase(key);
         _properties[name] = map;
-    } catch (const boost::bad_any_cast& e) {
+    } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
     }
 }
