@@ -405,11 +405,9 @@ public:
     ~flush_memory_accounter() {
         assert(_mt._flushed_memory <= _mt.occupancy().used_space());
     }
-    void account_component(memtable_entry& e) {
-        update_bytes_read(e.size_in_allocator_without_rows(_mt.allocator()));
-    }
-    void account_component(partition_snapshot& snp) {
-        update_bytes_read(_mt.allocator().object_memory_size_in_allocator(&*snp.version()));
+    uint64_t compute_size(memtable_entry& e, partition_snapshot& snp) {
+        return e.size_in_allocator_without_rows(_mt.allocator())
+            + _mt.allocator().object_memory_size_in_allocator(&*snp.version());
     }
 };
 
@@ -466,14 +464,14 @@ public:
     flush_reader& operator=(const flush_reader&) = delete;
 private:
     void get_next_partition() {
+        uint64_t component_size = 0;
         auto key_and_snp = read_section()(region(), [&] {
             return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, lw_shared_ptr<partition_snapshot>>> {
                 memtable_entry* e = fetch_entry();
                 if (e) {
                     auto dk = e->key();
                     auto snp = e->snapshot(*mtbl());
-                    _flushed_memory.account_component(*e);
-                    _flushed_memory.account_component(*snp);
+                    component_size = _flushed_memory.compute_size(*e, *snp);
                     advance_iterator();
                     return std::pair(std::move(dk), std::move(snp));
                 }
@@ -481,6 +479,7 @@ private:
             });
         });
         if (key_and_snp) {
+            _flushed_memory.update_bytes_read(component_size);
             update_last(key_and_snp->first);
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
