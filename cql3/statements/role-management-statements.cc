@@ -258,7 +258,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                 ty);
     };
 
-    static const auto metadata = ::make_shared<cql3::metadata>(
+    static const thread_local auto metadata = ::make_shared<cql3::metadata>(
             std::vector<::shared_ptr<column_specification>>{
                     make_column_spec("role", utf8_type),
                     make_column_spec("super", boolean_type),
