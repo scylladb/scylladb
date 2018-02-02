@@ -21,10 +21,9 @@
 
 #pragma once
 
-#include <unordered_map>
 #include <vector>
-#include <seastar/core/shared_future.hh>
 #include <seastar/core/future.hh>
+#include "utils/loading_shared_values.hh"
 
 namespace sstables {
 
@@ -36,50 +35,26 @@ using index_list = std::vector<index_entry>;
 class shared_index_lists {
 public:
     using key_type = uint64_t;
-    struct stats {
+    static thread_local struct stats {
         uint64_t hits = 0; // Number of times entry was found ready
         uint64_t misses = 0; // Number of times entry was not found
         uint64_t blocks = 0; // Number of times entry was not ready (>= misses)
-    };
-private:
-    class entry : public enable_lw_shared_from_this<entry> {
-    public:
-        key_type key;
-        index_list list;
-        shared_promise<> loaded;
-        shared_index_lists& parent;
+    } _shard_stats;
 
-        entry(shared_index_lists& parent, key_type key)
-            : key(key), parent(parent)
-        { }
-        ~entry() {
-            parent._lists.erase(key);
-        }
-        bool operator==(const entry& e) const { return key == e.key; }
-        bool operator!=(const entry& e) const { return key != e.key; }
+    struct stats_updater {
+        static void inc_hits() noexcept { ++_shard_stats.hits; }
+        static void inc_misses() noexcept { ++_shard_stats.misses; }
+        static void inc_blocks() noexcept { ++_shard_stats.blocks; }
+        static void inc_evictions() noexcept {}
     };
-    std::unordered_map<key_type, entry*> _lists;
-    static thread_local stats _shard_stats;
-public:
+
+    using loading_shared_lists_type = utils::loading_shared_values<key_type, index_list, std::hash<key_type>, std::equal_to<key_type>, stats_updater>;
     // Pointer to index_list
-    class list_ptr {
-        lw_shared_ptr<entry> _e;
-    public:
-        using element_type = index_list;
-        list_ptr() = default;
-        explicit list_ptr(lw_shared_ptr<entry> e) : _e(std::move(e)) {}
-        explicit operator bool() const { return static_cast<bool>(_e); }
-        index_list& operator*() { return _e->list; }
-        const index_list& operator*() const { return _e->list; }
-        index_list* operator->() { return &_e->list; }
-        const index_list* operator->() const { return &_e->list; }
+    using list_ptr = loading_shared_lists_type::entry_ptr;
+private:
 
-        index_list release() {
-            auto res = _e.owned() ? index_list(std::move(_e->list)) : index_list(_e->list);
-            _e = {};
-            return std::move(res);
-        }
-    };
+    loading_shared_lists_type _lists;
+public:
 
     shared_index_lists() = default;
     shared_index_lists(shared_index_lists&&) = delete;
@@ -93,41 +68,8 @@ public:
     //
     // The loader object does not survive deferring, so the caller must deal with its liveness.
     template<typename Loader>
-    future<list_ptr> get_or_load(key_type key, Loader&& loader) {
-        auto i = _lists.find(key);
-        lw_shared_ptr<entry> e;
-        auto f = [&] {
-            if (i != _lists.end()) {
-                e = i->second->shared_from_this();
-                return e->loaded.get_shared_future();
-            } else {
-                ++_shard_stats.misses;
-                e = make_lw_shared<entry>(*this, key);
-                auto f = e->loaded.get_shared_future();
-                auto res = _lists.emplace(key, e.get());
-                assert(res.second);
-                futurize_apply(loader, key).then_wrapped([e](future<index_list>&& f) mutable {
-                    if (f.failed()) {
-                        e->loaded.set_exception(f.get_exception());
-                    } else {
-                        e->list = f.get0();
-                        e->loaded.set_value();
-                    }
-                });
-                return f;
-            }
-        }();
-        if (!f.available()) {
-            ++_shard_stats.blocks;
-            return f.then([e]() mutable {
-                return list_ptr(std::move(e));
-            });
-        } else if (f.failed()) {
-            return make_exception_future<list_ptr>(std::move(f).get_exception());
-        } else {
-            ++_shard_stats.hits;
-            return make_ready_future<list_ptr>(list_ptr(std::move(e)));
-        }
+    future<list_ptr> get_or_load(const key_type& key, Loader&& loader) {
+        return _lists.get_or_load(key, std::forward<Loader>(loader));
     }
 
     static const stats& shard_stats() { return _shard_stats; }
