@@ -1002,7 +1002,7 @@ public:
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
         with_exn_cob(std::move(exn_cob), [&] {
-            auto prepared = _query_processor.local().get_prepared_for_thrift(itemId);
+            auto prepared = _query_processor.local().get_prepared(cql3::prepared_cache_key_type(itemId));
             if (!prepared) {
                 throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
             }
