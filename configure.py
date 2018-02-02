@@ -238,6 +238,7 @@ scylla_tests = [
     'tests/view_schema_test',
     'tests/counter_test',
     'tests/cell_locker_test',
+    'tests/loading_cache_test',
 ]
 
 apps = [

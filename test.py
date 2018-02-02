@@ -82,6 +82,7 @@ boost_tests = [
     'counter_test',
     'cell_locker_test',
     'clustering_ranges_walker_test',
+    'loading_cache_test',
 ]
 
 other_tests = [
