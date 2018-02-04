@@ -62,7 +62,7 @@ def get_json_from_url(path):
     return json.loads(data)
 
 def get_api(path):
-    return get_json_from_url("http://localhost:10000" + path)
+    return get_json_from_url("http://" + api_address + path)
 
 def version_compare(a, b):
     return parse_version(a) < parse_version(b)
@@ -141,6 +141,7 @@ parser.add_argument('-c', '--config', default="", help='An optional config file.
 parser.add_argument('--uuid', default="", help='A uuid for the requests')
 parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
 parser.add_argument('--repo-files', default="", help='The repository files that is been used for private repositories')
+parser.add_argument('--api-address', default="localhost:10000", help='The ip and port of the scylla api')
 
 subparsers = parser.add_subparsers(help='Available commands')
 parser_help = subparsers.add_parser('help', help='Display help information')
@@ -170,6 +171,7 @@ if args.uuid_file != "":
         create_uuid_file(args.uuid_file)
     with open(args.uuid_file, 'r') as myfile:
         uid = myfile.read().replace('\n', '')
+api_address = args.api_address
 if args.repo_files != "":
     repo_type, repo_id = get_repo_file(args.repo_files)
 args.func(args)
