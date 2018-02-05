@@ -1095,7 +1095,7 @@ private:
     dirty_memory_manager _streaming_dirty_memory_manager;
 
     database_config _dbcfg;
-    flush_cpu_controller _memtable_cpu_controller;
+    flush_controller _memtable_controller;
 
     db::timeout_semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
     db::timeout_semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
@@ -1116,8 +1116,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
-    flush_io_controller _flush_io_controller;
-    compaction_io_controller _compaction_io_controller;
+    compaction_controller _compaction_controller;
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);

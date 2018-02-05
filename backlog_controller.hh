@@ -45,90 +45,56 @@
 //
 // The constants q1 and q2 are used to determine the proportional factor at each stage.
 class backlog_controller {
+public:
+    future<> shutdown() {
+        return std::move(_inflight_update);
+    }
 protected:
     struct control_point {
         float input;
         float output;
     };
 
+    seastar::scheduling_group _scheduling_group;
+    const ::io_priority_class& _io_priority;
     std::chrono::milliseconds _interval;
     timer<> _update_timer;
 
     std::vector<control_point> _control_points;
 
     std::function<float()> _current_backlog;
+    // updating shares for an I/O class may contact another shard and returns a future.
+    future<> _inflight_update;
 
-    virtual void update_controller(float quota) = 0;
+    virtual void update_controller(float quota);
 
     void adjust();
 
-    backlog_controller(std::chrono::milliseconds interval, std::vector<control_point> control_points, std::function<float()> backlog)
-        : _interval(interval)
+    backlog_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval,
+                       std::vector<control_point> control_points, std::function<float()> backlog)
+        : _scheduling_group(sg)
+        , _io_priority(iop)
+        , _interval(interval)
         , _update_timer([this] { adjust(); })
         , _control_points({{0,0}})
         , _current_backlog(std::move(backlog))
+        , _inflight_update(make_ready_future<>())
     {
         _control_points.insert(_control_points.end(), control_points.begin(), control_points.end());
          _update_timer.arm_periodic(_interval);
     }
 
-    // Used when the controllers are disabled. When we deprecate the --auto-adjust-flush-quota
-    // parameter we can delete this constructor.
-    backlog_controller() = default;
-    virtual ~backlog_controller() {}
-};
-
-
-class backlog_cpu_controller : public backlog_controller {
-public:
-    float current_shares() const {
-        return _current_shares;
-    }
-protected:
-    unsigned _current_shares = 1;
-
-    void update_controller(float quota) override;
-
-    seastar::scheduling_group _scheduling_group;
-
-    backlog_cpu_controller(seastar::scheduling_group sg, float static_shares)
+    // Used when the controllers are disabled and a static share is used
+    // When that option is deprecated we should remove this.
+    backlog_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) 
         : _scheduling_group(sg)
-    {
-        update_controller(static_shares);
-    }
-    backlog_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
-        : backlog_controller(interval, std::move(control_points), backlog)
-        , _scheduling_group(sg)
-    {}
-};
-
-// Right now: the CPU controller deals with quotas, the I/O controller deals with shares.
-// The I/O Controllers will be always-enabled, the CPU controllers, conditionally. So it simplifies
-// things to keep them separate. When the work on the CPU controller is fully done, we can unify
-// them.
-class backlog_io_controller : public backlog_controller {
-    const ::io_priority_class& _io_priority;
-    // updating shares for an I/O class may contact another shard and returns a future.
-    future<> _inflight_update;
-
-public:
-    backlog_io_controller(const ::io_priority_class& iop, float static_shares)
-        : _io_priority(iop)
-        , _inflight_update(make_ready_future<>())
-    {
-        update_controller(static_shares);
-    }
-    backlog_io_controller(const ::io_priority_class& iop, std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
-        : backlog_controller(interval, std::move(control_points), backlog)
         , _io_priority(iop)
         , _inflight_update(make_ready_future<>())
-    {}
-
-    void update_controller(float shares) override;
-
-    future<> shutdown() {
-        return std::move(_inflight_update);
+    {
+        update_controller(static_shares);
     }
+
+    virtual ~backlog_controller() {}
 };
 
 // memtable flush CPU controller.
@@ -146,37 +112,24 @@ public:
 //
 // In the second half, we're getting close to the hard dirty limit so we increase the slope and
 // become more responsive, up to a maximum quota of qmax.
-class flush_cpu_controller : public backlog_cpu_controller {
+class flush_controller : public backlog_controller {
     static constexpr float hard_dirty_limit = 1.0f;
 public:
-    flush_cpu_controller(seastar::scheduling_group sg, float static_shares) : backlog_cpu_controller(sg, static_shares) {}
-    flush_cpu_controller(flush_cpu_controller&&) = default;
-    flush_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
-        : backlog_cpu_controller(sg, std::move(interval),
+    flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
+    flush_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
+        : backlog_controller(sg, iop, std::move(interval),
           std::vector<backlog_controller::control_point>({{soft_limit, 100}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200} , {hard_dirty_limit, 1000}}),
           std::move(current_dirty)
         )
     {}
 };
 
-class flush_io_controller : public backlog_io_controller {
-    static constexpr float hard_dirty_limit = 1.0f;
-public:
-    flush_io_controller(const ::io_priority_class& iop, float static_shares) : backlog_io_controller(iop, static_shares) {}
-    flush_io_controller(const ::io_priority_class& iop, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_backlog)
-        : backlog_io_controller(iop, std::move(interval),
-          std::vector<backlog_controller::control_point>({{soft_limit, 100}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200}, {hard_dirty_limit, 1000}}),
-          std::move(current_backlog)
-        )
-    {}
-};
-
-class compaction_io_controller : public backlog_io_controller {
+class compaction_controller : public backlog_controller {
 public:
     static constexpr unsigned normalization_factor = 10;
-    compaction_io_controller(const ::io_priority_class& iop, float static_shares) : backlog_io_controller(iop, static_shares) {}
-    compaction_io_controller(const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
-        : backlog_io_controller(iop, std::move(interval),
+    compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
+    compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
+        : backlog_controller(sg, iop, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.5, 10}, {1.5, 100} , {normalization_factor, 1000}}),
           std::move(current_backlog)
         )
