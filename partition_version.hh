@@ -414,7 +414,7 @@ public:
     lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
-    friend std::ostream& operator<<(std::ostream& out, partition_entry& e);
+    friend std::ostream& operator<<(std::ostream& out, const partition_entry& e);
 };
 
 // Monotonic exception guarantees
