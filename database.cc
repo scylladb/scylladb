@@ -2072,6 +2072,15 @@ make_flush_controller(db::config& cfg, const ::io_priority_class& iop, std::func
     return flush_io_controller(iop, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
+inline
+compaction_io_controller
+make_compaction_controller(db::config& cfg, const ::io_priority_class& iop, std::function<double()> fn) {
+    if (cfg.compaction_static_shares() > 0) {
+        return compaction_io_controller(iop, cfg.compaction_static_shares());
+    }
+    return compaction_io_controller(iop, 250ms, std::move(fn));
+}
+
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
 database::database() : database(db::config(), database_config())
@@ -2096,7 +2105,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _flush_io_controller(make_flush_controller(*_cfg, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return _dirty_memory_manager.virtual_dirty_memory() / limit;
     }))
-    , _compaction_io_controller(service::get_local_compaction_priority(), 250ms, [this] () -> float {
+    , _compaction_io_controller(make_compaction_controller(*_cfg, service::get_local_compaction_priority(), [this] () -> float {
         auto backlog = _compaction_manager->backlog();
         // This means we are using an unimplemented strategy
         if (std::isinf(backlog)) {
@@ -2106,7 +2115,7 @@ database::database(const db::config& cfg, database_config dbcfg)
             return compaction_io_controller::normalization_factor;
         }
         return _compaction_manager->backlog() / memory::stats().total_memory();
-    })
+    }))
 {
     _compaction_manager->start();
     setup_metrics();

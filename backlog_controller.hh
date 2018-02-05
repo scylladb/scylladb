@@ -174,6 +174,7 @@ public:
 class compaction_io_controller : public backlog_io_controller {
 public:
     static constexpr unsigned normalization_factor = 10;
+    compaction_io_controller(const ::io_priority_class& iop, float static_shares) : backlog_io_controller(iop, static_shares) {}
     compaction_io_controller(const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_io_controller(iop, std::move(interval),
           std::vector<backlog_controller::control_point>({{0.5, 10}, {1.5, 100} , {normalization_factor, 1000}}),

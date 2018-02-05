@@ -117,6 +117,9 @@ public:
     val(memtable_flush_static_shares, float, 0, Used, \
             "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity" \
     )   \
+    val(compaction_static_shares, float, 0, Used, \
+            "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity" \
+    )   \
     /* Initialization properties */             \
     /* The minimal properties needed for configuring a cluster. */  \
     val(cluster_name, sstring, "", Used,   \
