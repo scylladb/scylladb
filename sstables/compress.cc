@@ -139,30 +139,31 @@ void compression::segmented_offsets::write(uint64_t bucket_index, uint64_t offse
     seastar::write_le(_storage[bucket_index].storage.get() + offset_byte, value);
 }
 
-void compression::segmented_offsets::update_position_trackers(std::size_t index) const {
+void compression::segmented_offsets::state::update_position_trackers(std::size_t index, uint16_t segment_size_bits,
+        uint32_t segments_per_bucket, uint8_t grouped_offsets) {
     if (_current_index != index - 1) {
         _current_index = index;
-        const uint64_t current_segment_index = _current_index / _grouped_offsets;
-        _current_bucket_segment_index = current_segment_index % _segments_per_bucket;
-        _current_segment_relative_index = _current_index % _grouped_offsets;
-        _current_bucket_index = current_segment_index / _segments_per_bucket;
-        _current_segment_offset_bits = (_current_bucket_segment_index % _segments_per_bucket) * _segment_size_bits;
+        const uint64_t current_segment_index = _current_index / grouped_offsets;
+        _current_bucket_segment_index = current_segment_index % segments_per_bucket;
+        _current_segment_relative_index = _current_index % grouped_offsets;
+        _current_bucket_index = current_segment_index / segments_per_bucket;
+        _current_segment_offset_bits = (_current_bucket_segment_index % segments_per_bucket) * segment_size_bits;
     } else {
         ++_current_index;
         ++_current_segment_relative_index;
 
         // Crossed segment boundary.
-        if (_current_segment_relative_index == _grouped_offsets) {
+        if (_current_segment_relative_index == grouped_offsets) {
             ++_current_bucket_segment_index;
             _current_segment_relative_index = 0;
 
             // Crossed bucket boundary.
-            if (_current_bucket_segment_index == _segments_per_bucket) {
+            if (_current_bucket_segment_index == segments_per_bucket) {
                 ++_current_bucket_index;
                 _current_bucket_segment_index = 0;
                 _current_segment_offset_bits = 0;
             } else {
-                _current_segment_offset_bits += _segment_size_bits;
+                _current_segment_offset_bits += segment_size_bits;
             }
         }
     }
@@ -188,41 +189,40 @@ void compression::segmented_offsets::init(uint32_t chunk_size) {
     _segments_per_bucket = params.first.segments_per_bucket;
 }
 
-uint64_t compression::segmented_offsets::at(std::size_t i) const {
+uint64_t compression::segmented_offsets::at(std::size_t i, compression::segmented_offsets::state& s) const {
     if (i >= _size) {
         throw std::out_of_range(sprint("{}: index {} is out of range", __FUNCTION__, i));
     }
 
-    update_position_trackers(i);
+    s.update_position_trackers(i, _segment_size_bits, _segments_per_bucket, _grouped_offsets);
+    const uint64_t bucket_base_offset = _storage[s._current_bucket_index].base_offset;
+    const uint64_t segment_base_offset = bucket_base_offset + read(s._current_bucket_index, s._current_segment_offset_bits, _segment_base_offset_size_bits);
 
-    const uint64_t bucket_base_offset = _storage[_current_bucket_index].base_offset;
-    const uint64_t segment_base_offset = bucket_base_offset + read(_current_bucket_index, _current_segment_offset_bits, _segment_base_offset_size_bits);
-
-    if (_current_segment_relative_index == 0) {
-        return  segment_base_offset;
+    if (s._current_segment_relative_index == 0) {
+        return segment_base_offset;
     }
 
     return segment_base_offset
-        + read(_current_bucket_index,
-                _current_segment_offset_bits + _segment_base_offset_size_bits + (_current_segment_relative_index - 1) * _segmented_offset_size_bits,
+        + read(s._current_bucket_index,
+                s._current_segment_offset_bits + _segment_base_offset_size_bits + (s._current_segment_relative_index - 1) * _segmented_offset_size_bits,
                 _segmented_offset_size_bits);
 }
 
-void compression::segmented_offsets::push_back(uint64_t offset) {
-    update_position_trackers(_size);
+void compression::segmented_offsets::push_back(uint64_t offset, compression::segmented_offsets::state& s) {
+    s.update_position_trackers(_size, _segment_size_bits, _segments_per_bucket, _grouped_offsets);
 
-    if (_current_bucket_index == _storage.size()) {
+    if (s._current_bucket_index == _storage.size()) {
         _storage.push_back(bucket{_last_written_offset, std::unique_ptr<char[]>(new char[bucket_size])});
     }
 
-    const uint64_t bucket_base_offset = _storage[_current_bucket_index].base_offset;
+    const uint64_t bucket_base_offset = _storage[s._current_bucket_index].base_offset;
 
-    if (_current_segment_relative_index == 0) {
-        write(_current_bucket_index, _current_segment_offset_bits, _segment_base_offset_size_bits, offset - bucket_base_offset);
+    if (s._current_segment_relative_index == 0) {
+        write(s._current_bucket_index, s._current_segment_offset_bits, _segment_base_offset_size_bits, offset - bucket_base_offset);
     } else {
-        const uint64_t segment_base_offset = bucket_base_offset + read(_current_bucket_index, _current_segment_offset_bits, _segment_base_offset_size_bits);
-        write(_current_bucket_index,
-                _current_segment_offset_bits + _segment_base_offset_size_bits + (_current_segment_relative_index - 1) * _segmented_offset_size_bits,
+        const uint64_t segment_base_offset = bucket_base_offset + read(s._current_bucket_index, s._current_segment_offset_bits, _segment_base_offset_size_bits);
+        write(s._current_bucket_index,
+                s._current_segment_offset_bits + _segment_base_offset_size_bits + (s._current_segment_relative_index - 1) * _segmented_offset_size_bits,
                 _segmented_offset_size_bits,
                 offset - segment_base_offset);
     }
@@ -270,14 +270,14 @@ void compression::set_compressor(compressor c) {
 // the end-of-file position (one past the last byte) MUST not be used. If the
 // caller wants to read from the end of file, it should simply read nothing.
 compression::chunk_and_offset
-compression::locate(uint64_t position) const {
+compression::locate(uint64_t position, const compression::segmented_offsets::accessor& accessor) {
     auto ucl = uncompressed_chunk_length();
     auto chunk_index = position / ucl;
     decltype(ucl) chunk_offset = position % ucl;
-    auto chunk_start = offsets.at(chunk_index);
+    auto chunk_start = accessor.at(chunk_index);
     auto chunk_end = (chunk_index + 1 == offsets.size())
             ? _compressed_file_length
-            : offsets.at(chunk_index + 1);
+            : accessor.at(chunk_index + 1);
     return { chunk_start, chunk_end - chunk_start, chunk_offset };
 }
 
@@ -424,6 +424,7 @@ size_t compress_max_size_snappy(size_t input_len) {
 class compressed_file_data_source_impl : public data_source_impl {
     stdx::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
+    sstables::compression::segmented_offsets::accessor _offsets;
     uint64_t _underlying_pos;
     uint64_t _pos;
     uint64_t _beg_pos;
@@ -432,6 +433,7 @@ public:
     compressed_file_data_source_impl(file f, sstables::compression* cm,
                 uint64_t pos, size_t len, file_input_stream_options options)
             : _compression_metadata(cm)
+            , _offsets(_compression_metadata->offsets.get_accessor())
     {
         _beg_pos = pos;
         if (pos > _compression_metadata->uncompressed_file_length()) {
@@ -450,8 +452,8 @@ public:
         // _beg_pos and _end_pos specify positions in the compressed stream.
         // We need to translate them into a range of uncompressed chunks,
         // and open a file_input_stream to read that range.
-        auto start = _compression_metadata->locate(_beg_pos);
-        auto end = _compression_metadata->locate(_end_pos - 1);
+        auto start = _compression_metadata->locate(_beg_pos, _offsets);
+        auto end = _compression_metadata->locate(_end_pos - 1, _offsets);
         _input_stream = make_file_input_stream(std::move(f),
                 start.chunk_start,
                 end.chunk_start + end.chunk_len - start.chunk_start,
@@ -463,7 +465,7 @@ public:
         if (_pos >= _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
-        auto addr = _compression_metadata->locate(_pos);
+        auto addr = _compression_metadata->locate(_pos, _offsets);
         // Uncompress the next chunk. We need to skip part of the first
         // chunk, but then continue to read from beginning of chunks.
         if (_pos != _beg_pos && addr.offset != 0) {
@@ -511,7 +513,7 @@ public:
         if (_pos == _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
-        auto addr = _compression_metadata->locate(_pos);
+        auto addr = _compression_metadata->locate(_pos, _offsets);
         auto underlying_n = addr.chunk_start - _underlying_pos;
         _underlying_pos = addr.chunk_start;
         _beg_pos = _pos;
