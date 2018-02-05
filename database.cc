@@ -2057,10 +2057,10 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 inline
 flush_cpu_controller
 make_flush_cpu_controller(db::config& cfg, seastar::scheduling_group sg, std::function<double()> fn) {
-    if (cfg.auto_adjust_flush_quota()) {
-        return flush_cpu_controller(sg, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+    if (cfg.memtable_flush_static_shares() > 0) {
+        return flush_cpu_controller(sg, cfg.memtable_flush_static_shares());
     }
-    return flush_cpu_controller(backlog_cpu_controller::disabled{sg});
+    return flush_cpu_controller(sg, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});

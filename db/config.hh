@@ -111,8 +111,11 @@ public:
     val(background_writer_scheduling_quota, double, 1.0, Unused, \
             "max cpu usage ratio (between 0 and 1) for compaction process. Not intended for setting in normal operations. Setting it to 1 or higher will disable it, recommended operational setting is 0.5." \
     )   \
-    val(auto_adjust_flush_quota, bool, false, Used, \
+    val(auto_adjust_flush_quota, bool, false, Unused, \
             "true: auto-adjust memtable shares for flush processes" \
+    )   \
+    val(memtable_flush_static_shares, float, 0, Used, \
+            "If set to higher than 0, ignore the controller's output and set the memtable shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity" \
     )   \
     /* Initialization properties */             \
     /* The minimal properties needed for configuring a cluster. */  \

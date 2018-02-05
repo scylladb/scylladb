@@ -81,10 +81,6 @@ protected:
 
 class backlog_cpu_controller : public backlog_controller {
 public:
-    struct disabled {
-        seastar::scheduling_group backup;
-    };
-
     float current_shares() const {
         return _current_shares;
     }
@@ -95,14 +91,15 @@ protected:
 
     seastar::scheduling_group _scheduling_group;
 
+    backlog_cpu_controller(seastar::scheduling_group sg, float static_shares)
+        : _scheduling_group(sg)
+    {
+        update_controller(static_shares);
+    }
     backlog_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
         : backlog_controller(interval, std::move(control_points), backlog)
         , _scheduling_group(sg)
     {}
-
-    backlog_cpu_controller(disabled d)
-        : backlog_controller()
-        , _scheduling_group(d.backup) {}
 };
 
 // Right now: the CPU controller deals with quotas, the I/O controller deals with shares.
@@ -146,7 +143,7 @@ public:
 class flush_cpu_controller : public backlog_cpu_controller {
     static constexpr float hard_dirty_limit = 1.0f;
 public:
-    flush_cpu_controller(backlog_cpu_controller::disabled d) : backlog_cpu_controller(std::move(d)) {}
+    flush_cpu_controller(seastar::scheduling_group sg, float static_shares) : backlog_cpu_controller(sg, static_shares) {}
     flush_cpu_controller(flush_cpu_controller&&) = default;
     flush_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_dirty)
         : backlog_cpu_controller(sg, std::move(interval),
