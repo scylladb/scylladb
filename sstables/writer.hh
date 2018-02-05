@@ -192,11 +192,13 @@ output_stream<char> make_checksummed_file_output_stream(file f, struct checksum&
 class compressed_file_data_sink_impl : public data_sink_impl {
     output_stream<char> _out;
     sstables::compression* _compression_metadata;
+    sstables::compression::segmented_offsets::writer _offsets;
     size_t _pos = 0;
 public:
     compressed_file_data_sink_impl(file f, sstables::compression* cm, file_output_stream_options options)
             : _out(make_file_output_stream(std::move(f), options))
-            , _compression_metadata(cm) {}
+            , _compression_metadata(cm)
+            , _offsets(_compression_metadata->offsets.get_writer()) {}
 
     future<> put(net::packet data) { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
@@ -210,7 +212,7 @@ public:
             throw std::runtime_error("possible overflow during compression");
         }
 
-        _compression_metadata->offsets.push_back(_pos);
+        _offsets.push_back(_pos);
         // account compressed data + 32-bit checksum.
         _pos += len + 4;
         _compression_metadata->set_compressed_file_length(_pos);

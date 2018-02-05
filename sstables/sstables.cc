@@ -869,21 +869,22 @@ future<> parse(random_access_reader& in, compression& c) {
         c.set_uncompressed_chunk_length(*chunk_len_ptr);
         c.set_uncompressed_file_length(*data_len_ptr);
 
-        auto len = make_lw_shared<uint32_t>();
-        return parse(in, *len).then([&in, &c, len] {
-            auto eoarr = [&c, len] { return c.offsets.size() == *len; };
+      return do_with(uint32_t(), c.offsets.get_writer(), [&in, &c] (uint32_t& len, compression::segmented_offsets::writer& offsets) {
+        return parse(in, len).then([&in, &c, &len, &offsets] {
+            auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
-            return do_until(eoarr, [&in, &c, len] {
-                auto now = std::min(*len - c.offsets.size(), 100000 / sizeof(uint64_t));
-                return in.read_exactly(now * sizeof(uint64_t)).then([&c, len, now] (auto buf) {
+            return do_until(eoarr, [&in, &c, &len, &offsets] () {
+                auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
+                return in.read_exactly(now * sizeof(uint64_t)).then([&offsets, now] (auto buf) {
                     uint64_t value;
                     for (size_t i = 0; i < now; ++i) {
                         std::copy_n(buf.get() + i * sizeof(uint64_t), sizeof(uint64_t), reinterpret_cast<char*>(&value));
-                        c.offsets.push_back(net::ntoh(value));
+                        offsets.push_back(net::ntoh(value));
                     }
                 });
             });
         });
+      });
     });
 }
 

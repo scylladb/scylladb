@@ -125,6 +125,50 @@ struct compression {
     // * The iterator and at() can't provide references to the elements.
     // * No point insert is available.
     class segmented_offsets {
+    public:
+        class state {
+            std::size_t _current_index{0};
+            std::size_t _current_bucket_index{0};
+            uint64_t _current_bucket_segment_index{0};
+            uint64_t _current_segment_relative_index{0};
+            uint64_t _current_segment_offset_bits{0};
+
+            void update_position_trackers(std::size_t index, uint16_t segment_size_bits,
+                uint32_t segments_per_bucket, uint8_t grouped_offsets);
+
+            friend class segmented_offsets;
+        };
+
+        class accessor {
+            const segmented_offsets& _offsets;
+            mutable state _state;
+        public:
+            accessor(const segmented_offsets& offsets) : _offsets(offsets) { }
+
+            uint64_t at(std::size_t i) const {
+                return _offsets.at(i, _state);
+            }
+        };
+
+        class writer {
+            segmented_offsets& _offsets;
+            state _state;
+        public:
+            writer(segmented_offsets& offsets) : _offsets(offsets) { }
+
+            void push_back(uint64_t offset) {
+                return _offsets.push_back(offset, _state);
+            }
+        };
+
+        accessor get_accessor() const {
+            return accessor(*this);
+        }
+
+        writer get_writer() {
+            return writer(*this);
+        }
+    private:
         struct bucket {
             uint64_t base_offset;
             std::unique_ptr<char[]> storage;
@@ -137,12 +181,6 @@ struct compression {
         uint32_t _segments_per_bucket{0};
         uint8_t _grouped_offsets{0};
 
-        mutable std::size_t _current_index{0};
-        mutable std::size_t _current_bucket_index{0};
-        mutable uint64_t _current_bucket_segment_index{0};
-        mutable uint64_t _current_segment_relative_index{0};
-        mutable uint64_t _current_segment_offset_bits{0};
-
         uint64_t _last_written_offset{0};
 
         std::size_t _size{0};
@@ -151,24 +189,24 @@ struct compression {
         uint64_t read(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits) const;
         void write(uint64_t bucket_index, uint64_t offset_bits, uint64_t size_bits, uint64_t value);
 
-        void update_position_trackers(std::size_t index) const;
-
+        uint64_t at(std::size_t i, state& s) const;
+        void push_back(uint64_t offset, state& s);
     public:
         class const_iterator : public std::iterator<std::random_access_iterator_tag, const uint64_t> {
             friend class segmented_offsets;
             struct end_tag {};
 
-            const segmented_offsets& _offsets;
+            segmented_offsets::accessor _offsets;
             std::size_t _index;
 
             const_iterator(const segmented_offsets& offsets)
-                : _offsets(offsets)
+                : _offsets(offsets.get_accessor())
                 , _index(0) {
             }
 
             const_iterator(const segmented_offsets& offsets, end_tag)
-                : _offsets(offsets)
-                , _index(_offsets.size()) {
+                : _offsets(offsets.get_accessor())
+                , _index(offsets.size()) {
             }
 
         public:
@@ -279,10 +317,6 @@ struct compression {
             return _size;
         }
 
-        uint64_t at(std::size_t i) const;
-
-        void push_back(uint64_t offset);
-
         const_iterator begin() const {
             return const_iterator(*this);
         }
@@ -337,7 +371,7 @@ public:
         uint64_t chunk_len; // variable size of compressed chunk
         unsigned offset; // offset into chunk after uncompressing it
     };
-    chunk_and_offset locate(uint64_t position) const;
+    chunk_and_offset locate(uint64_t position, const compression::segmented_offsets::accessor& accessor);
 
     unsigned uncompressed_chunk_length() const noexcept {
         return chunk_len;
