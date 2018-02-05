@@ -2273,9 +2273,6 @@ database::setup_metrics() {
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
 
-        sm::make_gauge("cpu_flush_quota", [this] { return _memtable_cpu_controller.current_shares(); },
-                             sm::description("The current quota for memtable CPU scheduling group")),
-
         sm::make_derive("short_data_queries", _stats->short_data_queries,
                        sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
 
