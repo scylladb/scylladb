@@ -117,6 +117,8 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
 
     friend class partition_version_ref;
 public:
+    using is_evictable = bool_class<class evictable_tag>;
+
     explicit partition_version(schema_ptr s) noexcept
         : _partition(std::move(s)) { }
     explicit partition_version(mutation_partition mp) noexcept
@@ -139,11 +141,15 @@ using partition_version_range = anchorless_list_base_hook<partition_version>::ra
 class partition_version_ref {
     partition_version* _version = nullptr;
     bool _unique_owner = false;
+    bool _evictable;
 
     friend class partition_version;
 public:
     partition_version_ref() = default;
-    explicit partition_version_ref(partition_version& pv) noexcept : _version(&pv) {
+    explicit partition_version_ref(partition_version& pv, partition_version::is_evictable ev) noexcept
+        : _version(&pv)
+        , _evictable(ev)
+    {
         assert(!_version->_backref);
         _version->_backref = this;
     }
@@ -152,7 +158,10 @@ public:
             _version->_backref = nullptr;
         }
     }
-    partition_version_ref(partition_version_ref&& other) noexcept : _version(other._version) {
+    partition_version_ref(partition_version_ref&& other) noexcept
+        : _version(other._version)
+        , _evictable(other._evictable)
+    {
         if (_version) {
             _version->_backref = this;
         }
@@ -187,6 +196,8 @@ public:
 
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
+    void make_evictable() { _evictable = true; }
+    bool evictable() const { return _evictable; }
 };
 
 class partition_entry;
@@ -316,6 +327,7 @@ public:
     explicit partition_entry(mutation_partition mp);
     // Constructs an evictable entry
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
+    partition_entry(evictable_tag, const schema& s, partition_entry&&);
     ~partition_entry();
 
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
