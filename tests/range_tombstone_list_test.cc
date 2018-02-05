@@ -280,7 +280,7 @@ BOOST_AUTO_TEST_CASE(test_search_prefix) {
 
     range_tombstone_list l1(*s);
 
-    l1.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({1, 2}), bound_kind::incl_end, {8, gc_now}));
+    l1.apply(*s, range_tombstone(key({1}), bound_kind::excl_start, key({2, 2}), bound_kind::incl_end, {8, gc_now}));
     l1.apply(*s, range_tombstone(key({1, 2}), bound_kind::excl_start, key({1, 3}), bound_kind::incl_end, {12, gc_now}));
 
     BOOST_REQUIRE(tombstone() == l1.search_tombstone_covering(*s, key({1})));
