@@ -2056,11 +2056,20 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 
 inline
 flush_cpu_controller
-make_flush_cpu_controller(db::config& cfg, seastar::scheduling_group sg, std::function<double()> fn) {
+make_flush_controller(db::config& cfg, seastar::scheduling_group sg, std::function<double()> fn) {
     if (cfg.memtable_flush_static_shares() > 0) {
         return flush_cpu_controller(sg, cfg.memtable_flush_static_shares());
     }
     return flush_cpu_controller(sg, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+}
+
+inline
+flush_io_controller
+make_flush_controller(db::config& cfg, const ::io_priority_class& iop, std::function<double()> fn) {
+    if (cfg.memtable_flush_static_shares() > 0) {
+        return flush_io_controller(iop, cfg.memtable_flush_static_shares());
+    }
+    return flush_io_controller(iop, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -2077,16 +2086,16 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
     , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
     , _dbcfg(dbcfg)
-    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, dbcfg.memtable_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _memtable_cpu_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
     , _data_query_stage("data_query", _dbcfg.query_scheduling_group, &column_family::query)
     , _version(empty_version)
     , _compaction_manager(std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group))
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _flush_io_controller(service::get_local_memtable_flush_priority(), 250ms, cfg.virtual_dirty_soft_limit(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _flush_io_controller(make_flush_controller(*_cfg, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return _dirty_memory_manager.virtual_dirty_memory() / limit;
-    })
+    }))
     , _compaction_io_controller(service::get_local_compaction_priority(), 250ms, [this] () -> float {
         auto backlog = _compaction_manager->backlog();
         // This means we are using an unimplemented strategy
