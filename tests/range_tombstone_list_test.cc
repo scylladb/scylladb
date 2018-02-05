@@ -715,10 +715,26 @@ BOOST_AUTO_TEST_CASE(test_exception_safety) {
     range_tombstone_list original(*s);
     range_tombstone_list to_apply(*s);
 
-    original.apply(*s, rtie(next_pos(), next_pos(), ts0));
-    to_apply.apply(*s, rtie(next_pos(), next_pos(), ts0));
-    to_apply.apply(*s, rtie(next_pos(), next_pos(), ts0));
-    original.apply(*s, rtie(next_pos(), next_pos(), ts0));
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        original.apply(*s, rtie(p1, p2, ts0));
+    }
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        to_apply.apply(*s, rtie(p1, p2, ts0));
+    }
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        to_apply.apply(*s, rtie(p1, p2, ts0));
+    }
+    {
+        auto p1 = next_pos();
+        auto p2 = next_pos();
+        original.apply(*s, rtie(p1, p2, ts0));
+    }
 
     {
         auto p1 = next_pos();
