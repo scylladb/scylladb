@@ -165,7 +165,7 @@ public:
     flush_io_controller(const ::io_priority_class& iop, float static_shares) : backlog_io_controller(iop, static_shares) {}
     flush_io_controller(const ::io_priority_class& iop, std::chrono::milliseconds interval, float soft_limit, std::function<float()> current_backlog)
         : backlog_io_controller(iop, std::move(interval),
-          std::vector<backlog_controller::control_point>({{soft_limit, 10}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 100}, {hard_dirty_limit, 1000}}),
+          std::vector<backlog_controller::control_point>({{soft_limit, 100}, {soft_limit + (hard_dirty_limit - soft_limit) / 2, 200}, {hard_dirty_limit, 1000}}),
           std::move(current_backlog)
         )
     {}
