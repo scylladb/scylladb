@@ -80,6 +80,12 @@ struct tombstone final : public with_relational_operators<tombstone> {
         std::swap(*this, t);
     }
 
+    tombstone operator+(const tombstone& t) {
+        auto result = *this;
+        result.apply(t);
+        return result;
+    }
+
     friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
         if (t) {
             return out << "{tombstone: timestamp=" << t.timestamp << ", deletion_time=" << t.deletion_time.time_since_epoch().count() << "}";

@@ -117,6 +117,8 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
 
     friend class partition_version_ref;
 public:
+    using is_evictable = bool_class<class evictable_tag>;
+
     explicit partition_version(schema_ptr s) noexcept
         : _partition(std::move(s)) { }
     explicit partition_version(mutation_partition mp) noexcept
@@ -139,11 +141,15 @@ using partition_version_range = anchorless_list_base_hook<partition_version>::ra
 class partition_version_ref {
     partition_version* _version = nullptr;
     bool _unique_owner = false;
+    bool _evictable;
 
     friend class partition_version;
 public:
     partition_version_ref() = default;
-    explicit partition_version_ref(partition_version& pv) noexcept : _version(&pv) {
+    explicit partition_version_ref(partition_version& pv, partition_version::is_evictable ev) noexcept
+        : _version(&pv)
+        , _evictable(ev)
+    {
         assert(!_version->_backref);
         _version->_backref = this;
     }
@@ -152,7 +158,10 @@ public:
             _version->_backref = nullptr;
         }
     }
-    partition_version_ref(partition_version_ref&& other) noexcept : _version(other._version) {
+    partition_version_ref(partition_version_ref&& other) noexcept
+        : _version(other._version)
+        , _evictable(other._evictable)
+    {
         if (_version) {
             _version->_backref = this;
         }
@@ -187,6 +196,8 @@ public:
 
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
+    void make_evictable() { _evictable = true; }
+    bool evictable() const { return _evictable; }
 };
 
 class partition_entry;
@@ -287,6 +298,11 @@ public:
 // objects called versions. The logical mutation_partition state represented
 // by that chain is equal to reducing the chain using mutation_partition::apply()
 // from left (latest version) to right.
+//
+// We distinguish evictable and non-evictable partition entries. Entries which
+// are non-evictable have all their elements non-evictable and fully continuous.
+// Partition snapshots inherit evictability of the entry, which remains invariant
+// for a snapshot.
 class partition_entry {
     partition_snapshot* _snapshot = nullptr;
     partition_version_ref _version;
@@ -303,10 +319,21 @@ private:
 
     void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&);
 public:
+    struct evictable_tag {};
     class rows_iterator;
+    // Constructs a non-evictable entry holding empty partition
     partition_entry() = default;
+    // Constructs a non-evictable entry
     explicit partition_entry(mutation_partition mp);
+    // Constructs an evictable entry
+    partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
+    partition_entry(evictable_tag, const schema& s, partition_entry&&);
     ~partition_entry();
+
+    static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
+    static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
+    // pe must be a non-evictable fully continuous entry.
+    static partition_entry make_evictable(const schema& s, partition_entry&& pe);
 
     partition_entry(partition_entry&& pe) noexcept
         : _snapshot(pe._snapshot), _version(std::move(pe._version))
@@ -338,15 +365,14 @@ public:
 
     // Strong exception guarantees.
     // Assumes this instance and mp are fully continuous.
+    // Use only on non-evictable entries.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
     void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
-
-    // Strong exception guarantees.
-    // Assumes this instance and mpv are fully continuous.
     void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
 
     // Adds mutation_partition represented by "other" to the one represented
     // by this entry.
+    // This entry must be evictable.
     //
     // The argument must be fully-continuous.
     //
@@ -388,7 +414,7 @@ public:
     lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
-    friend std::ostream& operator<<(std::ostream& out, partition_entry& e);
+    friend std::ostream& operator<<(std::ostream& out, const partition_entry& e);
 };
 
 // Monotonic exception guarantees
