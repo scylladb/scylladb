@@ -64,10 +64,9 @@ future<> memtable::clear_gently() noexcept {
 
             auto p = std::move(partitions);
             while (!p.empty()) {
-                auto batch_size = std::min<size_t>(p.size(), 32);
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
-                    while (batch_size--) {
+                    while (!p.empty() && !need_preempt()) {
                         p.erase_and_dispose(p.begin(), [&] (auto e) {
                             alloc.destroy(e);
                         });

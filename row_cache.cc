@@ -955,14 +955,12 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
-                unsigned quota = 30;
                 auto cmp = cache_entry::compare(_schema);
                 {
                     _update_section(_tracker.region(), [&] {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
-                        unsigned quota_before = quota;
                         // FIXME: we should really be checking should_yield() here instead of
-                        // need_preempt() + quota. However, should_yield() is currently quite
+                        // need_preempt(). However, should_yield() is currently quite
                         // expensive and we need to amortize it somehow.
                         do {
                           auto i = m.partitions.begin();
@@ -978,11 +976,10 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             real_dirty_acc.unpin_memory(size_entry);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
-                            --quota;
                            }
                           });
                           STAP_PROBE(scylla, row_cache_update_partition_end);
-                        } while (!m.partitions.empty() && quota && !need_preempt());
+                        } while (!m.partitions.empty() && !need_preempt());
                         with_allocator(standard_allocator(), [&] {
                             if (m.partitions.empty()) {
                                 _prev_snapshot_pos = {};
@@ -990,11 +987,8 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
                             }
                         });
-                        STAP_PROBE1(scylla, row_cache_update_one_batch_end, quota_before - quota);
+                        STAP_PROBE(scylla, row_cache_update_one_batch_end);
                     });
-                    if (quota == 0 && seastar::thread::should_yield()) {
-                        return;
-                    }
                 }
             });
             seastar::thread::yield();
