@@ -158,14 +158,8 @@ void partition_snapshot::merge_partition_versions() {
         auto current = first_used->next();
         while (current && !current->is_referenced()) {
             auto next = current->next();
-            try {
-                first_used->partition().apply(*_schema, std::move(current->partition()));
-                current_allocator().destroy(current);
-            } catch (...) {
-                // Set _version so that the merge can be retried.
-                _version = partition_version_ref(*current);
-                throw;
-            }
+            first_used->partition().apply(*_schema, std::move(current->partition()));
+            current_allocator().destroy(current);
             current = next;
         }
     }
@@ -184,7 +178,41 @@ unsigned partition_snapshot::version_count()
 partition_entry::partition_entry(mutation_partition mp)
 {
     auto new_version = current_allocator().construct<partition_version>(std::move(mp));
-    _version = partition_version_ref(*new_version);
+    _version = partition_version_ref(*new_version, partition_version::is_evictable::no);
+}
+
+partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, mutation_partition&& mp)
+    : partition_entry(std::move(mp))
+{
+    _version->partition().ensure_last_dummy(s);
+    _version.make_evictable();
+}
+
+partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, partition_entry&& e)
+    : partition_entry(std::move(e))
+{
+    if (_snapshot) {
+        // We must not change evictability of existing snapshots
+        // FIXME: https://github.com/scylladb/scylla/issues/1938
+        add_version(s);
+    }
+    _version.make_evictable();
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, mutation_partition&& mp) {
+    return {evictable_tag(), s, std::move(mp)};
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, const mutation_partition& mp) {
+    return make_evictable(s, mutation_partition(mp));
+}
+
+partition_entry partition_entry::make_evictable(const schema& s, partition_entry&& pe) {
+    // If we can assume that _pe is fully continuous, we don't need to check all versions
+    // to determine what the continuity is.
+    // This doesn't change value and doesn't invalidate iterators, so can be called even with a snapshot.
+    pe.version()->partition().ensure_last_dummy(s);
+    return partition_entry(evictable_tag(), s, std::move(pe));
 }
 
 partition_entry::~partition_entry() {
@@ -204,13 +232,15 @@ partition_entry::~partition_entry() {
 
 void partition_entry::set_version(partition_version* new_version)
 {
+    bool evictable = _version.evictable();
+
     if (_snapshot) {
         _snapshot->_version = std::move(_version);
         _snapshot->_entry = nullptr;
     }
 
     _snapshot = nullptr;
-    _version = partition_version_ref(*new_version);
+    _version = partition_version_ref(*new_version, partition_version::is_evictable(evictable));
 }
 
 partition_version& partition_entry::add_version(const schema& s) {
@@ -445,7 +475,7 @@ void partition_entry::with_detached_versions(Func&& func) {
         snapshot->_entry = nullptr;
         _snapshot = nullptr;
     }
-    _version = { };
+    auto prev = std::exchange(_version, {});
 
     auto revert = defer([&] {
         if (snapshot) {
@@ -453,7 +483,7 @@ void partition_entry::with_detached_versions(Func&& func) {
             snapshot->_entry = this;
             _version = std::move(snapshot->_version);
         } else {
-            _version = partition_version_ref(*current);
+            _version = std::move(prev);
         }
     });
 
@@ -578,18 +608,20 @@ partition_snapshot::range_tombstones(const ::schema& s, position_in_partition_vi
     return boost::copy_range<std::vector<range_tombstone>>(list.slice(s, start, end));
 }
 
-std::ostream& operator<<(std::ostream& out, partition_entry& e) {
+std::ostream& operator<<(std::ostream& out, const partition_entry& e) {
     out << "{";
     bool first = true;
     if (e._version) {
-        for (const partition_version& v : e.versions()) {
+        const partition_version* v = &*e._version;
+        while (v) {
             if (!first) {
                 out << ", ";
             }
-            if (v.is_referenced()) {
+            if (v->is_referenced()) {
                 out << "(*) ";
             }
-            out << v.partition();
+            out << v->partition();
+            v = v->next();
             first = false;
         }
     }
@@ -602,6 +634,9 @@ void partition_entry::evict() noexcept {
         return;
     }
     for (auto&& v : versions()) {
+        if (v.is_referenced() && !v.back_reference().evictable()) {
+            break;
+        }
         v.partition().evict();
     }
     current_allocator().invalidate_references();

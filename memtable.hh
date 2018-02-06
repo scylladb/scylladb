@@ -23,6 +23,7 @@
 
 #include <map>
 #include <memory>
+#include <iosfwd>
 #include "database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
@@ -105,6 +106,8 @@ public:
             return _c(k1, k2._key);
         }
     };
+
+    friend std::ostream& operator<<(std::ostream&, const memtable_entry&);
 };
 
 class dirty_memory_manager;
@@ -229,4 +232,6 @@ public:
     dirty_memory_manager& get_dirty_memory_manager() {
         return _dirty_mgr;
     }
+
+    friend std::ostream& operator<<(std::ostream&, memtable&);
 };

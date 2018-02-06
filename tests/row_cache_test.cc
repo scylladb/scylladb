@@ -28,6 +28,7 @@
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
+#include "tests/flat_mutation_reader_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
 #include "schema_builder.hh"
@@ -1822,6 +1823,12 @@ static void apply(row_cache& cache, memtable_snapshot_source& underlying, const 
     cache.update([&] { underlying.apply(m); }, *mt).get();
 }
 
+static void apply(row_cache& cache, memtable_snapshot_source& underlying, memtable& m) {
+    auto mt1 = make_lw_shared<memtable>(m.schema());
+    mt1->apply(m).get();
+    cache.update([&] { underlying.apply(std::move(mt1)); }, m).get();
+}
+
 SEASTAR_TEST_CASE(test_readers_get_all_data_after_eviction) {
     return seastar::async([] {
         simple_schema table;
@@ -2736,5 +2743,48 @@ SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versi
         assert_that(cache.make_reader(s.schema()))
             .produces(m1 + m2)
             .produces_end_of_stream();
+    });
+}
+
+SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memtable_readers) {
+    // Verifies that memtable readers created before memtable is moved to cache
+    // are not affected by eviction in cache after their partition entries were moved to cache.
+    // Reproduces https://github.com/scylladb/scylla/issues/3186
+    return seastar::async([] {
+        simple_schema ss;
+        schema_ptr s = ss.schema();
+
+        auto m1 = ss.new_mutation("pk1");
+        const auto n_rows = 10000;
+        for (auto i = 0u; i < n_rows; ++i) {
+            ss.add_row(m1, ss.make_ckey(i), "val");
+        }
+
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s);
+        row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker, is_continuous::yes);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        mt->apply(m1);
+
+        auto mt_rd1 = mt->make_flat_reader(s);
+        mt_rd1.set_max_buffer_size(1);
+        mt_rd1.fill_buffer().get();
+        BOOST_REQUIRE(mt_rd1.is_buffer_full()); // If fails, increase n_rows
+
+        auto mt_rd2 = mt->make_flat_reader(s);
+        mt_rd2.set_max_buffer_size(1);
+        mt_rd2.fill_buffer().get();
+
+        apply(cache, underlying, *mt);
+
+        assert_that(std::move(mt_rd1))
+            .produces(m1);
+
+        cache.evict();
+
+        assert_that(std::move(mt_rd2))
+            .produces(m1);
     });
 }

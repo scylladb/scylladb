@@ -682,3 +682,12 @@ void memtable::upgrade_entry(memtable_entry& e) {
 void memtable::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
 }
+
+std::ostream& operator<<(std::ostream& out, memtable& mt) {
+    logalloc::reclaim_lock rl(mt);
+    return out << "{memtable: [" << ::join(",\n", mt.partitions) << "]}";
+}
+
+std::ostream& operator<<(std::ostream& out, const memtable_entry& mt) {
+    return out << "{" << mt.key() << ": " << mt.partition() << "}";
+}
