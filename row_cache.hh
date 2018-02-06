@@ -353,7 +353,6 @@ private:
     void invalidate_locked(const dht::decorated_key&);
     void invalidate_unwrapped(const dht::partition_range&);
     void clear_now() noexcept;
-    static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 
     struct previous_entry_pointer {
         stdx::optional<dht::decorated_key> _key;
