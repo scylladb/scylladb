@@ -662,3 +662,48 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
     do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
     return make_ready_future<>();
 }
+
+
+SEASTAR_TEST_CASE(test_eviction_with_mixed_snapshot_evictability) {
+    return seastar::async([] {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
+
+        mutation m1 = gen();
+        mutation m2 = gen();
+        m1.partition().make_fully_continuous();
+        m2.partition().make_fully_continuous();
+
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            logalloc::reclaim_lock l(r);
+
+            auto e = partition_entry(mutation_partition(s));
+
+            e.apply(*s, m1.partition(), *s);
+
+            auto snap1 = e.read(r, s); // non-evictable
+
+            e = partition_entry::make_evictable(*s, std::move(e));
+
+            {
+                partition_entry tmp(m2.partition());
+                e.apply_to_incomplete(*s, std::move(tmp), *m2.schema(), r);
+            }
+
+            auto snap2 = e.read(r, s); // evictable
+
+            e.evict();
+
+            assert_that(s, read_using_cursor(*snap1)).is_equal_to(m1.partition());
+
+            snap1 = {};
+            e.evict();
+
+            // Everything should be evicted now, since non-evictable snapshot is gone
+            auto pt = m1.partition().partition_tombstone() + m2.partition().partition_tombstone();
+            assert_that(s, read_using_cursor(*snap2))
+                .is_equal_to(mutation_partition::make_incomplete(*s, pt));
+        });
+    });
+}
