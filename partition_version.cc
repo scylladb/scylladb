@@ -170,14 +170,8 @@ void partition_snapshot::merge_partition_versions() {
         auto current = first_used->next();
         while (current && !current->is_referenced()) {
             auto next = current->next();
-            try {
-                merge_versions(*_schema, first_used->partition(), std::move(current->partition()));
-                current_allocator().destroy(current);
-            } catch (...) {
-                // Set _version so that the merge can be retried.
-                _version = partition_version_ref(*current);
-                throw;
-            }
+            merge_versions(*_schema, first_used->partition(), std::move(current->partition()));
+            current_allocator().destroy(current);
             current = next;
         }
     }
