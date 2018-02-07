@@ -1194,6 +1194,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
     schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type)));
     builder.set_compressor_params(compression_parameters(compressor::none));
+    builder.set_min_compaction_threshold(4);
     auto s = builder.build(schema_builder::compact_storage::no);
 
     auto cm = make_lw_shared<compaction_manager>();
@@ -2156,8 +2157,10 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
 }
 
 SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type)));
+    builder.set_min_compaction_threshold(4);
+    auto s = builder.build(schema_builder::compact_storage::no);
 
     column_family::config cfg;
     cell_locker_stats cl_stats;
@@ -3057,8 +3060,11 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 }
 
 SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type)));
+    builder.set_min_compaction_threshold(4);
+    auto s = builder.build(schema_builder::compact_storage::no);
+
     compaction_manager cm;
     column_family::config cfg;
     cell_locker_stats cl_stats;
@@ -3094,8 +3100,11 @@ SEASTAR_TEST_CASE(basic_date_tiered_strategy_test) {
 }
 
 SEASTAR_TEST_CASE(date_tiered_strategy_test_2) {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+    schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type)));
+    builder.set_min_compaction_threshold(4);
+    auto s = builder.build(schema_builder::compact_storage::no);
+
     compaction_manager cm;
     column_family::config cfg;
     cell_locker_stats cl_stats;
