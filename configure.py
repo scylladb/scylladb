@@ -288,6 +288,7 @@ scylla_tests = [
     'tests/caching_options_test',
     'tests/auth_resource_test',
     'tests/cql_roles_query_test',
+    'tests/extensions_test',
 ]
 
 perf_tests = [

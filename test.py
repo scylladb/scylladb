@@ -98,6 +98,7 @@ boost_tests = [
     'caching_options_test',
     'auth_resource_test',
     'cql_roles_query_test',
+    'extensions_test',
 ]
 
 other_tests = [
