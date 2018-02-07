@@ -876,7 +876,7 @@ if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags),
-                  '--c++-dialect=gnu++1z',
+                  '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']),
                  ]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
