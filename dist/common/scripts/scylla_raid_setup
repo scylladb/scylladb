@@ -100,7 +100,11 @@ if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
     mkfs.xfs $RAID -f
 else
     for dsk in $DISKS; do
-        blkdiscard $dsk &
+        if [ "$(cat /sys/block/${dsk##/dev/}/queue/discard_granularity)" != "0" ]; then
+            blkdiscard $dsk &
+        else
+            echo "$dsk does not supported TRIM, skipping blkdiscard..."
+        fi
     done
     wait
     mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
