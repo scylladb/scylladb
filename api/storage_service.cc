@@ -94,9 +94,12 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_token_endpoint.set(r, [] (std::unique_ptr<request> req) {
-        auto token_to_ep = service::get_local_storage_service().get_token_to_endpoint_map();
-        std::vector<storage_service_json::mapper> res;
-        return make_ready_future<json::json_return_type>(stream_object(std::move(map_to_key_value(token_to_ep, res))));
+        return make_ready_future<json::json_return_type>(stream_range_as_array(service::get_local_storage_service().get_token_to_endpoint_map(), [](const auto& i) {
+            storage_service_json::mapper val;
+            val.key = boost::lexical_cast<std::string>(i.first);
+            val.value = boost::lexical_cast<std::string>(i.second);
+            return val;
+        }));
     });
 
     ss::get_leaving_nodes.set(r, [](const_req req) {
