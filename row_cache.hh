@@ -208,7 +208,7 @@ public:
         uint64_t pinned_dirty_memory_overload;
 
         uint64_t active_reads() const {
-            return reads_done - reads;
+            return reads - reads_done;
         }
     };
 private:
