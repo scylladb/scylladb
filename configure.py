@@ -776,6 +776,14 @@ warnings = [w
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
+optimization_flags = [
+    '--param inline-unit-growth=300',
+]
+optimization_flags = [o
+                      for o in optimization_flags
+                      if flag_supported(flag = o, compiler = args.cxx)]
+modes['release']['opt'] += ' ' + ' '.join(optimization_flags)
+
 gold_linker_flag = gold_supported(compiler = args.cxx)
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
