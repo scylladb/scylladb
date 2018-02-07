@@ -123,15 +123,13 @@ namespace sstables {
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
     future<compaction_info> compact_sstables(sstables::compaction_descriptor descriptor,
-            column_family& cf, std::function<shared_sstable()> creator, bool cleanup = false,
-            seastar::scheduling_group sg = {});
+            column_family& cf, std::function<shared_sstable()> creator, bool cleanup = false);
 
     // Compacts a set of N shared sstables into M sstables. For every shard involved,
     // i.e. which owns any of the sstables, a new unshared sstable is created.
     future<std::vector<shared_sstable>> reshard_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable(shard_id)> creator,
-        uint64_t max_sstable_size, uint32_t sstable_level,
-        scheduling_group sg = {});
+        uint64_t max_sstable_size, uint32_t sstable_level);
 
     // Return list of expired sstables for column family cf.
     // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

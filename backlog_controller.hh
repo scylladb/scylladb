@@ -85,10 +85,6 @@ public:
         seastar::scheduling_group backup;
     };
 
-    seastar::scheduling_group scheduling_group() {
-        return _current_scheduling_group;
-    }
-
     float current_shares() const {
         return _current_shares;
     }
@@ -98,18 +94,15 @@ protected:
     void update_controller(float quota) override;
 
     seastar::scheduling_group _scheduling_group;
-    seastar::scheduling_group _current_scheduling_group;
 
     backlog_cpu_controller(seastar::scheduling_group sg, std::chrono::milliseconds interval, std::vector<backlog_controller::control_point> control_points, std::function<float()> backlog)
         : backlog_controller(interval, std::move(control_points), backlog)
         , _scheduling_group(sg)
-        , _current_scheduling_group(_scheduling_group)
     {}
 
     backlog_cpu_controller(disabled d)
         : backlog_controller()
-        , _scheduling_group(d.backup)
-        , _current_scheduling_group(d.backup) {}
+        , _scheduling_group(d.backup) {}
 };
 
 // Right now: the CPU controller deals with quotas, the I/O controller deals with shares.

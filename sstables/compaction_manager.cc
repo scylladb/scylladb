@@ -215,7 +215,7 @@ void compaction_manager::deregister_compacting_sstables(const std::vector<sstabl
     }
 }
 
-future<> compaction_manager::submit_major_compaction(column_family* cf) {
+future<> compaction_manager::do_submit_major_compaction(column_family* cf) {
     if (_stopped) {
         return make_ready_future<>();
     }
@@ -259,10 +259,11 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::run_resharding_job(column_family* cf, std::function<future<>()> job) {
+future<> compaction_manager::do_run_resharding_job(column_family* cf, std::function<future<>()> job) {
     if (_stopped) {
         return make_ready_future<>();
     }
+
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     _tasks.push_back(task);
@@ -304,7 +305,8 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
     });
 }
 
-compaction_manager::compaction_manager() = default;
+compaction_manager::compaction_manager(seastar::scheduling_group sg)
+    : _scheduling_group(sg) {}
 
 compaction_manager::~compaction_manager() {
     // Assert that compaction manager was explicitly stopped, if started.
@@ -425,7 +427,7 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f) {
     return retry;
 }
 
-void compaction_manager::submit(column_family* cf) {
+void compaction_manager::do_submit(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     _tasks.push_back(task);
@@ -494,7 +496,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     return false;
 }
 
-future<> compaction_manager::perform_cleanup(column_family* cf) {
+future<> compaction_manager::do_perform_cleanup(column_family* cf) {
     if (check_for_cleanup(cf)) {
         throw std::runtime_error(sprint("cleanup request failed: there is an ongoing cleanup on %s.%s",
             cf->schema()->ks_name(), cf->schema()->cf_name()));
