@@ -1257,6 +1257,25 @@ void column_family::rebuild_statistics() {
 
 void
 column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                                    const std::vector<sstables::shared_sstable>& old_sstables) {
+    auto current_sstables = _sstables;
+    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
+
+    std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
+
+    // this might seem dangerous, but "move" here just avoids constness,
+    // making the two ranges compatible when compiling with boost 1.55.
+    // Noone is actually moving anything...
+    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables->all()))) {
+        if (!s.count(tab)) {
+            new_sstable_list.insert(tab);
+        }
+    }
+    _sstables = make_lw_shared(std::move(new_sstable_list));
+}
+
+void
+column_family::on_compaction_completion(const std::vector<sstables::shared_sstable>& new_sstables,
                                     const std::vector<sstables::shared_sstable>& sstables_to_remove) {
     // Build a new list of _sstables: We remove from the existing list the
     // tables we compacted (by now, there might be more sstables flushed
@@ -1268,34 +1287,19 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // to avoid a new compaction from ignoring data in the old sstables
     // if the deletion fails (note deletion of shared sstables can take
     // unbounded time, because all shards must agree on the deletion).
-    auto current_sstables = _sstables;
-    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
+
     auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
 
+    // rebuilding _sstables_compacted_but_not_deleted first to make the entire rebuild operation exception safe.
+    new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), sstables_to_remove.begin(), sstables_to_remove.end());
 
-    std::unordered_set<sstables::shared_sstable> s(
-           sstables_to_remove.begin(), sstables_to_remove.end());
+    rebuild_sstable_list(new_sstables, sstables_to_remove);
 
-    // First, add the new sstables.
-
-    // this might seem dangerous, but "move" here just avoids constness,
-    // making the two ranges compatible when compiling with boost 1.55.
-    // Noone is actually moving anything...
-    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables->all()))) {
-        // Checks if oldtab is a sstable not being compacted.
-        if (!s.count(tab)) {
-            new_sstable_list.insert(tab);
-        } else {
-            new_compacted_but_not_deleted.push_back(tab);
-        }
-    }
-    _sstables = make_lw_shared(std::move(new_sstable_list));
     _sstables_compacted_but_not_deleted = std::move(new_compacted_but_not_deleted);
 
     rebuild_statistics();
 
-    // Second, delete the old sstables.  This is done in the background, so we can
-    // consider this compaction completed.
+    // This is done in the background, so we can consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
         return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
@@ -1355,7 +1359,7 @@ void column_family::replace_ancestors_needed_rewrite(std::vector<sstables::share
             _sstables_need_rewrite.erase(it);
         }
     }
-    rebuild_sstable_list(new_sstables, old_sstables);
+    on_compaction_completion(new_sstables, old_sstables);
 }
 
 void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
@@ -1368,7 +1372,7 @@ void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t>
             _sstables_need_rewrite.erase(it);
         }
     }
-    rebuild_sstable_list({}, old_sstables);
+    on_compaction_completion({}, old_sstables);
 }
 
 future<>
@@ -1391,7 +1395,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         return sstables::compact_sstables(std::move(descriptor), *this, create_sstable,
                 cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact = std::move(sstables_to_compact)] (auto info) {
             _compaction_strategy.notify_completion(sstables_to_compact, info.new_sstables);
-            this->rebuild_sstable_list(info.new_sstables, sstables_to_compact);
+            this->on_compaction_completion(info.new_sstables, sstables_to_compact);
             return info;
         });
     }).then([this] (auto info) {
