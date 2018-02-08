@@ -1104,7 +1104,7 @@ private:
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
-    concrete_execution_stage<future<lw_shared_ptr<query::result>>, column_family*, schema_ptr, const query::read_command&, query::result_request,
+    concrete_execution_stage<future<lw_shared_ptr<query::result>>, column_family*, schema_ptr, const query::read_command&, query::result_options,
             const dht::partition_range_vector&, tracing::trace_state_ptr, query::result_memory_limiter&, uint64_t, db::timeout_clock::time_point> _data_query_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
