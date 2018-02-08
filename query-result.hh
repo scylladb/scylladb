@@ -21,11 +21,9 @@
 
 #pragma once
 
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-#include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
+#include "digest_algorithm.hh"
 #include "query-request.hh"
-#include "md5_hasher.hh"
 #include <experimental/optional>
 #include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
@@ -268,9 +266,21 @@ enum class result_request {
     result_and_digest,
 };
 
+struct result_options {
+    result_request request = result_request::only_result;
+    digest_algorithm digest_algo = query::digest_algorithm::none;
+
+    static result_options only_result() {
+        return result_options{};
+    }
+
+    static result_options only_digest(digest_algorithm da) {
+        return {result_request::only_digest, da};
+    }
+};
+
 class result_digest {
 public:
-    static_assert(16 == CryptoPP::Weak::MD5::DIGESTSIZE, "MD5 digest size is all wrong");
     using type = std::array<uint8_t, 16>;
 private:
     type _digest;

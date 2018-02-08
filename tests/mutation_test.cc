@@ -26,6 +26,7 @@
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include "mutation_query.hh"
 #include "md5_hasher.hh"
+#include "xx_hasher.hh"
 
 #include "core/sstring.hh"
 #include "core/do_with.hh"
@@ -958,23 +959,27 @@ SEASTAR_TEST_CASE(test_mutation_equality) {
 SEASTAR_TEST_CASE(test_mutation_hash) {
     return seastar::async([] {
         for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
-            auto get_hash = [] (const mutation& m) {
-                md5_hasher h;
-                feed_hash(h, m);
-                return h.finalize();
+            auto test_with_hasher = [&] (auto hasher) {
+                auto get_hash = [&] (const mutation &m) {
+                    auto h = hasher;
+                    feed_hash(h, m);
+                    return h.finalize();
+                };
+                auto h1 = get_hash(m1);
+                auto h2 = get_hash(m2);
+                if (eq) {
+                    if (h1 != h2) {
+                        BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                    }
+                } else {
+                    // We're using a strong hasher, collision should be unlikely
+                    if (h1 == h2) {
+                        BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                    }
+                }
             };
-            auto h1 = get_hash(m1);
-            auto h2 = get_hash(m2);
-            if (eq) {
-                if (h1 != h2) {
-                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
-                }
-            } else {
-                // We're using a strong hasher, collision should be unlikely
-                if (h1 == h2) {
-                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
-                }
-            }
+            test_with_hasher(md5_hasher());
+            test_with_hasher(xx_hasher());
         });
     });
 }
@@ -990,8 +995,8 @@ SEASTAR_TEST_CASE(test_query_digest) {
         auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
             auto ps1 = partition_slice_builder(*m1.schema()).build();
             auto ps2 = partition_slice_builder(*m2.schema()).build();
-            auto digest1 = *m1.query(ps1, query::result_request::only_digest).digest();
-            auto digest2 = *m2.query(ps2, query::result_request::only_digest).digest();
+            auto digest1 = *m1.query(ps1, query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
+            auto digest2 = *m2.query(ps2, query::result_options::only_digest(query::digest_algorithm::xxHash)).digest();
             if (digest1 != digest2) {
                 BOOST_FAIL(sprint("Digest should be the same for %s and %s", m1, m2));
             }
@@ -1176,7 +1181,8 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
                     .without_clustering_key_columns()
                     .without_partition_key_columns()
                     .build();
-            return query::result_set::from_raw_result(s, slice, m.query(slice, query::result_request::result_and_digest, t));
+            auto opts = query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash};
+            return query::result_set::from_raw_result(s, slice, m.query(slice, opts, t));
         };
 
         {

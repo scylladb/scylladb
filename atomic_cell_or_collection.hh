@@ -59,14 +59,6 @@ public:
     bool operator==(const atomic_cell_or_collection& other) const {
         return _data == other._data;
     }
-    template<typename Hasher>
-    void feed_hash(Hasher& h, const column_definition& def) const {
-        if (def.is_atomic()) {
-            ::feed_hash(h, as_atomic_cell(), def);
-        } else {
-            ::feed_hash(h, as_collection_mutation(), def);
-        }
-    }
     size_t external_memory_usage() const {
         return _data.external_memory_usage();
     }

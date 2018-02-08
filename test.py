@@ -169,7 +169,7 @@ if __name__ == "__main__":
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
                             '-c1 -m1G --count 4000000 --standard-object-size 128'.split()))
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
-                            '-c1 -m1G'.split()))
+                            '-c1 -m2G'.split()))
         test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
         test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split()))
     if 'debug' in modes_to_run:

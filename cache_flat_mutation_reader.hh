@@ -161,7 +161,7 @@ future<> cache_flat_mutation_reader::process_static_row(db::timeout_clock::time_
     if (_snp->static_row_continuous()) {
         _read_context->cache().on_row_hit();
         static_row sr = _lsa_manager.run_in_read_section([this] {
-            return _snp->static_row();
+            return _snp->static_row(_read_context->digest_requested());
         });
         if (!sr.empty()) {
             push_mutation_fragment(mutation_fragment(std::move(sr)));
@@ -380,6 +380,9 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         mutation_partition& mp = _snp->version()->partition();
         rows_entry::compare less(*_schema);
 
+        if (_read_context->digest_requested()) {
+            cr.cells().prepare_hash(*_schema, column_kind::regular_column);
+        }
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(cr.key(), cr.tomb(), cr.marker(), cr.cells()));
         new_entry->set_continuous(false);
@@ -528,7 +531,7 @@ inline
 void cache_flat_mutation_reader::add_to_buffer(const partition_snapshot_row_cursor& row) {
     if (!row.dummy()) {
         _read_context->cache().on_row_hit();
-        add_clustering_row_to_buffer(row.row());
+        add_clustering_row_to_buffer(row.row(_read_context->digest_requested()));
     }
 }
 
@@ -574,6 +577,9 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const static_row& sr) {
         clogger.trace("csm {}: populate({})", this, sr);
         _read_context->cache().on_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
+            if (_read_context->digest_requested()) {
+                sr.cells().prepare_hash(*_schema, column_kind::static_column);
+            }
             _snp->version()->partition().static_row().apply(*_schema, column_kind::static_column, sr.cells());
         });
     } else {

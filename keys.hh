@@ -146,13 +146,6 @@ public:
     auto components(const schema& s) const {
         return components();
     }
-
-    template<typename Hasher>
-    void feed_hash(Hasher& h, const schema& s) const {
-        for (bytes_view v : components(s)) {
-            ::feed_hash(h, v);
-        }
-    }
 };
 
 template <typename TopLevel, typename TopLevelView>
@@ -325,11 +318,6 @@ public:
         auto it = begin(s);
         std::advance(it, idx);
         return *it;
-    }
-
-    template<typename Hasher>
-    void feed_hash(Hasher& h, const schema& s) const {
-        view().feed_hash(h, s);
     }
 
     // Returns the number of components of this compound.
@@ -777,3 +765,38 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
 
+template<>
+struct appending_hash<partition_key_view> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const partition_key& pk, const schema& s) const {
+        for (bytes_view v : pk.components(s)) {
+            ::feed_hash(h, v);
+        }
+    }
+};
+
+template<>
+struct appending_hash<partition_key> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const partition_key& pk, const schema& s) const {
+        appending_hash<partition_key_view>()(h, pk.view(), s);
+    }
+};
+
+template<>
+struct appending_hash<clustering_key_prefix_view> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const clustering_key_prefix_view& ck, const schema& s) const {
+        for (bytes_view v : ck.components(s)) {
+            ::feed_hash(h, v);
+        }
+    }
+};
+
+template<>
+struct appending_hash<clustering_key_prefix> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const clustering_key_prefix& ck, const schema& s) const {
+        appending_hash<clustering_key_prefix_view>()(h, ck.view(), s);
+    }
+};

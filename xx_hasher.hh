@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
  */
 
 /*
@@ -21,31 +21,45 @@
 
 #pragma once
 
-#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
-
-#include <cryptopp/md5.h>
-#include "hashing.hh"
 #include "bytes.hh"
+#include "utils/serialization.hh"
 
-class md5_hasher {
-    CryptoPP::Weak::MD5 hash{};
+#include <xxHash/xxhash.h>
+#include <array>
+
+class xx_hasher {
+    static constexpr size_t digest_size = 16;
+    XXH64_state_t _state;
+
 public:
-    static constexpr size_t size = CryptoPP::Weak::MD5::DIGESTSIZE;
+    xx_hasher() noexcept {
+        XXH64_reset(&_state, 0);
+    }
 
     void update(const char* ptr, size_t length) {
-        static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
-        hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
+        XXH64_update(&_state, ptr, length);
     }
 
     bytes finalize() {
-        bytes digest{bytes::initialized_later(), size};
-        hash.Final(reinterpret_cast<unsigned char*>(digest.begin()));
+        bytes digest{bytes::initialized_later(), digest_size};
+        serialize_to(digest.begin());
         return digest;
     }
 
-    std::array<uint8_t, size> finalize_array() {
-        std::array<uint8_t, size> array;
-        hash.Final(reinterpret_cast<unsigned char*>(array.data()));
-        return array;
+    std::array<uint8_t, digest_size> finalize_array() {
+        std::array<uint8_t, digest_size> digest;
+        serialize_to(digest.begin());
+        return digest;
+    }
+
+    uint64_t finalize_uint64() {
+        return XXH64_digest(&_state);
+    }
+
+private:
+    template<typename OutIterator>
+    void serialize_to(OutIterator&& out) {
+        serialize_int64(out, 0);
+        serialize_int64(out, finalize_uint64());
     }
 };

@@ -495,3 +495,67 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
         } while (injector.failed());
     });
 }
+
+SEASTAR_TEST_CASE(test_hash_is_cached) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("v", bytes_type, column_kind::regular_column)
+                .build();
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        auto m = make_unique_mutation(s);
+        set_column(m, "v");
+        mt->apply(m);
+
+        {
+            auto rd = mt->make_flat_reader(s);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(!row.cells().cell_hash_for(0));
+        }
+
+        {
+            auto slice = s->full_slice();
+            slice.options.set<query::partition_slice::option::with_digest>();
+            auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(row.cells().cell_hash_for(0));
+        }
+
+        {
+            auto rd = mt->make_flat_reader(s);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(row.cells().cell_hash_for(0));
+        }
+
+        set_column(m, "v");
+        mt->apply(m);
+
+        {
+            auto rd = mt->make_flat_reader(s);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(!row.cells().cell_hash_for(0));
+        }
+
+        {
+            auto slice = s->full_slice();
+            slice.options.set<query::partition_slice::option::with_digest>();
+            auto rd = mt->make_flat_reader(s, query::full_partition_range, slice);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(row.cells().cell_hash_for(0));
+        }
+
+        {
+            auto rd = mt->make_flat_reader(s);
+            rd().get0()->as_partition_start();
+            clustering_row row = rd().get0()->as_clustering_row();
+            BOOST_REQUIRE(row.cells().cell_hash_for(0));
+        }
+    });
+}

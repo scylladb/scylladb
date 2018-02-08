@@ -191,6 +191,7 @@ public:
     row_cache::phase_type phase() const { return _phase; }
     const dht::decorated_key& key() const { return *_key; }
     void on_underlying_created() { ++_underlying_created; }
+    bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
 private:
     future<> ensure_underlying(db::timeout_clock::time_point timeout) {
         if (_underlying_snapshot) {

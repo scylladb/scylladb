@@ -283,7 +283,7 @@ public:
     logalloc::region& region() const { return _region; }
 
     tombstone partition_tombstone() const;
-    ::static_row static_row() const;
+    ::static_row static_row(bool digest_requested) const;
     bool static_row_continuous() const;
     mutation_partition squashed() const;
     // Returns range tombstones overlapping with [start, end)

@@ -26,7 +26,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "digest_algorithm.hh"
-
+#include "digester.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
 #include "idl/query.dist.hh"
@@ -48,8 +48,8 @@ class result::partition_writer {
     const clustering_row_ranges& _ranges;
     ser::query_result__partitions<bytes_ostream>& _pw;
     ser::vector_position _pos;
-    md5_hasher& _digest;
-    md5_hasher _digest_pos;
+    digester& _digest;
+    digester _digest_pos;
     uint32_t& _row_count;
     uint32_t& _partition_count;
     api::timestamp_type& _last_modified;
@@ -61,7 +61,7 @@ public:
         ser::query_result__partitions<bytes_ostream>& pw,
         ser::vector_position pos,
         ser::after_qr_partition__key<bytes_ostream> w,
-        md5_hasher& digest,
+        digester& digest,
         uint32_t& row_count,
         uint32_t& partition_count,
         api::timestamp_type& last_modified)
@@ -104,7 +104,7 @@ public:
     const partition_slice& slice() const {
         return _slice;
     }
-    md5_hasher& digest() {
+    digester& digest() {
         return _digest;
     }
     uint32_t& row_count() {
@@ -121,7 +121,6 @@ public:
 
 class result::builder {
     bytes_ostream _out;
-    md5_hasher _digest;
     const partition_slice& _slice;
     ser::query_result__partitions<bytes_ostream> _w;
     result_request _request;
@@ -129,12 +128,14 @@ class result::builder {
     uint32_t _partition_count = 0;
     api::timestamp_type _last_modified = api::missing_timestamp;
     short_read _short_read;
+    digester _digest;
     result_memory_accounter _memory_accounter;
 public:
-    builder(const partition_slice& slice, result_request request, result_memory_accounter memory_accounter)
+    builder(const partition_slice& slice, result_options options, result_memory_accounter memory_accounter)
         : _slice(slice)
         , _w(ser::writer_of_query_result<bytes_ostream>(_out).start_partitions())
-        , _request(request)
+        , _request(options.request)
+        , _digest(digester(options.digest_algo))
         , _memory_accounter(std::move(memory_accounter))
     { }
     builder(builder&&) = delete; // _out is captured by reference
@@ -168,7 +169,7 @@ public:
             }
         }();
         if (_request != result_request::only_result) {
-            key.feed_hash(_digest, s);
+            _digest.feed_hash(key, s);
         }
         return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count,
                                 _partition_count, _last_modified);

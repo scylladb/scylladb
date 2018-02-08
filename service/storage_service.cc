@@ -92,6 +92,7 @@ static const sstring CORRECT_COUNTER_ORDER_FEATURE = "CORRECT_COUNTER_ORDER";
 static const sstring SCHEMA_TABLES_V3 = "SCHEMA_TABLES_V3";
 static const sstring CORRECT_NON_COMPOUND_RANGE_TOMBSTONES = "CORRECT_NON_COMPOUND_RANGE_TOMBSTONES";
 static const sstring WRITE_FAILURE_REPLY_FEATURE = "WRITE_FAILURE_REPLY";
+static const sstring XXHASH_FEATURE = "XXHASH";
 
 distributed<storage_service> _the_storage_service;
 
@@ -139,6 +140,7 @@ sstring storage_service::get_config_supported_features() {
         SCHEMA_TABLES_V3,
         CORRECT_NON_COMPOUND_RANGE_TOMBSTONES,
         WRITE_FAILURE_REPLY_FEATURE,
+        XXHASH_FEATURE,
     };
     if (service::get_local_storage_service()._db.local().get_config().experimental()) {
         features.push_back(MATERIALIZED_VIEWS_FEATURE);
@@ -351,6 +353,7 @@ void storage_service::register_features() {
     _schema_tables_v3 = gms::feature(SCHEMA_TABLES_V3);
     _correct_non_compound_range_tombstones = gms::feature(CORRECT_NON_COMPOUND_RANGE_TOMBSTONES);
     _write_failure_reply_feature = gms::feature(WRITE_FAILURE_REPLY_FEATURE);
+    _xxhash_feature = gms::feature(XXHASH_FEATURE);
 
     if (_db.local().get_config().experimental()) {
         _materialized_views_feature = gms::feature(MATERIALIZED_VIEWS_FEATURE);

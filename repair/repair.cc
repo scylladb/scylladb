@@ -22,6 +22,7 @@
 #include "repair.hh"
 #include "range_split.hh"
 
+#include "atomic_cell_hash.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
@@ -467,17 +468,17 @@ private:
     void consume_cell(const column_definition& col, const atomic_cell_or_collection& cell) {
         feed_hash(_hasher, col.name());
         feed_hash(_hasher, col.type->name());
-        cell.feed_hash(_hasher, col);
+        feed_hash(_hasher, cell, col);
     }
 
     void consume_range_tombstone_start(const range_tombstone& rt) {
-        rt.start.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.start, _schema);
         feed_hash(_hasher, rt.start_kind);
         feed_hash(_hasher, rt.tomb);
     }
 
     void consume_range_tombstone_end(const range_tombstone& rt) {
-        rt.end.feed_hash(_hasher, _schema);
+        feed_hash(_hasher, rt.end, _schema);
         feed_hash(_hasher, rt.end_kind);
     }
 
@@ -526,7 +527,7 @@ public:
         : _schema(s), _cmp(s), _rt_list(s) { }
 
     void consume_new_partition(const dht::decorated_key& dk) {
-        dk.key().feed_hash(_hasher, _schema);
+        feed_hash(_hasher, dk.key(), _schema);
     }
 
     stop_iteration consume(tombstone t) {
@@ -545,7 +546,7 @@ public:
     stop_iteration consume(const clustering_row& cr) {
         consume_range_tombstones_until(cr);
 
-        cr.key().feed_hash(_hasher, _schema);
+        feed_hash(_hasher, cr.key(), _schema);
         feed_hash(_hasher, cr.tomb());
         feed_hash(_hasher, cr.marker());
         cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {

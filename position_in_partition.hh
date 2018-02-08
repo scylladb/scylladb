@@ -278,7 +278,7 @@ public:
         ::feed_hash(hasher, _bound_weight);
         if (_ck) {
             ::feed_hash(hasher, true);
-            _ck->feed_hash(hasher, s);
+            ::feed_hash(hasher, *_ck, s);
         } else {
             ::feed_hash(hasher, false);
         }
