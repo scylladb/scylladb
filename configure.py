@@ -107,9 +107,9 @@ def try_compile_and_link(compiler, source = '', flags = []):
             if os.path.exists(ofile):
                 os.unlink(ofile)
 
-def warning_supported(warning, compiler):
+def flag_supported(flag, compiler):
     # gcc ignores -Wno-x even if it is not supported
-    adjusted = re.sub('^-Wno-', '-W', warning)
+    adjusted = re.sub('^-Wno-', '-W', flag)
     return try_compile(flags = ['-Werror', adjusted], compiler = compiler)
 
 def debug_flag(compiler):
@@ -771,7 +771,7 @@ warnings = [
 
 warnings = [w
             for w in warnings
-            if warning_supported(warning = w, compiler = args.cxx)]
+            if flag_supported(flag = w, compiler = args.cxx)]
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
