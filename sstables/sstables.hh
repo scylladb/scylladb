@@ -52,7 +52,6 @@
 #include "query-request.hh"
 #include "compound_compat.hh"
 #include "disk-error-handler.hh"
-#include "atomic_deletion.hh"
 #include "sstables/shared_index_lists.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
@@ -811,19 +810,8 @@ future<> await_background_jobs_on_all_shards();
 // shared among shard, so actual on-disk deletion of an sstable is deferred
 // until all shards agree it can be deleted.
 //
-// When shutting down, we will not be able to complete some deletions.
-// In that case, an atomic_deletion_cancelled exception is returned instead.
-//
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts);
-future<> delete_atomically(std::vector<sstable_to_delete> ssts);
-
-// Cancel any deletions scheduled by delete_atomically() and make their
-// futures complete (with an atomic_deletion_cancelled exception).
-void cancel_prior_atomic_deletions();
-
-// Like cancel_prior_atomic_deletions(), but will also cause any later deletion attempts to fail.
-void cancel_atomic_deletions();
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;

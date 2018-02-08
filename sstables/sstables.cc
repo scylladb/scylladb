@@ -3046,26 +3046,11 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
-std::ostream&
-operator<<(std::ostream& os, const sstable_to_delete& std) {
-    return os << std.name << "(" << (std.shared ? "shared" : "unshared") << ")";
-}
-
 future<>
 delete_sstables(std::vector<sstring> tocs) {
     // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
     return parallel_for_each(tocs, [] (sstring name) {
         return remove_by_toc_name(name);
-    });
-}
-
-static thread_local atomic_deletion_manager g_atomic_deletion_manager(smp::count, delete_sstables);
-
-future<>
-delete_atomically(std::vector<sstable_to_delete> ssts) {
-    auto shard = engine().cpu_id();
-    return smp::submit_to(0, [=] {
-        return g_atomic_deletion_manager.delete_atomically(ssts, shard);
     });
 }
 
@@ -3075,23 +3060,6 @@ delete_atomically(std::vector<shared_sstable> ssts) {
             | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
 
     return delete_sstables(std::move(sstables_to_delete_atomically));
-}
-
-void cancel_prior_atomic_deletions() {
-    g_atomic_deletion_manager.cancel_prior_atomic_deletions();
-}
-
-void cancel_atomic_deletions() {
-    g_atomic_deletion_manager.cancel_atomic_deletions();
-}
-
-atomic_deletion_cancelled::atomic_deletion_cancelled(std::vector<sstring> names)
-        : _msg(sprint("atomic deletions cancelled; not deleting %s", names)) {
-}
-
-const char*
-atomic_deletion_cancelled::what() const noexcept {
-    return _msg.c_str();
 }
 
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;

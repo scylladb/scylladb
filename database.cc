@@ -1335,12 +1335,6 @@ column_family::on_compaction_completion(const std::vector<sstables::shared_sstab
                 return make_exception_future<>(eptr);
             }
             return make_ready_future<>();
-        }).handle_exception([] (std::exception_ptr e) {
-            try {
-                std::rethrow_exception(e);
-            } catch (sstables::atomic_deletion_cancelled& adc) {
-                dblog.debug("Failed to delete sstables after compaction: {}", adc);
-            }
         }).then([this] {
             // refresh underlying data source in row cache to prevent it from holding reference
             // to sstables files which were previously deleted.
