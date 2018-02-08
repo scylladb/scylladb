@@ -492,8 +492,7 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
     ++_stats.reads;
 
     assert(_restrictions->uses_secondary_indexing());
-
-    return find_index_partition_ranges(proxy, state, options).then([&, this] (dht::partition_range_vector partition_ranges) {
+    return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges) {
         auto command = ::make_lw_shared<query::read_command>(
                 _schema->id(),
                 _schema->version(),
