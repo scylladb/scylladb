@@ -107,10 +107,11 @@ def try_compile_and_link(compiler, source = '', flags = []):
             if os.path.exists(ofile):
                 os.unlink(ofile)
 
-def warning_supported(warning, compiler):
+def flag_supported(flag, compiler):
     # gcc ignores -Wno-x even if it is not supported
-    adjusted = re.sub('^-Wno-', '-W', warning)
-    return try_compile(flags = ['-Werror', adjusted], compiler = compiler)
+    adjusted = re.sub('^-Wno-', '-W', flag)
+    split = adjusted.split(' ')
+    return try_compile(flags = ['-Werror'] + split, compiler = compiler)
 
 def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
@@ -192,7 +193,7 @@ modes = {
     'release': {
         'sanitize': '',
         'sanitize_libs': '',
-        'opt': '-O2',
+        'opt': '-O3',
         'libs': '',
     },
 }
@@ -771,9 +772,17 @@ warnings = [
 
 warnings = [w
             for w in warnings
-            if warning_supported(warning = w, compiler = args.cxx)]
+            if flag_supported(flag = w, compiler = args.cxx)]
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
+
+optimization_flags = [
+    '--param inline-unit-growth=300',
+]
+optimization_flags = [o
+                      for o in optimization_flags
+                      if flag_supported(flag = o, compiler = args.cxx)]
+modes['release']['opt'] += ' ' + ' '.join(optimization_flags)
 
 gold_linker_flag = gold_supported(compiler = args.cxx)
 
@@ -876,7 +885,7 @@ if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags),
-                  '--c++-dialect=gnu++1z',
+                  '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']),
                  ]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
