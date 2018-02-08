@@ -54,7 +54,6 @@
 #include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <regex>
 #include <core/align.hh>
-#include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
 #include "counters.hh"
 #include "binary_search.hh"
@@ -108,7 +107,7 @@ future<file> new_sstable_component_file(const io_error_handler& error_handler, s
     });
 }
 
-static utils::phased_barrier& background_jobs() {
+utils::phased_barrier& background_jobs() {
     static thread_local utils::phased_barrier gate;
     return gate;
 }
@@ -2794,6 +2793,9 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
     return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
+future<>
+delete_sstables(std::vector<sstring> tocs);
+
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
@@ -2816,12 +2818,10 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
+            delete_sstables({filename(component_type::TOC)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
-                            } catch (atomic_deletion_cancelled&) {
-                                sstlog.debug("Exception when deleting sstable file: {}", eptr);
                             } catch (...) {
                                 sstlog.warn("Exception when deleting sstable file: {}", eptr);
                             }
@@ -3071,11 +3071,10 @@ delete_atomically(std::vector<sstable_to_delete> ssts) {
 
 future<>
 delete_atomically(std::vector<shared_sstable> ssts) {
-    std::vector<sstable_to_delete> sstables_to_delete_atomically;
-    for (auto&& sst : ssts) {
-        sstables_to_delete_atomically.push_back({sst->toc_filename(), sst->is_shared()});
-    }
-    return delete_atomically(std::move(sstables_to_delete_atomically));
+    auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
+            | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
+
+    return delete_sstables(std::move(sstables_to_delete_atomically));
 }
 
 void cancel_prior_atomic_deletions() {

@@ -760,7 +760,6 @@ column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring di
     auto sst = sstables::make_sstable(_schema, dir, generation, v, f);
     if (!belongs_to_current_shard(info.owners)) {
         dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
-        sst->mark_for_deletion();
         return make_ready_future<sstables::shared_sstable>();
     }
     return sst->load(std::move(info)).then([sst] () mutable {
@@ -1288,8 +1287,20 @@ column_family::on_compaction_completion(const std::vector<sstables::shared_sstab
     // if the deletion fails (note deletion of shared sstables can take
     // unbounded time, because all shards must agree on the deletion).
 
-    auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
+    // make sure all old sstables belong *ONLY* to current shard before we proceed to their deletion.
+    for (auto& sst : sstables_to_remove) {
+        auto shards = sst->get_shards_for_this_sstable();
+        if (shards.size() > 1) {
+            throw std::runtime_error(sprint("A regular compaction for %s.%s INCORRECTLY used shared sstable %s. Only resharding work with those!",
+                _schema->ks_name(), _schema->cf_name(), sst->toc_filename()));
+        }
+        if (!belongs_to_current_shard(shards)) {
+            throw std::runtime_error(sprint("A regular compaction for %s.%s INCORRECTLY used sstable %s which doesn't belong to this shard!",
+                _schema->ks_name(), _schema->cf_name(), sst->toc_filename()));
+        }
+    }
 
+    auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
     // rebuilding _sstables_compacted_but_not_deleted first to make the entire rebuild operation exception safe.
     new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), sstables_to_remove.begin(), sstables_to_remove.end());
 
@@ -1359,7 +1370,8 @@ void column_family::replace_ancestors_needed_rewrite(std::vector<sstables::share
             _sstables_need_rewrite.erase(it);
         }
     }
-    on_compaction_completion(new_sstables, old_sstables);
+    rebuild_sstable_list(new_sstables, old_sstables);
+    rebuild_statistics();
 }
 
 void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
@@ -1372,7 +1384,8 @@ void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t>
             _sstables_need_rewrite.erase(it);
         }
     }
-    on_compaction_completion({}, old_sstables);
+    rebuild_sstable_list({}, old_sstables);
+    rebuild_statistics();
 }
 
 future<>
@@ -1835,6 +1848,15 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                 cf->replace_ancestors_needed_rewrite(sstables);
                             });
                         }
+                    }).then([sstables] {
+                        // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
+                        sstables::delete_atomically(std::move(sstables)).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                            try {
+                                std::rethrow_exception(eptr);
+                            } catch (...) {
+                                dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
+                            }
+                        });
                     });
                 });
             }).get();

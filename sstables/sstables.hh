@@ -57,6 +57,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "flat_mutation_reader.hh"
+#include "utils/phased_barrier.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -935,5 +936,7 @@ struct sstable_open_info {
 };
 
 future<> init_metrics();
+
+utils::phased_barrier& background_jobs();
 
 }
