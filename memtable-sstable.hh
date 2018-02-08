@@ -39,8 +39,7 @@ write_memtable_to_sstable(memtable& mt,
         sstables::write_monitor& mon,
         bool backup = false,
         const io_priority_class& pc = default_priority_class(),
-        bool leave_unsealed = false,
-        seastar::thread_scheduling_group* tsg = nullptr);
+        bool leave_unsealed = false);
 
 future<>
 write_memtable_to_sstable(memtable& mt,

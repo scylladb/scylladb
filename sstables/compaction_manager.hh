@@ -28,6 +28,7 @@
 #include "core/shared_future.hh"
 #include "core/rwlock.hh"
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/scheduling.hh>
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include <vector>
@@ -137,8 +138,14 @@ private:
     void postpone_compaction_for_column_family(column_family* cf);
 
     compaction_backlog_manager _backlog_manager;
+    seastar::scheduling_group _scheduling_group;
+
+    void do_submit(column_family* cf);
+    future<> do_perform_cleanup(column_family* cf);
+    future<> do_submit_major_compaction(column_family* cf);
+    future<> do_run_resharding_job(column_family* cf, std::function<future<>()> job);
 public:
-    compaction_manager();
+    compaction_manager(seastar::scheduling_group sg = default_scheduling_group());
     ~compaction_manager();
 
     void register_metrics();
@@ -152,13 +159,25 @@ public:
     bool stopped() const { return _stopped; }
 
     // Submit a column family to be compacted.
-    void submit(column_family* cf);
+    void submit(column_family* cf) {
+        with_scheduling_group(_scheduling_group, [this, cf] {
+            return do_submit(cf);
+        });
+    }
 
     // Submit a column family to be cleaned up and wait for its termination.
-    future<> perform_cleanup(column_family* cf);
+    future<> perform_cleanup(column_family* cf) {
+        return with_scheduling_group(_scheduling_group, [this, cf] {
+            return do_perform_cleanup(cf);
+        });
+    }
 
     // Submit a column family for major compaction.
-    future<> submit_major_compaction(column_family* cf);
+    future<> submit_major_compaction(column_family* cf) {
+        return with_scheduling_group(_scheduling_group, [this, cf] {
+            return do_submit_major_compaction(cf);
+        });
+    }
 
     // Run a resharding job for a given column family.
     // it completes when future returned by job is ready or returns immediately
@@ -168,7 +187,11 @@ public:
     // of sstables that belong to different shards for this column family using
     // sstables::reshard_sstables(), and in the end, it will forward unshared
     // sstables created by the process to their owner shards.
-    future<> run_resharding_job(column_family* cf, std::function<future<>()> job);
+    future<> run_resharding_job(column_family* cf, std::function<future<>()> job) {
+        return with_scheduling_group(_scheduling_group, [this, cf, job = std::move(job)] {
+            return do_run_resharding_job(cf, std::move(job));
+        });
+    }
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.

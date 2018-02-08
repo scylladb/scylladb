@@ -59,18 +59,14 @@ void memtable::clear() noexcept {
 
 future<> memtable::clear_gently() noexcept {
     return futurize_apply([this] {
-        static thread_local seastar::thread_scheduling_group scheduling_group(std::chrono::milliseconds(1), 0.2);
-        auto attr = seastar::thread_attributes();
-        attr.scheduling_group = &scheduling_group;
-        auto t = std::make_unique<seastar::thread>(attr, [this] {
+        auto t = std::make_unique<seastar::thread>([this] {
             auto& alloc = allocator();
 
             auto p = std::move(partitions);
             while (!p.empty()) {
-                auto batch_size = std::min<size_t>(p.size(), 32);
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
-                    while (batch_size--) {
+                    while (!p.empty() && !need_preempt()) {
                         p.erase_and_dispose(p.begin(), [&] (auto e) {
                             alloc.destroy(e);
                         });

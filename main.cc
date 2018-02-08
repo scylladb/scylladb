@@ -471,7 +471,21 @@ int main(int ac, char** av) {
             init_storage_service(db, auth_service);
             supervisor::notify("starting per-shard database core");
             // Note: changed from using a move here, because we want the config object intact.
-            db.start(std::ref(*cfg)).get();
+            database_config dbcfg;
+            auto make_sched_group = [&] (sstring name, unsigned shares) {
+                if (cfg->cpu_scheduler()) {
+                    return seastar::create_scheduling_group(name, shares).get0();
+                } else {
+                    return seastar::scheduling_group();
+                }
+            };
+            dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
+            dbcfg.streaming_scheduling_group = make_sched_group("streaming", 200);
+            dbcfg.query_scheduling_group = make_sched_group("query", 1000);
+            dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
+            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
+            db.start(std::ref(*cfg), dbcfg).get();
             engine().at_exit([&db, &return_value] {
                 // A shared sstable must be compacted by all shards before it can be deleted.
                 // Since we're stoping, that's not going to happen.  Cancel those pending

@@ -309,7 +309,7 @@ public:
             ss.start(std::ref(*db), std::ref(*auth_service)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            db->start(std::move(*cfg)).get();
+            db->start(std::move(*cfg), database_config()).get();
             auto stop_db = defer([db] {
                 db->stop().get();
                 sstables::cancel_prior_atomic_deletions();

@@ -45,8 +45,6 @@ logging::logger clogger("cache");
 using namespace std::chrono_literals;
 using namespace cache;
 
-thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
-
 flat_mutation_reader
 row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, const dht::partition_range& pr) {
     ctx.on_underlying_created();
@@ -947,9 +945,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
         STAP_PROBE(scylla, row_cache_update_end);
     });
 
-    auto attr = seastar::thread_attributes();
-    attr.scheduling_group = &_update_thread_scheduling_group;
-    return seastar::async(std::move(attr), [this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
+    return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] {
             invalidate_sync(m);
@@ -959,14 +955,12 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
             with_allocator(_tracker.allocator(), [&] () {
-                unsigned quota = 30;
                 auto cmp = cache_entry::compare(_schema);
                 {
                     _update_section(_tracker.region(), [&] {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
-                        unsigned quota_before = quota;
                         // FIXME: we should really be checking should_yield() here instead of
-                        // need_preempt() + quota. However, should_yield() is currently quite
+                        // need_preempt(). However, should_yield() is currently quite
                         // expensive and we need to amortize it somehow.
                         do {
                           auto i = m.partitions.begin();
@@ -982,11 +976,10 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             real_dirty_acc.unpin_memory(size_entry);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
-                            --quota;
                            }
                           });
                           STAP_PROBE(scylla, row_cache_update_partition_end);
-                        } while (!m.partitions.empty() && quota && !need_preempt());
+                        } while (!m.partitions.empty() && !need_preempt());
                         with_allocator(standard_allocator(), [&] {
                             if (m.partitions.empty()) {
                                 _prev_snapshot_pos = {};
@@ -994,11 +987,8 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
                             }
                         });
-                        STAP_PROBE1(scylla, row_cache_update_one_batch_end, quota_before - quota);
+                        STAP_PROBE(scylla, row_cache_update_one_batch_end);
                     });
-                    if (quota == 0 && seastar::thread::should_yield()) {
-                        return;
-                    }
                 }
             });
             seastar::thread::yield();

@@ -36,6 +36,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/execution_stage.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -67,7 +68,6 @@
 #include "service/priority_manager.hh"
 #include "cell_locking.hh"
 #include "db/view/row_locking.hh"
-#include <seastar/core/execution_stage.hh>
 #include "view_info.hh"
 #include "memtable-sstable.hh"
 #include "db/schema_tables.hh"
@@ -859,6 +859,7 @@ column_family::seal_active_streaming_memtable_delayed() {
 
 future<>
 column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
+  return with_scheduling_group(_config.streaming_scheduling_group, [this, permit = std::move(permit)] () mutable {
     auto old = _streaming_memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -896,20 +897,22 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
             return do_with(std::move(monitor), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
                 auto&& priority = service::get_local_streaming_write_priority();
-                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.background_writer_scheduling_group).then([this, newtab, old] {
+                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false).then([this, newtab, old] {
                     return newtab->open_data();
                 }).then([this, old, newtab] () {
-                    auto adder = [this, newtab] {
-                        add_sstable(newtab, {engine().cpu_id()});
-                        try_trigger_compaction();
-                        dblog.debug("Flushing to {} done", newtab->get_filename());
-                    };
-                    if (_config.enable_cache) {
+                    return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, newtab, old] {
+                      auto adder = [this, newtab] {
+                          add_sstable(newtab, {engine().cpu_id()});
+                          try_trigger_compaction();
+                          dblog.debug("Flushing to {} done", newtab->get_filename());
+                      };
+                      if (_config.enable_cache) {
                         return _cache.update_invalidating(adder, *old);
-                    } else {
+                      } else {
                         adder();
                         return old->clear_gently();
-                    }
+                      }
+                    });
                 }).handle_exception([old, permit = std::move(permit), &monitor, newtab] (auto ep) {
                     monitor.write_failed();
                     newtab->mark_for_deletion();
@@ -929,9 +932,11 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
 
         return f;
     }).finally([guard = std::move(guard)] { });
+  });
 }
 
 future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_big& smb, flush_permit&& permit) {
+  return with_scheduling_group(_config.streaming_scheduling_group, [this, &smb, permit = std::move(permit)] () mutable {
     auto old = smb.memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -951,7 +956,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 auto fp = permit.release_sstable_write_permit();
                 auto monitor = std::make_unique<database_sstable_write_monitor>(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
                 auto&& priority = service::get_local_streaming_write_priority();
-                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, incremental_backups_enabled(), priority, true, _config.background_writer_scheduling_group);
+                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, incremental_backups_enabled(), priority, true);
                 return fut.then_wrapped([this, newtab, old, &smb, permit = std::move(permit), monitor = std::move(monitor)] (future<> f) mutable {
                     if (!f.failed()) {
                         smb.sstables.push_back(monitored_sstable{std::move(monitor), newtab});
@@ -967,6 +972,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
             });
         });
     });
+  });
 }
 
 future<>
@@ -1022,6 +1028,7 @@ column_family::seal_active_memtable(flush_permit&& permit) {
 
 future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
+  return with_scheduling_group(_config.memtable_scheduling_group, [this, old = std::move(old), permit = std::move(permit)] () mutable {
     auto gen = calculate_generation_for_new_table();
 
     auto newtab = sstables::make_sstable(_schema,
@@ -1045,16 +1052,21 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
     database_sstable_write_monitor monitor(std::move(permit), newtab, _compaction_manager, _compaction_strategy);
     return do_with(std::move(monitor), [this, old, newtab] (auto& monitor) {
         auto&& priority = service::get_local_memtable_flush_priority();
-        return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false, _config.memtable_scheduling_group).then([this, newtab, old] {
-            return newtab->open_data();
-        }).then([this, old, newtab] () {
+        return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false).then([this, newtab, old, &monitor] {
+         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
+         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
+         // priority inversion.
+         return with_scheduling_group(default_scheduling_group(), [this, &monitor, old = std::move(old), newtab = std::move(newtab)] () mutable {
+          return newtab->open_data().then([this, old, newtab] () {
             dblog.debug("Flushing to {} done", newtab->get_filename());
-            return update_cache(old, newtab);
-        }).then([this, old, newtab] () noexcept {
+            return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, newtab] {
+                return update_cache(old, newtab);
+            });
+          }).then([this, old, newtab] () noexcept {
             _memtables->erase(old);
             dblog.debug("Memtable for {} replaced", newtab->get_filename());
             return stop_iteration::yes;
-        }).handle_exception([this, old, newtab, &monitor] (auto e) {
+          }).handle_exception([this, old, newtab, &monitor] (auto e) {
             monitor.write_failed();
             newtab->mark_for_deletion();
             dblog.error("failed to write sstable {}: {}", newtab->get_filename(), e);
@@ -1062,8 +1074,11 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
             // that will decrease dirty memory again. So we need to reset the accounting.
             old->revert_flushed_memory();
             return stop_iteration::no;
+          });
+         });
         });
     });
+  });
 }
 
 void
@@ -1389,7 +1404,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         };
         auto sstables_to_compact = descriptor.sstables;
         return sstables::compact_sstables(std::move(descriptor), *this, create_sstable,
-                cleanup, _config.background_writer_scheduling_group).then([this, sstables_to_compact = std::move(sstables_to_compact)] (auto info) {
+                cleanup).then([this, sstables_to_compact = std::move(sstables_to_compact)] (auto info) {
             _compaction_strategy.notify_completion(sstables_to_compact, info.new_sstables);
             this->rebuild_sstable_list(info.new_sstables, sstables_to_compact);
             return info;
@@ -1789,7 +1804,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         gc_clock::now(), default_io_error_handler_gen());
                     return sst;
                 };
-                auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level, cf->background_writer_scheduling_group());
+                auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
 
                 return f.then([&cf, sstables = std::move(sstables)] (std::vector<sstables::shared_sstable> new_sstables) mutable {
                     // an input sstable may belong to shard 1 and 2 and only have data which
@@ -2040,20 +2055,29 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
 }
 
 inline
-flush_cpu_controller
-make_flush_cpu_controller(db::config& cfg, seastar::thread_scheduling_group* backup, std::function<double()> fn) {
-    if (cfg.auto_adjust_flush_quota()) {
-        return flush_cpu_controller(250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+flush_controller
+make_flush_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+    if (cfg.memtable_flush_static_shares() > 0) {
+        return flush_controller(sg, iop, cfg.memtable_flush_static_shares());
     }
-    return flush_cpu_controller(backlog_cpu_controller::disabled{backup});
+    return flush_controller(sg, iop, 250ms, cfg.virtual_dirty_soft_limit(), std::move(fn));
+}
+
+inline
+compaction_controller
+make_compaction_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+    if (cfg.compaction_static_shares() > 0) {
+        return compaction_controller(sg, iop, cfg.compaction_static_shares());
+    }
+    return compaction_controller(sg, iop, 250ms, std::move(fn));
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
 
-database::database() : database(db::config())
+database::database() : database(db::config(), database_config())
 {}
 
-database::database(const db::config& cfg)
+database::database(const db::config& cfg, database_config dbcfg)
     : _stats(make_lw_shared<db_stats>())
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
@@ -2061,27 +2085,25 @@ database::database(const db::config& cfg)
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit())
     , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
     , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
-    , _background_writer_scheduling_group(1ms, _cfg->background_writer_scheduling_quota())
-    , _memtable_cpu_controller(make_flush_cpu_controller(*_cfg, &_background_writer_scheduling_group, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
+    , _dbcfg(dbcfg)
+    , _memtable_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
     }))
+    , _data_query_stage("data_query", _dbcfg.query_scheduling_group, &column_family::query)
     , _version(empty_version)
-    , _compaction_manager(std::make_unique<compaction_manager>())
+    , _compaction_manager(std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group))
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _flush_io_controller(service::get_local_memtable_flush_priority(), 250ms, cfg.virtual_dirty_soft_limit(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        return _dirty_memory_manager.virtual_dirty_memory() / limit;
-    })
-    , _compaction_io_controller(service::get_local_compaction_priority(), 250ms, [this] () -> float {
+    , _compaction_controller(make_compaction_controller(*_cfg, dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), [this] () -> float {
         auto backlog = _compaction_manager->backlog();
         // This means we are using an unimplemented strategy
         if (std::isinf(backlog)) {
             // returning the normalization factor means that we'll return the maximum
             // output in the _control_points. We can get rid of this when we implement
             // all strategies.
-            return compaction_io_controller::normalization_factor;
+            return compaction_controller::normalization_factor;
         }
         return _compaction_manager->backlog() / memory::stats().total_memory();
-    })
+    }))
 {
     _compaction_manager->start();
     setup_metrics();
@@ -2105,12 +2127,8 @@ void backlog_controller::adjust() {
     update_controller(result);
 }
 
-void backlog_cpu_controller::update_controller(float quota) {
-    _current_quota = quota;
-    _scheduling_group.update_usage(_current_quota);
-}
-
-void backlog_io_controller::update_controller(float shares) {
+void backlog_controller::update_controller(float shares) {
+    _scheduling_group.set_shares(shares);
     if (!_inflight_update.available()) {
         return; // next timer will fix it
     }
@@ -2256,9 +2274,6 @@ database::setup_metrics() {
 
         sm::make_gauge("total_result_bytes", [this] { return get_result_memory_limiter().total_used_memory(); },
                        sm::description("Holds the current amount of memory used for results.")),
-
-        sm::make_gauge("cpu_flush_quota", [this] { return _memtable_cpu_controller.current_quota(); },
-                             sm::description("The current quota for memtable CPU scheduling group")),
 
         sm::make_derive("short_data_queries", _stats->short_data_queries,
                        sm::description("The rate of data queries (data or digest reads) that returned less rows than requested due to result size limiting.")),
@@ -2730,8 +2745,12 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.streaming_read_concurrency_config = _config.streaming_read_concurrency_config;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
-    cfg.background_writer_scheduling_group = _config.background_writer_scheduling_group;
+    cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
+    cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
+    cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
+    cfg.query_scheduling_group = _config.query_scheduling_group;
+    cfg.commitlog_scheduling_group = _config.commitlog_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
 
     return cfg;
@@ -3000,13 +3019,11 @@ std::chrono::milliseconds column_family::get_coordinator_read_latency_percentile
     return _percentile_cache_value;
 }
 
-static thread_local auto data_query_stage = seastar::make_execution_stage("data_query", &column_family::query);
-
 future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
+    return _data_query_stage(&cf, std::move(s), seastar::cref(cmd), request, seastar::cref(ranges),
                             std::move(trace_state), seastar::ref(get_result_memory_limiter()),
                             max_result_size,
                             timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
@@ -3484,10 +3501,12 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
-    if (_cfg->background_writer_scheduling_quota() < 1.0f) {
-        cfg.background_writer_scheduling_group = &_background_writer_scheduling_group;
-        cfg.memtable_scheduling_group = _memtable_cpu_controller.scheduling_group();
-    }
+    cfg.compaction_scheduling_group = _dbcfg.compaction_scheduling_group;
+    cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
+    cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
+    cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
+    cfg.query_scheduling_group = _dbcfg.query_scheduling_group;
+    cfg.commitlog_scheduling_group = _dbcfg.commitlog_scheduling_group;
     cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
     return cfg;
 }
@@ -3598,9 +3617,9 @@ database::stop() {
     }).then([this] {
         return _streaming_dirty_memory_manager.shutdown();
     }).then([this] {
-        return _flush_io_controller.shutdown();
+        return _memtable_controller.shutdown();
     }).then([this] {
-        return _compaction_io_controller.shutdown();
+        return _compaction_controller.shutdown();
     });
 }
 
@@ -4457,13 +4476,11 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
                           sstables::write_monitor& monitor,
-                          bool backup, const io_priority_class& pc, bool leave_unsealed,
-                          seastar::thread_scheduling_group *tsg) {
+                          bool backup, const io_priority_class& pc, bool leave_unsealed) {
     sstables::sstable_writer_config cfg;
     cfg.replay_position = mt.replay_position();
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
-    cfg.thread_scheduling_group = tsg;
     cfg.monitor = &monitor;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc),
                                  mt.partition_count(), mt.schema(), cfg, pc);

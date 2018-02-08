@@ -27,6 +27,7 @@
 #include "index/secondary_index_manager.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
+#include <seastar/core/execution_stage.hh>
 #include "net/byteorder.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/UUID.hh"
@@ -300,8 +301,12 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
-        seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
-        seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
+        seastar::scheduling_group memtable_scheduling_group;
+        seastar::scheduling_group memtable_to_cache_scheduling_group;
+        seastar::scheduling_group compaction_scheduling_group;
+        seastar::scheduling_group commitlog_scheduling_group;
+        seastar::scheduling_group query_scheduling_group;
+        seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
     };
     struct no_commitlog {};
@@ -752,10 +757,6 @@ public:
         return _config.cf_stats;
     }
 
-    seastar::thread_scheduling_group* background_writer_scheduling_group() {
-        return _config.background_writer_scheduling_group;
-    }
-
     compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
@@ -968,8 +969,12 @@ public:
         restricted_mutation_reader_config read_concurrency_config;
         restricted_mutation_reader_config streaming_read_concurrency_config;
         ::cf_stats* cf_stats = nullptr;
-        seastar::thread_scheduling_group* background_writer_scheduling_group = nullptr;
-        seastar::thread_scheduling_group* memtable_scheduling_group = nullptr;
+        seastar::scheduling_group memtable_scheduling_group;
+        seastar::scheduling_group memtable_to_cache_scheduling_group;
+        seastar::scheduling_group compaction_scheduling_group;
+        seastar::scheduling_group commitlog_scheduling_group;
+        seastar::scheduling_group query_scheduling_group;
+        seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
     };
 private:
@@ -1042,6 +1047,16 @@ public:
     no_such_column_family(const sstring& ks_name, const sstring& cf_name);
 };
 
+
+struct database_config {
+    seastar::scheduling_group memtable_scheduling_group;
+    seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
+    seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group commitlog_scheduling_group;
+    seastar::scheduling_group query_scheduling_group;
+    seastar::scheduling_group streaming_scheduling_group;
+};
+
 // Policy for distributed<database>:
 //   broadcast metadata writes
 //   local metadata reads
@@ -1079,14 +1094,17 @@ private:
     dirty_memory_manager _dirty_memory_manager;
     dirty_memory_manager _streaming_dirty_memory_manager;
 
-    seastar::thread_scheduling_group _background_writer_scheduling_group;
-    flush_cpu_controller _memtable_cpu_controller;
+    database_config _dbcfg;
+    flush_controller _memtable_controller;
 
     db::timeout_semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
     db::timeout_semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
     db::timeout_semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
+
+    concrete_execution_stage<future<lw_shared_ptr<query::result>>, column_family*, schema_ptr, const query::read_command&, query::result_request,
+            const dht::partition_range_vector&, tracing::trace_state_ptr, query::result_memory_limiter&, uint64_t, db::timeout_clock::time_point> _data_query_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
@@ -1098,8 +1116,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
-    flush_io_controller _flush_io_controller;
-    compaction_io_controller _compaction_io_controller;
+    compaction_controller _compaction_controller;
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
@@ -1134,7 +1151,7 @@ public:
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
-    database(const db::config&);
+    database(const db::config&, database_config dbcfg);
     database(database&&) = delete;
     ~database();
 
@@ -1145,6 +1162,8 @@ public:
     db::commitlog* commitlog() const {
         return _commitlog.get();
     }
+
+    seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
 
     compaction_manager& get_compaction_manager() {
         return *_compaction_manager;

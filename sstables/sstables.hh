@@ -60,10 +60,6 @@
 
 #include <seastar/util/optimized_optional.hh>
 
-namespace seastar {
-class thread_scheduling_group;
-}
-
 namespace sstables {
 
 extern logging::logger sstlog;
@@ -128,7 +124,6 @@ struct sstable_writer_config {
     bool backup = false;
     bool leave_unsealed = false;
     stdx::optional<db::replay_position> replay_position;
-    seastar::thread_scheduling_group* thread_scheduling_group = nullptr;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
 };
