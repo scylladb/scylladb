@@ -487,10 +487,6 @@ int main(int ac, char** av) {
             dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", 1000);
             db.start(std::ref(*cfg), dbcfg).get();
             engine().at_exit([&db, &return_value] {
-                // A shared sstable must be compacted by all shards before it can be deleted.
-                // Since we're stoping, that's not going to happen.  Cancel those pending
-                // deletions to let anyone waiting on them to continue.
-                sstables::cancel_atomic_deletions();
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.

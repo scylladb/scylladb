@@ -500,9 +500,14 @@ private:
         return sstable_generation % smp::count;
     }
 
-    // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
+    // Rebuilds existing sstable set with new sstables added to it and old sstables removed from it.
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
-                              const std::vector<sstables::shared_sstable>& sstables_to_remove);
+        const std::vector<sstables::shared_sstable>& old_sstables);
+
+    // Rebuilds the sstable set right away and schedule deletion of old sstables.
+    void on_compaction_completion(const std::vector<sstables::shared_sstable>& new_sstables,
+        const std::vector<sstables::shared_sstable>& sstables_to_remove);
+
     void rebuild_statistics();
 
     // This function replaces new sstables by their ancestors, which are sstables that needed resharding.

@@ -312,7 +312,6 @@ public:
             db->start(std::move(*cfg), database_config()).get();
             auto stop_db = defer([db] {
                 db->stop().get();
-                sstables::cancel_prior_atomic_deletions();
             });
 
             // FIXME: split

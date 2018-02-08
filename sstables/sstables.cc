@@ -54,7 +54,6 @@
 #include <boost/range/algorithm_ext/is_sorted.hpp>
 #include <regex>
 #include <core/align.hh>
-#include "utils/phased_barrier.hh"
 #include "range_tombstone_list.hh"
 #include "counters.hh"
 #include "binary_search.hh"
@@ -108,7 +107,7 @@ future<file> new_sstable_component_file(const io_error_handler& error_handler, s
     });
 }
 
-static utils::phased_barrier& background_jobs() {
+utils::phased_barrier& background_jobs() {
     static thread_local utils::phased_barrier gate;
     return gate;
 }
@@ -2792,6 +2791,9 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
     return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
+future<>
+delete_sstables(std::vector<sstring> tocs);
+
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
@@ -2814,12 +2816,10 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
+            delete_sstables({filename(component_type::TOC)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
-                            } catch (atomic_deletion_cancelled&) {
-                                sstlog.debug("Exception when deleting sstable file: {}", eptr);
                             } catch (...) {
                                 sstlog.warn("Exception when deleting sstable file: {}", eptr);
                             }
@@ -3044,11 +3044,6 @@ utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key&
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }
 
-std::ostream&
-operator<<(std::ostream& os, const sstable_to_delete& std) {
-    return os << std.name << "(" << (std.shared ? "shared" : "unshared") << ")";
-}
-
 future<>
 delete_sstables(std::vector<sstring> tocs) {
     // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
@@ -3057,40 +3052,12 @@ delete_sstables(std::vector<sstring> tocs) {
     });
 }
 
-static thread_local atomic_deletion_manager g_atomic_deletion_manager(smp::count, delete_sstables);
-
-future<>
-delete_atomically(std::vector<sstable_to_delete> ssts) {
-    auto shard = engine().cpu_id();
-    return smp::submit_to(0, [=] {
-        return g_atomic_deletion_manager.delete_atomically(ssts, shard);
-    });
-}
-
 future<>
 delete_atomically(std::vector<shared_sstable> ssts) {
-    std::vector<sstable_to_delete> sstables_to_delete_atomically;
-    for (auto&& sst : ssts) {
-        sstables_to_delete_atomically.push_back({sst->toc_filename(), sst->is_shared()});
-    }
-    return delete_atomically(std::move(sstables_to_delete_atomically));
-}
+    auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
+            | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
 
-void cancel_prior_atomic_deletions() {
-    g_atomic_deletion_manager.cancel_prior_atomic_deletions();
-}
-
-void cancel_atomic_deletions() {
-    g_atomic_deletion_manager.cancel_atomic_deletions();
-}
-
-atomic_deletion_cancelled::atomic_deletion_cancelled(std::vector<sstring> names)
-        : _msg(sprint("atomic deletions cancelled; not deleting %s", names)) {
-}
-
-const char*
-atomic_deletion_cancelled::what() const noexcept {
-    return _msg.c_str();
+    return delete_sstables(std::move(sstables_to_delete_atomically));
 }
 
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;

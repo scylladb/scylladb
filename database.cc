@@ -760,7 +760,6 @@ column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring di
     auto sst = sstables::make_sstable(_schema, dir, generation, v, f);
     if (!belongs_to_current_shard(info.owners)) {
         dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
-        sst->mark_for_deletion();
         return make_ready_future<sstables::shared_sstable>();
     }
     return sst->load(std::move(info)).then([sst] () mutable {
@@ -1272,6 +1271,25 @@ void column_family::rebuild_statistics() {
 
 void
 column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                                    const std::vector<sstables::shared_sstable>& old_sstables) {
+    auto current_sstables = _sstables;
+    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
+
+    std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
+
+    // this might seem dangerous, but "move" here just avoids constness,
+    // making the two ranges compatible when compiling with boost 1.55.
+    // Noone is actually moving anything...
+    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables->all()))) {
+        if (!s.count(tab)) {
+            new_sstable_list.insert(tab);
+        }
+    }
+    _sstables = make_lw_shared(std::move(new_sstable_list));
+}
+
+void
+column_family::on_compaction_completion(const std::vector<sstables::shared_sstable>& new_sstables,
                                     const std::vector<sstables::shared_sstable>& sstables_to_remove) {
     // Build a new list of _sstables: We remove from the existing list the
     // tables we compacted (by now, there might be more sstables flushed
@@ -1283,34 +1301,31 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // to avoid a new compaction from ignoring data in the old sstables
     // if the deletion fails (note deletion of shared sstables can take
     // unbounded time, because all shards must agree on the deletion).
-    auto current_sstables = _sstables;
-    auto new_sstable_list = _compaction_strategy.make_sstable_set(_schema);
-    auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
 
-
-    std::unordered_set<sstables::shared_sstable> s(
-           sstables_to_remove.begin(), sstables_to_remove.end());
-
-    // First, add the new sstables.
-
-    // this might seem dangerous, but "move" here just avoids constness,
-    // making the two ranges compatible when compiling with boost 1.55.
-    // Noone is actually moving anything...
-    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables->all()))) {
-        // Checks if oldtab is a sstable not being compacted.
-        if (!s.count(tab)) {
-            new_sstable_list.insert(tab);
-        } else {
-            new_compacted_but_not_deleted.push_back(tab);
+    // make sure all old sstables belong *ONLY* to current shard before we proceed to their deletion.
+    for (auto& sst : sstables_to_remove) {
+        auto shards = sst->get_shards_for_this_sstable();
+        if (shards.size() > 1) {
+            throw std::runtime_error(sprint("A regular compaction for %s.%s INCORRECTLY used shared sstable %s. Only resharding work with those!",
+                _schema->ks_name(), _schema->cf_name(), sst->toc_filename()));
+        }
+        if (!belongs_to_current_shard(shards)) {
+            throw std::runtime_error(sprint("A regular compaction for %s.%s INCORRECTLY used sstable %s which doesn't belong to this shard!",
+                _schema->ks_name(), _schema->cf_name(), sst->toc_filename()));
         }
     }
-    _sstables = make_lw_shared(std::move(new_sstable_list));
+
+    auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
+    // rebuilding _sstables_compacted_but_not_deleted first to make the entire rebuild operation exception safe.
+    new_compacted_but_not_deleted.insert(new_compacted_but_not_deleted.end(), sstables_to_remove.begin(), sstables_to_remove.end());
+
+    rebuild_sstable_list(new_sstables, sstables_to_remove);
+
     _sstables_compacted_but_not_deleted = std::move(new_compacted_but_not_deleted);
 
     rebuild_statistics();
 
-    // Second, delete the old sstables.  This is done in the background, so we can
-    // consider this compaction completed.
+    // This is done in the background, so we can consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
         return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
@@ -1335,12 +1350,6 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
                 return make_exception_future<>(eptr);
             }
             return make_ready_future<>();
-        }).handle_exception([] (std::exception_ptr e) {
-            try {
-                std::rethrow_exception(e);
-            } catch (sstables::atomic_deletion_cancelled& adc) {
-                dblog.debug("Failed to delete sstables after compaction: {}", adc);
-            }
         }).then([this] {
             // refresh underlying data source in row cache to prevent it from holding reference
             // to sstables files which were previously deleted.
@@ -1371,6 +1380,7 @@ void column_family::replace_ancestors_needed_rewrite(std::vector<sstables::share
         }
     }
     rebuild_sstable_list(new_sstables, old_sstables);
+    rebuild_statistics();
 }
 
 void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors) {
@@ -1384,6 +1394,7 @@ void column_family::remove_ancestors_needed_rewrite(std::unordered_set<uint64_t>
         }
     }
     rebuild_sstable_list({}, old_sstables);
+    rebuild_statistics();
 }
 
 future<>
@@ -1406,7 +1417,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         return sstables::compact_sstables(std::move(descriptor), *this, create_sstable,
                 cleanup).then([this, sstables_to_compact = std::move(sstables_to_compact)] (auto info) {
             _compaction_strategy.notify_completion(sstables_to_compact, info.new_sstables);
-            this->rebuild_sstable_list(info.new_sstables, sstables_to_compact);
+            this->on_compaction_completion(info.new_sstables, sstables_to_compact);
             return info;
         });
     }).then([this] (auto info) {
@@ -1846,6 +1857,15 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                 cf->replace_ancestors_needed_rewrite(sstables);
                             });
                         }
+                    }).then([sstables] {
+                        // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
+                        sstables::delete_atomically(std::move(sstables)).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                            try {
+                                std::rethrow_exception(eptr);
+                            } catch (...) {
+                                dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
+                            }
+                        });
                     });
                 });
             }).get();
