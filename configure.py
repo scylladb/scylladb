@@ -110,7 +110,8 @@ def try_compile_and_link(compiler, source = '', flags = []):
 def flag_supported(flag, compiler):
     # gcc ignores -Wno-x even if it is not supported
     adjusted = re.sub('^-Wno-', '-W', flag)
-    return try_compile(flags = ['-Werror', adjusted], compiler = compiler)
+    split = adjusted.split(' ')
+    return try_compile(flags = ['-Werror'] + split, compiler = compiler)
 
 def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
