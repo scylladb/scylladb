@@ -606,6 +606,7 @@ void query_processor::migration_subscriber::on_drop_aggregate(const sstring& ks_
 }
 
 void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    remove_invalid_prepared_statements(ks_name, view_name);
 }
 
 void query_processor::migration_subscriber::remove_invalid_prepared_statements(
