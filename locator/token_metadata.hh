@@ -141,7 +141,7 @@ private:
      * multiple tokens.  Hence, the BiMultiValMap collection.
      */
     // FIXME: have to be BiMultiValMap
-    std::map<token, inet_address> _token_to_endpoint_map;
+    std::unordered_map<token, inet_address> _token_to_endpoint_map;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
     std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
@@ -228,7 +228,7 @@ private:
         friend class token_metadata;
     };
 
-    token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
+    token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata() {};
     const std::vector<token>& sorted_tokens() const;
@@ -239,7 +239,7 @@ public:
     size_t first_token_index(const token& start) const;
     std::experimental::optional<inet_address> get_endpoint(const token& token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
-    const std::map<token, inet_address>& get_token_to_endpoint() const {
+    const std::unordered_map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
     }
 

@@ -47,7 +47,7 @@ static void remove_by_value(C& container, V value) {
     }
 }
 
-token_metadata::token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
+token_metadata::token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     _sorted_tokens = sort_tokens();
 }
@@ -59,6 +59,8 @@ std::vector<token> token_metadata::sort_tokens() {
     for (auto&& i : _token_to_endpoint_map) {
         sorted.push_back(i.first);
     }
+
+    std::sort(sorted.begin(), sorted.end());
 
     return sorted;
 }
@@ -74,6 +76,7 @@ std::vector<token> token_metadata::get_tokens(const inet_address& addr) const {
             res.push_back(i.first);
         }
     }
+    std::sort(res.begin(), res.end());
     return res;
 }
 /**
@@ -481,6 +484,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
     // for each of those ranges, find what new nodes will be responsible for the range when
     // all leaving nodes are gone.
     auto metadata = clone_only_token_map(); // don't do this in the loop! #7758
+    tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} stars", affected_ranges.size());
     for (const auto& r : affected_ranges) {
         auto t = r.end() ? r.end()->value() : dht::maximum_token();
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
@@ -494,6 +498,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
             new_pending_ranges.emplace(r, ep);
         }
     }
+    tlogger.debug("In calculate_pending_ranges: affected_ranges.size={} ends", affected_ranges.size());
 
     // At this stage newPendingRanges has been updated according to leave operations. We can
     // now continue the calculation by checking bootstrapping nodes.
