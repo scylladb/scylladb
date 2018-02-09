@@ -95,6 +95,9 @@ void truncate_statement::validate(distributed<service::storage_proxy>&, const se
 future<::shared_ptr<cql_transport::messages::result_message>>
 truncate_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options)
 {
+    if (service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family())->is_view()) {
+        throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
+    }
     return service::get_local_storage_proxy().truncate_blocking(keyspace(), column_family()).handle_exception([](auto ep) {
         throw exceptions::truncate_exception(ep);
     }).then([] {
