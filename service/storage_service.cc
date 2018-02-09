@@ -797,7 +797,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    do_update_pending_ranges();
+    do_update_pending_ranges().get();
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
@@ -3174,9 +3174,9 @@ std::chrono::milliseconds storage_service::get_ring_delay() {
     return std::chrono::milliseconds(ring_delay);
 }
 
-void storage_service::do_update_pending_ranges() {
+future<> storage_service::do_update_pending_ranges() {
     if (engine().cpu_id() != 0) {
-        throw std::runtime_error("do_update_pending_ranges should be called on cpu zero");
+        return make_exception_future<>(std::runtime_error("do_update_pending_ranges should be called on cpu zero"));
     }
     // long start = System.currentTimeMillis();
     auto keyspaces = _db.local().get_non_system_keyspaces();
@@ -3185,16 +3185,18 @@ void storage_service::do_update_pending_ranges() {
         auto& strategy = ks.get_replication_strategy();
         get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name);
     }
+    return make_ready_future<>();
     // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
         ss._update_jobs++;
-        ss.do_update_pending_ranges();
-        // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
-        return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
-            ss._update_jobs--;
+        return ss.do_update_pending_ranges().then([&ss] {
+            // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
+            return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
+                ss._update_jobs--;
+            });
         });
     });
 }

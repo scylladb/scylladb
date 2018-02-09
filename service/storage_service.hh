@@ -141,7 +141,7 @@ public:
     void uninit_messaging_service();
 
 private:
-    void do_update_pending_ranges();
+    future<> do_update_pending_ranges();
 
 public:
     future<> keyspace_changed(const sstring& ks_name);
