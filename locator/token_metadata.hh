@@ -652,7 +652,7 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    void calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
 public:
 
     token get_predecessor(token t);

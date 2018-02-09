@@ -458,13 +458,13 @@ token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint)
     return ret;
 }
 
-void token_metadata::calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name) {
+future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name) {
     std::unordered_multimap<range<token>, inet_address> new_pending_ranges;
 
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _moving_endpoints.empty()) {
         tlogger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspace_name);
         set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
-        return;
+        return make_ready_future<>();
     }
 
     std::unordered_multimap<inet_address, dht::token_range> address_ranges = strategy.get_address_ranges(*this);
@@ -555,7 +555,9 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
     if (tlogger.is_enabled(logging::log_level::debug)) {
         tlogger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
     }
+    return make_ready_future<>();
 }
+
 sstring token_metadata::print_pending_ranges() {
     std::stringstream ss;
 

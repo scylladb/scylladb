@@ -3179,13 +3179,16 @@ future<> storage_service::do_update_pending_ranges() {
         return make_exception_future<>(std::runtime_error("do_update_pending_ranges should be called on cpu zero"));
     }
     // long start = System.currentTimeMillis();
-    auto keyspaces = _db.local().get_non_system_keyspaces();
-    for (auto& keyspace_name : keyspaces) {
-        auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto& strategy = ks.get_replication_strategy();
-        get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name);
-    }
-    return make_ready_future<>();
+    return do_with(_db.local().get_non_system_keyspaces(), [this] (auto& keyspaces){
+        return do_for_each(keyspaces, [this] (auto& keyspace_name) {
+            auto& ks = this->_db.local().find_keyspace(keyspace_name);
+            auto& strategy = ks.get_replication_strategy();
+            slogger.debug("Calculating pending ranges for keyspace={} starts", keyspace_name);
+            return get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
+                slogger.debug("Calculating pending ranges for keyspace={} ends", keyspace_name);
+            });
+        });
+    });
     // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
