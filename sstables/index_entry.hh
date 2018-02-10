@@ -76,6 +76,9 @@ private:
 
 public:
     void verify_end_state() {
+        if (_num_blocks_left != 0) {
+            throw std::runtime_error("promoted_index_blocks_reader - no more data but parsing is incomplete");
+        }
     }
 
     bool non_consuming() const {

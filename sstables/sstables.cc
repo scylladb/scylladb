@@ -1104,9 +1104,6 @@ void write_digest(io_error_handler& error_handler, const sstring file_path, uint
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
-std::unique_ptr<index_reader> sstable::get_index_reader(const io_priority_class& pc) {
-    return std::make_unique<index_reader>(shared_from_this(), pc);
-}
 
 template <sstable::component_type Type, typename T>
 future<> sstable::read_simple(T& component, const io_priority_class& pc) {

@@ -751,9 +751,16 @@ future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::
     }
 }
 
+static
+std::unique_ptr<index_reader> get_index_reader(shared_sstable sst,
+        const io_priority_class& pc, shared_index_lists& index_lists) {
+    return std::make_unique<index_reader>(sst, pc, index_lists);
+}
+
 class sstable_mutation_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer;
     shared_sstable _sst;
+    shared_index_lists _index_lists;
     mp_row_consumer _consumer;
     bool _index_in_current_partition = false; // Whether _lh_index is in current partition
     bool _will_likely_slice = false;
@@ -797,8 +804,8 @@ public:
         , _sst(std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
-            _lh_index = _sst->get_index_reader(pc); // lh = left hand
-            _rh_index = _sst->get_index_reader(pc);
+            _lh_index = get_index_reader(_sst, pc, _index_lists); // lh = left hand
+            _rh_index = get_index_reader(_sst, pc, _index_lists);
             auto f = seastar::when_all_succeed(_lh_index->advance_to_start(pr), _rh_index->advance_to_end(pr));
             return f.then([this, &pc, &slice, fwd_mr] () mutable {
                 sstable::disk_read_range drr{_lh_index->data_file_position(),
@@ -827,7 +834,7 @@ public:
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
-            _lh_index = _sst->get_index_reader(pc);
+            _lh_index = get_index_reader(_sst, pc, _index_lists);
             auto f = _lh_index->advance_and_check_if_present(key);
             return f.then([this, &slice, &pc, key] (bool present) mutable {
                 if (!present) {
@@ -873,7 +880,7 @@ private:
     }
     index_reader& lh_index() {
         if (!_lh_index) {
-            _lh_index = _sst->get_index_reader(_consumer.io_priority());
+            _lh_index = get_index_reader(_sst, _consumer.io_priority(), _index_lists);
         }
         return *_lh_index;
     }

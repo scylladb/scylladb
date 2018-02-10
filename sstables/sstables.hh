@@ -52,7 +52,6 @@
 #include "query-request.hh"
 #include "compound_compat.hh"
 #include "disk-error-handler.hh"
-#include "sstables/shared_index_lists.hh"
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "flat_mutation_reader.hh"
@@ -469,7 +468,6 @@ private:
     std::vector<sstring> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
-    shared_index_lists _index_lists;
     bool _shared = true;  // across shards; safe default
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -640,8 +638,6 @@ private:
 
     std::vector<unsigned> compute_shards_for_this_sstable() const;
 public:
-    std::unique_ptr<index_reader> get_index_reader(const io_priority_class& pc);
-
     future<> read_toc();
 
     bool has_scylla_component() const {
