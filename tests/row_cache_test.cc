@@ -1887,12 +1887,6 @@ SEASTAR_TEST_CASE(test_concurrent_population_before_latest_version_iterator) {
     });
 }
 
-static void populate_range(row_cache& cache, dht::partition_range& pr, const query::clustering_row_ranges& ranges) {
-    for (auto&& r : ranges) {
-        populate_range(cache, pr, r);
-    }
-}
-
 SEASTAR_TEST_CASE(test_tombstone_merging_of_overlapping_tombstones_in_many_versions) {
     return seastar::async([] {
         simple_schema s;
