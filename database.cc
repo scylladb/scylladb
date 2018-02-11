@@ -3672,6 +3672,7 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
     return cf.run_async([this, &ks, &cf, tsf = std::move(tsf), with_snapshot] {
         const auto durable = ks.metadata()->durable_writes();
         const auto auto_snapshot = with_snapshot && get_config().auto_snapshot();
+        const auto should_flush = durable || auto_snapshot;
 
         // Force mutations coming in to re-acquire higher rp:s
         // This creates a "soft" ordering, in that we will guarantee that
@@ -3681,9 +3682,9 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
         auto low_mark = cf.set_low_replay_position_mark();
 
 
-        return cf.run_with_compaction_disabled([&cf, durable, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
+        return cf.run_with_compaction_disabled([this, &cf, should_flush, auto_snapshot, tsf = std::move(tsf), low_mark]() mutable {
             future<> f = make_ready_future<>();
-            if (durable || auto_snapshot) {
+            if (should_flush) {
                 // TODO:
                 // this is not really a guarantee at all that we've actually
                 // gotten all things to disk. Again, need queue-ish or something.
@@ -3691,27 +3692,38 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
             } else {
                 f = cf.clear();
             }
-            return f.then([&cf, auto_snapshot, tsf = std::move(tsf), low_mark] {
+            return f.then([this, &cf, auto_snapshot, tsf = std::move(tsf), low_mark, should_flush] {
                 dblog.debug("Discarding sstable data for truncated CF + indexes");
                 // TODO: notify truncation
 
-                return tsf().then([&cf, auto_snapshot, low_mark](db_clock::time_point truncated_at) {
+                return tsf().then([this, &cf, auto_snapshot, low_mark, should_flush](db_clock::time_point truncated_at) {
                     future<> f = make_ready_future<>();
                     if (auto_snapshot) {
                         auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
                         f = cf.snapshot(name);
                     }
-                    return f.then([&cf, truncated_at, low_mark] {
-                        return cf.discard_sstables(truncated_at).then([&cf, truncated_at, low_mark](db::replay_position rp) {
-                            // TODO: verify that rp == db::replay_position is because we have no sstables (and no data flushed)
-                            if (rp == db::replay_position()) {
-                                return make_ready_future();
-                            }
+                    return f.then([this, &cf, truncated_at, low_mark, should_flush] {
+                        return cf.discard_sstables(truncated_at).then([this, &cf, truncated_at, low_mark, should_flush](db::replay_position rp) {
                             // TODO: indexes.
                             assert(low_mark <= rp);
-                            return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                            return truncate_views(cf, truncated_at, should_flush).then([&cf, truncated_at, rp] {
+                                return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                            });
                         });
                     });
+                });
+            });
+        });
+    });
+}
+
+future<> database::truncate_views(const column_family& base, db_clock::time_point truncated_at, bool should_flush) {
+    return parallel_for_each(base.views(), [this, truncated_at, should_flush] (view_ptr v) {
+        auto& vcf = find_column_family(v);
+        return vcf.run_with_compaction_disabled([&vcf, truncated_at, should_flush] {
+            return (should_flush ? vcf.flush() : vcf.clear()).then([&vcf, truncated_at, should_flush] {
+                return vcf.discard_sstables(truncated_at).then([&vcf, truncated_at, should_flush](db::replay_position rp) {
+                    return db::system_keyspace::save_truncation_record(vcf, truncated_at, rp);
                 });
             });
         });
