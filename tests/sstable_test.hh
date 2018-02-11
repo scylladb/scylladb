@@ -77,7 +77,9 @@ public:
 
     future<index_list> read_indexes() {
         auto l = make_lw_shared<index_list>();
-        return do_with(_sst->get_index_reader(default_priority_class()), [l] (auto& ir) {
+        // FIXME: kill shared_index_lists
+        return do_with(std::make_unique<shared_index_lists>(), [this, l] (std::unique_ptr<shared_index_lists>& sil) {
+          return do_with(std::make_unique<index_reader>(_sst, default_priority_class(), *sil), [this, l] (std::unique_ptr<index_reader>& ir) {
             return ir->read_partition_data().then([&, l] {
                 l->push_back(std::move(ir->current_partition_entry()));
             }).then([&, l] {
@@ -92,6 +94,7 @@ public:
                     });
                 });
             });
+          });
         }).then([l] {
             return std::move(*l);
         });

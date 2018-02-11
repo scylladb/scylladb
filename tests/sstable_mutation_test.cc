@@ -797,6 +797,10 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     });
 }
 
+static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, shared_index_lists& sil) {
+    return std::make_unique<index_reader>(sst, default_priority_class(), sil);
+}
+
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return seastar::async([] {
         storage_service_for_tests ssft;
@@ -843,7 +847,8 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         cfg.promoted_index_block_size = 1;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
-        assert_that(sst->get_index_reader(default_priority_class())).has_monotonic_positions(*s);
+        shared_index_lists sil;
+        assert_that(get_index_reader(sst, sil)).has_monotonic_positions(*s);
     });
 }
 
@@ -895,7 +900,8 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         sst->load().get();
 
         {
-            assert_that(sst->get_index_reader(default_priority_class())).has_monotonic_positions(*s);
+            shared_index_lists sil;
+            assert_that(get_index_reader(sst, sil)).has_monotonic_positions(*s);
         }
 
         {
@@ -951,7 +957,8 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         sst->load().get();
 
         {
-            assert_that(sst->get_index_reader(default_priority_class())).has_monotonic_positions(*s);
+            shared_index_lists sil;
+            assert_that(get_index_reader(sst, sil)).has_monotonic_positions(*s);
         }
 
         {
@@ -1081,7 +1088,8 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
         sst->load().get();
 
-        assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+        shared_index_lists sil;
+        assert_that(get_index_reader(sst, sil)).is_empty(*s);
     });
 }
 

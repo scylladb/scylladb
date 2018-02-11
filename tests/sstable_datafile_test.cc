@@ -4441,6 +4441,10 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
     });
 }
 
+static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, shared_index_lists& sil) {
+    return std::make_unique<index_reader>(sst, default_priority_class(), sil);
+}
+
 SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
     // create table ks.test (pk int, ck int, v int, primary key(pk, ck)) with compact storage;
     //
@@ -4461,7 +4465,8 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
         sst->load().get0();
 
         {
-            assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+            shared_index_lists sil;
+            assert_that(get_index_reader(sst, sil)).is_empty(*s);
         }
     });
 }
