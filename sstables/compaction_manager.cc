@@ -215,7 +215,7 @@ void compaction_manager::deregister_compacting_sstables(const std::vector<sstabl
     }
 }
 
-future<> compaction_manager::do_submit_major_compaction(column_family* cf) {
+future<> compaction_manager::submit_major_compaction(column_family* cf) {
     if (_stopped) {
         return make_ready_future<>();
     }
@@ -240,7 +240,9 @@ future<> compaction_manager::do_submit_major_compaction(column_family* cf) {
             auto sstables = get_candidates(*cf);
             auto compacting = compacting_sstable_registration(this, sstables);
 
-            return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables))).then([compacting = std::move(compacting)] {});
+            return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
+                return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+            }).then([compacting = std::move(compacting)] {});
         });
     }).then_wrapped([this, task] (future<> f) {
         _stats.active_tasks--;
@@ -259,7 +261,7 @@ future<> compaction_manager::do_submit_major_compaction(column_family* cf) {
     return task->compaction_done.get_future().then([task] {});
 }
 
-future<> compaction_manager::do_run_resharding_job(column_family* cf, std::function<future<>()> job) {
+future<> compaction_manager::run_resharding_job(column_family* cf, std::function<future<>()> job) {
     if (_stopped) {
         return make_ready_future<>();
     }
@@ -280,7 +282,9 @@ future<> compaction_manager::do_run_resharding_job(column_family* cf, std::funct
             // no need to register shared sstables because they're excluded from non-resharding
             // compaction and some of them may not even belong to current shard.
 
-            return job();
+            return with_scheduling_group(_scheduling_group, [job = std::move(job)] {
+                return job();
+            });
         });
     }).then_wrapped([this, task] (future<> f) {
         _stats.active_tasks--;
@@ -427,7 +431,7 @@ inline bool compaction_manager::maybe_stop_on_error(future<> f) {
     return retry;
 }
 
-void compaction_manager::do_submit(column_family* cf) {
+void compaction_manager::submit(column_family* cf) {
     auto task = make_lw_shared<compaction_manager::task>();
     task->compacting_cf = cf;
     _tasks.push_back(task);
@@ -439,6 +443,7 @@ void compaction_manager::do_submit(column_family* cf) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         }
         return with_lock(_compaction_locks[cf].for_read(), [this, task] () mutable {
+          return with_scheduling_group(_scheduling_group, [this, task = std::move(task)] () mutable {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
@@ -481,6 +486,7 @@ void compaction_manager::do_submit(column_family* cf) {
                 task->compaction_retry.reset();
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
+          });
         });
     }).finally([this, task] {
         _tasks.remove(task);
@@ -496,7 +502,7 @@ inline bool compaction_manager::check_for_cleanup(column_family* cf) {
     return false;
 }
 
-future<> compaction_manager::do_perform_cleanup(column_family* cf) {
+future<> compaction_manager::perform_cleanup(column_family* cf) {
     if (check_for_cleanup(cf)) {
         throw std::runtime_error(sprint("cleanup request failed: there is an ongoing cleanup on %s.%s",
             cf->schema()->ks_name(), cf->schema()->cf_name()));
@@ -508,6 +514,7 @@ future<> compaction_manager::do_perform_cleanup(column_family* cf) {
     _stats.pending_tasks++;
 
     task->compaction_done = repeat([this, task] () mutable {
+        // FIXME: lock cf here
         if (!can_proceed(task)) {
             _stats.pending_tasks--;
             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -518,8 +525,9 @@ future<> compaction_manager::do_perform_cleanup(column_family* cf) {
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
-        return cf.cleanup_sstables(std::move(descriptor))
-                .then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
+        return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
+            return cf.cleanup_sstables(std::move(descriptor));
+        }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             _stats.active_tasks--;
             if (!can_proceed(task)) {
                 maybe_stop_on_error(std::move(f));
