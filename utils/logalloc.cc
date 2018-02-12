@@ -1382,6 +1382,11 @@ public:
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) noexcept {
+        // degroup_temporarily allocates via binomial_heap::push(), which should not
+        // fail, because we have a matching deallocation before that and we don't
+        // allocate between them.
+        memory::disable_failure_guard dfg;
+
         compaction_lock dct1(*this);
         compaction_lock dct2(other);
         degroup_temporarily dgt1(this);
