@@ -58,7 +58,7 @@ protected:
     input_stream<char> _input;
     sstables::reader_position_tracker _stream_position;
     // remaining length of input to read (if <0, continue until end of file).
-    int64_t _remain;
+    uint64_t _remain;
 
     // state machine progress:
     enum class prestate {
@@ -272,7 +272,7 @@ public:
     // called by input_stream::consume():
     future<consumption_result_type>
     operator()(temporary_buffer<char> data) {
-        if (_remain >= 0 && data.size() >= (uint64_t)_remain) {
+        if (data.size() >= _remain) {
             // We received more data than we actually care about, so process
             // the beginning of the buffer, and return the rest to the stream
             auto segment = data.share(0, _remain);
@@ -295,9 +295,7 @@ public:
             _stream_position.position += data.size();
             auto result = process(data);
             return visit(result, [this, &data, orig_data_size] (proceed value) {
-                if (_remain >= 0) {
-                    _remain -= orig_data_size - data.size();
-                }
+                _remain -= orig_data_size - data.size();
                 _stream_position.position -= data.size();
                 if (value == proceed::yes) {
                     return make_ready_future<consumption_result_type>(continue_consuming{});
