@@ -158,7 +158,7 @@ public:
                 };
 
                 std::vector<shared_sstable> ssts;
-                for (auto i = 0; i < _cfg.sstables; i++) {
+                for (auto i = 0u; i < _cfg.sstables; i++) {
                     auto sst = sst_gen();
                     write_memtable_to_sstable(*_mt, sst).get();
                     sst->open_data().get();

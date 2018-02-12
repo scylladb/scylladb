@@ -3744,7 +3744,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
             assertions
                 .produces_partition_start(keys[0])
                 .fast_forward_to(position_range::all_clustered_rows());
-            for (auto i = 0; i < rows_per_part; i++) {
+            for (auto i = 0u; i < rows_per_part; i++) {
                 assertions.produces_row_with_key(table.make_ckey(i));
             }
             assertions.produces_end_of_stream();

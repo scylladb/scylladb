@@ -513,7 +513,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
 
     if (thread) {
         auto filter = [&] (const dht::decorated_key& dk) {
-            for (auto j = 0; j < muts.size(); j += 2) {
+            for (auto j = size_t(0); j < muts.size(); j += 2) {
                 if (dk.equal(*s, muts[j].decorated_key())) {
                     return false;
                 }
@@ -524,7 +524,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         fmr = flat_mutation_reader_from_mutations(muts);
         muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter));
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
-        for (auto j = 1; j < muts.size(); j += 2) {
+        for (auto j = size_t(1); j < muts.size(); j += 2) {
             BOOST_REQUIRE_EQUAL(muts[j], muts2[j / 2]);
         }
     }
@@ -601,7 +601,7 @@ SEASTAR_TEST_CASE(test_make_forwardable) {
 
         rd2.fast_forward_to(remaining_range);
 
-        for (int i = 1; i < ms.size(); ++i) {
+        for (auto i = size_t(1); i < ms.size(); ++i) {
             test(rd2, ms[i]);
         }
     });
