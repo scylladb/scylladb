@@ -355,6 +355,12 @@ void set_storage_service(http_context& ctx, routes& r) {
                 });
     });
 
+    ss::get_active_repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
+        return get_active_repairs(ctx.db).then([] (std::vector<int> res){
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
     ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
         return repair_get_status(ctx.db, boost::lexical_cast<int>( req->get_query_param("id")))
                 .then_wrapped([] (future<repair_status>&& fut) {

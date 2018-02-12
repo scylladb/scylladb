@@ -793,6 +793,24 @@
          ]
       },
       {
+         "path":"/storage_service/active_repair/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Return an array with the ids of the currently active repairs",
+               "type":"array",
+               "items":{
+                  "type":"int"
+               },
+               "nickname":"get_active_repair_async",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/repair_async/{keyspace}",
          "operations":[
             {
