@@ -84,10 +84,11 @@ private:
 public:
     memtable_snapshot_source(schema_ptr s)
         : _s(s)
-        , _compactor(seastar::async([this] {
+        , _compactor(seastar::async([this] () noexcept {
             while (!_closed) {
                 _should_compact.wait().get();
                 while (should_compact()) {
+                    memory::disable_failure_guard dfg;
                     compact();
                 }
             }
