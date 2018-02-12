@@ -108,7 +108,7 @@ public:
     impl();
     ~impl();
     void register_region(region::impl*);
-    void unregister_region(region::impl*);
+    void unregister_region(region::impl*) noexcept;
     size_t reclaim(size_t bytes);
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
     size_t compact_and_evict(size_t bytes);
@@ -1229,8 +1229,13 @@ public:
     {
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
-        if (group) {
-            group->add(this);
+        try {
+            if (group) {
+                group->add(this);
+            }
+        } catch (...) {
+            tracker_instance._impl->unregister_region(this);
+            throw;
         }
     }
 
@@ -1974,7 +1979,7 @@ void tracker::impl::register_region(region::impl* r) {
     llogger.debug("Registered region @{} with id={}", r, r->id());
 }
 
-void tracker::impl::unregister_region(region::impl* r) {
+void tracker::impl::unregister_region(region::impl* r) noexcept {
     reclaiming_lock _(*this);
     llogger.debug("Unregistering region, id={}", r->id());
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
