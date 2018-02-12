@@ -36,6 +36,8 @@
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/algorithm.hpp>
+#include <boost/range/algorithm_ext.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 #include <cryptopp/sha.h>
 #include <seastar/core/gate.hh>
@@ -409,6 +411,13 @@ public:
             return it->second;
         }
         return {};
+    }
+    std::vector<int> get_active() const {
+        std::vector<int> res;
+        boost::push_back(res, _status | boost::adaptors::filtered([] (auto& x) {
+            return x.second == repair_status::RUNNING;
+        }) | boost::adaptors::map_keys);
+        return res;
     }
     size_t nr_running_repair_jobs() {
         size_t count = 0;
@@ -1342,6 +1351,12 @@ future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options) {
     return db.invoke_on(0, [&db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
         return do_repair_start(db, std::move(keyspace), std::move(options));
+    });
+}
+
+future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db) {
+    return db.invoke_on(0, [] (database& localdb) {
+        return repair_tracker.get_active();
     });
 }
 
