@@ -1982,7 +1982,7 @@ void tracker::impl::register_region(region::impl* r) {
 void tracker::impl::unregister_region(region::impl* r) noexcept {
     reclaiming_lock _(*this);
     llogger.debug("Unregistering region, id={}", r->id());
-    _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
+    _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
 tracker::impl::impl() {
