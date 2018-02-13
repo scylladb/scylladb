@@ -65,18 +65,10 @@ cache_tracker::cache_tracker() {
           // the rbtree, so linearize anything we read
           return with_linearized_managed_bytes([&] {
            try {
-            auto evict_last = [this](lru_type& lru) {
-                cache_entry& ce = lru.back();
-                auto it = row_cache::partitions_type::s_iterator_to(ce);
-                clear_continuity(*std::next(it));
-                lru.pop_back_and_dispose(current_deleter<cache_entry>());
-            };
             if (_lru.empty()) {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
-            evict_last(_lru);
-            --_stats.partitions;
-            ++_stats.partition_evictions;
+            _lru.back().on_evicted(*this);
             return memory::reclaiming_result::reclaimed_something;
            } catch (std::bad_alloc&) {
             // Bad luck, linearization during partition removal caused us to
@@ -175,6 +167,11 @@ void cache_tracker::on_partition_hit() {
 
 void cache_tracker::on_partition_miss() {
     ++_stats.partition_misses;
+}
+
+void cache_tracker::on_partition_eviction() {
+    --_stats.partitions;
+    ++_stats.partition_evictions;
 }
 
 void cache_tracker::on_row_hit() {
@@ -1150,6 +1147,13 @@ cache_entry::~cache_entry() {
 
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
     _schema = std::move(new_schema);
+}
+
+void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
+    auto it = row_cache::partitions_type::s_iterator_to(*this);
+    std::next(it)->set_continuous(false);
+    current_deleter<cache_entry>()(this);
+    tracker.on_partition_eviction();
 }
 
 flat_mutation_reader cache_entry::read(row_cache& rc, read_context& reader) {
