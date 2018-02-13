@@ -105,7 +105,8 @@ int get_generation_number() {
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service)
         : _db(db)
         , _auth_service(auth_service)
-        , _replicate_action([this] { return do_replicate_to_all_cores(); }) {
+        , _replicate_action([this] { return do_replicate_to_all_cores(); })
+        , _update_pending_ranges_action([this] { return do_update_pending_ranges(); }) {
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
@@ -797,7 +798,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    do_update_pending_ranges().get();
+    _update_pending_ranges_action.trigger_later().get();
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
@@ -879,7 +880,13 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
     _token_metadata.add_leaving_endpoint(endpoint);
-    update_pending_ranges().get();
+    update_pending_ranges_nowait(endpoint);
+}
+
+void storage_service::update_pending_ranges_nowait(inet_address endpoint) {
+    update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
+        slogger.info("Failed to update_pending_ranges for node {}: {}", endpoint, ep);
+    });
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -3195,7 +3202,7 @@ future<> storage_service::do_update_pending_ranges() {
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
         ss._update_jobs++;
-        return ss.do_update_pending_ranges().then([&ss] {
+        return ss._update_pending_ranges_action.trigger_later().then([&ss] {
             // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
             return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
                 ss._update_jobs--;
