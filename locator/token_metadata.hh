@@ -141,7 +141,7 @@ private:
      * multiple tokens.  Hence, the BiMultiValMap collection.
      */
     // FIXME: have to be BiMultiValMap
-    std::map<token, inet_address> _token_to_endpoint_map;
+    std::unordered_map<token, inet_address> _token_to_endpoint_map;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
     std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
@@ -228,7 +228,7 @@ private:
         friend class token_metadata;
     };
 
-    token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
+    token_metadata(std::unordered_map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata() {};
     const std::vector<token>& sorted_tokens() const;
@@ -239,7 +239,7 @@ public:
     size_t first_token_index(const token& start) const;
     std::experimental::optional<inet_address> get_endpoint(const token& token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
-    const std::map<token, inet_address>& get_token_to_endpoint() const {
+    const std::unordered_map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
     }
 
@@ -652,7 +652,19 @@ public:
      * NOTE: This is heavy and ineffective operation. This will be done only once when a node
      * changes state in the cluster, so it should be manageable.
      */
-    void calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name);
+    future<> calculate_pending_ranges_for_leaving(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata);
+    void calculate_pending_ranges_for_bootstrap(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata);
+    void calculate_pending_ranges_for_moving(
+        abstract_replication_strategy& strategy,
+        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
+        lw_shared_ptr<token_metadata> all_left_metadata);
 public:
 
     token get_predecessor(token t);

@@ -106,7 +106,8 @@ int get_generation_number() {
 storage_service::storage_service(distributed<database>& db, sharded<auth::service>& auth_service)
         : _db(db)
         , _auth_service(auth_service)
-        , _replicate_action([this] { return do_replicate_to_all_cores(); }) {
+        , _replicate_action([this] { return do_replicate_to_all_cores(); })
+        , _update_pending_ranges_action([this] { return do_update_pending_ranges(); }) {
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
@@ -800,7 +801,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    do_update_pending_ranges();
+    _update_pending_ranges_action.trigger_later().get();
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
@@ -882,7 +883,13 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
     _token_metadata.add_leaving_endpoint(endpoint);
-    update_pending_ranges().get();
+    update_pending_ranges_nowait(endpoint);
+}
+
+void storage_service::update_pending_ranges_nowait(inet_address endpoint) {
+    update_pending_ranges().handle_exception([endpoint] (std::exception_ptr ep) {
+        slogger.info("Failed to update_pending_ranges for node {}: {}", endpoint, ep);
+    });
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -3177,27 +3184,32 @@ std::chrono::milliseconds storage_service::get_ring_delay() {
     return std::chrono::milliseconds(ring_delay);
 }
 
-void storage_service::do_update_pending_ranges() {
+future<> storage_service::do_update_pending_ranges() {
     if (engine().cpu_id() != 0) {
-        throw std::runtime_error("do_update_pending_ranges should be called on cpu zero");
+        return make_exception_future<>(std::runtime_error("do_update_pending_ranges should be called on cpu zero"));
     }
     // long start = System.currentTimeMillis();
-    auto keyspaces = _db.local().get_non_system_keyspaces();
-    for (auto& keyspace_name : keyspaces) {
-        auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto& strategy = ks.get_replication_strategy();
-        get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name);
-    }
+    return do_with(_db.local().get_non_system_keyspaces(), [this] (auto& keyspaces){
+        return do_for_each(keyspaces, [this] (auto& keyspace_name) {
+            auto& ks = this->_db.local().find_keyspace(keyspace_name);
+            auto& strategy = ks.get_replication_strategy();
+            slogger.debug("Calculating pending ranges for keyspace={} starts", keyspace_name);
+            return get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name).finally([&keyspace_name] {
+                slogger.debug("Calculating pending ranges for keyspace={} ends", keyspace_name);
+            });
+        });
+    });
     // slogger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
 }
 
 future<> storage_service::update_pending_ranges() {
     return get_storage_service().invoke_on(0, [] (auto& ss){
         ss._update_jobs++;
-        ss.do_update_pending_ranges();
-        // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
-        return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
-            ss._update_jobs--;
+        return ss._update_pending_ranges_action.trigger_later().then([&ss] {
+            // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
+            return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
+                ss._update_jobs--;
+            });
         });
     });
 }

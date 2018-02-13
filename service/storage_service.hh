@@ -141,11 +141,12 @@ public:
     void uninit_messaging_service();
 
 private:
-    void do_update_pending_ranges();
+    future<> do_update_pending_ranges();
 
 public:
     future<> keyspace_changed(const sstring& ks_name);
     future<> update_pending_ranges();
+    void update_pending_ranges_nowait(inet_address endpoint);
 
     auth::service& get_local_auth_service() {
         return _auth_service.local();
@@ -700,6 +701,7 @@ private:
     future<> replicate_to_all_cores();
     future<> do_replicate_to_all_cores();
     serialized_action _replicate_action;
+    serialized_action _update_pending_ranges_action;
 private:
     /**
      * Replicates token_metadata contents on shard0 instance to other shards.
