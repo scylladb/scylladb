@@ -22,6 +22,7 @@
 #pragma once
 
 #include <boost/test/unit_test.hpp>
+#include <seastar/util/backtrace.hh>
 #include "flat_mutation_reader.hh"
 #include "mutation_assertions.hh"
 
@@ -165,7 +166,9 @@ public:
 
     flat_reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
-        BOOST_REQUIRE(bool(mo));
+        if (!mo) {
+            BOOST_FAIL(sprint("Expected %s, but got end of stream, at: %s", m, seastar::current_backtrace()));
+        }
         memory::disable_failure_guard dfg;
         assert_that(*mo).is_equal_to(m, ck_ranges);
         return *this;
