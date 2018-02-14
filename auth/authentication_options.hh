@@ -23,9 +23,11 @@
 
 #include <iosfwd>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
+#include <seastar/core/print.hh>
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
@@ -49,5 +51,12 @@ struct authentication_options final {
 inline bool any_authentication_options(const authentication_options& aos) noexcept {
     return aos.password || aos.options;
 }
+
+class unsupported_authentication_option : public std::invalid_argument {
+public:
+    explicit unsupported_authentication_option(authentication_option k)
+            : std::invalid_argument(sprint("The %s option is not supported.", k)) {
+    }
+};
 
 }

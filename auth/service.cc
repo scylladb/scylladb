@@ -291,6 +291,25 @@ bool is_enforcing(const service& ser)  {
     return enforcing_authorizer || enforcing_authenticator;
 }
 
+static void validate_authentication_options_are_supported(
+        const authentication_options& options,
+        const authentication_option_set& supported) {
+    const auto check = [&supported](authentication_option k) {
+        if (supported.count(k) == 0) {
+            throw unsupported_authentication_option(k);
+        }
+    };
+
+    if (options.password) {
+        check(authentication_option::password);
+    }
+
+    if (options.options) {
+        check(authentication_option::options);
+    }
+}
+
+
 future<> create_role(
         service& ser,
         const authenticated_user& performer,
@@ -305,11 +324,14 @@ future<> create_role(
             return make_ready_future<>();
         }
 
-        return ser.underlying_authenticator().create(
-                sstring(name),
-                options).handle_exception([&ser, &performer, &name](std::exception_ptr ep) {
-             // Roll-back.
-             return ser.underlying_role_manager().drop(performer, name).then([ep = std::move(ep)] {
+        return futurize_apply(
+                &validate_authentication_options_are_supported,
+                options,
+                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
+            return ser.underlying_authenticator().create(sstring(name), options);
+        }).handle_exception([&ser, &performer, &name](std::exception_ptr ep) {
+            // Roll-back.
+            return ser.underlying_role_manager().drop(performer, name).then([ep = std::move(ep)] {
                 std::rethrow_exception(ep);
             });
         });
@@ -327,7 +349,12 @@ future<> alter_role(
             return make_ready_future<>();
         }
 
-        return ser.underlying_authenticator().alter(sstring(name), options);
+        return futurize_apply(
+                &validate_authentication_options_are_supported,
+                options,
+                ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
+            return ser.underlying_authenticator().alter(sstring(name), options);
+        });
     });
 }
 

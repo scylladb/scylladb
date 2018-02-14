@@ -122,6 +122,8 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
             }
 
             return void_result_message();
+        }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -191,6 +193,8 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
         return auth::alter_role(as, *cs.user(), _role, update, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([](const auth::roles_argument_exception& e) {
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+        }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
             return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         });
     });

@@ -183,6 +183,8 @@ bool is_enforcing(const service&);
 ///
 /// \returns an exceptional future with \ref role_already_exists if the user or role exists.
 ///
+/// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
+///
 future<> create_role(
         service&,
         const authenticated_user& performer,
@@ -194,6 +196,8 @@ future<> create_role(
 /// Alter an existing role and its authentication information.
 ///
 /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
 ///
 future<> alter_role(
         service&,
