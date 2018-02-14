@@ -90,17 +90,17 @@ public:
     ///
     /// The resulting permission set includes permissions obtained transitively through roles granted to this role.
     ///
-    virtual future<permission_set> authorize(service&, stdx::string_view role_name, resource) const = 0;
+    virtual future<permission_set> authorize(service&, stdx::string_view role_name, const resource&) const = 0;
 
     ///
     /// Grant a set of permissions to a user for a particular \ref resource.
     ///
-    virtual future<> grant(permission_set, resource, stdx::string_view role_name) = 0;
+    virtual future<> grant(permission_set, const resource&, stdx::string_view role_name) = 0;
 
     ///
     /// Revoke a set of permissions from a user for a particular \ref resource.
     ///
-    virtual future<> revoke(permission_set, resource, stdx::string_view role_name) = 0;
+    virtual future<> revoke(permission_set, const resource&, stdx::string_view role_name) = 0;
 
     ///
     /// Query for granted permissions.
@@ -116,8 +116,8 @@ public:
     list(
             service&,
             permission_set matching,
-            std::optional<resource> resource,
-            std::optional<stdx::string_view> role_name) const = 0;
+            const std::optional<resource>& resource,
+            const std::optional<stdx::string_view>& role_name) const = 0;
 
     ///
     /// Revoke all permissions granted to a particular user.
@@ -127,7 +127,7 @@ public:
     ///
     /// Revoke all permissions granted to any user for a particular resource.
     ///
-    virtual future<> revoke_all(resource) = 0;
+    virtual future<> revoke_all(const resource&) = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

@@ -83,7 +83,7 @@ public:
         return _cache.stop();
     }
 
-    future<permission_set> get(stdx::string_view role_name, resource);
+    future<permission_set> get(stdx::string_view role_name, const resource&);
 };
 
 }

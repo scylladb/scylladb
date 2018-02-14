@@ -201,12 +201,16 @@ std::ostream& operator<<(std::ostream&, const role_resource_view&);
 ///
 resource parse_resource(stdx::string_view name);
 
+const resource& root_data_resource();
+
 inline resource make_data_resource(stdx::string_view keyspace) {
     return resource(data_resource_t{}, keyspace);
 }
 inline resource make_data_resource(stdx::string_view keyspace, stdx::string_view table) {
     return resource(data_resource_t{}, keyspace, table);
 }
+
+const resource& root_role_resource();
 
 inline resource make_role_resource(stdx::string_view role) {
     return resource(role_resource_t{}, role);

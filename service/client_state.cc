@@ -106,25 +106,38 @@ future<> service::client_state::has_all_keyspaces_access(
         return make_ready_future();
     }
     validate_login();
-    return ensure_has_permission(p, auth::resource(auth::resource_kind::data));
+
+    return do_with(auth::resource(auth::resource_kind::data), [this, p](const auto& r) {
+        return ensure_has_permission(p, r);
+    });
 }
 
 future<> service::client_state::has_keyspace_access(const sstring& ks,
                 auth::permission p) const {
-    return has_access(ks, p, auth::make_data_resource(ks));
+    return do_with(ks, auth::make_data_resource(ks), [this, p](auto const& ks, auto const& r) {
+        return has_access(ks, p, r);
+    });
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p) const {
     validation::validate_column_family(ks, cf);
-    return has_access(ks, p, auth::make_data_resource(ks, cf));
+
+    return do_with(ks, auth::make_data_resource(ks, cf), [this, p](const auto& ks, const auto& r) {
+        return has_access(ks, p, r);
+    });
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
-    return has_access(s.ks_name(), p, auth::make_data_resource(s.ks_name(), s.cf_name()));
+    return do_with(
+            s.ks_name(),
+            auth::make_data_resource(s.ks_name(),s.cf_name()),
+            [this, p](auto const& ks, auto const& r) {
+        return has_access(ks, p, r);
+    });
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::resource resource) const {
+future<> service::client_state::has_access(const sstring& ks, auth::permission p, const auth::resource& resource) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -179,34 +192,36 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
     }
 
-    return ensure_has_permission(p, std::move(resource));
+    return ensure_has_permission(p, resource);
 }
 
-future<bool> service::client_state::check_has_permission(auth::permission p, auth::resource resource) const {
+future<bool> service::client_state::check_has_permission(auth::permission p, const auth::resource& r) const {
     if (_is_internal) {
         return make_ready_future<bool>(true);
     }
 
-    std::optional<auth::resource> parent = resource.parent();
-
-    return _auth_service->get_permissions(*_user->name, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
-        if (set.contains(p)) {
-            return make_ready_future<bool>(true);
-        }
-        if (parent) {
-            return check_has_permission(p, std::move(*parent));
-        }
-        return make_ready_future<bool>(false);
+    return do_with(r.parent(), [this, p, &r](const auto& parent_r) {
+        return _auth_service->get_permissions(*_user->name, r).then([this, p, &parent_r](auth::permission_set set) {
+            if (set.contains(p)) {
+                return make_ready_future<bool>(true);
+            }
+            if (parent_r) {
+                return check_has_permission(p, *parent_r);
+            }
+            return make_ready_future<bool>(false);
+        });
     });
 }
 
-future<> service::client_state::ensure_has_permission(auth::permission p, auth::resource resource) const {
-    return check_has_permission(p, resource).then([this, p, resource](bool ok) {
+future<> service::client_state::ensure_has_permission(auth::permission p, const auth::resource& r) const {
+    return check_has_permission(p, r).then([this, p, &r](bool ok) {
         if (!ok) {
-            throw exceptions::unauthorized_exception(sprint("User %s has no %s permission on %s or any of its parents",
-                                            *_user,
-                                            auth::permissions::to_string(p),
-                                            resource));
+            throw exceptions::unauthorized_exception(
+                sprint(
+                        "User %s has no %s permission on %s or any of its parents",
+                        *_user,
+                        auth::permissions::to_string(p),
+                        r));
         }
     });
 }

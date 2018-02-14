@@ -154,8 +154,10 @@ cql3::statements::list_permissions_statement::execute(
     return map_reduce(
             resources,
             [&state, this](opt_resource r) {
-                auto& auth_service = *state.get_client_state().get_auth_service();
-                return auth_service.underlying_authorizer().list(auth_service, _permissions, std::move(r), _username);
+                return do_with(std::move(r), [this, &state](const opt_resource& r) {
+                    auto& auth_service = *state.get_client_state().get_auth_service();
+                    return auth_service.underlying_authorizer().list(auth_service, _permissions, r, _username);
+                });
             },
             std::vector<auth::permission_details>(),
             [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {

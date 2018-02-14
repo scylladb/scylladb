@@ -240,9 +240,9 @@ future<bool> service::has_existing_legacy_users() const {
     });
 }
 
-future<permission_set> service::get_permissions(stdx::string_view role_name, resource r) const {
-    return validate_role_exists(*this, role_name).then([this, role_name, r = std::move(r)] {
-        return _permissions_cache->get(role_name, std::move(r));
+future<permission_set> service::get_permissions(stdx::string_view role_name, const resource& r) const {
+    return validate_role_exists(*this, role_name).then([this, role_name, &r] {
+        return _permissions_cache->get(role_name, r);
     });
 }
 

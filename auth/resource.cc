@@ -280,4 +280,16 @@ resource parse_resource(stdx::string_view name) {
     return resource(kind, std::move(parts));
 }
 
+static const resource the_root_data_resource{resource_kind::data};
+
+const resource& root_data_resource() {
+    return the_root_data_resource;
+}
+
+static const resource the_root_role_resource{resource_kind::role};
+
+const resource& root_role_resource() {
+    return the_root_role_resource;
+}
+
 }

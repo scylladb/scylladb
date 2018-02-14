@@ -153,8 +153,8 @@ future<permission_set> default_authorizer::authorize_role_directly(
 future<permission_set> default_authorizer::authorize(
         service& ser,
         stdx::string_view role_name,
-        resource resource) const {
-    return do_with(permission_set(), std::move(resource), [this, &ser, role_name](auto& ps, const auto& r) {
+        const resource& r) const {
+    return do_with(permission_set(), [this, &ser, role_name, &r](auto& ps) {
         return ser.get_roles(role_name).then([this, &ser, &ps, &r](std::unordered_set<sstring> all_roles) {
             return do_with(std::move(all_roles), [this, &ser, &ps, &r](const auto& all_roles) {
                 return parallel_for_each(all_roles, [this, &ser, &ps, &r](stdx::string_view role_name) {
@@ -170,7 +170,11 @@ future<permission_set> default_authorizer::authorize(
 }
 
 future<>
-default_authorizer::modify(permission_set set, resource resource, stdx::string_view role_name, stdx::string_view op) {
+default_authorizer::modify(
+        permission_set set,
+        const resource& resource,
+        stdx::string_view role_name,
+        stdx::string_view op) {
     // TODO: why does this not check super user?
     auto query = sprint(
             "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -189,19 +193,19 @@ default_authorizer::modify(permission_set set, resource resource, stdx::string_v
 }
 
 
-future<> default_authorizer::grant(permission_set set, resource resource, stdx::string_view role_name) {
-    return modify(std::move(set), std::move(resource), role_name, "+");
+future<> default_authorizer::grant(permission_set set, const resource& resource, stdx::string_view role_name) {
+    return modify(std::move(set), resource, role_name, "+");
 }
 
-future<> default_authorizer::revoke(permission_set set, resource resource, stdx::string_view role_name) {
-    return modify(std::move(set), std::move(resource), role_name, "-");
+future<> default_authorizer::revoke(permission_set set, const resource& resource, stdx::string_view role_name) {
+    return modify(std::move(set), resource, role_name, "-");
 }
 
 future<std::vector<permission_details>> default_authorizer::list(
         service& ser,
         permission_set set,
-        std::optional<resource> resource,
-        std::optional<stdx::string_view> role_name) const {
+        const std::optional<resource>& resource,
+        const std::optional<stdx::string_view>& role_name) const {
     sstring query = sprint(
             "SELECT %s, %s, %s FROM %s.%s",
             ROLE_NAME,
@@ -215,7 +219,7 @@ future<std::vector<permission_details>> default_authorizer::list(
     future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
 
     if (role_name) {
-        f = ser.get_roles(*role_name).then([this, resource = std::move(resource), query, &f](
+        f = ser.get_roles(*role_name).then([this, &resource, query, &f](
                 std::unordered_set<sstring> all_roles) mutable {
             if (resource) {
                 query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
@@ -268,7 +272,7 @@ future<> default_authorizer::revoke_all(stdx::string_view role_name) {
     });
 }
 
-future<> default_authorizer::revoke_all(resource resource) {
+future<> default_authorizer::revoke_all(const resource& resource) {
     auto query = sprint(
             "SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
             ROLE_NAME,

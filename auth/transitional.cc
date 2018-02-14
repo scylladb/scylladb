@@ -205,8 +205,8 @@ public:
     }
 
     virtual future<permission_set>
-    authorize(service& ser, stdx::string_view role_name, resource resource) const override {
-        return ser.has_superuser(role_name).then([resource](bool s) {
+    authorize(service& ser, stdx::string_view role_name, const resource& resource) const override {
+        return ser.has_superuser(role_name).then([&resource](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<
                                     permission::CREATE,
@@ -219,29 +219,29 @@ public:
         });
     }
 
-    virtual future<> grant(permission_set ps, resource r, stdx::string_view s) override {
-        return _authorizer->grant(std::move(ps), std::move(r), s);
+    virtual future<> grant(permission_set ps, const resource& r, stdx::string_view s) override {
+        return _authorizer->grant(std::move(ps), r, s);
     }
 
-    virtual future<> revoke(permission_set ps, resource r, stdx::string_view s) override {
-        return _authorizer->revoke(std::move(ps), std::move(r), s);
+    virtual future<> revoke(permission_set ps, const resource& r, stdx::string_view s) override {
+        return _authorizer->revoke(std::move(ps), r, s);
     }
 
     virtual future<std::vector<permission_details>>
     list(
             service& ser,
             permission_set ps,
-            std::optional<resource> r,
-            std::optional<stdx::string_view> s) const override {
-        return _authorizer->list(ser, std::move(ps), std::move(r), std::move(s));
+            const std::optional<resource>& r,
+            const std::optional<stdx::string_view>& s) const override {
+        return _authorizer->list(ser, std::move(ps), r, s);
     }
 
     virtual future<> revoke_all(stdx::string_view s) override {
         return _authorizer->revoke_all(s);
     }
 
-    virtual future<> revoke_all(resource r) override {
-        return _authorizer->revoke_all(std::move(r));
+    virtual future<> revoke_all(const resource& r) override {
+        return _authorizer->revoke_all(r);
     }
 
     virtual const resource_set& protected_resources() const override {

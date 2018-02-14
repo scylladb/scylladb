@@ -87,7 +87,7 @@ future<> create_role_statement::check_access(const service::client_state& state)
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission(auth::permission::CREATE, auth::resource(auth::resource_kind::role)).get0();
+        state.ensure_has_permission(auth::permission::CREATE, auth::root_role_resource()).get0();
 
         if (*_options.is_superuser) {
             if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get0()) {
@@ -257,9 +257,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        if (state.check_has_permission(
-                    auth::permission::DESCRIBE,
-                    auth::resource(auth::resource_kind::role)).get0()) {
+        if (state.check_has_permission(auth::permission::DESCRIBE, auth::root_role_resource()).get0()) {
             return;
         }
 
@@ -342,7 +340,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
             // only the roles granted to them.
             return cs.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::resource(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
+                    auth::root_role_resource()).then([&cs, &rm, query_mode](bool has_describe) {
                 if (has_describe) {
                     return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
                 }
@@ -367,7 +365,10 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> grant_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::make_role_resource(_role));
+
+    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+        return state.ensure_has_permission(auth::permission::AUTHORIZE, r);
+    });
 }
 
 future<result_message_ptr>
@@ -389,7 +390,10 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> revoke_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::make_role_resource(_role));
+
+    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+        return state.ensure_has_permission(auth::permission::AUTHORIZE, r);
+    });
 }
 
 future<result_message_ptr> revoke_role_statement::execute(
