@@ -57,8 +57,6 @@ namespace auth {
 
 class service;
 
-class authenticated_user;
-
 struct permission_details {
     sstring user;
     ::auth::resource resource;
@@ -95,12 +93,12 @@ public:
     ///
     /// Grant a set of permissions to a user for a particular \ref resource.
     ///
-    virtual future<> grant(const authenticated_user& performer, permission_set, resource, sstring to) = 0;
+    virtual future<> grant(permission_set, resource, sstring to) = 0;
 
     ///
     /// Revoke a set of permissions from a user for a particular \ref resource.
     ///
-    virtual future<> revoke(const authenticated_user& performer, permission_set, resource, sstring from) = 0;
+    virtual future<> revoke(permission_set, resource, sstring from) = 0;
 
     ///
     /// Query for granted permissions.
@@ -112,12 +110,7 @@ public:
     /// If `user` is empty, query for permissions of all users. Otherwise, query for permissions specific to that user.
     ///
     virtual future<std::vector<permission_details>>
-    list(
-            service&,
-            const authenticated_user& performer,
-            permission_set matching,
-            std::optional<resource> resource,
-            std::optional<sstring> user) const = 0;
+    list(service&, permission_set matching, std::optional<resource> resource, std::optional<sstring> user) const = 0;
 
     ///
     /// Revoke all permissions granted to a particular user.

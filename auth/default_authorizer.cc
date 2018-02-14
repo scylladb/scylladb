@@ -167,12 +167,7 @@ future<auth::permission_set> auth::default_authorizer::authorize(
     });
 }
 
-future<> auth::default_authorizer::modify(
-        const authenticated_user& performer,
-        permission_set set,
-        resource resource,
-        sstring user,
-        sstring op) {
+future<> auth::default_authorizer::modify(permission_set set, resource resource, sstring user, sstring op) {
     // TODO: why does this not check super user?
     auto query = sprint(
             "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -191,25 +186,16 @@ future<> auth::default_authorizer::modify(
 }
 
 
-future<> auth::default_authorizer::grant(
-        const authenticated_user& performer,
-        permission_set set,
-        resource resource,
-        sstring to) {
-    return modify(performer, std::move(set), std::move(resource), std::move(to), "+");
+future<> auth::default_authorizer::grant(permission_set set, resource resource, sstring to) {
+    return modify(std::move(set), std::move(resource), std::move(to), "+");
 }
 
-future<> auth::default_authorizer::revoke(
-        const authenticated_user& performer,
-        permission_set set,
-        resource resource,
-        sstring from) {
-    return modify(performer, std::move(set), std::move(resource), std::move(from), "-");
+future<> auth::default_authorizer::revoke(permission_set set, resource resource, sstring from) {
+    return modify(std::move(set), std::move(resource), std::move(from), "-");
 }
 
 future<std::vector<auth::permission_details>> auth::default_authorizer::list(
         service& ser,
-        const authenticated_user&,
         permission_set set,
         std::optional<resource> resource,
         std::optional<sstring> role) const {

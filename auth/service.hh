@@ -29,7 +29,6 @@
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
-#include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
@@ -190,7 +189,6 @@ bool is_enforcing(const service&);
 ///
 future<> create_role(
         service&,
-        const authenticated_user& performer,
         stdx::string_view name,
         const role_config&,
         const authentication_options&);
@@ -204,7 +202,6 @@ future<> create_role(
 ///
 future<> alter_role(
         service&,
-        const authenticated_user& performer,
         stdx::string_view name,
         const role_config_update&,
         const authentication_options&);
@@ -214,7 +211,7 @@ future<> alter_role(
 ///
 /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
 ///
-future<> drop_role(service&, const authenticated_user& performer, stdx::string_view name);
+future<> drop_role(service&, stdx::string_view name);
 
 ///
 /// Check if `grantee` has been granted the named role.

@@ -111,10 +111,9 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
             std::move(config),
             extract_authentication_options(_options),
             [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
-        auto& cs = state.get_client_state();
-        auto& as = *cs.get_auth_service();
+        auto& as = *state.get_client_state().get_auth_service();
 
-        return auth::create_role(as, *cs.user(), _role, config, authen_options).then([] {
+        return auth::create_role(as, _role, config, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
             if (!_if_not_exists) {
@@ -186,10 +185,9 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
             std::move(update),
             extract_authentication_options(_options),
             [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
-        auto& cs = state.get_client_state();
-        auto& as = *cs.get_auth_service();
+        auto& as = *state.get_client_state().get_auth_service();
 
-        return auth::alter_role(as, *cs.user(), _role, update, authen_options).then([] {
+        return auth::alter_role(as, _role, update, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([](const auth::roles_argument_exception& e) {
             return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
@@ -238,10 +236,9 @@ future<result_message_ptr>
 drop_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
+    auto& as = *state.get_client_state().get_auth_service();
 
-    return auth::drop_role(as, *cs.user(), _role).then([] {
+    return auth::drop_role(as, _role).then([] {
         return void_result_message();
     }).handle_exception_type([this](const auth::nonexistant_role& e) {
         if (!_if_exists) {
@@ -378,10 +375,9 @@ future<result_message_ptr>
 grant_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
+    auto& as = *state.get_client_state().get_auth_service();
 
-    return as.underlying_role_manager().grant(*cs.user(), _grantee, _role).then([] {
+    return as.underlying_role_manager().grant(_grantee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
@@ -405,10 +401,9 @@ revoke_role_statement::execute(
         const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    auto& cs = state.get_client_state();
-    auto& rm = cs.get_auth_service()->underlying_role_manager();
+    auto& rm = state.get_client_state().get_auth_service()->underlying_role_manager();
 
-    return rm.revoke(*cs.user(), _revokee, _role).then([] {
+    return rm.revoke(_revokee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
         throw exceptions::invalid_request_exception(e.what());

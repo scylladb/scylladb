@@ -371,7 +371,6 @@ public:
 
                 auth::create_role(
                     auth_service->local(),
-                    auth::authenticated_user(),
                     testing_superuser,
                     config,
                     auth::authentication_options()).get0();

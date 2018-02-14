@@ -218,22 +218,21 @@ public:
         });
     }
 
-    virtual future<> grant(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->grant(user, std::move(ps), std::move(r), std::move(s));
+    virtual future<> grant(permission_set ps, resource r, sstring s) override {
+        return _authorizer->grant(std::move(ps), std::move(r), std::move(s));
     }
 
-    virtual future<> revoke(const authenticated_user& user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->revoke(user, std::move(ps), std::move(r), std::move(s));
+    virtual future<> revoke(permission_set ps, resource r, sstring s) override {
+        return _authorizer->revoke(std::move(ps), std::move(r), std::move(s));
     }
 
     virtual future<std::vector<permission_details>>
     list(
             service& ser,
-            const authenticated_user& user,
             permission_set ps,
             std::optional<resource> r,
             std::optional<sstring> s) const override {
-        return _authorizer->list(ser, user, std::move(ps), std::move(r), std::move(s));
+        return _authorizer->list(ser, std::move(ps), std::move(r), std::move(s));
     }
 
     virtual future<> revoke_all(sstring s) override {

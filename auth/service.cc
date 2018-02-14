@@ -322,14 +322,10 @@ static void validate_authentication_options_are_supported(
 
 future<> create_role(
         service& ser,
-        const authenticated_user& performer,
         stdx::string_view name,
         const role_config& config,
         const authentication_options& options) {
-    return ser.underlying_role_manager().create(
-            performer,
-            name,
-            config).then([&ser, &performer, name, &options] {
+    return ser.underlying_role_manager().create(name, config).then([&ser, name, &options] {
         if (!auth::any_authentication_options(options)) {
             return make_ready_future<>();
         }
@@ -339,9 +335,9 @@ future<> create_role(
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
             return ser.underlying_authenticator().create(sstring(name), options);
-        }).handle_exception([&ser, &performer, &name](std::exception_ptr ep) {
+        }).handle_exception([&ser, &name](std::exception_ptr ep) {
             // Roll-back.
-            return ser.underlying_role_manager().drop(performer, name).then([ep = std::move(ep)] {
+            return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
                 std::rethrow_exception(ep);
             });
         });
@@ -350,11 +346,10 @@ future<> create_role(
 
 future<> alter_role(
         service& ser,
-        const authenticated_user& performer,
         stdx::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
-    return ser.underlying_role_manager().alter(performer, name, config_update).then([&ser, name, &options] {
+    return ser.underlying_role_manager().alter(name, config_update).then([&ser, name, &options] {
         if (!any_authentication_options(options)) {
             return make_ready_future<>();
         }
@@ -368,12 +363,12 @@ future<> alter_role(
     });
 }
 
-future<> drop_role(service& ser, const authenticated_user& performer, stdx::string_view name) {
-    return do_with(sstring(name), [&ser, &performer](const auto& name) {
+future<> drop_role(service& ser, stdx::string_view name) {
+    return do_with(sstring(name), [&ser](const auto& name) {
         return ser.underlying_authorizer().revoke_all(name).then([&ser, &name] {
             return ser.underlying_authenticator().drop(name);
-        }).then([&ser, &performer, &name] {
-            return ser.underlying_role_manager().drop(performer, name);
+        }).then([&ser, &name] {
+            return ser.underlying_role_manager().drop(name);
         });
     });
 }

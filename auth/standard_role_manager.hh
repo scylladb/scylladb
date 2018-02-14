@@ -64,19 +64,15 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<>
-    create(const authenticated_user& performer, stdx::string_view role_name, const role_config&) override;
+    virtual future<> create(stdx::string_view role_name, const role_config&) override;
 
-    virtual future<> drop(const authenticated_user& performer, stdx::string_view role_name) override;
+    virtual future<> drop(stdx::string_view role_name) override;
 
-    virtual future<>
-    alter(const authenticated_user& performer, stdx::string_view role_name, const role_config_update&) override;
+    virtual future<> alter(stdx::string_view role_name, const role_config_update&) override;
 
-    virtual future<>
-    grant(const authenticated_user& performer, stdx::string_view grantee_name, stdx::string_view role_name) override;
+    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) override;
 
-    virtual future<>
-    revoke(const authenticated_user& performer, stdx::string_view revokee_name, stdx::string_view role_name) override;
+    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) override;
 
     virtual future<std::unordered_set<sstring>>
     query_granted(stdx::string_view grantee_name, recursive_role_query) const override;

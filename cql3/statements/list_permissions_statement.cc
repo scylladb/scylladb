@@ -155,18 +155,7 @@ cql3::statements::list_permissions_statement::execute(
             resources,
             [&state, this](opt_resource r) {
                 auto& auth_service = *state.get_client_state().get_auth_service();
-                return make_ready_future<>().then([
-                        this,
-                        r = std::move(r),
-                        &auth_service,
-                        user = state.get_client_state().user()] {
-                    return auth_service.underlying_authorizer().list(
-                            auth_service,
-                            *user,
-                            _permissions,
-                            std::move(r),
-                            _username).finally([user] {});
-                });
+                return auth_service.underlying_authorizer().list(auth_service, _permissions, std::move(r), _username);
             },
             std::vector<auth::permission_details>(),
             [](std::vector<auth::permission_details> details, std::vector<auth::permission_details> pd) {

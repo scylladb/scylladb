@@ -37,8 +37,6 @@
 
 namespace auth {
 
-class authenticated_user;
-
 struct role_config final {
     bool is_superuser{false};
     bool can_login{false};
@@ -141,31 +139,27 @@ public:
     virtual future<> stop() = 0;
 
     // Must throw `role_already_exists` for a role that has previously been created.
-    virtual future<>
-    create(const authenticated_user& performer, stdx::string_view role_name, const role_config&) = 0;
+    virtual future<> create(stdx::string_view role_name, const role_config&) = 0;
 
     // Must throw `nonexistant_role` if the role does not exist.
-    virtual future<> drop(const authenticated_user& performer, stdx::string_view role_name) = 0;
+    virtual future<> drop(stdx::string_view role_name) = 0;
 
     // Must throw `nonexistant_role` if the role does not exist.
-    virtual future<>
-    alter(const authenticated_user& performer, stdx::string_view role_name, const role_config_update&) = 0;
+    virtual future<> alter(stdx::string_view role_name, const role_config_update&) = 0;
 
     // Grant `role_name` to `grantee_name`.
     //
     // Must throw `nonexistant_role` if either the role or the grantee do not exist.
     //
     // Must throw `role_already_included` if granting the role would be redundant, or create a cycle.
-    virtual future<>
-    grant(const authenticated_user& performer, stdx::string_view grantee_name, stdx::string_view role_name) = 0;
+    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) = 0;
 
     // Revoke `role_name` from `revokee_name`.
     //
     // Must throw `nonexistant_role` if either the role or the revokee do not exist.
     //
     // Must throw `revoke_ungranted_role` if the role was not granted.
-    virtual future<>
-    revoke(const authenticated_user& performer, stdx::string_view revokee_name, stdx::string_view role_name) = 0;
+    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) = 0;
 
     // Must throw `nonexistant_role` if the role does not exist.
     virtual future<std::unordered_set<sstring>> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;

@@ -60,17 +60,16 @@ public:
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
-    virtual future<> grant(const authenticated_user&, permission_set, resource, sstring) override {
+    virtual future<> grant(permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
     }
 
-    virtual future<> revoke(const authenticated_user&, permission_set, resource, sstring) override {
+    virtual future<> revoke(permission_set, resource, sstring) override {
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
     virtual future<std::vector<permission_details>> list(
             service&,
-            const authenticated_user& performer,
             permission_set,
             std::optional<resource>,
             std::optional<sstring>) const override {
