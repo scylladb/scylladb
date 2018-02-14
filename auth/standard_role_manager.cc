@@ -69,7 +69,7 @@ struct record final {
     sstring name;
     bool is_superuser;
     bool can_login;
-    std::unordered_set<sstring> member_of;
+    role_set member_of;
 };
 
 static db::consistency_level consistency_for_role(stdx::string_view role_name) noexcept {
@@ -104,7 +104,7 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
                         row.get_as<bool>("can_login"),
                         (row.has("member_of")
                                  ? row.get_set<sstring>("member_of")
-                                 : std::unordered_set<sstring>())});
+                                 : role_set())});
     });
 }
 
@@ -342,10 +342,10 @@ future<> standard_role_manager::drop(stdx::string_view role_name) {
         const auto revoke_members_of = [this, grantee = role_name] {
             return this->query_granted(
                     grantee,
-                    recursive_role_query::no).then([this, grantee](std::unordered_set<sstring> granted_roles) {
+                    recursive_role_query::no).then([this, grantee](role_set granted_roles) {
                 return do_with(
                         std::move(granted_roles),
-                        [this, grantee](const std::unordered_set<sstring>& granted_roles) {
+                        [this, grantee](const role_set& granted_roles) {
                     return parallel_for_each(
                             granted_roles.begin(),
                             granted_roles.end(),
@@ -392,7 +392,7 @@ standard_role_manager::modify_membership(
         return _qp.process(
                 query,
                 consistency_for_role(grantee_name),
-                {std::unordered_set<sstring>{sstring(role_name)}, sstring(grantee_name)}).discard_result();
+                {role_set{sstring(role_name)}, sstring(grantee_name)}).discard_result();
     };
 
     const auto modify_role_members = [this, role_name, grantee_name, ch] {
@@ -425,7 +425,7 @@ standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view r
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
                 grantee_name,
-                recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
+                recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.count(sstring(role_name)) != 0) {
                 throw role_already_included(grantee_name, role_name);
             }
@@ -437,7 +437,7 @@ standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view r
     const auto check_cycle = [this, role_name, grantee_name] {
         return this->query_granted(
                 role_name,
-                recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
+                recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
             if (roles.count(sstring(grantee_name)) != 0) {
                 throw role_already_included(role_name, grantee_name);
             }
@@ -460,7 +460,7 @@ standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view 
     }).then([this, revokee_name, role_name] {
         return this->query_granted(
                 revokee_name,
-                recursive_role_query::no).then([revokee_name, role_name](std::unordered_set<sstring> roles) {
+                recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
             if (roles.count(sstring(role_name)) == 0) {
                 throw revoke_ungranted_role(revokee_name, role_name);
             }
@@ -476,9 +476,9 @@ static future<> collect_roles(
         cql3::query_processor& qp,
         stdx::string_view grantee_name,
         bool recurse,
-        std::unordered_set<sstring>& roles) {
+        role_set& roles) {
     return require_record(qp, grantee_name).then([&qp, &roles, recurse](record r) {
-        return do_with(std::move(r.member_of), [&qp, &roles, recurse](const std::unordered_set<sstring>& memberships) {
+        return do_with(std::move(r.member_of), [&qp, &roles, recurse](const role_set& memberships) {
             return do_for_each(memberships.begin(), memberships.end(), [&qp, &roles, recurse](const sstring& role_name) {
                 roles.insert(role_name);
 
@@ -492,18 +492,17 @@ static future<> collect_roles(
     });
 }
 
-future<std::unordered_set<sstring>>
-standard_role_manager::query_granted(stdx::string_view grantee_name, recursive_role_query m) const {
+future<role_set> standard_role_manager::query_granted(stdx::string_view grantee_name, recursive_role_query m) const {
     const bool recurse = (m == recursive_role_query::yes);
 
     return do_with(
-            std::unordered_set<sstring>{sstring(grantee_name)},
-            [this, grantee_name, recurse](std::unordered_set<sstring>& roles) {
+            role_set{sstring(grantee_name)},
+            [this, grantee_name, recurse](role_set& roles) {
         return collect_roles(_qp, grantee_name, recurse, roles).then([&roles] { return roles; });
     });
 }
 
-future<std::unordered_set<sstring>> standard_role_manager::query_all() const {
+future<role_set> standard_role_manager::query_all() const {
     static const sstring query = sprint(
             "SELECT %s FROM %s",
             meta::roles_table::role_col_name,
@@ -513,7 +512,7 @@ future<std::unordered_set<sstring>> standard_role_manager::query_all() const {
     static const auto role_col_name_string = sstring(meta::roles_table::role_col_name);
 
     return _qp.process(query, db::consistency_level::QUORUM).then([](::shared_ptr<cql3::untyped_result_set> results) {
-        std::unordered_set<sstring> roles;
+        role_set roles;
 
         std::transform(
                 results->begin(),

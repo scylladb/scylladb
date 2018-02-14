@@ -145,7 +145,7 @@ public:
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
     ///
     /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
-    future<std::unordered_set<sstring>> get_roles(stdx::string_view role_name) const;
+    future<role_set> get_roles(stdx::string_view role_name) const;
 
     future<bool> exists(const resource&) const;
 
@@ -181,7 +181,7 @@ private:
 
 future<bool> has_superuser(const service&, const authenticated_user&);
 
-future<std::unordered_set<sstring>> get_roles(const service&, const authenticated_user&);
+future<role_set> get_roles(const service&, const authenticated_user&);
 
 future<permission_set> get_permissions(const service&, const authenticated_user&, const resource&);
 

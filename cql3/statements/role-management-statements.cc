@@ -324,7 +324,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     make_column_spec("super", boolean_type),
                     make_column_spec("login", boolean_type)});
 
-    static const auto make_results = [](auth::role_manager& rm, std::unordered_set<sstring>&& roles)
+    static const auto make_results = [](auth::role_manager& rm, auth::role_set&& roles)
             -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
 
@@ -372,13 +372,13 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
                 }
 
-                return rm.query_granted(*user->name, query_mode).then([&rm](std::unordered_set<sstring> roles) {
+                return rm.query_granted(*user->name, query_mode).then([&rm](auth::role_set roles) {
                     return make_results(rm, std::move(roles));
                 });
             });
         }
 
-        return rm.query_granted(*_grantee, query_mode).then([&rm](std::unordered_set<sstring> roles) {
+        return rm.query_granted(*_grantee, query_mode).then([&rm](auth::role_set roles) {
             return make_results(rm, std::move(roles));
         });
     }).handle_exception_type([](const auth::nonexistant_role& e) {

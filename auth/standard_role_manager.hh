@@ -76,10 +76,9 @@ public:
 
     virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) override;
 
-    virtual future<std::unordered_set<sstring>>
-    query_granted(stdx::string_view grantee_name, recursive_role_query) const override;
+    virtual future<role_set> query_granted(stdx::string_view grantee_name, recursive_role_query) const override;
 
-    virtual future<std::unordered_set<sstring>> query_all() const override;
+    virtual future<role_set> query_all() const override;
 
     virtual future<bool> exists(stdx::string_view role_name) const override;
 

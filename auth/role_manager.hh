@@ -88,6 +88,8 @@ public:
     }
 };
 
+using role_set = std::unordered_set<sstring>;
+
 enum class recursive_role_query { yes, no };
 
 ///
@@ -145,9 +147,9 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<std::unordered_set<sstring>> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
+    virtual future<role_set> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
 
-    virtual future<std::unordered_set<sstring>> query_all() const = 0;
+    virtual future<role_set> query_all() const = 0;
 
     virtual future<bool> exists(stdx::string_view role_name) const = 0;
 
