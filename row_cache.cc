@@ -114,24 +114,13 @@ cache_tracker::setup_metrics() {
 }
 
 void cache_tracker::clear() {
+    auto partitions_before = _stats.partitions;
     with_allocator(_region.allocator(), [this] {
-        auto clear = [this] (lru_type& lru) {
-            while (!lru.empty()) {
-                cache_entry& ce = lru.back();
-                auto it = row_cache::partitions_type::s_iterator_to(ce);
-                while (it->is_evictable()) {
-                    cache_entry& to_remove = *it;
-                    ++it;
-                    to_remove._lru_link.unlink();
-                    current_deleter<cache_entry>()(&to_remove);
-                }
-                clear_continuity(*it);
-            }
-        };
-        clear(_lru);
+        while (!_lru.empty()) {
+            _lru.back().on_evicted(*this);
+        }
     });
-    _stats.partition_removals += _stats.partitions;
-    _stats.partitions = 0;
+    _stats.partition_removals += partitions_before;
     allocator().invalidate_references();
 }
 
