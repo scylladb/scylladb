@@ -22,17 +22,20 @@
 #pragma once
 
 #include <chrono>
+#include <experimental/string_view>
 #include <functional>
 #include <iostream>
 #include <utility>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "log.hh"
+#include "stdx.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 
@@ -45,8 +48,8 @@ struct hash<auth::authenticated_user> final {
     }
 };
 
-inline std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::resource>& p) {
-    os << "{user: " << p.first.name() << ", resource: " << p.second << "}";
+inline std::ostream& operator<<(std::ostream& os, const std::pair<sstring, auth::resource>& p) {
+    os << "{role: " << p.first << ", resource: " << p.second << "}";
     return os;
 }
 
@@ -70,7 +73,7 @@ struct permissions_cache_config final {
 
 class permissions_cache final {
     using cache_type = utils::loading_cache<
-            std::pair<authenticated_user, resource>,
+            std::pair<sstring, resource>,
             permission_set,
             utils::loading_cache_reload_enabled::yes,
             utils::simple_entry_size<permission_set>,
@@ -87,7 +90,7 @@ public:
         return _cache.stop();
     }
 
-    future<permission_set> get(::shared_ptr<authenticated_user>, resource);
+    future<permission_set> get(stdx::string_view role_name, resource);
 };
 
 }

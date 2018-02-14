@@ -39,13 +39,13 @@ permissions_cache_config permissions_cache_config::from_db_config(const db::conf
 
 permissions_cache::permissions_cache(const permissions_cache_config& c, service& ser, logging::logger& log)
         : _cache(c.max_entries, c.validity_period, c.update_period, log, [&ser, &log](const key_type& k) {
-              log.debug("Refreshing permissions for {}", k.first.name());
-              return ser.underlying_authorizer().authorize(ser, ::make_shared<authenticated_user>(k.first), k.second);
+              log.debug("Refreshing permissions for {}", k.first);
+              return ser.underlying_authorizer().authorize(ser, k.first, k.second);
           }) {
 }
 
-future<permission_set> permissions_cache::get(::shared_ptr<authenticated_user> user, resource r) {
-    return _cache.get(key_type(*user, r));
+future<permission_set> permissions_cache::get(stdx::string_view role_name, resource r) {
+    return _cache.get(key_type(sstring(role_name), r));
 }
 
 }

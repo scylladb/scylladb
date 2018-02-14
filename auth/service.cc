@@ -88,31 +88,6 @@ private:
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
 
-static db::consistency_level consistency_for_user(const sstring& name) {
-    if (name == meta::DEFAULT_SUPERUSER_NAME) {
-        return db::consistency_level::QUORUM;
-    } else {
-        return db::consistency_level::LOCAL_ONE;
-    }
-}
-
-static future<::shared_ptr<cql3::untyped_result_set>> select_user(cql3::query_processor& qp, const sstring& name) {
-    // Here was a thread local, explicit cache of prepared statement. In normal execution this is
-    // fine, but since we in testing set up and tear down system over and over, we'd start using
-    // obsolete prepared statements pretty quickly.
-    // Rely on query processing caching statements instead, and lets assume
-    // that a map lookup string->statement is not gonna kill us much.
-    return qp.process(
-            sprint(
-                    "SELECT * FROM %s.%s WHERE %s = ?",
-                    meta::AUTH_KS,
-                    meta::USERS_CF,
-                    meta::user_name_col_name),
-            consistency_for_user(name),
-            { name },
-            true);
-}
-
 service_config service_config::from_db_config(const db::config& dc) {
     const qualified_name qualified_authorizer_name(meta::AUTH_PACKAGE_NAME, dc.authorizer());
     const qualified_name qualified_authenticator_name(meta::AUTH_PACKAGE_NAME, dc.authenticator());
@@ -140,9 +115,7 @@ service::service(
             , _authorizer(std::move(z))
             , _authenticator(std::move(a))
             , _role_manager(std::move(r))
-            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer))
-            , _stopped(make_ready_future<>()) {
-
+            , _migration_listener(std::make_unique<auth_migration_listener>(*_authorizer)) {
     // The password authenticator requires that the `standard_role_manager` is running so that the roles metadata table
     // it manages is created and updated. This cross-module dependency is rather gross, but we have to maintain it for
     // the sake of compatibility with Apache Cassandra and its choice of auth. schema.
@@ -190,63 +163,9 @@ future<> service::create_keyspace_if_missing() const {
     return make_ready_future<>();
 }
 
-future<> service::create_metadata_if_missing() {
-    // 3 months.
-    static const auto gc_grace_seconds = 90 * 24 * 60 * 60;
-
-    static const sstring users_table_query = sprint(
-            "CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY (%s)) WITH gc_grace_seconds=%s",
-            meta::AUTH_KS,
-            meta::USERS_CF,
-            meta::user_name_col_name,
-            meta::superuser_col_name,
-            meta::user_name_col_name,
-            gc_grace_seconds);
-
-    return create_metadata_table_if_missing(
-            meta::USERS_CF,
-            _qp,
-            users_table_query,
-            _migration_manager).then([this] {
-        _stopped = auth::do_after_system_ready(_as, [this] {
-            return has_existing_users().then([this](bool existing) {
-                if (!existing) {
-                    //
-                    // Create default superuser.
-                    //
-
-                    static const sstring query = sprint(
-                            "INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
-                            meta::AUTH_KS,
-                            meta::USERS_CF,
-                            meta::user_name_col_name,
-                            meta::superuser_col_name);
-
-                    return _qp.process(
-                            query,
-                            db::consistency_level::ONE,
-                            { meta::DEFAULT_SUPERUSER_NAME, true }).then([](auto&&) {
-                        log.info("Created default superuser '{}'", meta::DEFAULT_SUPERUSER_NAME);
-                    }).discard_result();
-                }
-
-                return make_ready_future<>();
-            });
-        });
-
-        return make_ready_future<>();
-    });
-}
-
 future<> service::start() {
     return once_among_shards([this] {
-        return create_keyspace_if_missing().then([this] {
-            if (is_enforcing(*this)) {
-                return create_metadata_if_missing();
-            }
-
-            return make_ready_future<>();
-        });
+        return create_keyspace_if_missing();
     }).then([this] {
         return _role_manager->start();
     }).then([this] {
@@ -262,14 +181,16 @@ future<> service::start() {
 }
 
 future<> service::stop() {
-    _as.request_abort();
     return _permissions_cache->stop().then([this] {
-        auto s = _stopped.handle_exception_type([] (const sleep_aborted&) { });
-        return when_all_succeed(std::move(s), _role_manager->stop(), _authorizer->stop(), _authenticator->stop());
+        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop());
     });
 }
 
-future<bool> service::has_existing_users() const {
+future<bool> service::has_existing_legacy_users() const {
+    if (!_qp.db().local().has_schema(meta::AUTH_KS, meta::USERS_CF)) {
+        return make_ready_future<bool>(false);
+    }
+
     static const sstring default_user_query = sprint(
             "SELECT * FROM %s.%s WHERE %s = ?",
             meta::AUTH_KS,
@@ -311,43 +232,8 @@ future<bool> service::has_existing_users() const {
     });
 }
 
-future<bool> service::is_existing_user(const sstring& name) const {
-    return select_user(_qp, name).then([](auto results) {
-        return !results->empty();
-    });
-}
-
-future<bool> service::is_super_user(const sstring& name) const {
-    return select_user(_qp, name).then([](auto results) {
-        return !results->empty() && results->one().template get_as<bool>(meta::superuser_col_name);
-    });
-}
-
-future<> service::insert_user(const sstring& name, bool is_superuser) {
-    return _qp.process(
-            sprint(
-                    "INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
-                    meta::AUTH_KS,
-                    meta::USERS_CF,
-                    meta::user_name_col_name,
-                    meta::superuser_col_name),
-            consistency_for_user(name),
-            { name, is_superuser }).discard_result();
-}
-
-future<> service::delete_user(const sstring& name) {
-    return _qp.process(
-            sprint(
-                    "DELETE FROM %s.%s WHERE %s = ?",
-                    meta::AUTH_KS,
-                    meta::USERS_CF,
-                    meta::user_name_col_name),
-            consistency_for_user(name),
-            { name }).discard_result();
-}
-
-future<permission_set> service::get_permissions(::shared_ptr<authenticated_user> u, resource r) const {
-    return _permissions_cache->get(std::move(u), std::move(r));
+future<permission_set> service::get_permissions(stdx::string_view role_name, resource r) const {
+    return _permissions_cache->get(role_name, std::move(r));
 }
 
 future<bool> service::role_has_superuser(stdx::string_view role_name) const {
@@ -380,12 +266,20 @@ future<std::unordered_set<sstring>> service::get_roles(stdx::string_view role_na
 // Free functions.
 //
 
-future<bool> is_super_user(const service& ser, const authenticated_user& u) {
+future<bool> has_superuser(const service& ser, const authenticated_user& u) {
     if (u.is_anonymous()) {
         return make_ready_future<bool>(false);
     }
 
-    return ser.is_super_user(u.name());
+    return ser.role_has_superuser(u.name());
+}
+
+future<std::unordered_set<sstring>> get_roles(const service& ser, const authenticated_user& u) {
+    if (u.is_anonymous()) {
+        return make_ready_future<std::unordered_set<sstring>>();
+    }
+
+    return ser.get_roles(u.name());
 }
 
 bool is_enforcing(const service& ser)  {
@@ -395,6 +289,56 @@ bool is_enforcing(const service& ser)  {
             != allow_all_authenticator_name();
 
     return enforcing_authorizer || enforcing_authenticator;
+}
+
+future<> create_role(
+        service& ser,
+        const authenticated_user& performer,
+        stdx::string_view name,
+        const role_config& config,
+        const authentication_options& options) {
+    return ser.underlying_role_manager().create(
+            performer,
+            name,
+            config).then([&ser, &performer, name, &options] {
+        if (!auth::any_authentication_options(options)) {
+            return make_ready_future<>();
+        }
+
+        return ser.underlying_authenticator().create(
+                sstring(name),
+                options).handle_exception([&ser, &performer, &name](std::exception_ptr ep) {
+             // Roll-back.
+             return ser.underlying_role_manager().drop(performer, name).then([ep = std::move(ep)] {
+                std::rethrow_exception(ep);
+            });
+        });
+    });
+}
+
+future<> alter_role(
+        service& ser,
+        const authenticated_user& performer,
+        stdx::string_view name,
+        const role_config_update& config_update,
+        const authentication_options& options) {
+    return ser.underlying_role_manager().alter(performer, name, config_update).then([&ser, name, &options] {
+        if (!any_authentication_options(options)) {
+            return make_ready_future<>();
+        }
+
+        return ser.underlying_authenticator().alter(sstring(name), options);
+    });
+}
+
+future<> drop_role(service& ser, const authenticated_user& performer, stdx::string_view name) {
+    return do_with(sstring(name), [&ser, &performer](const auto& name) {
+        return ser.underlying_authorizer().revoke_all(name).then([&ser, &name] {
+            return ser.underlying_authenticator().drop(name);
+        }).then([&ser, &performer, &name] {
+            return ser.underlying_role_manager().drop(performer, name);
+        });
+    });
 }
 
 }

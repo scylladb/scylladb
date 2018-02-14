@@ -42,7 +42,6 @@
 #pragma once
 
 #include "authentication_statement.hh"
-#include "cql3/user_options.hh"
 
 namespace cql3 {
 

@@ -46,4 +46,8 @@ struct authentication_options final {
     std::optional<std::unordered_map<sstring, sstring>> options;
 };
 
+inline bool any_authentication_options(const authentication_options& aos) noexcept {
+    return aos.password || aos.options;
+}
+
 }

@@ -65,30 +65,6 @@ SEASTAR_TEST_CASE(test_password_authenticator_attributes) {
     }, cfg);
 }
 
-SEASTAR_TEST_CASE(test_auth_users) {
-    db::config cfg;
-    cfg.authenticator(auth::password_authenticator_name());
-
-    return do_with_cql_env([](cql_test_env& env) {
-        return seastar::async([&env] {
-            auto& auth = env.local_auth_service();
-
-            sstring username("fisk");
-            auth.insert_user(username, false).get();
-            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), true);
-            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), false);
-
-            auth.insert_user(username, true).get();
-            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), true);
-            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), true);
-
-            auth.delete_user(username).get();
-            BOOST_REQUIRE_EQUAL(auth.is_existing_user(username).get0(), false);
-            BOOST_REQUIRE_EQUAL(auth.is_super_user(username).get0(), false);
-        });
-    }, cfg);
-}
-
 SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
     cfg.authenticator(auth::password_authenticator_name());
@@ -191,7 +167,7 @@ SEASTAR_TEST_CASE(test_cassandra_hash) {
 
         // This is extremely whitebox. We'll just go right ahead and know
         // what the tables etc are called. Oy wei...
-        auto f = env.local_qp().process("INSERT into system_auth.credentials (username, salted_hash) values (?, ?)", db::consistency_level::ONE,
+        auto f = env.local_qp().process("INSERT into system_auth.roles (role, salted_hash) values (?, ?)", db::consistency_level::ONE,
                         { username, salted_hash }).discard_result();
 
         return f.then([=, &env] {

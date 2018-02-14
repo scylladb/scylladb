@@ -64,7 +64,7 @@ void cql3::statements::list_permissions_statement::validate(distributed<service:
 future<> cql3::statements::list_permissions_statement::check_access(const service::client_state& state) {
     auto f = make_ready_future();
     if (_username) {
-        f = state.get_auth_service()->is_existing_user(*_username).then([this](bool exists) {
+        f = state.get_auth_service()->underlying_role_manager().exists(*_username).then([this](bool exists) {
             if (!exists) {
                 throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", *_username));
             }
@@ -89,7 +89,7 @@ cql3::statements::list_permissions_statement::execute(distributed<service::stora
         return ::make_shared<column_specification>(auth::meta::AUTH_KS, "permissions", ::make_shared<column_identifier>(std::move(name), true), utf8_type);
     };
     static thread_local const std::vector<::shared_ptr<column_specification>> metadata({
-        make_column("username"), make_column("resource"), make_column("permission")
+        make_column("role"), make_column("resource"), make_column("permission")
     });
 
     typedef std::experimental::optional<auth::resource> opt_resource;

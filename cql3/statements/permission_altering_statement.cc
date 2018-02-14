@@ -72,7 +72,7 @@ void cql3::statements::permission_altering_statement::validate(distributed<servi
 }
 
 future<> cql3::statements::permission_altering_statement::check_access(const service::client_state& state) {
-    return state.get_auth_service()->is_existing_user(_username).then([this, &state](bool exists) {
+    return state.get_auth_service()->underlying_role_manager().exists(_username).then([this, &state](bool exists) {
         if (!exists) {
             throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
         }

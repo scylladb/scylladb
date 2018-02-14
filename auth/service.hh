@@ -24,7 +24,6 @@
 #include <experimental/string_view>
 #include <memory>
 
-#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
@@ -91,15 +90,10 @@ class service final {
 
     std::unique_ptr<authenticator> _authenticator;
 
-    // Similar functionality as this class, except for roles. It will replace the user-based functions when Scylla
-    // switches over to role-based access-control. Until then, it's mostly dormant.
     std::unique_ptr<role_manager> _role_manager;
 
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
-
-    future<> _stopped;
-    seastar::abort_source _as;
 
 public:
     service(
@@ -125,15 +119,7 @@ public:
 
     future<> stop();
 
-    future<bool> is_existing_user(const sstring& name) const;
-
-    future<bool> is_super_user(const sstring& name) const;
-
-    future<> insert_user(const sstring& name, bool is_superuser);
-
-    future<> delete_user(const sstring& name);
-
-    future<permission_set> get_permissions(::shared_ptr<authenticated_user>, resource) const;
+    future<permission_set> get_permissions(stdx::string_view role_name, resource) const;
 
     ///
     /// Query whether the named role has been granted a role that is a superuser.
@@ -175,14 +161,14 @@ public:
     }
 
 private:
-    future<bool> has_existing_users() const;
+    future<bool> has_existing_legacy_users() const;
 
     future<> create_keyspace_if_missing() const;
-
-    future<> create_metadata_if_missing();
 };
 
-future<bool> is_super_user(const service&, const authenticated_user&);
+future<bool> has_superuser(const service&, const authenticated_user&);
+
+future<std::unordered_set<sstring>> get_roles(const service&, const authenticated_user&);
 
 ///
 /// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
@@ -191,5 +177,36 @@ future<bool> is_super_user(const service&, const authenticated_user&);
 /// need to authenticate themselves.
 ///
 bool is_enforcing(const service&);
+
+///
+/// Create a role with optional authentication information.
+///
+/// \returns an exceptional future with \ref role_already_exists if the user or role exists.
+///
+future<> create_role(
+        service&,
+        const authenticated_user& performer,
+        stdx::string_view name,
+        const role_config&,
+        const authentication_options&);
+
+///
+/// Alter an existing role and its authentication information.
+///
+/// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+///
+future<> alter_role(
+        service&,
+        const authenticated_user& performer,
+        stdx::string_view name,
+        const role_config_update&,
+        const authentication_options&);
+
+///
+/// Drop a role from the system, including all permissions and authentication information.
+///
+/// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+///
+future<> drop_role(service&, const authenticated_user& performer, stdx::string_view name);
 
 }

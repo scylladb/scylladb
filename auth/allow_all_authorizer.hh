@@ -56,7 +56,7 @@ public:
         return allow_all_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const override {
+    future<permission_set> authorize(service&, sstring role_name, resource) const override {
         return make_ready_future<permission_set>(permissions::ALL);
     }
 

@@ -65,7 +65,7 @@ future<> service::client_state::check_user_exists() {
         return make_ready_future();
     }
 
-    return _auth_service->is_existing_user(_user->name()).then([user = _user](bool exists) mutable {
+    return _auth_service->underlying_role_manager().exists(_user->name()).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             sprint("User %s doesn't exist - create it with CREATE USER query first",
@@ -189,7 +189,7 @@ future<bool> service::client_state::check_has_permission(auth::permission p, aut
 
     std::experimental::optional<auth::resource> parent = resource.parent();
 
-    return _auth_service->get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
+    return _auth_service->get_permissions(_user->name(), resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
         if (set.contains(p)) {
             return make_ready_future<bool>(true);
         }

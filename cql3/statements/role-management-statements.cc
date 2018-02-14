@@ -41,6 +41,7 @@
 
 #include <algorithm>
 
+#include "auth/authentication_options.hh"
 #include "auth/common.hh"
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
@@ -63,6 +64,17 @@ namespace statements {
 using result_message = cql_transport::messages::result_message;
 using result_message_ptr = ::shared_ptr<result_message>;
 
+static auth::authentication_options extract_authentication_options(const cql3::role_options& options) {
+    auth::authentication_options authen_options;
+    authen_options.password = options.password;
+
+    if (options.options) {
+        authen_options.options = std::unordered_map<sstring, sstring>(options.options->begin(), options.options->end());
+    }
+
+    return authen_options;
+}
+
 static future<result_message_ptr> void_result_message() {
     return make_ready_future<result_message_ptr>(nullptr);
 }
@@ -78,7 +90,7 @@ future<> create_role_statement::check_access(const service::client_state& state)
         state.ensure_has_permission(auth::permission::CREATE, auth::resource::root_of(auth::resource_kind::role)).get0();
 
         if (*_options.is_superuser) {
-            if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
+            if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get0()) {
                 throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
             }
         }
@@ -91,21 +103,22 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
                                const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
-
     auth::role_config config;
     config.is_superuser = *_options.is_superuser;
     config.can_login = *_options.can_login;
 
-    return do_with(std::move(config), [this, &state](const auth::role_config& config) {
+    return do_with(
+            std::move(config),
+            extract_authentication_options(_options),
+            [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
         auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
 
-        return as.underlying_role_manager().create(*cs.user(), _role, config).then([] {
+        return auth::create_role(as, *cs.user(), _role, config, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
             if (!_if_not_exists) {
-                throw exceptions::invalid_request_exception(e.what());
+                return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
             }
 
             return void_result_message();
@@ -124,7 +137,7 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
         auto& as = *state.get_auth_service();
 
         const auto& user = *state.user();
-        const bool user_is_superuser = auth::is_super_user(as, user).get0();
+        const bool user_is_superuser = auth::has_superuser(as, user).get0();
 
         if (_options.is_superuser) {
             if (!user_is_superuser) {
@@ -141,8 +154,21 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
         if (user.name() != _role) {
             state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
         } else {
-            // TODO(jhaberku) Once we switch to roles, this is where we would query the authenticator for the set of
-            // alterable options it supports (throwing errors as necessary).
+            const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
+
+            const auto check = [&alterable_options](auth::authentication_option ao) {
+                if (alterable_options.count(ao) == 0) {
+                    throw exceptions::unauthorized_exception(sprint("You aren't allowed to alter the %s option.", ao));
+                }
+            };
+
+            if (_options.password) {
+                check(auth::authentication_option::password);
+            }
+
+            if (_options.options) {
+                check(auth::authentication_option::options);
+            }
         }
     });
 }
@@ -151,21 +177,21 @@ future<result_message_ptr>
 alter_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
-
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
 
-    return do_with(std::move(update), [this, &state](const auth::role_config_update& update) {
+    return do_with(
+            std::move(update),
+            extract_authentication_options(_options),
+            [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
         auto& cs = state.get_client_state();
         auto& as = *cs.get_auth_service();
 
-        return as.underlying_role_manager().alter(*cs.user(), _role, update).then([] {
+        return auth::alter_role(as, *cs.user(), _role, update, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([](const auth::roles_argument_exception& e) {
-            throw exceptions::invalid_request_exception(e.what());
-            return void_result_message();
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -188,7 +214,7 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
 
         auto& as = *state.get_auth_service();
 
-        const bool user_is_superuser = auth::is_super_user(as, *state.user()).get0();
+        const bool user_is_superuser = auth::has_superuser(as, *state.user()).get0();
         const bool role_has_superuser = as.role_has_superuser(_role).get0();
 
         if (role_has_superuser && !user_is_superuser) {
@@ -203,13 +229,12 @@ drop_role_statement::execute(distributed<service::storage_proxy>&, service::quer
 
     auto& cs = state.get_client_state();
     auto& as = *cs.get_auth_service();
-    auto& rm = as.underlying_role_manager();
 
-    return rm.drop(*cs.user(), _role).then([] {
+    return auth::drop_role(as, *cs.user(), _role).then([] {
         return void_result_message();
     }).handle_exception_type([this](const auth::nonexistant_role& e) {
         if (!_if_exists) {
-            throw exceptions::invalid_request_exception(e.what());
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         }
 
         return void_result_message();
@@ -300,7 +325,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
     auto& cs = state.get_client_state();
     auto& as = *cs.get_auth_service();
 
-    return auth::is_super_user(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
+    return auth::has_superuser(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
         auto& rm = as.underlying_role_manager();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 

@@ -180,14 +180,14 @@ public:
     const sstring& qualified_java_name() const override {
         return transitional_authorizer_name();
     }
-    future<permission_set> authorize(service& ser, ::shared_ptr<authenticated_user> user, resource resource) const override {
-        return is_super_user(ser, *user).then([](bool s) {
+    future<permission_set> authorize(service& ser, sstring role, resource resource) const override {
+        return ser.role_has_superuser(role).then([resource](bool s) {
             static const permission_set transitional_permissions =
                             permission_set::of<permission::CREATE,
                                             permission::ALTER, permission::DROP,
                                             permission::SELECT, permission::MODIFY>();
 
-            return make_ready_future<permission_set>(s ? permissions::ALL : transitional_permissions);
+            return make_ready_future<permission_set>(s ? resource.applicable_permissions() : transitional_permissions);
         });
     }
     future<> grant(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {

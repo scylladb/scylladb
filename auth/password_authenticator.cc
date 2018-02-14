@@ -39,13 +39,16 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <unistd.h>
 #include <crypt.h>
 #include <random>
 #include <chrono>
 
+#include <boost/algorithm/cxx11/all_of.hpp>
 #include <seastar/core/reactor.hh>
 
+#include "auth/roles-metadata.hh"
 #include "common.hh"
 #include "password_authenticator.hh"
 #include "authenticated_user.hh"
@@ -61,10 +64,8 @@ const sstring& auth::password_authenticator_name() {
 
 // name of the hash column.
 static const sstring SALTED_HASH = "salted_hash";
-static const sstring USER_NAME = "username";
 static const sstring DEFAULT_USER_NAME = auth::meta::DEFAULT_SUPERUSER_NAME;
 static const sstring DEFAULT_USER_PASSWORD = auth::meta::DEFAULT_SUPERUSER_NAME;
-static const sstring CREDENTIALS_CF = "credentials";
 
 static logging::logger plogger("password_authenticator");
 
@@ -155,46 +156,31 @@ static sstring hashpw(const sstring& pass) {
 }
 
 future<> auth::password_authenticator::start() {
-    return auth::once_among_shards([this] {
-        gensalt(); // do this once to determine usable hashing
+     return auth::once_among_shards([this] {
+         gensalt(); // do this once to determine usable hashing
 
-        static const sstring create_table = sprint(
-                "CREATE TABLE %s.%s ("
-                "%s text,"
-                "%s text," // salt + hash + number of rounds
-                "options map<text,text>,"// for future extensions
-                "PRIMARY KEY(%s)"
-                ") WITH gc_grace_seconds=%d",
-                meta::AUTH_KS,
-                CREDENTIALS_CF, USER_NAME, SALTED_HASH, USER_NAME,
-                90 * 24 * 60 * 60); // 3 months.
+         _stopped = auth::do_after_system_ready(_as, [this] {
+             return has_existing_users().then([this](bool existing) {
+                 if (!existing) {
+                     return _qp.process(
+                             sprint(
+                                     "UPDATE %s SET %s = ? WHERE %s = ?",
+                                     meta::roles_table::qualified_name(),
+                                     SALTED_HASH,
+                                     meta::roles_table::role_col_name),
+                             db::consistency_level::ONE,
+                             { hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME }).then([](auto) {
+                         plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
+                     });
+                 }
 
-        return auth::create_metadata_table_if_missing(
-                CREDENTIALS_CF,
-                _qp,
-                create_table,
-                _migration_manager).then([this] {
-            _stopped = auth::do_after_system_ready(_as, [this] {
-                return has_existing_users().then([this](bool existing) {
-                    if (!existing) {
-                        return _qp.process(
-                                sprint(
-                                        "INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
-                                        meta::AUTH_KS,
-                                        CREDENTIALS_CF,
-                                        USER_NAME, SALTED_HASH),
-                                db::consistency_level::ONE,
-                                { DEFAULT_USER_NAME, hashpw(DEFAULT_USER_PASSWORD) }).then([](auto) {
-                            plogger.info("Created default user '{}'", DEFAULT_USER_NAME);
-                        });
-                    }
+                 return make_ready_future<>();
+             });
+         });
 
-                    return make_ready_future<>();
-                });
-            });
-        });
-    });
-}
+         return make_ready_future<>();
+     });
+ }
 
 future<> auth::password_authenticator::stop() {
     _as.request_abort();
@@ -242,8 +228,8 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
     // Rely on query processing caching statements instead, and lets assume
     // that a map lookup string->statement is not gonna kill us much.
     return futurize_apply([this, username, password] {
-        return _qp.process(sprint("SELECT %s FROM %s.%s WHERE %s = ?", SALTED_HASH,
-                                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME),
+        return _qp.process(sprint("SELECT %s FROM %s WHERE %s = ?", SALTED_HASH,
+                                        meta::roles_table::qualified_name(), meta::roles_table::role_col_name),
                         consistency_for_user(username), {username}, true);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
@@ -265,29 +251,30 @@ future<::shared_ptr<auth::authenticated_user> > auth::password_authenticator::au
 future<> auth::password_authenticator::create(sstring username,
                 const authentication_options& options) {
     if (!options.password) {
-        throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
+        return make_ready_future<>();
     }
 
-    auto query = sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?)",
-                    meta::AUTH_KS, CREDENTIALS_CF, USER_NAME, SALTED_HASH);
-    return _qp.process(query, consistency_for_user(username), { username, hashpw(*options.password) }).discard_result();
+    auto query = sprint("UPDATE %s SET %s = ? WHERE %s = ?",
+                    meta::roles_table::qualified_name(), SALTED_HASH, meta::roles_table::role_col_name);
+    return _qp.process(query, consistency_for_user(username), { hashpw(*options.password), username }).discard_result();
 }
 
 future<> auth::password_authenticator::alter(sstring username,
                 const authentication_options& options) {
     if (!options.password) {
-        throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
+        return make_ready_future<>();
     }
 
-    auto query = sprint("UPDATE %s.%s SET %s = ? WHERE %s = ?",
-                    meta::AUTH_KS, CREDENTIALS_CF, SALTED_HASH, USER_NAME);
+    auto query = sprint("UPDATE %s SET %s = ? WHERE %s = ?",
+                    meta::roles_table::qualified_name(), SALTED_HASH, meta::roles_table::role_col_name);
     return _qp.process(query, consistency_for_user(username), { hashpw(*options.password), username }).discard_result();
 }
 
 future<> auth::password_authenticator::drop(sstring username) {
     try {
-        auto query = sprint("DELETE FROM %s.%s WHERE %s = ?",
-                        meta::AUTH_KS, CREDENTIALS_CF, USER_NAME);
+        auto query = sprint("DELETE %s FROM %s WHERE %s = ?",
+                        SALTED_HASH,
+                        meta::roles_table::qualified_name(), meta::roles_table::role_col_name);
         return _qp.process(query, consistency_for_user(username), { username }).discard_result();
     } catch (std::out_of_range&) {
         throw exceptions::invalid_request_exception("PasswordAuthenticator requires PASSWORD option");
@@ -295,7 +282,7 @@ future<> auth::password_authenticator::drop(sstring username) {
 }
 
 const auth::resource_set& auth::password_authenticator::protected_resources() const {
-    static const resource_set resources({ resource::data(meta::AUTH_KS, CREDENTIALS_CF) });
+    static const resource_set resources({ resource::data(meta::AUTH_KS, meta::roles_table::name) });
     return resources;
 }
 
@@ -368,22 +355,25 @@ const auth::resource_set& auth::password_authenticator::protected_resources() co
     return ::make_shared<plain_text_password_challenge>(*this);
 }
 
-
 //
-// Similar in structure to `auth::service::has_existing_users()`, but trying to generalize the pattern breaks all kinds
-// of module boundaries and leaks implementation details.
+// Similar in structure to `auth::service::has_existing_legacy_users()`, but trying to generalize the pattern breaks all
+// kinds of module boundaries and leaks implementation details.
 //
 future<bool> auth::password_authenticator::has_existing_users() const {
+    static const auto hash_is_null = [](const cql3::untyped_result_set_row& row) {
+        return utf8_type->deserialize(row.get_blob(SALTED_HASH)) == data_value::make_null(utf8_type);
+    };
+
     static const sstring default_user_query = sprint(
-            "SELECT * FROM %s.%s WHERE %s = ?",
-            meta::AUTH_KS,
-            CREDENTIALS_CF,
-            USER_NAME);
+            "SELECT %s FROM %s WHERE %s = ?",
+            SALTED_HASH,
+            meta::roles_table::qualified_name(),
+            meta::roles_table::role_col_name);
 
     static const sstring all_users_query = sprint(
-            "SELECT * FROM %s.%s LIMIT 1",
-            meta::AUTH_KS,
-            CREDENTIALS_CF);
+            "SELECT %s FROM %s LIMIT 1",
+            SALTED_HASH,
+            meta::roles_table::qualified_name());
 
     // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default user, we
     // can potentially avoid doing a range query with a high consistency level.
@@ -393,7 +383,7 @@ future<bool> auth::password_authenticator::has_existing_users() const {
             db::consistency_level::ONE,
             { meta::DEFAULT_SUPERUSER_NAME },
             true).then([this](auto results) {
-        if (!results->empty()) {
+        if (!results->empty() && !hash_is_null(results->one())) {
             return make_ready_future<bool>(true);
         }
 
@@ -402,14 +392,14 @@ future<bool> auth::password_authenticator::has_existing_users() const {
                 db::consistency_level::QUORUM,
                 { meta::DEFAULT_SUPERUSER_NAME },
                 true).then([this](auto results) {
-            if (!results->empty()) {
+            if (!results->empty() && !hash_is_null(results->one())) {
                 return make_ready_future<bool>(true);
             }
 
             return _qp.process(
                     all_users_query,
                     db::consistency_level::QUORUM).then([](auto results) {
-                return make_ready_future<bool>(!results->empty());
+                return make_ready_future<bool>(!boost::algorithm::all_of(*results, hash_is_null));
             });
         });
     });

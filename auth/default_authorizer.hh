@@ -68,7 +68,7 @@ public:
         return default_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const override;
+    future<permission_set> authorize(service&, sstring, resource) const override;
 
     future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
 
@@ -85,7 +85,12 @@ public:
     future<> validate_configuration() const override;
 
 private:
-    future<> modify(::shared_ptr<authenticated_user>, permission_set, resource, sstring, sstring);
+    future<> modify(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring, sstring);
+
+    ///
+    /// Permissions granted directly to a role, rather than those inherited.
+    ///
+    future<permission_set> authorize_role_directly(const service&, stdx::string_view role_name, const resource&) const;
 };
 
 } /* namespace auth */

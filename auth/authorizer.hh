@@ -82,13 +82,13 @@ public:
     virtual const sstring& qualified_java_name() const = 0;
 
     /**
-     * The primary Authorizer method. Returns a set of permissions of a user on a resource.
+     * The primary Authorizer method. Returns a set of permissions of a role on a resource.
      *
      * @param user Authenticated user requesting authorization.
      * @param resource Resource for which the authorization is being requested. @see DataResource.
      * @return Set of permissions of the user on the resource. Should never return empty. Use permission.NONE instead.
      */
-    virtual future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const = 0;
+    virtual future<permission_set> authorize(service&, sstring role_name, resource) const = 0;
 
     /**
      * Grants a set of permissions on a resource to a user.

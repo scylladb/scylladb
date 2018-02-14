@@ -59,13 +59,7 @@ static db::config db_config_with_auth() {
 //
 
 static void create_user_if_not_exists(cql_test_env& env, stdx::string_view user_name) {
-    //
-    // When roles replace users, creating a user will be equivalent to creating a role with the same name. Until then,
-    // we must manually ensure that a role and a user of the same name exist.
-    //
-
     env.execute_cql(sprint("CREATE USER IF NOT EXISTS %s WITH PASSWORD '%s'", user_name, user_name)).get();
-    env.execute_cql(sprint("CREATE ROLE IF NOT EXISTS %s", user_name)).get();
 }
 
 // Invoke `f` as though the user indicated with `user_name` had logged in. The current logged in user is restored after
