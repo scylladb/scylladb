@@ -159,7 +159,7 @@ void cache_tracker::insert(cache_entry& entry) {
     _lru.push_front(entry);
 }
 
-void cache_tracker::on_erase() {
+void cache_tracker::on_partition_erase() {
     --_stats.partitions;
     ++_stats.partition_removals;
     allocator().invalidate_references();
@@ -767,7 +767,7 @@ row_cache::~row_cache() {
     with_allocator(_tracker.allocator(), [this] {
         _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             if (!p->is_dummy_entry()) {
-                _tracker.on_erase();
+                _tracker.on_partition_erase();
             }
             deleter(p);
         });
@@ -777,7 +777,7 @@ row_cache::~row_cache() {
 void row_cache::clear_now() noexcept {
     with_allocator(_tracker.allocator(), [this] {
         auto it = _partitions.erase_and_dispose(_partitions.begin(), partitions_end(), [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
+            _tracker.on_partition_erase();
             deleter(p);
         });
         _tracker.clear_continuity(*it);
@@ -1061,7 +1061,7 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
     } else {
         auto it = _partitions.erase_and_dispose(pos,
             [this, &dk, deleter = current_deleter<cache_entry>()](auto&& p) mutable {
-                _tracker.on_erase();
+                _tracker.on_partition_erase();
                 deleter(p);
             });
         _tracker.clear_continuity(*it);
@@ -1101,7 +1101,7 @@ void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
     with_allocator(_tracker.allocator(), [this, begin, end] {
         auto it = _partitions.erase_and_dispose(begin, end, [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
+            _tracker.on_partition_erase();
             deleter(p);
         });
         assert(it != _partitions.end());

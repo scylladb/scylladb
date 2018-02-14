@@ -231,7 +231,7 @@ public:
     void touch(cache_entry&);
     void insert(cache_entry&);
     void clear_continuity(cache_entry& ce);
-    void on_erase();
+    void on_partition_erase();
     void on_merge();
     void on_partition_hit();
     void on_partition_miss();
