@@ -88,6 +88,14 @@ private:
     void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 };
 
+static future<> validate_role_exists(const service& ser, stdx::string_view role_name) {
+    return ser.underlying_role_manager().exists(role_name).then([role_name](bool exists) {
+        if (!exists) {
+            throw nonexistant_role(role_name);
+        }
+    });
+}
+
 service_config service_config::from_db_config(const db::config& dc) {
     const qualified_name qualified_authorizer_name(meta::AUTH_PACKAGE_NAME, dc.authorizer());
     const qualified_name qualified_authenticator_name(meta::AUTH_PACKAGE_NAME, dc.authenticator());
@@ -233,7 +241,9 @@ future<bool> service::has_existing_legacy_users() const {
 }
 
 future<permission_set> service::get_permissions(stdx::string_view role_name, resource r) const {
-    return _permissions_cache->get(role_name, std::move(r));
+    return validate_role_exists(*this, role_name).then([this, role_name, r = std::move(r)] {
+        return _permissions_cache->get(role_name, std::move(r));
+    });
 }
 
 future<bool> service::role_has_superuser(stdx::string_view role_name) const {
