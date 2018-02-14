@@ -50,8 +50,6 @@
 
 namespace auth {
 
-class service;
-
 static const sstring PACKAGE_NAME("com.scylladb.auth.");
 
 static const sstring& transitional_authenticator_name() {
@@ -204,19 +202,16 @@ public:
         return transitional_authorizer_name();
     }
 
-    virtual future<permission_set>
-    authorize(stdx::string_view role_name, const resource& resource, service& ser) const override {
-        return ser.has_superuser(role_name).then([&resource](bool s) {
-            static const permission_set transitional_permissions =
-                            permission_set::of<
-                                    permission::CREATE,
-                                    permission::ALTER,
-                                    permission::DROP,
-                                    permission::SELECT,
-                                    permission::MODIFY>();
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {
+        static const permission_set transitional_permissions =
+                permission_set::of<
+                        permission::CREATE,
+                        permission::ALTER,
+                        permission::DROP,
+                        permission::SELECT,
+                        permission::MODIFY>();
 
-            return make_ready_future<permission_set>(s ? resource.applicable_permissions() : transitional_permissions);
-        });
+        return make_ready_future<permission_set>(transitional_permissions);
     }
 
     virtual future<> grant(stdx::string_view s, permission_set ps, const resource& r) override {
@@ -227,13 +222,8 @@ public:
         return _authorizer->revoke(s, std::move(ps), r);
     }
 
-    virtual future<std::vector<permission_details>>
-    list(
-            permission_set ps,
-            const std::optional<resource>& r,
-            const std::optional<stdx::string_view>& s,
-            service& ser) const override {
-        return _authorizer->list(std::move(ps), r, s, ser);
+    virtual future<std::vector<permission_details>> list_all() const override {
+        return _authorizer->list_all();
     }
 
     virtual future<> revoke_all(stdx::string_view s) override {

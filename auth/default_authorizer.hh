@@ -69,18 +69,13 @@ public:
         return default_authorizer_name();
     }
 
-    virtual future<permission_set> authorize(stdx::string_view, const resource&, service&) const override;
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 
     virtual future<> grant(stdx::string_view, permission_set, const resource&) override;
 
     virtual future<> revoke( stdx::string_view, permission_set, const resource&) override;
 
-    virtual future<std::vector<permission_details>>
-    list(
-            permission_set,
-            const std::optional<resource>&,
-            const std::optional<stdx::string_view>&,
-            service&) const override;
+    virtual future<std::vector<permission_details>> list_all() const override;
 
     virtual future<> revoke_all(stdx::string_view) override;
 
@@ -90,11 +85,6 @@ public:
 
 private:
     future<> modify(stdx::string_view, permission_set, const resource&, stdx::string_view);
-
-    ///
-    /// Permissions granted directly to a role, rather than those inherited.
-    ///
-    future<permission_set> authorize_role_directly(stdx::string_view role_name, const resource&, const service&) const;
 };
 
 } /* namespace auth */

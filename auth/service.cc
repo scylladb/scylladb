@@ -21,6 +21,7 @@
 
 #include "auth/service.hh"
 
+#include <algorithm>
 #include <map>
 
 #include <seastar/core/future-util.hh>
@@ -31,6 +32,7 @@
 #include "auth/allow_all_authorizer.hh"
 #include "auth/common.hh"
 #include "auth/password_authenticator.hh"
+#include "auth/role_or_anonymous.hh"
 #include "auth/standard_role_manager.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -240,10 +242,41 @@ future<bool> service::has_existing_legacy_users() const {
     });
 }
 
-future<permission_set> service::get_permissions(stdx::string_view role_name, const resource& r) const {
-    return validate_role_exists(*this, role_name).then([this, role_name, &r] {
-        return _permissions_cache->get(role_name, r);
+future<permission_set>
+service::get_uncached_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
+    if (is_anonymous(maybe_role)) {
+        return _authorizer->authorize(maybe_role, r);
+    }
+
+    const stdx::string_view role_name = *maybe_role.name;
+
+    return has_superuser(role_name).then([this, role_name, &r](bool superuser) {
+        if (superuser) {
+            return make_ready_future<permission_set>(r.applicable_permissions());
+        }
+
+        //
+        // Aggregate the permissions from all granted roles.
+        //
+
+        return do_with(permission_set(), [this, role_name, &r](auto& all_perms) {
+            return get_roles(role_name).then([this, &r, &all_perms](std::unordered_set<sstring> all_roles) {
+                return do_with(std::move(all_roles), [this, &r, &all_perms](const auto& all_roles) {
+                    return parallel_for_each(all_roles, [this, &r, &all_perms](stdx::string_view role_name) {
+                        return _authorizer->authorize(role_name, r).then([&all_perms](permission_set perms) {
+                            all_perms = permission_set::from_mask(all_perms.mask() | perms.mask());
+                        });
+                    });
+                });
+            }).then([&all_perms] {
+                return all_perms;
+            });
+        });
     });
+}
+
+future<permission_set> service::get_permissions(const role_or_anonymous& maybe_role, const resource& r) const {
+    return _permissions_cache->get(maybe_role, r);
 }
 
 future<bool> service::has_superuser(stdx::string_view role_name) const {
@@ -325,6 +358,13 @@ future<std::unordered_set<sstring>> get_roles(const service& ser, const authenti
     }
 
     return ser.get_roles(*u.name);
+}
+
+future<permission_set> get_permissions(const service& ser, const authenticated_user& u, const resource& r) {
+    return do_with(role_or_anonymous(), [&ser, &u, &r](auto& maybe_role) {
+        maybe_role.name = u.name;
+        return ser.get_permissions(maybe_role, r);
+    });
 }
 
 bool is_enforcing(const service& ser)  {
@@ -421,6 +461,72 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
     }
 
     return has_role(ser, *u.name, name);
+}
+
+future<std::vector<permission_details>> list_filtered_permissions(
+        const service& ser,
+        permission_set perms,
+        std::optional<stdx::string_view> role_name,
+        const std::optional<std::pair<resource, recursive_permissions>>& resource_filter) {
+    return ser.underlying_authorizer().list_all().then([&ser, perms, role_name, &resource_filter](
+            std::vector<permission_details> all_details) {
+
+        if (resource_filter) {
+            const resource r = resource_filter->first;
+
+            const auto resources = resource_filter->second
+                    ? auth::expand_resource_family(r)
+                    : auth::resource_set{r};
+
+            all_details.erase(
+                    std::remove_if(
+                            all_details.begin(),
+                            all_details.end(),
+                            [&resources](const permission_details& pd) {
+                        return resources.count(pd.resource) == 0;
+                    }),
+                    all_details.end());
+        }
+
+        std::transform(
+                std::make_move_iterator(all_details.begin()),
+                std::make_move_iterator(all_details.end()),
+                all_details.begin(),
+                [perms](permission_details pd) {
+                    pd.permissions = permission_set::from_mask(pd.permissions.mask() & perms.mask());
+                    return pd;
+                });
+
+        // Eliminate rows with an empty permission set.
+        all_details.erase(
+                std::remove_if(all_details.begin(), all_details.end(), [](const permission_details& pd) {
+                    return pd.permissions.mask() == 0;
+                }),
+                all_details.end());
+
+        if (!role_name) {
+            return make_ready_future<std::vector<permission_details>>(std::move(all_details));
+        }
+
+        //
+        // Filter out rows based on whether permissions have been granted to this role (directly or indirectly).
+        //
+
+        return do_with(std::move(all_details), [&ser, role_name](auto& all_details) {
+            return ser.get_roles(*role_name).then([&all_details](std::unordered_set<sstring> all_roles) {
+                all_details.erase(
+                        std::remove_if(
+                                all_details.begin(),
+                                all_details.end(),
+                                [&all_roles](const permission_details& pd) {
+                            return all_roles.count(pd.role_name) == 0;
+                        }),
+                        all_details.end());
+
+                return make_ready_future<std::vector<permission_details>>(std::move(all_details));
+            });
+        });
+    });
 }
 
 }

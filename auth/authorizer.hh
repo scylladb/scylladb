@@ -57,17 +57,27 @@
 
 namespace auth {
 
-class service;
+class role_or_anonymous;
 
 struct permission_details {
-    sstring user;
+    sstring role_name;
     ::auth::resource resource;
     permission_set permissions;
-
-    bool operator<(const permission_details& v) const {
-        return std::tie(user, resource, permissions) < std::tie(v.user, v.resource, v.permissions);
-    }
 };
+
+inline bool operator==(const permission_details& pd1, const permission_details& pd2) {
+    return std::forward_as_tuple(pd1.role_name, pd1.resource, pd1.permissions.mask())
+            == std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions.mask());
+}
+
+inline bool operator!=(const permission_details& pd1, const permission_details& pd2) {
+    return !(pd1 == pd2);
+}
+
+inline bool operator<(const permission_details& pd1, const permission_details& pd2) {
+    return std::forward_as_tuple(pd1.role_name, pd1.resource, pd1.permissions)
+            < std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions);
+}
 
 ///
 /// Abstract interface for authorizing users to access resources.
@@ -86,46 +96,36 @@ public:
     virtual const sstring& qualified_java_name() const = 0;
 
     ///
-    /// Query for the permissions granted to a role for a particular \ref resource.
+    /// Query for the permissions granted directly to a role for a particular \ref resource (and not any of its
+    /// parents).
     ///
-    /// The resulting permission set includes permissions obtained transitively through roles granted to this role.
+    /// The optional role name is empty when an anonymous user is authorized. Some implementations may still wish to
+    /// grant default permissions in this case.
     ///
-    virtual future<permission_set> authorize(stdx::string_view role_name, const resource&, service&) const = 0;
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const = 0;
 
     ///
-    /// Grant a set of permissions to a user for a particular \ref resource.
+    /// Grant a set of permissions to a role for a particular \ref resource.
     ///
     virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) = 0;
 
     ///
-    /// Revoke a set of permissions from a user for a particular \ref resource.
+    /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
     virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) = 0;
 
     ///
-    /// Query for granted permissions.
+    /// Query for all directly granted permissions.
     ///
-    /// Only information for permissions in `matching` is included.
-    ///
-    /// If `resource` is empty, then query for permissions on all resources.
-    ///
-    /// If `role_name` is empty, query for permissions of all users. Otherwise, query for permissions specific to that
-    /// user.
-    ///
-    virtual future<std::vector<permission_details>>
-    list(
-            permission_set matching,
-            const std::optional<resource>& resource,
-            const std::optional<stdx::string_view>& role_name,
-            service&) const = 0;
+    virtual future<std::vector<permission_details>> list_all() const = 0;
 
     ///
-    /// Revoke all permissions granted to a particular user.
+    /// Revoke all permissions granted directly to a particular role.
     ///
     virtual future<> revoke_all(stdx::string_view role_name) = 0;
 
     ///
-    /// Revoke all permissions granted to any user for a particular resource.
+    /// Revoke all permissions granted to any role for a particular resource.
     ///
     virtual future<> revoke_all(const resource&) = 0;
 

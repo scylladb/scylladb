@@ -23,9 +23,11 @@
 
 #include <experimental/string_view>
 #include <memory>
+#include <optional>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
@@ -49,6 +51,8 @@ class migration_listener;
 }
 
 namespace auth {
+
+class role_or_anonymous;
 
 struct service_config final {
     static service_config from_db_config(const db::config&);
@@ -121,7 +125,12 @@ public:
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
     ///
-    future<permission_set> get_permissions(stdx::string_view role_name, const resource&) const;
+    future<permission_set> get_permissions(const role_or_anonymous&, const resource&) const;
+
+    ///
+    /// Like \ref get_permissions, but never returns cached permissions.
+    ///
+    future<permission_set> get_uncached_permissions(const role_or_anonymous&, const resource&) const;
 
     ///
     /// Query whether the named role has been granted a role that is a superuser.
@@ -173,6 +182,8 @@ private:
 future<bool> has_superuser(const service&, const authenticated_user&);
 
 future<std::unordered_set<sstring>> get_roles(const service&, const authenticated_user&);
+
+future<permission_set> get_permissions(const service&, const authenticated_user&, const resource&);
 
 ///
 /// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
@@ -227,5 +238,26 @@ future<bool> has_role(const service&, stdx::string_view grantee, stdx::string_vi
 /// \returns an exceptional future with \ref nonexistent_role if the user or `name` do not exist.
 ///
 future<bool> has_role(const service&, const authenticated_user&, stdx::string_view name);
+
+using recursive_permissions = bool_class<struct recursive_permissions_tag>;
+
+///
+/// Query for all granted permissions according to filtering criteria.
+///
+/// Only permissions included in the provided set are included.
+///
+/// If a role name is provided, only permissions granted (directly or recursively) to the role are included.
+///
+/// If a resource filter is provided, only permissions granted on the resource are included. When \ref
+/// recursive_permissions is `true`, permissions on a parent resource are included.
+///
+/// \returns an exceptional future with \ref nonexistent_role if a role name is included which refers to a role that
+/// does not exist.
+///
+future<std::vector<permission_details>> list_filtered_permissions(
+        const service&,
+        permission_set,
+        std::optional<stdx::string_view> role_name,
+        const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
 
 }

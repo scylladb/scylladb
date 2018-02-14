@@ -35,8 +35,6 @@ class migration_manager;
 
 namespace auth {
 
-class service;
-
 const sstring& allow_all_authorizer_name();
 
 class allow_all_authorizer final  : public authorizer {
@@ -56,7 +54,7 @@ public:
         return allow_all_authorizer_name();
     }
 
-    virtual future<permission_set> authorize(stdx::string_view, const resource&, service&) const override {
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {
         return make_ready_future<permission_set>(permissions::ALL);
     }
 
@@ -68,11 +66,7 @@ public:
         throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
     }
 
-    virtual future<std::vector<permission_details>> list(
-            permission_set,
-            const std::optional<resource>&,
-            const std::optional<stdx::string_view>&,
-            service&) const override {
+    virtual future<std::vector<permission_details>> list_all() const override {
         throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
     }
 

@@ -364,16 +364,17 @@ public:
                 auth_service->stop().get();
             });
 
-            if (auth::is_enforcing(auth_service->local())) {
+            // Create the testing user.
+            {
                 auth::role_config config;
                 config.is_superuser = true;
                 config.can_login = true;
 
                 auth::create_role(
-                    auth_service->local(),
-                    testing_superuser,
-                    config,
-                    auth::authentication_options()).get0();
+                        auth_service->local(),
+                        testing_superuser,
+                        config,
+                        auth::authentication_options()).get0();
             }
 
             single_node_cql_env env(db, auth_service);

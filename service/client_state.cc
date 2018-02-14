@@ -202,7 +202,7 @@ future<bool> service::client_state::check_has_permission(auth::permission p, con
     }
 
     return do_with(r.parent(), [this, p, &r](const auto& parent_r) {
-        return _auth_service->get_permissions(*_user->name, r).then([this, p, &parent_r](auth::permission_set set) {
+        return auth::get_permissions(*_auth_service, *_user, r).then([this, p, &parent_r](auth::permission_set set) {
             if (set.contains(p)) {
                 return make_ready_future<bool>(true);
             }

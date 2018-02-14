@@ -56,6 +56,7 @@ extern "C" {
 #include "auth/authenticated_user.hh"
 #include "auth/common.hh"
 #include "auth/permission.hh"
+#include "auth/role_or_anonymous.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
@@ -120,52 +121,29 @@ future<> default_authorizer::stop() {
     return make_ready_future<>();
 }
 
-future<permission_set> default_authorizer::authorize_role_directly(
-        stdx::string_view role_name,
-        const resource& r,
-        const service& ser) const {
-    return ser.has_superuser(role_name).then([this, role_name, &r](bool has_superuser) {
-        if (has_superuser) {
-            return make_ready_future<permission_set>(r.applicable_permissions());
+future<permission_set>
+default_authorizer::authorize(const role_or_anonymous& maybe_role, const resource& r) const {
+    if (is_anonymous(maybe_role)) {
+        return make_ready_future<permission_set>(permissions::NONE);
+    }
+
+    static const sstring query = sprint(
+            "SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?",
+            PERMISSIONS_NAME,
+            meta::AUTH_KS,
+            PERMISSIONS_CF,
+            ROLE_NAME,
+            RESOURCE_NAME);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {*maybe_role.name, r.name()}).then([](::shared_ptr<cql3::untyped_result_set> results) {
+        if (results->empty()) {
+            return permissions::NONE;
         }
 
-        static const sstring query = sprint(
-                "SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?",
-                PERMISSIONS_NAME,
-                meta::AUTH_KS,
-                PERMISSIONS_CF,
-                ROLE_NAME,
-                RESOURCE_NAME);
-
-        return _qp.process(
-                query,
-                db::consistency_level::LOCAL_ONE,
-                {sstring(role_name), r.name()}).then([](::shared_ptr<cql3::untyped_result_set> results) {
-            if (results->empty()) {
-                return permissions::NONE;
-            }
-
-            return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
-        });
-    });
-}
-
-future<permission_set> default_authorizer::authorize(
-        stdx::string_view role_name,
-        const resource& r,
-        service& ser) const {
-    return do_with(permission_set(), [this, &ser, role_name, &r](auto& ps) {
-        return ser.get_roles(role_name).then([this, &ser, &ps, &r](std::unordered_set<sstring> all_roles) {
-            return do_with(std::move(all_roles), [this, &ser, &ps, &r](const auto& all_roles) {
-                return parallel_for_each(all_roles, [this, &ser, &ps, &r](stdx::string_view role_name) {
-                    return this->authorize_role_directly(role_name, r, ser).then([&ps](permission_set rp) {
-                        ps = permission_set::from_mask(ps.mask() | rp.mask());
-                    });
-                });
-            });
-        }).then([&ps] {
-            return ps;
-        });
+        return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
     });
 }
 
@@ -202,12 +180,8 @@ future<> default_authorizer::revoke(stdx::string_view role_name, permission_set 
     return modify(role_name, std::move(set), resource, "-");
 }
 
-future<std::vector<permission_details>> default_authorizer::list(
-        permission_set set,
-        const std::optional<resource>& resource,
-        const std::optional<stdx::string_view>& role_name,
-        service& ser) const {
-    sstring query = sprint(
+future<std::vector<permission_details>> default_authorizer::list_all() const {
+    static const sstring query = sprint(
             "SELECT %s, %s, %s FROM %s.%s",
             ROLE_NAME,
             RESOURCE_NAME,
@@ -215,59 +189,23 @@ future<std::vector<permission_details>> default_authorizer::list(
             meta::AUTH_KS,
             PERMISSIONS_CF);
 
-    // Oh, look, it is a case where it does not pay off to have
-    // parameters to process in an initializer list.
-    future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
+    return _qp.process(
+            query,
+            db::consistency_level::ONE,
+            {},
+            true).then([](::shared_ptr<cql3::untyped_result_set> results) {
+        std::vector<permission_details> all_details;
 
-    if (role_name) {
-        f = ser.get_roles(*role_name).then([this, &resource, query, &f](
-                std::unordered_set<sstring> all_roles) mutable {
-            if (resource) {
-                query += sprint(" WHERE %s IN ? AND %s = ?", ROLE_NAME, RESOURCE_NAME);
-
-                return do_with(
-                        std::move(query),
-                        std::move(all_roles),
-                        [this, &resource](const auto& query, const auto& all_roles) {
-                    return _qp.process(query, db::consistency_level::ONE, {all_roles, resource->name()});
-                });
-            }
-
-            query += sprint(" WHERE %s IN ?", ROLE_NAME);
-
-            return do_with(
-                    std::move(query),
-                    std::move(all_roles),
-                    [this](const auto& query, const auto& all_roles) {
-                return _qp.process(query, db::consistency_level::ONE, {all_roles});
-            });
-        });
-    } else if (resource) {
-        query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
-
-        f = do_with(std::move(query), [this, &resource](const auto& query) {
-            return _qp.process(query, db::consistency_level::ONE, {resource->name()});
-        });
-    } else {
-        f = do_with(std::move(query), [this, &resource](const auto& query) {
-            return _qp.process(query, db::consistency_level::ONE, {});
-        });
-    }
-
-    return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
-        std::vector<permission_details> result;
-
-        for (auto& row : *res) {
+        for (const auto& row : *results) {
             if (row.has(PERMISSIONS_NAME)) {
-                auto username = row.get_as<sstring>(ROLE_NAME);
+                auto role_name = row.get_as<sstring>(ROLE_NAME);
                 auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
-                auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                ps = permission_set::from_mask(ps.mask() & set.mask());
-
-                result.emplace_back(permission_details {username, resource, ps});
+                auto perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+                all_details.push_back(permission_details{std::move(role_name), std::move(resource), std::move(perms)});
             }
         }
-        return make_ready_future<std::vector<permission_details>>(std::move(result));
+
+        return all_details;
     });
 }
 
