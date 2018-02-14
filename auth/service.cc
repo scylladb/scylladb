@@ -461,6 +461,26 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
     return has_role(ser, *u.name, name);
 }
 
+future<> grant_permissions(
+        service& ser,
+        stdx::string_view role_name,
+        permission_set perms,
+        const resource& r) {
+    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
+        return ser.underlying_authorizer().grant(role_name, perms, r);
+    });
+}
+
+future<> revoke_permissions(
+        service& ser,
+        stdx::string_view role_name,
+        permission_set perms,
+        const resource& r) {
+    return validate_role_exists(ser, role_name).then([&ser, role_name, perms, &r] {
+        return ser.underlying_authorizer().revoke(role_name, perms, r);
+    });
+}
+
 future<std::vector<permission_details>> list_filtered_permissions(
         const service& ser,
         permission_set perms,

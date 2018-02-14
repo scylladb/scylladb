@@ -239,6 +239,24 @@ future<bool> has_role(const service&, stdx::string_view grantee, stdx::string_vi
 ///
 future<bool> has_role(const service&, const authenticated_user&, stdx::string_view name);
 
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+future<> grant_permissions(
+        service&,
+        stdx::string_view role_name,
+        permission_set,
+        const resource&);
+
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+future<> revoke_permissions(
+        service&,
+        stdx::string_view role_name,
+        permission_set,
+        const resource&);
+
 using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 
 ///
