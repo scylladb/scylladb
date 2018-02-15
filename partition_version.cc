@@ -199,20 +199,24 @@ partition_entry::partition_entry(mutation_partition mp)
 }
 
 partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, mutation_partition&& mp)
-    : partition_entry(std::move(mp))
+    : partition_entry([&] {
+        mp.ensure_last_dummy(s);
+        return std::move(mp);
+    }())
 {
-    _version->partition().ensure_last_dummy(s);
     _version.make_evictable();
 }
 
 partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, partition_entry&& e)
-    : partition_entry(std::move(e))
+    : partition_entry([&] {
+        if (e._snapshot) {
+            // We must not change evictability of existing snapshots
+            // FIXME: https://github.com/scylladb/scylla/issues/1938
+            e.add_version(s);
+        }
+        return std::move(e);
+    }())
 {
-    if (_snapshot) {
-        // We must not change evictability of existing snapshots
-        // FIXME: https://github.com/scylladb/scylla/issues/1938
-        add_version(s);
-    }
     _version.make_evictable();
 }
 

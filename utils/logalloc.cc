@@ -108,7 +108,7 @@ public:
     impl();
     ~impl();
     void register_region(region::impl*);
-    void unregister_region(region::impl*);
+    void unregister_region(region::impl*) noexcept;
     size_t reclaim(size_t bytes);
     reactor::idle_cpu_handler_result compact_on_idle(reactor::work_waiting_on_reactor check_for_work);
     size_t compact_and_evict(size_t bytes);
@@ -1229,8 +1229,13 @@ public:
     {
         _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
-        if (group) {
-            group->add(this);
+        try {
+            if (group) {
+                group->add(this);
+            }
+        } catch (...) {
+            tracker_instance._impl->unregister_region(this);
+            throw;
         }
     }
 
@@ -1377,6 +1382,11 @@ public:
     // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) noexcept {
+        // degroup_temporarily allocates via binomial_heap::push(), which should not
+        // fail, because we have a matching deallocation before that and we don't
+        // allocate between them.
+        memory::disable_failure_guard dfg;
+
         compaction_lock dct1(*this);
         compaction_lock dct2(other);
         degroup_temporarily dgt1(this);
@@ -1974,10 +1984,10 @@ void tracker::impl::register_region(region::impl* r) {
     llogger.debug("Registered region @{} with id={}", r, r->id());
 }
 
-void tracker::impl::unregister_region(region::impl* r) {
+void tracker::impl::unregister_region(region::impl* r) noexcept {
     reclaiming_lock _(*this);
     llogger.debug("Unregistering region, id={}", r->id());
-    _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
+    _regions.erase(std::remove(_regions.begin(), _regions.end(), r), _regions.end());
 }
 
 tracker::impl::impl() {

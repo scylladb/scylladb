@@ -326,8 +326,10 @@ public:
     // Constructs a non-evictable entry
     explicit partition_entry(mutation_partition mp);
     // Constructs an evictable entry
+    // Strong exception guarantees for the state of mp.
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
-    partition_entry(evictable_tag, const schema& s, partition_entry&&);
+    // Strong exception guarantees for the state of pe.
+    partition_entry(evictable_tag, const schema& s, partition_entry&& pe);
     ~partition_entry();
 
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
