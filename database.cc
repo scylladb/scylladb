@@ -2137,7 +2137,7 @@ void backlog_controller::adjust() {
     // interpolate to find out which region we are. This run infrequently and there are a fixed
     // number of points so a simple loop will do.
     size_t idx = 1;
-    while ((idx < _control_points.size()) && (_control_points[idx].input < backlog)) {
+    while ((idx < _control_points.size() - 1) && (_control_points[idx].input < backlog)) {
         idx++;
     }
 
