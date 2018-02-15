@@ -2995,14 +2995,13 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
     // are not affected by eviction in cache after their partition entries were moved to cache.
     // Reproduces https://github.com/scylladb/scylla/issues/3186
     return seastar::async([] {
-        simple_schema ss;
-        schema_ptr s = ss.schema();
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        auto s = gen.schema();
 
-        auto m1 = ss.new_mutation("pk1");
-        const auto n_rows = 10000;
-        for (auto i = 0u; i < n_rows; ++i) {
-            ss.add_row(m1, ss.make_ckey(i), "val");
-        }
+        mutation m1 = gen();
+        mutation m2 = gen();
+        m1.partition().make_fully_continuous();
+        m2.partition().make_fully_continuous();
 
         cache_tracker tracker;
         memtable_snapshot_source underlying(s);
@@ -3026,10 +3025,21 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
         assert_that(std::move(mt_rd1))
             .produces(m1);
 
+        auto c_rd1 = cache.make_reader(s);
+        c_rd1.set_max_buffer_size(1);
+        c_rd1.fill_buffer().get();
+
+        apply(cache, underlying, m2);
+
+        auto c_rd2 = cache.make_reader(s);
+        c_rd2.set_max_buffer_size(1);
+        c_rd2.fill_buffer().get();
+
         cache.evict();
 
-        assert_that(std::move(mt_rd2))
-            .produces(m1);
+        assert_that(std::move(mt_rd2)).produces(m1);
+        assert_that(std::move(c_rd1)).produces(m1);
+        assert_that(std::move(c_rd2)).produces(m1 + m2);
     });
 }
 
