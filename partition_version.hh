@@ -324,13 +324,10 @@ public:
     explicit partition_entry(mutation_partition mp);
     // Constructs an evictable entry
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
-    partition_entry(evictable_tag, const schema& s, partition_entry&&);
     ~partition_entry();
 
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
     static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
-    // pe must be a non-evictable fully continuous entry.
-    static partition_entry make_evictable(const schema& s, partition_entry&& pe);
 
     partition_entry(partition_entry&& pe) noexcept
         : _snapshot(pe._snapshot), _version(std::move(pe._version))

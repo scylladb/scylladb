@@ -1034,11 +1034,14 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             _tracker.touch(entry);
             _tracker.on_merge();
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
-            cache_entry* entry = current_allocator().construct<cache_entry>(
-                mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
+            // Partition is absent in underlying. First, insert a neutral partition entry.
+            cache_entry* entry = current_allocator().construct<cache_entry>(cache_entry::evictable_tag(),
+                _schema, dht::decorated_key(mem_e.key()),
+                partition_entry::make_evictable(*_schema, mutation_partition(_schema)));
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             _partitions.insert(cache_i, *entry);
+            entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema());
         }
     });
 }
