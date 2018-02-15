@@ -207,33 +207,12 @@ partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s
     _version.make_evictable();
 }
 
-partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, partition_entry&& e)
-    : partition_entry([&] {
-        if (e._snapshot) {
-            // We must not change evictability of existing snapshots
-            // FIXME: https://github.com/scylladb/scylla/issues/1938
-            e.add_version(s);
-        }
-        return std::move(e);
-    }())
-{
-    _version.make_evictable();
-}
-
 partition_entry partition_entry::make_evictable(const schema& s, mutation_partition&& mp) {
     return {evictable_tag(), s, std::move(mp)};
 }
 
 partition_entry partition_entry::make_evictable(const schema& s, const mutation_partition& mp) {
     return make_evictable(s, mutation_partition(mp));
-}
-
-partition_entry partition_entry::make_evictable(const schema& s, partition_entry&& pe) {
-    // If we can assume that _pe is fully continuous, we don't need to check all versions
-    // to determine what the continuity is.
-    // This doesn't change value and doesn't invalidate iterators, so can be called even with a snapshot.
-    pe.version()->partition().ensure_last_dummy(s);
-    return partition_entry(evictable_tag(), s, std::move(pe));
 }
 
 partition_entry::~partition_entry() {
@@ -574,10 +553,8 @@ void partition_entry::evict() noexcept {
     if (!_version) {
         return;
     }
+    // Must evict from all versions atomically to keep snapshots consistent.
     for (auto&& v : versions()) {
-        if (v.is_referenced() && !v.back_reference().evictable()) {
-            break;
-        }
         v.partition().evict();
     }
     current_allocator().invalidate_references();

@@ -111,12 +111,6 @@ public:
     { }
 
     // It is assumed that pe is fully continuous
-    cache_entry(schema_ptr s, dht::decorated_key&& key, partition_entry&& pe)
-        : cache_entry(evictable_tag(), s, std::move(key),
-            partition_entry::make_evictable(*s, std::move(pe)))
-    { }
-
-    // It is assumed that pe is fully continuous
     // pe must be evictable.
     cache_entry(evictable_tag, schema_ptr s, dht::decorated_key&& key, partition_entry&& pe) noexcept
         : _schema(std::move(s))
