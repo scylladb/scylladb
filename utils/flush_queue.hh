@@ -183,11 +183,6 @@ public:
     future<> close() {
         return _gate.close();
     }
-    // Poll-check that queue is still open
-    void check_open_gate() {
-        _gate.enter();
-        _gate.leave();
-    }
 };
 
 }
