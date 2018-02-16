@@ -35,7 +35,7 @@ namespace bi = boost::intrusive;
 
 typedef bi::rbtree_algorithms<bi::rbtree_node_traits<void*, true>> algo;
 
-class intrusive_set_external_comparator_member_hook : public bi::set_member_hook<bi::optimize_size<true>> {
+class intrusive_set_external_comparator_member_hook : public bi::set_member_hook<bi::optimize_size<true>, bi::link_mode<bi::auto_unlink>> {
 public:
     intrusive_set_external_comparator_member_hook() = default;
     intrusive_set_external_comparator_member_hook(intrusive_set_external_comparator_member_hook&& o) noexcept {
