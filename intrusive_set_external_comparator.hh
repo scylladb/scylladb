@@ -90,7 +90,7 @@ private:
 
     using const_value_traits_ptr = typename std::pointer_traits<typename value_traits::node_ptr>::template rebind<const value_traits>;
 
-    const_value_traits_ptr priv_value_traits_ptr() const {
+    static const_value_traits_ptr priv_value_traits_ptr() {
         return bi::pointer_traits<const_value_traits_ptr>::pointer_to(_value_traits);
     }
     template <typename Comparator>
@@ -108,6 +108,7 @@ public:
         algo::init_header(_header.this_ptr());
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
     }
+    static iterator iterator_to(Elem& e) { return iterator(_value_traits.to_node_ptr(e), priv_value_traits_ptr()); }
     iterator begin() { return iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
     const_iterator begin() const { return const_iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
     iterator end() { return iterator(algo::end_node(_header.this_ptr()), priv_value_traits_ptr()); }
