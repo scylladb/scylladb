@@ -172,6 +172,7 @@ public:
 };
 
 using partition_version_range = anchorless_list_base_hook<partition_version>::range;
+using partition_version_reversed_range = anchorless_list_base_hook<partition_version>::reversed_range;
 
 class partition_version_ref {
     partition_version* _version = nullptr;
@@ -399,6 +400,10 @@ public:
 
     partition_version_range versions() {
         return _version->elements_from_this();
+    }
+
+    partition_version_reversed_range versions_from_oldest() {
+        return _version->all_elements_reversed();
     }
 
     // Strong exception guarantees.
