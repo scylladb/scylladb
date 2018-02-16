@@ -60,6 +60,35 @@ public:
         }
     };
 
+    class reverse_iterator {
+        anchorless_list_base_hook<T>* _position;
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = T;
+        using difference_type = ssize_t;
+        using pointer = T*;
+        using reference = T&;
+    public:
+        explicit reverse_iterator(anchorless_list_base_hook<T>* pos) : _position(pos) { }
+        T& operator*() { return *static_cast<T*>(_position); }
+        T* operator->() { return static_cast<T*>(_position); }
+        reverse_iterator& operator++() {
+            _position = _position->_prev;
+            return *this;
+        }
+        reverse_iterator operator++(int) {
+            reverse_iterator it = *this;
+            operator++();
+            return it;
+        }
+        bool operator==(const reverse_iterator& other) {
+            return _position == other._position;
+        }
+        bool operator!=(const reverse_iterator& other) {
+            return !(*this == other);
+        }
+    };
+
     class range {
         anchorless_list_base_hook<T>* _begin;
         anchorless_list_base_hook<T>* _end;
@@ -68,6 +97,16 @@ public:
             : _begin(b), _end(e) { }
         iterator begin() { return iterator(_begin); }
         iterator end() { return iterator(_end); }
+    };
+
+    class reversed_range {
+        anchorless_list_base_hook<T>* _begin;
+        anchorless_list_base_hook<T>* _end;
+    public:
+        reversed_range(anchorless_list_base_hook<T>* b, anchorless_list_base_hook<T>* e)
+            : _begin(b), _end(e) { }
+        reverse_iterator begin() { return reverse_iterator(_begin); }
+        reverse_iterator end() { return reverse_iterator(_end); }
     };
 public:
     anchorless_list_base_hook() = default;
@@ -153,6 +192,9 @@ public:
             begin = begin->_prev;
         }
         return range(begin, nullptr);
+    }
+    reversed_range all_elements_reversed() {
+        return reversed_range(last(), nullptr);
     }
     range elements_from_this() {
         return range(this, nullptr);
