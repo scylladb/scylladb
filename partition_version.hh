@@ -131,8 +131,9 @@
 // this assumption to make calculation of the union of intervals on merging
 // easier.
 //
-// Continuity after the last entry in a version is assumed to be discontinuous
-// for evictable entries.
+// versions of evictable entries always have a dummy entry at position_in_partition::after_all_clustered_rows().
+// This is needed so that they can be always made fully discontinuous by eviction, and because
+// we need a way to link partitions with no rows into the LRU.
 //
 // Snapshots of evictable entries always have a row entry at
 // position_in_partition::after_all_clustered_rows().

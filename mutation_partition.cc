@@ -2123,17 +2123,13 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
 }
 
 void mutation_partition::evict(cache_tracker& tracker) noexcept {
-    if (!_rows.empty()) {
-        // We need to keep the last entry to mark the range containing all evicted rows as discontinuous.
-        // No rows would mean it is continuous.
+    {
+        assert(!_rows.empty());
+        auto del = current_deleter<rows_entry>();
         auto i = _rows.erase_and_dispose(_rows.begin(), std::prev(_rows.end()), current_deleter<rows_entry>());
         rows_entry& e = *i;
-        e._flags._before_ck = false;
-        e._flags._after_ck = true;
-        e._flags._dummy = true;
-        e._flags._last_dummy = true;
-        e._flags._continuous = false;
-        e._row = {};
+        assert(e.is_last_dummy());
+        e.set_continuous(false);
     }
     _row_tombstones.clear();
     _static_row_continuous = false;

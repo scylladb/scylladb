@@ -241,7 +241,13 @@ void partition_entry::set_version(partition_version* new_version)
 }
 
 partition_version& partition_entry::add_version(const schema& s, cache_tracker* tracker) {
-    auto new_version = current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
+    // Every evictable version must have a dummy entry at the end so that
+    // it can be tracked in the LRU. It is also needed to allow old versions
+    // to stay around (with tombstones and static rows) after fully evicted.
+    // Such versions must be fully discontinuous, and thus have a dummy at the end.
+    auto new_version = tracker
+                       ? current_allocator().construct<partition_version>(mutation_partition::make_incomplete(s))
+                       : current_allocator().construct<partition_version>(mutation_partition(s.shared_from_this()));
     new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
     new_version->insert_before(*_version);
     set_version(new_version);
