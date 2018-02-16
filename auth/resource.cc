@@ -63,13 +63,11 @@ std::ostream& operator<<(std::ostream& os, resource_kind kind) {
 
 static const std::unordered_map<resource_kind, stdx::string_view> roots{
         {resource_kind::data, "data"},
-        {resource_kind::role, "roles"},
-};
+        {resource_kind::role, "roles"}};
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
-        {resource_kind::role, 1},
-};
+        {resource_kind::role, 1}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
     if (dv.table()) {
@@ -111,60 +109,23 @@ resource::resource(resource_kind kind, std::vector<sstring> parts) : resource(ki
     _parts.insert(_parts.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
 }
 
-resource resource::data(stdx::string_view keyspace) {
-    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)});
+resource::resource(data_resource_t, stdx::string_view keyspace)
+        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace)}) {
 }
 
-resource resource::data(stdx::string_view keyspace, stdx::string_view table) {
-    return resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)});
+resource::resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table)
+        : resource(resource_kind::data, std::vector<sstring>{sstring(keyspace), sstring(table)}) {
 }
 
-resource resource::role(stdx::string_view role) {
-    return resource(resource_kind::role, std::vector<sstring>{sstring(role)});
-}
-
-resource resource::from_name(stdx::string_view name) {
-    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
-        std::unordered_map<stdx::string_view, resource_kind> result;
-
-        for (const auto& pair : roots) {
-            result.emplace(pair.second, pair.first);
-        }
-
-        return result;
-    }();
-
-    std::vector<sstring> parts;
-    boost::split(parts, name, [](char ch) { return ch == '/'; });
-
-    if (parts.empty()) {
-        throw invalid_resource_name(name);
-    }
-
-    const auto iter = reverse_roots.find(parts[0]);
-    if (iter == reverse_roots.end()) {
-        throw invalid_resource_name(name);
-    }
-
-    const auto kind = iter->second;
-    parts.erase(parts.begin());
-
-    if (parts.size() > max_parts.at(kind)) {
-        throw invalid_resource_name(name);
-    }
-
-    return resource(kind, std::move(parts));
-}
-
-resource resource::root_of(resource_kind kind) {
-    return resource(kind);
+resource::resource(role_resource_t, stdx::string_view role)
+        : resource(resource_kind::role, std::vector<sstring>{sstring(role)}) {
 }
 
 sstring resource::name() const {
     return boost::algorithm::join(_parts, "/");
 }
 
-stdx::optional<resource> resource::parent() const {
+std::optional<resource> resource::parent() const {
     if (_parts.size() == 1) {
         return {};
     }
@@ -212,7 +173,7 @@ data_resource_view::data_resource_view(const resource& r) : _resource(r) {
     }
 }
 
-stdx::optional<stdx::string_view> data_resource_view::keyspace() const {
+std::optional<stdx::string_view> data_resource_view::keyspace() const {
     if (_resource._parts.size() == 1) {
         return {};
     }
@@ -220,7 +181,7 @@ stdx::optional<stdx::string_view> data_resource_view::keyspace() const {
     return _resource._parts[1];
 }
 
-stdx::optional<stdx::string_view> data_resource_view::table() const {
+std::optional<stdx::string_view> data_resource_view::table() const {
     if (_resource._parts.size() <= 2) {
         return {};
     }
@@ -243,30 +204,13 @@ std::ostream& operator<<(std::ostream& os, const data_resource_view& v) {
     return os;
 }
 
-bool resource_exists(const data_resource_view& v) {
-    // TODO(jhaberku) This dependency on global data is a remnant from the previous version, and needs to be fixed in a
-    // dedicated patch.
-    auto& local_db = service::get_local_storage_proxy().get_db().local();
-
-    const auto keyspace = v.keyspace();
-    const auto table = v.table();
-
-    if (table) {
-        return local_db.has_schema(sstring(*keyspace), sstring(*table));
-    } else if (keyspace) {
-        return local_db.has_keyspace(sstring(*keyspace));
-    } else {
-        return true;
-    }
-}
-
 role_resource_view::role_resource_view(const resource& r) : _resource(r) {
     if (r._kind != resource_kind::role) {
         throw resource_kind_mismatch(resource_kind::role, r._kind);
     }
 }
 
-stdx::optional<stdx::string_view> role_resource_view::role() const {
+std::optional<stdx::string_view> role_resource_view::role() const {
     if (_resource._parts.size() == 1) {
         return {};
     }
@@ -284,6 +228,69 @@ std::ostream& operator<<(std::ostream& os, const role_resource_view& v) {
     }
 
     return os;
+}
+
+resource parse_resource(stdx::string_view name) {
+    static const std::unordered_map<stdx::string_view, resource_kind> reverse_roots = [] {
+        std::unordered_map<stdx::string_view, resource_kind> result;
+
+        for (const auto& pair : roots) {
+            result.emplace(pair.second, pair.first);
+        }
+
+        return result;
+    }();
+
+    std::vector<sstring> parts;
+    boost::split(parts, name, [](char ch) { return ch == '/'; });
+
+    if (parts.empty()) {
+        throw invalid_resource_name(name);
+    }
+
+    const auto iter = reverse_roots.find(parts[0]);
+    if (iter == reverse_roots.end()) {
+        throw invalid_resource_name(name);
+    }
+
+    const auto kind = iter->second;
+    parts.erase(parts.begin());
+
+    if (parts.size() > max_parts.at(kind)) {
+        throw invalid_resource_name(name);
+    }
+
+    return resource(kind, std::move(parts));
+}
+
+static const resource the_root_data_resource{resource_kind::data};
+
+const resource& root_data_resource() {
+    return the_root_data_resource;
+}
+
+static const resource the_root_role_resource{resource_kind::role};
+
+const resource& root_role_resource() {
+    return the_root_role_resource;
+}
+
+resource_set expand_resource_family(const resource& rr) {
+    resource r = rr;
+    resource_set rs;
+
+    while (true) {
+        const auto pr = r.parent();
+        rs.insert(std::move(r));
+
+        if (!pr) {
+            break;
+        }
+
+        r = std::move(*pr);
+    }
+
+    return rs;
 }
 
 }

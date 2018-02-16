@@ -39,198 +39,283 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <unistd.h>
-#include <crypt.h>
-#include <random>
-#include <chrono>
+#include "auth/default_authorizer.hh"
 
+extern "C" {
+#include <crypt.h>
+#include <unistd.h>
+}
+
+#include <chrono>
+#include <random>
+
+#include <boost/algorithm/string/join.hpp>
+#include <boost/range.hpp>
 #include <seastar/core/reactor.hh>
 
-#include "common.hh"
-#include "default_authorizer.hh"
-#include "authenticated_user.hh"
-#include "permission.hh"
+#include "auth/authenticated_user.hh"
+#include "auth/common.hh"
+#include "auth/permission.hh"
+#include "auth/role_or_anonymous.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 
-const sstring& auth::default_authorizer_name() {
+namespace auth {
+
+const sstring& default_authorizer_name() {
     static const sstring name = meta::AUTH_PACKAGE_NAME + "CassandraAuthorizer";
     return name;
 }
 
-static const sstring USER_NAME = "username";
+static const sstring ROLE_NAME = "role";
 static const sstring RESOURCE_NAME = "resource";
 static const sstring PERMISSIONS_NAME = "permissions";
-static const sstring PERMISSIONS_CF = "permissions";
+static const sstring PERMISSIONS_CF = "role_permissions";
 
 static logging::logger alogger("default_authorizer");
 
 // To ensure correct initialization order, we unfortunately need to use a string literal.
 static const class_registrator<
-        auth::authorizer,
-        auth::default_authorizer,
+        authorizer,
+        default_authorizer,
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.CassandraAuthorizer");
 
-auth::default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
+default_authorizer::default_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
         : _qp(qp)
         , _migration_manager(mm) {
 }
 
-auth::default_authorizer::~default_authorizer() {
+default_authorizer::~default_authorizer() {
 }
 
-future<> auth::default_authorizer::start() {
-    static const sstring create_table = sprint("CREATE TABLE %s.%s ("
-                    "%s text,"
-                    "%s text,"
-                    "%s set<text>,"
-                    "PRIMARY KEY(%s, %s)"
-                    ") WITH gc_grace_seconds=%d", meta::AUTH_KS,
-                    PERMISSIONS_CF, USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME,
-                    USER_NAME, RESOURCE_NAME, 90 * 24 * 60 * 60); // 3 months.
+static const sstring legacy_table_name{"permissions"};
 
-    return auth::once_among_shards([this] {
-        return auth::create_metadata_table_if_missing(
+bool default_authorizer::legacy_metadata_exists() const {
+    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+}
+
+future<bool> default_authorizer::any_granted() const {
+    static const sstring query = sprint("SELECT * FROM %s.%s LIMIT 1", meta::AUTH_KS, PERMISSIONS_CF);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {},
+            true).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return !results->empty();
+    });
+}
+
+future<> default_authorizer::migrate_legacy_metadata() {
+    alogger.info("Starting migration of legacy permissions metadata.");
+    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            return do_with(
+                    row.get_as<sstring>("username"),
+                    parse_resource(row.get_as<sstring>(RESOURCE_NAME)),
+                    [this, &row](const auto& username, const auto& r) {
+                const permission_set perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+                return grant(username, perms, r);
+            });
+        }).finally([results] {});
+    }).then([] {
+        alogger.info("Finished migrating legacy permissions metadata.");
+    }).handle_exception([](std::exception_ptr ep) {
+        alogger.error("Encountered an error during migration!");
+        std::rethrow_exception(ep);
+    });
+}
+
+future<> default_authorizer::start() {
+    static const sstring create_table = sprint(
+            "CREATE TABLE %s.%s ("
+            "%s text,"
+            "%s text,"
+            "%s set<text>,"
+            "PRIMARY KEY(%s, %s)"
+            ") WITH gc_grace_seconds=%d",
+            meta::AUTH_KS,
+            PERMISSIONS_CF,
+            ROLE_NAME,
+            RESOURCE_NAME,
+            PERMISSIONS_NAME,
+            ROLE_NAME,
+            RESOURCE_NAME,
+            90 * 24 * 60 * 60); // 3 months.
+
+    return once_among_shards([this] {
+        return create_metadata_table_if_missing(
                 PERMISSIONS_CF,
                 _qp,
                 create_table,
-                _migration_manager);
-    });
-}
+                _migration_manager).then([this] {
+            _finished = do_after_system_ready(_as, [this] {
+                if (legacy_metadata_exists()) {
+                   return any_granted().then([this](bool any) {
+                       if (!any) {
+                           return migrate_legacy_metadata();
+                       }
 
-future<> auth::default_authorizer::stop() {
-    return make_ready_future<>();
-}
+                       alogger.warn("Ignoring legacy permissions metadata since role permissions exist.");
+                       return make_ready_future<>();
+                   });
+               }
 
-future<auth::permission_set> auth::default_authorizer::authorize(
-                service& ser, ::shared_ptr<authenticated_user> user, resource resource) const {
-    return auth::is_super_user(ser, *user).then([this, user, resource = std::move(resource)](bool is_super) {
-        if (is_super) {
-            return make_ready_future<permission_set>(permissions::ALL);
-        }
-
-        /**
-         * TOOD: could create actual data type for permission (translating string<->perm),
-         * but this seems overkill right now. We still must store strings so...
-         */
-        auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?"
-                        , PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
-        return _qp.process(query, db::consistency_level::LOCAL_ONE, {user->name(), resource.name() })
-                        .then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
-            try {
-                auto res = f.get0();
-
-                if (res->empty() || !res->one().has(PERMISSIONS_NAME)) {
-                    return make_ready_future<permission_set>(permissions::NONE);
-                }
-                return make_ready_future<permission_set>(permissions::from_strings(res->one().get_set<sstring>(PERMISSIONS_NAME)));
-            } catch (exceptions::request_execution_exception& e) {
-                alogger.warn("CassandraAuthorizer failed to authorize {} for {}", user->name(), resource);
-                return make_ready_future<permission_set>(permissions::NONE);
-            }
+               return make_ready_future<>();
+            });
         });
     });
 }
 
-#include <boost/range.hpp>
-
-future<> auth::default_authorizer::modify(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
-                resource resource, sstring user, sstring op) {
-    // TODO: why does this not check super user?
-    auto query = sprint("UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
-                    meta::AUTH_KS, PERMISSIONS_CF, PERMISSIONS_NAME,
-                    PERMISSIONS_NAME, op, USER_NAME, RESOURCE_NAME);
-    return _qp.process(query, db::consistency_level::ONE, {
-                    permissions::to_strings(set), user, resource.name() }).discard_result();
+future<> default_authorizer::stop() {
+    _as.request_abort();
+    return _finished.handle_exception_type([](const sleep_aborted&) {});
 }
 
+future<permission_set>
+default_authorizer::authorize(const role_or_anonymous& maybe_role, const resource& r) const {
+    if (is_anonymous(maybe_role)) {
+        return make_ready_future<permission_set>(permissions::NONE);
+    }
 
-future<> auth::default_authorizer::grant(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
-                resource resource, sstring to) {
-    return modify(std::move(performer), std::move(set), std::move(resource), std::move(to), "+");
-}
+    static const sstring query = sprint(
+            "SELECT %s FROM %s.%s WHERE %s = ? AND %s = ?",
+            PERMISSIONS_NAME,
+            meta::AUTH_KS,
+            PERMISSIONS_CF,
+            ROLE_NAME,
+            RESOURCE_NAME);
 
-future<> auth::default_authorizer::revoke(
-                ::shared_ptr<authenticated_user> performer, permission_set set,
-                resource resource, sstring from) {
-    return modify(std::move(performer), std::move(set), std::move(resource), std::move(from), "-");
-}
-
-future<std::vector<auth::permission_details>> auth::default_authorizer::list(
-                service& ser, ::shared_ptr<authenticated_user> performer, permission_set set,
-                optional<resource> resource, optional<sstring> user) const {
-    return auth::is_super_user(ser, *performer).then([this, performer, set = std::move(set), resource = std::move(resource), user = std::move(user)](bool is_super) {
-        if (!is_super && (!user || performer->name() != *user)) {
-            throw exceptions::unauthorized_exception(sprint("You are not authorized to view %s's permissions", user ? *user : "everyone"));
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {*maybe_role.name, r.name()}).then([](::shared_ptr<cql3::untyped_result_set> results) {
+        if (results->empty()) {
+            return permissions::NONE;
         }
 
-        auto query = sprint("SELECT %s, %s, %s FROM %s.%s", USER_NAME, RESOURCE_NAME, PERMISSIONS_NAME, meta::AUTH_KS, PERMISSIONS_CF);
-
-        // Oh, look, it is a case where it does not pay off to have
-        // parameters to process in an initializer list.
-        future<::shared_ptr<cql3::untyped_result_set>> f = make_ready_future<::shared_ptr<cql3::untyped_result_set>>();
-
-        if (resource && user) {
-            query += sprint(" WHERE %s = ? AND %s = ?", USER_NAME, RESOURCE_NAME);
-            f = _qp.process(query, db::consistency_level::ONE, {*user, resource->name()});
-        } else if (resource) {
-            query += sprint(" WHERE %s = ? ALLOW FILTERING", RESOURCE_NAME);
-            f = _qp.process(query, db::consistency_level::ONE, {resource->name()});
-        } else if (user) {
-            query += sprint(" WHERE %s = ?", USER_NAME);
-            f = _qp.process(query, db::consistency_level::ONE, {*user});
-        } else {
-            f = _qp.process(query, db::consistency_level::ONE, {});
-        }
-
-        return f.then([set](::shared_ptr<cql3::untyped_result_set> res) {
-            std::vector<permission_details> result;
-
-            for (auto& row : *res) {
-                if (row.has(PERMISSIONS_NAME)) {
-                    auto username = row.get_as<sstring>(USER_NAME);
-                    auto resource = resource::from_name(row.get_as<sstring>(RESOURCE_NAME));
-                    auto ps = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
-                    ps = permission_set::from_mask(ps.mask() & set.mask());
-
-                    result.emplace_back(permission_details {username, resource, ps});
-                }
-            }
-            return make_ready_future<std::vector<permission_details>>(std::move(result));
-        });
+        return permissions::from_strings(results->one().get_set<sstring>(PERMISSIONS_NAME));
     });
 }
 
-future<> auth::default_authorizer::revoke_all(sstring dropped_user) {
-    auto query = sprint("DELETE FROM %s.%s WHERE %s = ?", meta::AUTH_KS,
-                    PERMISSIONS_CF, USER_NAME);
-    return _qp.process(query, db::consistency_level::ONE, { dropped_user }).discard_result().handle_exception(
-                    [dropped_user](auto ep) {
-                        try {
-                            std::rethrow_exception(ep);
-                        } catch (exceptions::request_execution_exception& e) {
-                            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", dropped_user, e);
-                        }
-                    });
+future<>
+default_authorizer::modify(
+        stdx::string_view role_name,
+        permission_set set,
+        const resource& resource,
+        stdx::string_view op) {
+    return do_with(
+            sprint(
+                    "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
+                    meta::AUTH_KS,
+                    PERMISSIONS_CF,
+                    PERMISSIONS_NAME,
+                    PERMISSIONS_NAME,
+                    op,
+                    ROLE_NAME,
+                    RESOURCE_NAME),
+            [this, &role_name, set, &resource](const auto& query) {
+        return _qp.process(
+                query,
+                db::consistency_level::ONE,
+                {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
+    });
 }
 
-future<> auth::default_authorizer::revoke_all(resource resource) {
-    auto query = sprint("SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
-                    USER_NAME, meta::AUTH_KS, PERMISSIONS_CF, RESOURCE_NAME);
-    return _qp.process(query, db::consistency_level::LOCAL_ONE, { resource.name() })
-                    .then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
+
+future<> default_authorizer::grant(stdx::string_view role_name, permission_set set, const resource& resource) {
+    return modify(role_name, std::move(set), resource, "+");
+}
+
+future<> default_authorizer::revoke(stdx::string_view role_name, permission_set set, const resource& resource) {
+    return modify(role_name, std::move(set), resource, "-");
+}
+
+future<std::vector<permission_details>> default_authorizer::list_all() const {
+    static const sstring query = sprint(
+            "SELECT %s, %s, %s FROM %s.%s",
+            ROLE_NAME,
+            RESOURCE_NAME,
+            PERMISSIONS_NAME,
+            meta::AUTH_KS,
+            PERMISSIONS_CF);
+
+    return _qp.process(
+            query,
+            db::consistency_level::ONE,
+            {},
+            true).then([](::shared_ptr<cql3::untyped_result_set> results) {
+        std::vector<permission_details> all_details;
+
+        for (const auto& row : *results) {
+            if (row.has(PERMISSIONS_NAME)) {
+                auto role_name = row.get_as<sstring>(ROLE_NAME);
+                auto resource = parse_resource(row.get_as<sstring>(RESOURCE_NAME));
+                auto perms = permissions::from_strings(row.get_set<sstring>(PERMISSIONS_NAME));
+                all_details.push_back(permission_details{std::move(role_name), std::move(resource), std::move(perms)});
+            }
+        }
+
+        return all_details;
+    });
+}
+
+future<> default_authorizer::revoke_all(stdx::string_view role_name) {
+    static const sstring query = sprint(
+            "DELETE FROM %s.%s WHERE %s = ?",
+            meta::AUTH_KS,
+            PERMISSIONS_CF,
+            ROLE_NAME);
+
+    return _qp.process(
+            query,
+            db::consistency_level::ONE,
+            {sstring(role_name)}).discard_result().handle_exception([role_name](auto ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (exceptions::request_execution_exception& e) {
+            alogger.warn("CassandraAuthorizer failed to revoke all permissions of {}: {}", role_name, e);
+        }
+    });
+}
+
+future<> default_authorizer::revoke_all(const resource& resource) {
+    static const sstring query = sprint(
+            "SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
+            ROLE_NAME,
+            meta::AUTH_KS,
+            PERMISSIONS_CF,
+            RESOURCE_NAME);
+
+    return _qp.process(
+            query,
+            db::consistency_level::LOCAL_ONE,
+            {resource.name()}).then_wrapped([this, resource](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
-            return parallel_for_each(res->begin(), res->end(), [this, res, resource](const cql3::untyped_result_set::row& r) {
-                auto query = sprint("DELETE FROM %s.%s WHERE %s = ? AND %s = ?"
-                                , meta::AUTH_KS, PERMISSIONS_CF, USER_NAME, RESOURCE_NAME);
-                return _qp.process(query, db::consistency_level::LOCAL_ONE, { r.get_as<sstring>(USER_NAME), resource.name() })
-                                .discard_result().handle_exception([resource](auto ep) {
+            return parallel_for_each(
+                    res->begin(),
+                    res->end(),
+                    [this, res, resource](const cql3::untyped_result_set::row& r) {
+                static const sstring query = sprint(
+                        "DELETE FROM %s.%s WHERE %s = ? AND %s = ?",
+                        meta::AUTH_KS,
+                        PERMISSIONS_CF,
+                        ROLE_NAME,
+                        RESOURCE_NAME);
+
+                return _qp.process(
+                        query,
+                        db::consistency_level::LOCAL_ONE,
+                        {r.get_as<sstring>(ROLE_NAME), resource.name()}).discard_result().handle_exception(
+                                [resource](auto ep) {
                     try {
                         std::rethrow_exception(ep);
                     } catch (exceptions::request_execution_exception& e) {
@@ -246,11 +331,9 @@ future<> auth::default_authorizer::revoke_all(resource resource) {
     });
 }
 
-const auth::resource_set& auth::default_authorizer::protected_resources() {
-    static const resource_set resources({ resource::data(meta::AUTH_KS, PERMISSIONS_CF) });
+const resource_set& default_authorizer::protected_resources() const {
+    static const resource_set resources({ make_data_resource(meta::AUTH_KS, PERMISSIONS_CF) });
     return resources;
 }
 
-future<> auth::default_authorizer::validate_configuration() const {
-    return make_ready_future();
 }

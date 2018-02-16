@@ -53,7 +53,7 @@ class permission_altering_statement : public authorization_statement {
 protected:
     auth::permission_set _permissions;
     auth::resource _resource;
-    sstring _username;
+    sstring _role_name;
 
 public:
     permission_altering_statement(auth::permission_set, auth::resource, sstring);

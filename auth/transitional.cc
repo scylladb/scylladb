@@ -39,19 +39,16 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "authenticator.hh"
-#include "authenticated_user.hh"
-#include "authenticator.hh"
-#include "authorizer.hh"
-#include "password_authenticator.hh"
-#include "default_authorizer.hh"
-#include "permission.hh"
+#include "auth/authenticated_user.hh"
+#include "auth/authenticator.hh"
+#include "auth/authorizer.hh"
+#include "auth/default_authorizer.hh"
+#include "auth/password_authenticator.hh"
+#include "auth/permission.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 namespace auth {
-
-class service;
 
 static const sstring PACKAGE_NAME("com.scylladb.auth.");
 
@@ -67,38 +64,47 @@ static const sstring& transitional_authorizer_name() {
 
 class transitional_authenticator : public authenticator {
     std::unique_ptr<authenticator> _authenticator;
+
 public:
     static const sstring PASSWORD_AUTHENTICATOR_NAME;
 
     transitional_authenticator(cql3::query_processor& qp, ::service::migration_manager& mm)
-            : transitional_authenticator(std::make_unique<password_authenticator>(qp, mm))
-    {}
+            : transitional_authenticator(std::make_unique<password_authenticator>(qp, mm)) {
+    }
     transitional_authenticator(std::unique_ptr<authenticator> a)
-        : _authenticator(std::move(a))
-    {}
-    future<> start() override {
+            : _authenticator(std::move(a)) {
+    }
+
+    virtual future<> start() override {
         return _authenticator->start();
     }
-    future<> stop() override {
+
+    virtual future<> stop() override {
         return _authenticator->stop();
     }
-    const sstring& qualified_java_name() const override {
+
+    virtual const sstring& qualified_java_name() const override {
         return transitional_authenticator_name();
     }
-    bool require_authentication() const override {
+
+    virtual bool require_authentication() const override {
         return true;
     }
-    option_set supported_options() const override {
+
+    virtual authentication_option_set supported_options() const override {
         return _authenticator->supported_options();
     }
-    option_set alterable_options() const override {
+
+    virtual authentication_option_set alterable_options() const override {
         return _authenticator->alterable_options();
     }
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override {
+
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override {
         auto i = credentials.find(authenticator::USERNAME_KEY);
-        if ((i == credentials.end() || i->second.empty()) && (!credentials.count(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
+        if ((i == credentials.end() || i->second.empty())
+                && (!credentials.count(PASSWORD_KEY) || credentials.at(PASSWORD_KEY).empty())) {
             // return anon user
-            return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+            return make_ready_future<authenticated_user>(anonymous_user());
         }
         return make_ready_future().then([this, &credentials] {
             return _authenticator->authenticate(credentials);
@@ -107,29 +113,35 @@ public:
                 std::rethrow_exception(ep);
             } catch (exceptions::authentication_exception&) {
                 // return anon user
-                return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+                return make_ready_future<authenticated_user>(anonymous_user());
             }
         });
     }
-    future<> create(sstring username, const option_map& options) override {
-        return _authenticator->create(username, options);
+
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) override {
+        return _authenticator->create(role_name, options);
     }
-    future<> alter(sstring username, const option_map& options) override {
-        return _authenticator->alter(username, options);
+
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) override {
+        return _authenticator->alter(role_name, options);
     }
-    future<> drop(sstring username) override {
-        return _authenticator->drop(username);
+
+    virtual future<> drop(stdx::string_view role_name) override {
+        return _authenticator->drop(role_name);
     }
-    const resource_set& protected_resources() const override {
+
+    virtual const resource_set& protected_resources() const override {
         return _authenticator->protected_resources();
     }
-    ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
+
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
         class sasl_wrapper : public sasl_challenge {
         public:
             sasl_wrapper(::shared_ptr<sasl_challenge> sasl)
-                : _sasl(std::move(sasl))
-            {}
-            bytes evaluate_response(bytes_view client_response) override {
+                    : _sasl(std::move(sasl)) {
+            }
+
+            virtual bytes evaluate_response(bytes_view client_response) override {
                 try {
                     return _sasl->evaluate_response(client_response);
                 } catch (exceptions::authentication_exception&) {
@@ -137,23 +149,27 @@ public:
                     return {};
                 }
             }
-            bool is_complete() const {
+
+            virtual bool is_complete() const override {
                 return _complete || _sasl->is_complete();
             }
-            future<::shared_ptr<authenticated_user>> get_authenticated_user() const {
+
+            virtual future<authenticated_user> get_authenticated_user() const {
                 return futurize_apply([this] {
                     return _sasl->get_authenticated_user().handle_exception([](auto ep) {
                         try {
                             std::rethrow_exception(ep);
                         } catch (exceptions::authentication_exception&) {
                             // return anon user
-                            return make_ready_future<::shared_ptr<authenticated_user>>(::make_shared<authenticated_user>());
+                            return make_ready_future<authenticated_user>(anonymous_user());
                         }
                     });
                 });
             }
+
         private:
             ::shared_ptr<sasl_challenge> _sasl;
+
             bool _complete = false;
         };
         return ::make_shared<sasl_wrapper>(_authenticator->new_sasl_challenge());
@@ -162,54 +178,64 @@ public:
 
 class transitional_authorizer : public authorizer {
     std::unique_ptr<authorizer> _authorizer;
+
 public:
     transitional_authorizer(cql3::query_processor& qp, ::service::migration_manager& mm)
-        : transitional_authorizer(std::make_unique<default_authorizer>(qp, mm))
-    {}
+            : transitional_authorizer(std::make_unique<default_authorizer>(qp, mm)) {
+    }
     transitional_authorizer(std::unique_ptr<authorizer> a)
-        : _authorizer(std::move(a))
-    {}
-    ~transitional_authorizer()
-    {}
-    future<> start() override {
+            : _authorizer(std::move(a)) {
+    }
+
+    ~transitional_authorizer() {
+    }
+
+    virtual future<> start() override {
         return _authorizer->start();
     }
-    future<> stop() override {
+
+    virtual future<> stop() override {
         return _authorizer->stop();
     }
-    const sstring& qualified_java_name() const override {
+
+    virtual const sstring& qualified_java_name() const override {
         return transitional_authorizer_name();
     }
-    future<permission_set> authorize(service& ser, ::shared_ptr<authenticated_user> user, resource resource) const override {
-        return is_super_user(ser, *user).then([](bool s) {
-            static const permission_set transitional_permissions =
-                            permission_set::of<permission::CREATE,
-                                            permission::ALTER, permission::DROP,
-                                            permission::SELECT, permission::MODIFY>();
 
-            return make_ready_future<permission_set>(s ? permissions::ALL : transitional_permissions);
-        });
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {
+        static const permission_set transitional_permissions =
+                permission_set::of<
+                        permission::CREATE,
+                        permission::ALTER,
+                        permission::DROP,
+                        permission::SELECT,
+                        permission::MODIFY>();
+
+        return make_ready_future<permission_set>(transitional_permissions);
     }
-    future<> grant(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->grant(std::move(user), std::move(ps), std::move(r), std::move(s));
+
+    virtual future<> grant(stdx::string_view s, permission_set ps, const resource& r) override {
+        return _authorizer->grant(s, std::move(ps), r);
     }
-    future<> revoke(::shared_ptr<authenticated_user> user, permission_set ps, resource r, sstring s) override {
-        return _authorizer->revoke(std::move(user), std::move(ps), std::move(r), std::move(s));
+
+    virtual future<> revoke(stdx::string_view s, permission_set ps, const resource& r) override {
+        return _authorizer->revoke(s, std::move(ps), r);
     }
-    future<std::vector<permission_details>> list(service& ser, ::shared_ptr<authenticated_user> user, permission_set ps, optional<resource> r, optional<sstring> s) const override {
-        return _authorizer->list(ser, std::move(user), std::move(ps), std::move(r), std::move(s));
+
+    virtual future<std::vector<permission_details>> list_all() const override {
+        return _authorizer->list_all();
     }
-    future<> revoke_all(sstring s) override {
-        return _authorizer->revoke_all(std::move(s));
+
+    virtual future<> revoke_all(stdx::string_view s) override {
+        return _authorizer->revoke_all(s);
     }
-    future<> revoke_all(resource r) override {
-        return _authorizer->revoke_all(std::move(r));
+
+    virtual future<> revoke_all(const resource& r) override {
+        return _authorizer->revoke_all(r);
     }
-    const resource_set& protected_resources() override {
+
+    virtual const resource_set& protected_resources() const override {
         return _authorizer->protected_resources();
-    }
-    future<> validate_configuration() const override {
-        return _authorizer->validate_configuration();
     }
 };
 

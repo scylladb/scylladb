@@ -21,9 +21,9 @@
 
 #pragma once
 
-#include <experimental/optional>
 #include <experimental/string_view>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -37,147 +37,130 @@
 
 namespace auth {
 
-class authenticated_user;
-
 struct role_config final {
     bool is_superuser{false};
     bool can_login{false};
 };
 
-// Differential update for altering existing roles.
+///
+/// Differential update for altering existing roles.
+///
 struct role_config_update final {
-    stdx::optional<bool> is_superuser{};
-    stdx::optional<bool> can_login{};
+    std::optional<bool> is_superuser{};
+    std::optional<bool> can_login{};
 };
 
-// A logical argument error for a role-management operation.
+///
+/// A logical argument error for a role-management operation.
+///
 class roles_argument_exception : public std::invalid_argument {
 public:
     using std::invalid_argument::invalid_argument;
 };
 
 class role_already_exists : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name;
-
 public:
     explicit role_already_exists(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The '%s' role already exists.", role_name))
-            , _role_name(std::make_shared<sstring>(role_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
+            : roles_argument_exception(sprint("Role %s already exists.", role_name)) {
     }
 };
 
 class nonexistant_role : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name;
-
 public:
     explicit nonexistant_role(stdx::string_view role_name)
-            : roles_argument_exception(sprint("The role '%s' does not exist.", role_name))
-            , _role_name(std::make_shared<sstring>(role_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
+            : roles_argument_exception(sprint("Role %s doesn't exist.", role_name)) {
     }
 };
 
 class role_already_included : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name, _grantee_name;
-
 public:
     role_already_included(stdx::string_view grantee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' already includes role '%s'.", grantee_name, role_name))
-            , _role_name(std::make_shared<sstring>(role_name))
-            , _grantee_name(std::make_shared<sstring>(grantee_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
-    }
-
-    stdx::string_view grantee_name() const noexcept {
-        return *_grantee_name;
+                      sprint("%s already includes role %s.", grantee_name, role_name)) {
     }
 };
 
 class revoke_ungranted_role : public roles_argument_exception {
-    std::shared_ptr<sstring> _role_name, _revokee_name;
-
 public:
     revoke_ungranted_role(stdx::string_view revokee_name, stdx::string_view role_name)
             : roles_argument_exception(
-                      sprint("'%s' was not granted role '%s', so it cannot be revoked.", revokee_name, role_name))
-            , _role_name(std::make_shared<sstring>(role_name))
-            , _revokee_name(std::make_shared<sstring>(revokee_name)) {
-    }
-
-    stdx::string_view role_name() const noexcept {
-        return *_role_name;
-    }
-
-    stdx::string_view revokee_name() const noexcept {
-        return *_revokee_name;
+                      sprint("%s was not granted role %s, so it cannot be revoked.", revokee_name, role_name)) {
     }
 };
 
+using role_set = std::unordered_set<sstring>;
+
 enum class recursive_role_query { yes, no };
 
-// Abstract role manager.
-//
-// All implementations should throw role-related exceptions as documented, but authorization-related checking is
-// handled by the CQL layer, and not here.
+///
+/// Abstract role manager.
+///
+/// All implementations should throw role-related exceptions as documented, but authorization-related checking is
+/// handled by the CQL layer, and not here.
+///
 class role_manager {
 public:
     virtual ~role_manager() = default;
 
     virtual stdx::string_view qualified_java_name() const noexcept = 0;
 
+    virtual const resource_set& protected_resources() const = 0;
+
     virtual future<> start() = 0;
 
     virtual future<> stop() = 0;
 
-    // Must throw `role_already_exists` for a role that has previously been created.
-    virtual future<>
-    create(const authenticated_user& performer, stdx::string_view role_name, const role_config&) = 0;
+    ///
+    /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
+    ///
+    virtual future<> create(stdx::string_view role_name, const role_config&) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
-    virtual future<> drop(const authenticated_user& performer, stdx::string_view role_name) = 0;
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
+    virtual future<> drop(stdx::string_view role_name) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
-    virtual future<>
-    alter(const authenticated_user& performer, stdx::string_view role_name, const role_config_update&) = 0;
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
+    virtual future<> alter(stdx::string_view role_name, const role_config_update&) = 0;
 
-    // Grant `role_name` to `grantee_name`.
-    //
-    // Must throw `nonexistant_role` if either the role or the grantee do not exist.
-    //
-    // Must throw `role_already_included` if granting the role would be redundant, or create a cycle.
-    virtual future<>
-    grant(const authenticated_user& performer, stdx::string_view grantee_name, stdx::string_view role_name) = 0;
+    ///
+    /// Grant `role_name` to `grantee_name`.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if either the role or the grantee do not exist.
+    ///
+    /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
+    /// create a cycle.
+    ///
+    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) = 0;
 
-    // Revoke `role_name` from `revokee_name`.
-    //
-    // Must throw `nonexistant_role` if either the role or the revokee do not exist.
-    //
-    // Must throw `revoke_ungranted_role` if the role was not granted.
-    virtual future<>
-    revoke(const authenticated_user& performer, stdx::string_view revokee_name, stdx::string_view role_name) = 0;
+    ///
+    /// Revoke `role_name` from `revokee_name`.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if either the role or the revokee do not exist.
+    ///
+    /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
+    ///
+    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
-    virtual future<std::unordered_set<sstring>> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
+    virtual future<role_set> query_granted(stdx::string_view grantee, recursive_role_query) const = 0;
 
-    virtual future<std::unordered_set<sstring>> query_all() const = 0;
+    virtual future<role_set> query_all() const = 0;
 
     virtual future<bool> exists(stdx::string_view role_name) const = 0;
 
-    /// Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<bool> is_superuser(stdx::string_view role_name) const = 0;
 
-    // Must throw `nonexistant_role` if the role does not exist.
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
+    ///
     virtual future<bool> can_login(stdx::string_view role_name) const = 0;
 };
 

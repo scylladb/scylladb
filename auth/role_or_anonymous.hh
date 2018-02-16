@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
  */
 
 /*
@@ -23,45 +23,44 @@
 
 #include <experimental/string_view>
 #include <functional>
+#include <iosfwd>
+#include <optional>
 
-#include <seastar/core/future.hh>
+#include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
 #include "stdx.hh"
 
-namespace cql3 {
-class query_processor;
-class untyped_result_set_row;
-}
-
 namespace auth {
 
-namespace meta {
+class role_or_anonymous final {
+public:
+    std::optional<sstring> name{};
 
-namespace roles_table {
+    role_or_anonymous() = default;
+    role_or_anonymous(stdx::string_view name) : name(name) {
+    }
+};
 
-constexpr stdx::string_view name{"roles", 5};
+std::ostream& operator<<(std::ostream&, const role_or_anonymous&);
 
-stdx::string_view qualified_name() noexcept;
+bool operator==(const role_or_anonymous&, const role_or_anonymous&) noexcept;
 
-constexpr stdx::string_view role_col_name{"role", 4};
+inline bool operator!=(const role_or_anonymous& mr1, const role_or_anonymous& mr2) noexcept {
+    return !(mr1 == mr2);
+}
+
+bool is_anonymous(const role_or_anonymous&) noexcept;
 
 }
 
-}
+namespace std {
 
-///
-/// Check that the default role satisfies a predicate, or `false` if the default role does not exist.
-///
-future<bool> default_role_row_satisfies(
-        cql3::query_processor&,
-        std::function<bool(const cql3::untyped_result_set_row&)>);
-
-///
-/// Check that any nondefault role satisfies a predicate. `false` if no nondefault roles exist.
-///
-future<bool> any_nondefault_role_row_satisfies(
-        cql3::query_processor&,
-        std::function<bool(const cql3::untyped_result_set_row&)>);
+template <>
+struct hash<auth::role_or_anonymous> {
+    size_t operator()(const auth::role_or_anonymous& mr) const {
+        return hash<std::optional<sstring>>()(mr.name);
+    }
+};
 
 }

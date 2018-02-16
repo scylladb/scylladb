@@ -41,10 +41,9 @@
 
 #pragma once
 
-#include <experimental/optional>
 #include <experimental/string_view>
 #include <iostream>
-#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -61,16 +60,9 @@
 namespace auth {
 
 class invalid_resource_name : public std::invalid_argument {
-    std::shared_ptr<sstring> _name;
-
 public:
     explicit invalid_resource_name(stdx::string_view name)
-            : std::invalid_argument(sprint("The resource name '%s' is invalid.", name))
-            , _name(std::make_shared<sstring>(name)) {
-    }
-
-    stdx::string_view name() const noexcept {
-        return *_name;
+            : std::invalid_argument(sprint("The resource name '%s' is invalid.", name)) {
     }
 };
 
@@ -79,6 +71,16 @@ enum class resource_kind {
 };
 
 std::ostream& operator<<(std::ostream&, resource_kind);
+
+///
+/// Type tag for constructing data resources.
+///
+struct data_resource_t final {};
+
+///
+/// Type tag for constructing role resources.
+///
+struct role_resource_t final {};
 
 ///
 /// Resources are entities that users can be granted permissions on.
@@ -99,19 +101,13 @@ class resource final {
     std::vector<sstring> _parts;
 
 public:
-    static resource root_of(resource_kind);
-
-    static resource data(stdx::string_view keyspace);
-    static resource data(stdx::string_view keyspace, stdx::string_view table);
-
-    static resource role(stdx::string_view role);
-
     ///
-    /// Parse a resource name.
+    /// A root resource of a particular kind.
     ///
-    /// \throws \ref invalid_resource_name when the name is malformed.
-    ///
-    static resource from_name(stdx::string_view);
+    explicit resource(resource_kind);
+    resource(data_resource_t, stdx::string_view keyspace);
+    resource(data_resource_t, stdx::string_view keyspace, stdx::string_view table);
+    resource(role_resource_t, stdx::string_view role);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -122,14 +118,11 @@ public:
     ///
     sstring name() const;
 
-    stdx::optional<resource> parent() const;
+    std::optional<resource> parent() const;
 
     permission_set applicable_permissions() const;
 
 private:
-    // A root resource.
-    explicit resource(resource_kind kind);
-
     resource(resource_kind, std::vector<sstring> parts);
 
     friend class std::hash<resource>;
@@ -138,6 +131,7 @@ private:
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&);
+    friend resource parse_resource(stdx::string_view);
 };
 
 bool operator<(const resource&, const resource&);
@@ -172,14 +166,12 @@ public:
     ///
     explicit data_resource_view(const resource& r);
 
-    stdx::optional<stdx::string_view> keyspace() const;
+    std::optional<stdx::string_view> keyspace() const;
 
-    stdx::optional<stdx::string_view> table() const;
+    std::optional<stdx::string_view> table() const;
 };
 
 std::ostream& operator<<(std::ostream&, const data_resource_view&);
-
-bool resource_exists(const data_resource_view&);
 
 ///
 /// A "role" view of \ref resource.
@@ -195,10 +187,32 @@ public:
     ///
     explicit role_resource_view(const resource&);
 
-    stdx::optional<stdx::string_view> role() const;
+    std::optional<stdx::string_view> role() const;
 };
 
 std::ostream& operator<<(std::ostream&, const role_resource_view&);
+
+///
+/// Parse a resource from its name.
+///
+/// \throws \ref invalid_resource_name when the name is malformed.
+///
+resource parse_resource(stdx::string_view name);
+
+const resource& root_data_resource();
+
+inline resource make_data_resource(stdx::string_view keyspace) {
+    return resource(data_resource_t{}, keyspace);
+}
+inline resource make_data_resource(stdx::string_view keyspace, stdx::string_view table) {
+    return resource(data_resource_t{}, keyspace, table);
+}
+
+const resource& root_role_resource();
+
+inline resource make_role_resource(stdx::string_view role) {
+    return resource(role_resource_t{}, role);
+}
 
 }
 
@@ -231,5 +245,10 @@ struct hash<auth::resource> {
 namespace auth {
 
 using resource_set = std::unordered_set<resource>;
+
+//
+// A resource and all of its parents.
+//
+resource_set expand_resource_family(const resource&);
 
 }

@@ -43,7 +43,9 @@
 
 #include <functional>
 
-#include "authorizer.hh"
+#include <seastar/core/abort_source.hh>
+
+#include "auth/authorizer.hh"
 #include "cql3/query_processor.hh"
 #include "service/migration_manager.hh"
 
@@ -56,36 +58,45 @@ class default_authorizer : public authorizer {
 
     ::service::migration_manager& _migration_manager;
 
+    abort_source _as{};
+
+    future<> _finished{make_ready_future<>()};
+
 public:
     default_authorizer(cql3::query_processor&, ::service::migration_manager&);
+
     ~default_authorizer();
 
-    future<> start() override;
+    virtual future<> start() override;
 
-    future<> stop() override;
+    virtual future<> stop() override;
 
-    const sstring& qualified_java_name() const override {
+    virtual const sstring& qualified_java_name() const override {
         return default_authorizer_name();
     }
 
-    future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const override;
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 
-    future<> grant(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
+    virtual future<> grant(stdx::string_view, permission_set, const resource&) override;
 
-    future<> revoke(::shared_ptr<authenticated_user>, permission_set, resource, sstring) override;
+    virtual future<> revoke( stdx::string_view, permission_set, const resource&) override;
 
-    future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user>, permission_set, optional<resource>, optional<sstring>) const override;
+    virtual future<std::vector<permission_details>> list_all() const override;
 
-    future<> revoke_all(sstring) override;
+    virtual future<> revoke_all(stdx::string_view) override;
 
-    future<> revoke_all(resource) override;
+    virtual future<> revoke_all(const resource&) override;
 
-    const resource_set& protected_resources() override;
-
-    future<> validate_configuration() const override;
+    virtual const resource_set& protected_resources() const override;
 
 private:
-    future<> modify(::shared_ptr<authenticated_user>, permission_set, resource, sstring, sstring);
+    bool legacy_metadata_exists() const;
+
+    future<bool> any_granted() const;
+
+    future<> migrate_legacy_metadata();
+
+    future<> modify(stdx::string_view, permission_set, const resource&, stdx::string_view);
 };
 
 } /* namespace auth */

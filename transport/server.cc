@@ -494,7 +494,16 @@ future<cql_server::connection::processing_result>
                 break;
         }
 
-        tracing::set_username(client_state.get_trace_state(), client_state.user());
+        const auto user = [&client_state]() -> stdx::optional<auth::authenticated_user> {
+            const auto user = client_state.user();
+            if (!user) {
+                return {};
+            }
+
+            return *user;
+        }();
+
+        tracing::set_username(client_state.get_trace_state(), user);
 
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
@@ -807,8 +816,8 @@ future<response_type> cql_server::connection::process_auth_response(uint16_t str
     auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
     auto challenge = sasl_challenge->evaluate_response(buf);
     if (sasl_challenge->is_complete()) {
-        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, client_state = std::move(client_state), challenge = std::move(challenge)](::shared_ptr<auth::authenticated_user> user) mutable {
-            client_state.set_login(std::move(user));
+        return sasl_challenge->get_authenticated_user().then([this, sasl_challenge, stream, client_state = std::move(client_state), challenge = std::move(challenge)](auth::authenticated_user user) mutable {
+            client_state.set_login(::make_shared<auth::authenticated_user>(std::move(user)));
             auto f = client_state.check_user_exists();
             return f.then([this, stream, client_state = std::move(client_state), challenge = std::move(challenge)]() mutable {
                 auto tr_state = client_state.get_trace_state();

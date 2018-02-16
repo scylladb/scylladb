@@ -39,29 +39,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "authenticator.hh"
-#include "authenticated_user.hh"
-#include "common.hh"
-#include "password_authenticator.hh"
+#include "auth/authenticator.hh"
+
+#include "auth/authenticated_user.hh"
+#include "auth/common.hh"
+#include "auth/password_authenticator.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "utils/class_registrator.hh"
 
 const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
-
-auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
-    if (strcasecmp(name.c_str(), "password") == 0) {
-        return option::PASSWORD;
-    }
-    throw std::invalid_argument(name);
-}
-
-sstring auth::authenticator::option_to_string(option opt) {
-    switch (opt) {
-    case option::PASSWORD:
-        return "PASSWORD";
-    default:
-        throw std::invalid_argument(sprint("Unknown option {}", opt));
-    }
-}

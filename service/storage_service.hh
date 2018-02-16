@@ -277,6 +277,7 @@ private:
     gms::feature _correct_non_compound_range_tombstones;
     gms::feature _write_failure_reply_feature;
     gms::feature _xxhash_feature;
+    gms::feature _roles_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -290,6 +291,7 @@ public:
         _correct_non_compound_range_tombstones.enable();
         _write_failure_reply_feature.enable();
         _xxhash_feature.enable();
+        _roles_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2266,6 +2268,10 @@ public:
 
     bool cluster_supports_xxhash_digest_algorithm() const {
         return bool(_xxhash_feature);
+    }
+
+    bool cluster_supports_roles() const {
+        return bool(_roles_feature);
     }
 };
 

@@ -41,127 +41,98 @@
 
 #pragma once
 
-#include <vector>
+#include <experimental/string_view>
+#include <functional>
+#include <optional>
 #include <tuple>
+#include <vector>
 
-#include <experimental/optional>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
-#include "permission.hh"
-#include "resource.hh"
-
+#include "auth/permission.hh"
+#include "auth/resource.hh"
 #include "seastarx.hh"
+#include "stdx.hh"
 
 namespace auth {
 
-class service;
-
-class authenticated_user;
+class role_or_anonymous;
 
 struct permission_details {
-    sstring user;
+    sstring role_name;
     ::auth::resource resource;
     permission_set permissions;
-
-    bool operator<(const permission_details& v) const {
-        return std::tie(user, resource, permissions) < std::tie(v.user, v.resource, v.permissions);
-    }
 };
 
-using std::experimental::optional;
+inline bool operator==(const permission_details& pd1, const permission_details& pd2) {
+    return std::forward_as_tuple(pd1.role_name, pd1.resource, pd1.permissions.mask())
+            == std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions.mask());
+}
 
+inline bool operator!=(const permission_details& pd1, const permission_details& pd2) {
+    return !(pd1 == pd2);
+}
+
+inline bool operator<(const permission_details& pd1, const permission_details& pd2) {
+    return std::forward_as_tuple(pd1.role_name, pd1.resource, pd1.permissions)
+            < std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions);
+}
+
+///
+/// Abstract interface for authorizing users to access resources.
+///
 class authorizer {
 public:
-    virtual ~authorizer() {}
+    virtual ~authorizer() = default;
 
     virtual future<> start() = 0;
 
     virtual future<> stop() = 0;
 
+    ///
+    /// A fully-qualified (class with package) Java-like name for this implementation.
+    ///
     virtual const sstring& qualified_java_name() const = 0;
 
-    /**
-     * The primary Authorizer method. Returns a set of permissions of a user on a resource.
-     *
-     * @param user Authenticated user requesting authorization.
-     * @param resource Resource for which the authorization is being requested. @see DataResource.
-     * @return Set of permissions of the user on the resource. Should never return empty. Use permission.NONE instead.
-     */
-    virtual future<permission_set> authorize(service&, ::shared_ptr<authenticated_user>, resource) const = 0;
+    ///
+    /// Query for the permissions granted directly to a role for a particular \ref resource (and not any of its
+    /// parents).
+    ///
+    /// The optional role name is empty when an anonymous user is authorized. Some implementations may still wish to
+    /// grant default permissions in this case.
+    ///
+    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const = 0;
 
-    /**
-     * Grants a set of permissions on a resource to a user.
-     * The opposite of revoke().
-     *
-     * @param performer User who grants the permissions.
-     * @param permissions Set of permissions to grant.
-     * @param to Grantee of the permissions.
-     * @param resource Resource on which to grant the permissions.
-     *
-     * @throws RequestValidationException
-     * @throws RequestExecutionException
-     */
-    virtual future<> grant(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring to) = 0;
+    ///
+    /// Grant a set of permissions to a role for a particular \ref resource.
+    ///
+    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) = 0;
 
-    /**
-     * Revokes a set of permissions on a resource from a user.
-     * The opposite of grant().
-     *
-     * @param performer User who revokes the permissions.
-     * @param permissions Set of permissions to revoke.
-     * @param from Revokee of the permissions.
-     * @param resource Resource on which to revoke the permissions.
-     *
-     * @throws RequestValidationException
-     * @throws RequestExecutionException
-     */
-    virtual future<> revoke(::shared_ptr<authenticated_user> performer, permission_set, resource, sstring from) = 0;
+    ///
+    /// Revoke a set of permissions from a role for a particular \ref resource.
+    ///
+    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) = 0;
 
-    /**
-     * Returns a list of permissions on a resource of a user.
-     *
-     * @param performer User who wants to see the permissions.
-     * @param permissions Set of Permission values the user is interested in. The result should only include the matching ones.
-     * @param resource The resource on which permissions are requested. Can be null, in which case permissions on all resources
-     *                 should be returned.
-     * @param of The user whose permissions are requested. Can be null, in which case permissions of every user should be returned.
-     *
-     * @return All of the matching permission that the requesting user is authorized to know about.
-     *
-     * @throws RequestValidationException
-     * @throws RequestExecutionException
-     */
-    virtual future<std::vector<permission_details>> list(service&, ::shared_ptr<authenticated_user> performer, permission_set, optional<resource>, optional<sstring>) const = 0;
+    ///
+    /// Query for all directly granted permissions.
+    ///
+    virtual future<std::vector<permission_details>> list_all() const = 0;
 
-    /**
-     * This method is called before deleting a user with DROP USER query so that a new user with the same
-     * name wouldn't inherit permissions of the deleted user in the future.
-     *
-     * @param droppedUser The user to revoke all permissions from.
-     */
-    virtual future<> revoke_all(sstring dropped_user) = 0;
+    ///
+    /// Revoke all permissions granted directly to a particular role.
+    ///
+    virtual future<> revoke_all(stdx::string_view role_name) = 0;
 
-    /**
-     * This method is called after a resource is removed (i.e. keyspace or a table is dropped).
-     *
-     * @param droppedResource The resource to revoke all permissions on.
-     */
-    virtual future<> revoke_all(resource) = 0;
+    ///
+    /// Revoke all permissions granted to any role for a particular resource.
+    ///
+    virtual future<> revoke_all(const resource&) = 0;
 
-    /**
-     * Set of resources that should be made inaccessible to users and only accessible internally.
-     *
-     * @return Keyspaces, column families that will be unmodifiable by users; other resources.
-     */
-    virtual const resource_set& protected_resources() = 0;
-
-    /**
-     * Validates configuration of IAuthorizer implementation (if configurable).
-     *
-     * @throws ConfigurationException when there is a configuration error.
-     */
-    virtual future<> validate_configuration() const = 0;
+    ///
+    /// System resources used internally as part of the implementation. These are made inaccessible to users.
+    ///
+    virtual const resource_set& protected_resources() const = 0;
 };
 
 }

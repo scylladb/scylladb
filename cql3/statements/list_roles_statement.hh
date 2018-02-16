@@ -41,13 +41,12 @@
 
 #pragma once
 
-#include <experimental/optional>
+#include <optional>
 
 #include <seastar/core/sstring.hh>
 
 #include "cql3/statements/authorization_statement.hh"
 #include "cql3/role_name.hh"
-#include "stdx.hh"
 #include "seastarx.hh"
 
 namespace cql3 {
@@ -55,13 +54,13 @@ namespace cql3 {
 namespace statements {
 
 class list_roles_statement final : public authorization_statement {
-    stdx::optional<sstring> _grantee;
+    std::optional<sstring> _grantee;
 
     bool _recursive;
 
 public:
-    list_roles_statement(const stdx::optional<role_name>& grantee, bool recursive)
-        : _grantee(grantee ? sstring(grantee->to_string()) : stdx::optional<sstring>()), _recursive(recursive) {}
+    list_roles_statement(const std::optional<role_name>& grantee, bool recursive)
+        : _grantee(grantee ? sstring(grantee->to_string()) : std::optional<sstring>()), _recursive(recursive) {}
 
     virtual future<> check_access(const service::client_state&) override;
 

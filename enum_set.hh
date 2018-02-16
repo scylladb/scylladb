@@ -21,7 +21,13 @@
 
 #pragma once
 
+#include <boost/iterator/transform_iterator.hpp>
+#include <seastar/core/bitset-iter.hh>
+
+#include <algorithm>
 #include <cstddef>
+#include <optional>
+#include <stdexcept>
 #include <type_traits>
 #include <limits>
 
@@ -85,6 +91,24 @@ struct super_enum {
 
     using sequence_type = typename std::underlying_type<enum_type>::type;
 
+    template <enum_type first, enum_type... rest>
+    struct valid_sequence {
+        static constexpr bool apply(sequence_type v) noexcept {
+            return (v == static_cast<sequence_type>(first)) || valid_sequence<rest...>::apply(v);
+        }
+    };
+
+    template <enum_type first>
+    struct valid_sequence<first> {
+        static constexpr bool apply(sequence_type v) noexcept {
+            return v == static_cast<sequence_type>(first);
+        }
+    };
+
+    static constexpr bool is_valid_sequence(sequence_type v) noexcept {
+        return valid_sequence<Items...>::apply(v);
+    }
+
     template<enum_type Elem>
     static constexpr sequence_type sequence_for() {
         return static_cast<sequence_type>(Elem);
@@ -100,12 +124,22 @@ struct super_enum {
     static_assert(min_sequence >= 0, "negative enum values unsupported");
 };
 
+class bad_enum_set_mask : public std::invalid_argument {
+public:
+    bad_enum_set_mask() : std::invalid_argument("Bit mask contains invalid enumeration indices.") {
+    }
+};
+
 template<typename Enum>
 class enum_set {
 public:
     using mask_type = size_t; // TODO: use the smallest sufficient type
     using enum_type = typename Enum::enum_type;
+
 private:
+    static constexpr int mask_digits = std::numeric_limits<mask_type>::digits;
+    using mask_iterator = seastar::bitsets::set_iterator<mask_digits>;
+
     mask_type _mask;
     constexpr enum_set(mask_type mask) : _mask(mask) {}
 
@@ -113,10 +147,28 @@ private:
     static constexpr unsigned shift_for() {
         return Enum::template sequence_for<Elem>();
     }
+
+    static auto make_iterator(mask_iterator iter) {
+        return boost::make_transform_iterator(std::move(iter), [](typename Enum::sequence_type s) {
+            return enum_type(s);
+        });
+    }
+
 public:
+    using iterator = std::invoke_result_t<decltype(&enum_set::make_iterator), mask_iterator>;
+
     constexpr enum_set() : _mask(0) {}
 
+    /**
+     * \throws \ref bad_enum_set_mask
+     */
     static constexpr enum_set from_mask(mask_type mask) {
+        const auto bit_range = seastar::bitsets::for_each_set(std::bitset<mask_digits>(mask));
+
+        if (!std::all_of(bit_range.begin(), bit_range.end(), &Enum::is_valid_sequence)) {
+            throw bad_enum_set_mask();
+        }
+
         return enum_set(mask);
     }
 
@@ -185,6 +237,14 @@ public:
 
     mask_type mask() const {
         return _mask;
+    }
+
+    iterator begin() const {
+        return make_iterator(mask_iterator(_mask));
+    }
+
+    iterator end() const {
+        return make_iterator(mask_iterator(0));
     }
 
     template<enum_type... items>

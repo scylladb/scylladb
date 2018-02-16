@@ -43,6 +43,7 @@
 #include "auth/authorizer.hh"
 #include "auth/authenticator.hh"
 #include "auth/common.hh"
+#include "auth/resource.hh"
 #include "exceptions/exceptions.hh"
 #include "validation.hh"
 #include "db/system_keyspace.hh"
@@ -61,15 +62,15 @@ void service::client_state::set_login(::shared_ptr<auth::authenticated_user> use
 }
 
 future<> service::client_state::check_user_exists() {
-    if (_user->is_anonymous()) {
+    if (auth::is_anonymous(*_user)) {
         return make_ready_future();
     }
 
-    return _auth_service->is_existing_user(_user->name()).then([user = _user](bool exists) mutable {
+    return _auth_service->underlying_role_manager().exists(*_user->name).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             sprint("User %s doesn't exist - create it with CREATE USER query first",
-                                            user->name()));
+                                            *user->name));
         }
         return make_ready_future();
     });
@@ -83,7 +84,7 @@ void service::client_state::validate_login() const {
 
 void service::client_state::ensure_not_anonymous() const {
     validate_login();
-    if (_user->is_anonymous()) {
+    if (auth::is_anonymous(*_user)) {
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
 }
@@ -106,25 +107,38 @@ future<> service::client_state::has_all_keyspaces_access(
         return make_ready_future();
     }
     validate_login();
-    return ensure_has_permission(p, auth::resource::root_of(auth::resource_kind::data));
+
+    return do_with(auth::resource(auth::resource_kind::data), [this, p](const auto& r) {
+        return ensure_has_permission(p, r);
+    });
 }
 
 future<> service::client_state::has_keyspace_access(const sstring& ks,
                 auth::permission p) const {
-    return has_access(ks, p, auth::resource::data(ks));
+    return do_with(ks, auth::make_data_resource(ks), [this, p](auto const& ks, auto const& r) {
+        return has_access(ks, p, r);
+    });
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
                 const sstring& cf, auth::permission p) const {
     validation::validate_column_family(ks, cf);
-    return has_access(ks, p, auth::resource::data(ks, cf));
+
+    return do_with(ks, auth::make_data_resource(ks, cf), [this, p](const auto& ks, const auto& r) {
+        return has_access(ks, p, r);
+    });
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
-    return has_access(s.ks_name(), p, auth::resource::data(s.ks_name(), s.cf_name()));
+    return do_with(
+            s.ks_name(),
+            auth::make_data_resource(s.ks_name(),s.cf_name()),
+            [this, p](auto const& ks, auto const& r) {
+        return has_access(ks, p, r);
+    });
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::resource resource) const {
+future<> service::client_state::has_access(const sstring& ks, auth::permission p, const auth::resource& resource) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -146,21 +160,29 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
             throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
         }
 
-        // we want to allow altering AUTH_KS and TRACING_KS.
-        for (auto& n : { auth::meta::AUTH_KS, tracing::trace_keyspace_helper::KEYSPACE_NAME }) {
-            if (name == n && p == auth::permission::DROP) {
-                throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
-            }
+        //
+        // we want to disallow dropping any contents of TRACING_KS and disallow dropping the `auth::meta::AUTH_KS`
+        // keyspace.
+        //
+
+        const bool dropping_anything_in_tracing = (name == tracing::trace_keyspace_helper::KEYSPACE_NAME)
+                && (p == auth::permission::DROP);
+
+        const bool dropping_auth_keyspace = (resource == auth::make_data_resource(auth::meta::AUTH_KS))
+                && (p == auth::permission::DROP);
+
+        if (dropping_anything_in_tracing || dropping_auth_keyspace) {
+            throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
         }
     }
 
     static thread_local std::set<auth::resource> readable_system_resources = [] {
         std::set<auth::resource> tmp;
         for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
-            tmp.insert(auth::resource::data(db::system_keyspace::NAME, cf));
+            tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
         for (auto cf : db::schema_tables::ALL) {
-            tmp.insert(auth::resource::data(db::schema_tables::NAME, cf));
+            tmp.insert(auth::make_data_resource(db::schema_tables::NAME, cf));
         }
         return tmp;
     }();
@@ -169,44 +191,41 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         return make_ready_future();
     }
     if (alteration_permissions.contains(p)) {
-        for (auto& s : { _auth_service->underlying_authorizer().protected_resources(),
-                        _auth_service->underlying_authorizer().protected_resources() }) {
-            if (s.count(resource)) {
-                throw exceptions::unauthorized_exception(
-                                sprint("%s schema is protected",
-                                                resource));
-            }
+        if (auth::is_protected(*_auth_service, resource)) {
+            throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
         }
     }
 
-    return ensure_has_permission(p, std::move(resource));
+    return ensure_has_permission(p, resource);
 }
 
-future<bool> service::client_state::check_has_permission(auth::permission p, auth::resource resource) const {
+future<bool> service::client_state::check_has_permission(auth::permission p, const auth::resource& r) const {
     if (_is_internal) {
         return make_ready_future<bool>(true);
     }
 
-    std::experimental::optional<auth::resource> parent = resource.parent();
-
-    return _auth_service->get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
-        if (set.contains(p)) {
-            return make_ready_future<bool>(true);
-        }
-        if (parent) {
-            return check_has_permission(p, std::move(*parent));
-        }
-        return make_ready_future<bool>(false);
+    return do_with(r.parent(), [this, p, &r](const auto& parent_r) {
+        return auth::get_permissions(*_auth_service, *_user, r).then([this, p, &parent_r](auth::permission_set set) {
+            if (set.contains(p)) {
+                return make_ready_future<bool>(true);
+            }
+            if (parent_r) {
+                return check_has_permission(p, *parent_r);
+            }
+            return make_ready_future<bool>(false);
+        });
     });
 }
 
-future<> service::client_state::ensure_has_permission(auth::permission p, auth::resource resource) const {
-    return check_has_permission(p, resource).then([this, p, resource](bool ok) {
+future<> service::client_state::ensure_has_permission(auth::permission p, const auth::resource& r) const {
+    return check_has_permission(p, r).then([this, p, &r](bool ok) {
         if (!ok) {
-            throw exceptions::unauthorized_exception(sprint("User %s has no %s permission on %s or any of its parents",
-                                            _user->name(),
-                                            auth::permissions::to_string(p),
-                                            resource));
+            throw exceptions::unauthorized_exception(
+                sprint(
+                        "User %s has no %s permission on %s or any of its parents",
+                        *_user,
+                        auth::permissions::to_string(p),
+                        r));
         }
     });
 }
@@ -246,3 +265,12 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
     assert(!orig._trace_state_ptr);
 }
 
+future<> service::client_state::ensure_exists(const auth::resource& r) const {
+    return _auth_service->exists(r).then([&r](bool exists) {
+        if (!exists) {
+            throw exceptions::invalid_request_exception(sprint("%s doesn't exist.", r));
+        }
+
+        return make_ready_future<>();
+    });
+}

@@ -217,7 +217,7 @@ public:
             auth::authenticator::credentials_map creds(auth_request.credentials.begin(), auth_request.credentials.end());
             auto& auth_service = *_query_state.get_client_state().get_auth_service();
             return auth_service.underlying_authenticator().authenticate(creds).then([this] (auto user) {
-                _query_state.get_client_state().set_login(std::move(user));
+                _query_state.get_client_state().set_login(::make_shared<auth::authenticated_user>(std::move(user)));
             });
         });
     }

@@ -56,9 +56,6 @@ options {
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/raw/use_statement.hh"
 #include "cql3/statements/raw/batch_statement.hh"
-#include "cql3/statements/create_user_statement.hh"
-#include "cql3/statements/alter_user_statement.hh"
-#include "cql3/statements/drop_user_statement.hh"
 #include "cql3/statements/list_users_statement.hh"
 #include "cql3/statements/grant_statement.hh"
 #include "cql3/statements/revoke_statement.hh"
@@ -1022,8 +1019,8 @@ revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
 
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
-		std::experimental::optional<auth::resource> r;
-		std::experimental::optional<sstring> u;
+		std::optional<auth::resource> r;
+		std::optional<sstring> u;
 		bool recursive = true;
     }
     : K_LIST
@@ -1050,52 +1047,54 @@ resource returns [uninitialized<auth::resource> res]
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
-    : K_ALL K_KEYSPACES { $res = auth::resource::root_of(auth::resource_kind::data); }
-    | K_KEYSPACE ks = keyspaceName { $res = auth::resource::data($ks.id); }
+    : K_ALL K_KEYSPACES { $res = auth::resource(auth::resource_kind::data); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::make_data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = auth::resource::data($cf.name->get_keyspace(), $cf.name->get_column_family()); }
+      { $res = auth::make_data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
 
 roleResource returns [uninitialized<auth::resource> res]
-    : K_ALL K_ROLES { $res = auth::resource::root_of(auth::resource_kind::role); }
-    | K_ROLE role = userOrRoleName { $res = auth::resource::role(static_cast<const cql3::role_name&>(role).to_string()); }
+    : K_ALL K_ROLES { $res = auth::resource(auth::resource_kind::role); }
+    | K_ROLE role = userOrRoleName { $res = auth::make_role_resource(static_cast<const cql3::role_name&>(role).to_string()); }
     ;
 
 /**
- * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
+ * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password> [AND OPTIONS { ... }]] [SUPERUSER|NOSUPERUSER]
  */
-createUserStatement returns [::shared_ptr<create_user_statement> stmt]
+createUserStatement returns [::shared_ptr<create_role_statement> stmt]
     @init {
-    	auto opts = ::make_shared<cql3::user_options>();
-        bool superuser = false;
+        cql3::role_options opts;
+        opts.is_superuser = false;
+        opts.can_login = true;
+
         bool ifNotExists = false;
     }
     : K_CREATE K_USER (K_IF K_NOT K_EXISTS { ifNotExists = true; })? username
-      ( K_WITH userOptions[opts] )?
-      ( K_SUPERUSER { superuser = true; } | K_NOSUPERUSER { superuser = false; } )?
-      { $stmt = ::make_shared<create_user_statement>($username.text, std::move(opts), superuser, ifNotExists); }
+      ( K_WITH roleAuthenticationOptions[opts] )?
+      ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
+      { $stmt = ::make_shared<create_role_statement>(cql3::role_name($username.text, cql3::preserve_role_case::yes), std::move(opts), ifNotExists); }
     ;
 
 /**
- * ALTER USER <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
+ * ALTER USER <username> [WITH PASSWORD <password> [AND OPTIONS { ... }]] [SUPERUSER|NOSUPERUSER]
  */
-alterUserStatement returns [::shared_ptr<alter_user_statement> stmt]
+alterUserStatement returns [::shared_ptr<alter_role_statement> stmt]
     @init {
-    	auto opts = ::make_shared<cql3::user_options>();
-    	std::experimental::optional<bool> superuser;
+        cql3::role_options opts;
     }
     : K_ALTER K_USER username
-      ( K_WITH userOptions[opts] )?
-      ( K_SUPERUSER { superuser = true; } | K_NOSUPERUSER { superuser = false; } )?
-      { $stmt = ::make_shared<alter_user_statement>($username.text, std::move(opts), std::move(superuser)); }
+      ( K_WITH roleAuthenticationOptions[opts] )?
+      ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
+      { $stmt = ::make_shared<alter_role_statement>(cql3::role_name($username.text, cql3::preserve_role_case::yes), std::move(opts)); }
     ;
 
 /**
  * DROP USER [IF EXISTS] <username>
  */
-dropUserStatement returns [::shared_ptr<drop_user_statement> stmt]
+dropUserStatement returns [::shared_ptr<drop_role_statement> stmt]
     @init { bool ifExists = false; }
-    : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? username { $stmt = ::make_shared<drop_user_statement>($username.text, ifExists); }
+    : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? username
+      { $stmt = ::make_shared<drop_role_statement>(cql3::role_name($username.text, cql3::preserve_role_case::yes), ifExists); }
     ;
 
 /**
@@ -1103,14 +1102,6 @@ dropUserStatement returns [::shared_ptr<drop_user_statement> stmt]
  */
 listUsersStatement returns [::shared_ptr<list_users_statement> stmt]
     : K_LIST K_USERS { $stmt = ::make_shared<list_users_statement>(); }
-    ;
-
-userOptions[::shared_ptr<cql3::user_options> opts]
-    : userOption[opts]
-    ;
-
-userOption[::shared_ptr<cql3::user_options> opts]
-    : k=K_PASSWORD v=STRING_LITERAL { opts->put($k.text, $v.text); }
     ;
 
 /**
@@ -1163,7 +1154,7 @@ dropRoleStatement returns [::shared_ptr<drop_role_statement> stmt]
 listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
     @init {
         bool recursive = true;
-        std::experimental::optional<cql3::role_name> grantee;
+        std::optional<cql3::role_name> grantee;
     }
     : K_LIST K_ROLES
         (K_OF g=userOrRoleName { grantee = std::move(g); })?

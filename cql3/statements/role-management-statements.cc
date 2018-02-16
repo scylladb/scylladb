@@ -41,6 +41,7 @@
 
 #include <algorithm>
 
+#include "auth/authentication_options.hh"
 #include "auth/common.hh"
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
@@ -53,6 +54,7 @@
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/request_validations.hh"
 #include "exceptions/exceptions.hh"
+#include "service/storage_service.hh"
 #include "transport/messages/result_message.hh"
 #include "unimplemented.hh"
 
@@ -60,52 +62,79 @@ namespace cql3 {
 
 namespace statements {
 
-static future<::shared_ptr<cql_transport::messages::result_message>> void_result_message() {
-    return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(nullptr);
+using result_message = cql_transport::messages::result_message;
+using result_message_ptr = ::shared_ptr<result_message>;
+
+static auth::authentication_options extract_authentication_options(const cql3::role_options& options) {
+    auth::authentication_options authen_options;
+    authen_options.password = options.password;
+
+    if (options.options) {
+        authen_options.options = std::unordered_map<sstring, sstring>(options.options->begin(), options.options->end());
+    }
+
+    return authen_options;
+}
+
+static future<result_message_ptr> void_result_message() {
+    return make_ready_future<result_message_ptr>(nullptr);
+}
+
+void validate_cluster_support() {
+    // TODO(jhaberku): All other feature-checking CQL statements also grab the `storage_service` globally. I'm not sure
+    // if it's accessible through some other object, but for now I'm sticking with convention.
+    if (!service::get_local_storage_service().cluster_supports_roles()) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify access-control information until the cluster has fully upgraded.");
+    }
 }
 
 //
 // `create_role_statement`
 //
 
+void create_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state&) {
+    validate_cluster_support();
+}
+
 future<> create_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission(auth::permission::CREATE, auth::resource::root_of(auth::resource_kind::role)).get0();
+        state.ensure_has_permission(auth::permission::CREATE, auth::root_role_resource()).get0();
 
         if (*_options.is_superuser) {
-            if (!auth::is_super_user(*state.get_auth_service(), *state.user()).get0()) {
+            if (!auth::has_superuser(*state.get_auth_service(), *state.user()).get0()) {
                 throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
             }
         }
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 create_role_statement::execute(distributed<service::storage_proxy>&,
                                service::query_state& state,
                                const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
-
-    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
-
     auth::role_config config;
     config.is_superuser = *_options.is_superuser;
     config.can_login = *_options.can_login;
 
-    return do_with(std::move(config), [this, &state](const auth::role_config& config) {
-        auto& cs = state.get_client_state();
-        auto& as = *cs.get_auth_service();
+    return do_with(
+            std::move(config),
+            extract_authentication_options(_options),
+            [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
+        auto& as = *state.get_client_state().get_auth_service();
 
-        return as.underlying_role_manager().create(*cs.user(), _role, config).then([] {
+        return auth::create_role(as, _role, config, authen_options).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
             if (!_if_not_exists) {
-                throw exceptions::invalid_request_exception(e.what());
+                return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
             }
 
             return void_result_message();
+        }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -114,6 +143,10 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
 // `alter_role_statement`
 //
 
+void alter_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state&) {
+    validate_cluster_support();
+}
+
 future<> alter_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
@@ -121,48 +154,63 @@ future<> alter_role_statement::check_access(const service::client_state& state) 
         auto& as = *state.get_auth_service();
 
         const auto& user = *state.user();
-        const bool user_is_superuser = auth::is_super_user(as, user).get0();
+        const bool user_is_superuser = auth::has_superuser(as, user).get0();
 
         if (_options.is_superuser) {
             if (!user_is_superuser) {
                 throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status.");
             }
 
-            const bool granted_to_user = as.get_roles(user.name()).get0().count(_role) != 0;
-            if (granted_to_user) {
-                throw exceptions::unauthorized_exception(
-                        "You are not allowed to alter your own superuser status or that of a role granted to you.");
+            try {
+                if (auth::has_role(as, user, _role).get0()) {
+                    throw exceptions::unauthorized_exception(
+                        "You aren't allowed to alter your own superuser status or that of a role granted to you.");
+                }
+            } catch (const auth::nonexistant_role& e) {
+                throw exceptions::invalid_request_exception(e.what());
             }
         }
 
-        if (user.name() != _role) {
-            state.ensure_has_permission(auth::permission::ALTER, auth::resource::role(_role)).get0();
+        if (*user.name != _role) {
+            state.ensure_has_permission(auth::permission::ALTER, auth::make_role_resource(_role)).get0();
         } else {
-            // TODO(jhaberku) Once we switch to roles, this is where we would query the authenticator for the set of
-            // alterable options it supports (throwing errors as necessary).
+            const auto alterable_options = state.get_auth_service()->underlying_authenticator().alterable_options();
+
+            const auto check = [&alterable_options](auth::authentication_option ao) {
+                if (alterable_options.count(ao) == 0) {
+                    throw exceptions::unauthorized_exception(sprint("You aren't allowed to alter the %s option.", ao));
+                }
+            };
+
+            if (_options.password) {
+                check(auth::authentication_option::password);
+            }
+
+            if (_options.options) {
+                check(auth::authentication_option::options);
+            }
         }
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 alter_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
-
-    // TODO(jhaberku) Authentication options are ignored until we switch over the system to use roles exclusively.
-
     auth::role_config_update update;
     update.is_superuser = _options.is_superuser;
     update.can_login = _options.can_login;
 
-    return do_with(std::move(update), [this, &state](const auth::role_config_update& update) {
-        auto& cs = state.get_client_state();
-        auto& as = *cs.get_auth_service();
+    return do_with(
+            std::move(update),
+            extract_authentication_options(_options),
+            [this, &state](const auth::role_config_update& update, const auth::authentication_options& authen_options) {
+        auto& as = *state.get_client_state().get_auth_service();
 
-        return as.underlying_role_manager().alter(*cs.user(), _role, update).then([] {
+        return auth::alter_role(as, _role, update, authen_options).then([] {
             return void_result_message();
-        }).handle_exception_type([](const auth::roles_argument_exception& e) {
-            throw exceptions::invalid_request_exception(e.what());
-            return void_result_message();
+        }).handle_exception_type([](const auth::nonexistant_role& e) {
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
+        }).handle_exception_type([](const auth::unsupported_authentication_option& e) {
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         });
     });
 }
@@ -172,7 +220,9 @@ alter_role_statement::execute(distributed<service::storage_proxy>&, service::que
 //
 
 void drop_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
-    if (state.user()->name() == _role) {
+    validate_cluster_support();
+
+    if (*state.user() == auth::authenticated_user(_role)) {
         throw request_validations::invalid_request("Cannot DROP primary role for current login.");
     }
 }
@@ -181,12 +231,20 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        state.ensure_has_permission(auth::permission::DROP, auth::resource::role(_role)).get0();
+        state.ensure_has_permission(auth::permission::DROP, auth::make_role_resource(_role)).get0();
 
         auto& as = *state.get_auth_service();
 
-        const bool user_is_superuser = auth::is_super_user(as, *state.user()).get0();
-        const bool role_has_superuser = as.role_has_superuser(_role).get0();
+        const bool user_is_superuser = auth::has_superuser(as, *state.user()).get0();
+
+        const bool role_has_superuser = [this, &as] {
+            try {
+                return as.has_superuser(_role).get0();
+            } catch (const auth::nonexistant_role&) {
+                // Handled as part of `execute`.
+                return false;
+            }
+        }();
 
         if (role_has_superuser && !user_is_superuser) {
             throw exceptions::unauthorized_exception("Only superusers can drop a superuser role.");
@@ -194,19 +252,15 @@ future<> drop_role_statement::check_access(const service::client_state& state) {
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 drop_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
-    unimplemented::warn(unimplemented::cause::ROLES);
+    auto& as = *state.get_client_state().get_auth_service();
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
-    auto& rm = as.underlying_role_manager();
-
-    return rm.drop(*cs.user(), _role).then([] {
+    return auth::drop_role(as, _role).then([] {
         return void_result_message();
     }).handle_exception_type([this](const auth::nonexistant_role& e) {
         if (!_if_exists) {
-            throw exceptions::invalid_request_exception(e.what());
+            return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
         }
 
         return void_result_message();
@@ -221,9 +275,7 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
     state.ensure_not_anonymous();
 
     return async([this, &state] {
-        if (state.check_has_permission(
-                    auth::permission::DESCRIBE,
-                    auth::resource::root_of(auth::resource_kind::role)).get0()) {
+        if (state.check_has_permission(auth::permission::DESCRIBE, auth::root_role_resource()).get0()) {
             return;
         }
 
@@ -232,19 +284,21 @@ future<> list_roles_statement::check_access(const service::client_state& state) 
         //
 
         const auto user_has_grantee = [this, &state] {
-            return state.get_auth_service()->get_roles(state.user()->name()).get0().count(*_grantee) != 0;
+            try {
+                return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get0();
+            } catch (const auth::nonexistant_role& e) {
+                throw exceptions::invalid_request_exception(e.what());
+            }
         };
 
         if (_grantee && !user_has_grantee()) {
             throw exceptions::unauthorized_exception(
                     sprint("You are not authorized to view the roles granted to role '%s'.", *_grantee));
         }
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 list_roles_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
@@ -264,14 +318,12 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     make_column_spec("super", boolean_type),
                     make_column_spec("login", boolean_type)});
 
-    static const auto make_results = [](auth::role_manager& rm, std::unordered_set<sstring>&& roles)
-            -> future<::shared_ptr<cql_transport::messages::result_message>> {
-        using cql_transport::messages::result_message;
-
+    static const auto make_results = [](auth::role_manager& rm, auth::role_set&& roles)
+            -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
 
         if (roles.empty()) {
-            return make_ready_future<::shared_ptr<result_message>>(
+            return make_ready_future<result_message_ptr>(
                 ::make_shared<result_message::rows>(std::move(results)));
         }
 
@@ -291,16 +343,16 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     results->add_column_value(boolean_type->decompose(login));
                 });
             }).then([&results] {
-                return make_ready_future<::shared_ptr<result_message>>(
-                        ::make_shared<result_message::rows>(std::move(results)));
+                return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(std::move(results)));
             });
         });
     };
 
     auto& cs = state.get_client_state();
     auto& as = *cs.get_auth_service();
+    const auto user = cs.user();
 
-    return auth::is_super_user(as, *cs.user()).then([this, &state, &cs, &as](bool super) {
+    return auth::has_superuser(as, *user).then([this, &state, &cs, &as, user](bool super) {
         auto& rm = as.underlying_role_manager();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
@@ -309,23 +361,22 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
             // only the roles granted to them.
             return cs.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::resource::root_of(auth::resource_kind::role)).then([&cs, &rm, query_mode](bool has_describe) {
+                    auth::root_role_resource()).then([&cs, &rm, user, query_mode](bool has_describe) {
                 if (has_describe) {
                     return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
                 }
 
-                return rm.query_granted(cs.user()->name(), query_mode).then([&rm](std::unordered_set<sstring> roles) {
+                return rm.query_granted(*user->name, query_mode).then([&rm](auth::role_set roles) {
                     return make_results(rm, std::move(roles));
                 });
             });
         }
 
-        return rm.query_granted(*_grantee, query_mode).then([&rm](std::unordered_set<sstring> roles) {
+        return rm.query_granted(*_grantee, query_mode).then([&rm](auth::role_set roles) {
             return make_results(rm, std::move(roles));
         });
-    }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+    }).handle_exception_type([](const auth::nonexistant_role& e) {
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -335,21 +386,22 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> grant_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
+
+    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+        return state.ensure_has_permission(auth::permission::AUTHORIZE, r);
+    });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
+future<result_message_ptr>
 grant_role_statement::execute(distributed<service::storage_proxy>&, service::query_state& state, const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
+    auto& as = *state.get_client_state().get_auth_service();
 
-    return as.underlying_role_manager().grant(*cs.user(), _grantee, _role).then([] {
+    return as.underlying_role_manager().grant(_grantee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 
@@ -359,24 +411,24 @@ grant_role_statement::execute(distributed<service::storage_proxy>&, service::que
 
 future<> revoke_role_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
-    return state.ensure_has_permission(auth::permission::AUTHORIZE, auth::resource::role(_role));
+
+    return do_with(auth::make_role_resource(_role), [this, &state](const auto& r) {
+        return state.ensure_has_permission(auth::permission::AUTHORIZE, r);
+    });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-revoke_role_statement::execute(
+future<result_message_ptr> revoke_role_statement::execute(
         distributed<service::storage_proxy>&,
         service::query_state& state,
         const query_options&) {
     unimplemented::warn(unimplemented::cause::ROLES);
 
-    auto& cs = state.get_client_state();
-    auto& rm = cs.get_auth_service()->underlying_role_manager();
+    auto& rm = state.get_client_state().get_auth_service()->underlying_role_manager();
 
-    return rm.revoke(*cs.user(), _revokee, _role).then([] {
+    return rm.revoke(_revokee, _role).then([] {
         return void_result_message();
     }).handle_exception_type([](const auth::roles_argument_exception& e) {
-        throw exceptions::invalid_request_exception(e.what());
-        return void_result_message();
+        return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
     });
 }
 

@@ -42,10 +42,11 @@
 #pragma once
 
 #include <unordered_set>
+
 #include <seastar/core/sstring.hh>
 
-#include "seastarx.hh"
 #include "enum_set.hh"
+#include "seastarx.hh"
 
 namespace auth {
 
@@ -70,7 +71,9 @@ enum class permission {
 
 };
 
-typedef enum_set<super_enum<permission,
+typedef enum_set<
+        super_enum<
+                permission,
                 permission::READ,
                 permission::WRITE,
                 permission::CREATE,
@@ -93,7 +96,6 @@ permission from_string(const sstring&);
 
 std::unordered_set<sstring> to_strings(const permission_set&);
 permission_set from_strings(const std::unordered_set<sstring>&);
-
 
 }
 

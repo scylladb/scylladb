@@ -41,9 +41,10 @@
 
 #pragma once
 
-#include "authenticator.hh"
-#include "cql3/query_processor.hh"
 #include <seastar/core/abort_source.hh>
+
+#include "auth/authenticator.hh"
+#include "cql3/query_processor.hh"
 
 namespace service {
 class migration_manager;
@@ -60,29 +61,42 @@ class password_authenticator : public authenticator {
     seastar::abort_source _as;
 
 public:
+    static db::consistency_level consistency_for_user(stdx::string_view role_name);
+
     password_authenticator(cql3::query_processor&, ::service::migration_manager&);
+
     ~password_authenticator();
 
-    future<> start() override;
+    virtual future<> start() override;
 
-    future<> stop() override;
+    virtual future<> stop() override;
 
-    const sstring& qualified_java_name() const override;
-    bool require_authentication() const override;
-    option_set supported_options() const override;
-    option_set alterable_options() const override;
-    future<::shared_ptr<authenticated_user>> authenticate(const credentials_map& credentials) const override;
-    future<> create(sstring username, const option_map& options) override;
-    future<> alter(sstring username, const option_map& options) override;
-    future<> drop(sstring username) override;
-    const resource_set& protected_resources() const override;
-    ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
+    virtual const sstring& qualified_java_name() const override;
 
+    virtual bool require_authentication() const override;
 
-    static db::consistency_level consistency_for_user(const sstring& username);
+    virtual authentication_option_set supported_options() const override;
+
+    virtual authentication_option_set alterable_options() const override;
+
+    virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
+
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) override;
+
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) override;
+
+    virtual future<> drop(stdx::string_view role_name) override;
+
+    virtual const resource_set& protected_resources() const override;
+
+    virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
 private:
-    future<bool> has_existing_users() const;
+    bool legacy_metadata_exists() const;
+
+    future<> migrate_legacy_metadata();
+
+    future<> create_default_if_missing();
 };
 
 }

@@ -58,14 +58,8 @@ static db::config db_config_with_auth() {
 // These functions must be called inside Seastar threads.
 //
 
-static void ensure_user_exists(cql_test_env& env, stdx::string_view user_name) {
-    //
-    // When roles replace users, creating a user will be equivalent to creating a role with the same name. Until then,
-    // we must manually ensure that a role and a user of the same name exist.
-    //
-
+static void create_user_if_not_exists(cql_test_env& env, stdx::string_view user_name) {
     env.execute_cql(sprint("CREATE USER IF NOT EXISTS %s WITH PASSWORD '%s'", user_name, user_name)).get();
-    env.execute_cql(sprint("CREATE ROLE IF NOT EXISTS %s", user_name)).get();
 }
 
 // Invoke `f` as though the user indicated with `user_name` had logged in. The current logged in user is restored after
@@ -75,7 +69,7 @@ static void with_user(cql_test_env& env, stdx::string_view user_name, Function&&
     auto& cs = env.local_client_state();
     auto old_user = cs.user();
 
-    ensure_user_exists(env, user_name);
+    create_user_if_not_exists(env, user_name);
     cs.set_login(::make_shared<auth::authenticated_user>(sstring(user_name)));
 
     const auto reset = defer([&cs, old_user = std::move(old_user)] {
@@ -252,7 +246,7 @@ SEASTAR_TEST_CASE(grant_role_restrictions) {
 
 SEASTAR_TEST_CASE(revoke_role_restrictions) {
     return do_with_cql_env_thread([](auto&& env) {
-        ensure_user_exists(env, alice);
+        create_user_if_not_exists(env, alice);
 
         env.execute_cql("CREATE ROLE lord").get0();
         env.execute_cql("GRANT lord TO alice").get0();

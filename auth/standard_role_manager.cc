@@ -44,15 +44,6 @@ namespace auth {
 
 namespace meta {
 
-namespace roles_table {
-
-stdx::string_view qualified_name() noexcept {
-    static const sstring instance = AUTH_KS + "." + sstring(name);
-    return instance;
-}
-
-}
-
 namespace role_members_table {
 
 constexpr stdx::string_view name{"role_members" , 12};
@@ -78,7 +69,7 @@ struct record final {
     sstring name;
     bool is_superuser;
     bool can_login;
-    std::unordered_set<sstring> member_of;
+    role_set member_of;
 };
 
 static db::consistency_level consistency_for_role(stdx::string_view role_name) noexcept {
@@ -113,14 +104,14 @@ static future<stdx::optional<record>> find_record(cql3::query_processor& qp, std
                         row.get_as<bool>("can_login"),
                         (row.has("member_of")
                                  ? row.get_set<sstring>("member_of")
-                                 : std::unordered_set<sstring>()) });
+                                 : role_set())});
     });
 }
 
 static future<record> require_record(cql3::query_processor& qp, stdx::string_view role_name) {
     return find_record(qp, role_name).then([role_name](stdx::optional<record> mr) {
         if (!mr) {
-            throw nonexistant_role(sstring(role_name));
+            throw nonexistant_role(role_name);
         }
 
         return make_ready_future<record>(*mr);
@@ -134,6 +125,14 @@ stdx::string_view standard_role_manager_name() noexcept {
 
 stdx::string_view standard_role_manager::qualified_java_name() const noexcept {
     return standard_role_manager_name();
+}
+
+const resource_set& standard_role_manager::protected_resources() const {
+    static const resource_set resources({
+            make_data_resource(meta::AUTH_KS, meta::roles_table::name),
+            make_data_resource(meta::AUTH_KS, meta::role_members_table::name)});
+
+    return resources;
 }
 
 future<> standard_role_manager::create_metadata_tables_if_missing() {
@@ -170,40 +169,61 @@ future<> standard_role_manager::create_metadata_tables_if_missing() {
                     _migration_manager));
 }
 
-// Must be called within the scope of a seastar thread
-bool standard_role_manager::has_existing_roles() const {
-    static const sstring default_role_query = sprint(
-        "SELECT * FROM %s WHERE %s = ?",
-        meta::roles_table::qualified_name(),
-        meta::roles_table::role_col_name);
+future<> standard_role_manager::create_default_role_if_missing() {
+    return default_role_row_satisfies(_qp, [](auto&&) { return true; }).then([this](bool exists) {
+        if (!exists) {
+            static const sstring query = sprint(
+                    "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
+                    meta::roles_table::qualified_name(),
+                    meta::roles_table::role_col_name);
 
-    static const sstring all_roles_query = sprint("SELECT * FROM %s LIMIT 1", meta::roles_table::qualified_name());
+            return _qp.process(
+                    query,
+                    db::consistency_level::QUORUM,
+                    {meta::DEFAULT_SUPERUSER_NAME}).then([](auto&&) {
+                log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
+                return make_ready_future<>();
+            });
+        }
 
-    // This logic is borrowed directly from Apache Cassandra. By first checking for the presence of the default role, we
-    // can potentially avoid doing a range query with a high consistency level.
+        return make_ready_future<>();
+    }).handle_exception_type([](const exceptions::unavailable_exception& e) {
+        log.warn("Skipped default role setup: some nodes were not ready; will retry");
+        return make_exception_future<>(e);
+    });
+}
 
-    const bool default_exists_one = !_qp.process(
-            default_role_query,
-            db::consistency_level::ONE,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            true).get0()->empty();
+static const sstring legacy_table_name{"users"};
 
-    if (default_exists_one) {
-        return true;
-    }
+bool standard_role_manager::legacy_metadata_exists() const {
+    return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
+}
 
-    const bool default_exists_quorum = !_qp.process(
-            default_role_query,
-            db::consistency_level::QUORUM,
-            {meta::DEFAULT_SUPERUSER_NAME},
-            true).get0()->empty();
+future<> standard_role_manager::migrate_legacy_metadata() {
+    log.info("Starting migration of legacy user metadata.");
+    static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
 
-    if (default_exists_quorum) {
-        return true;
-    }
+    return _qp.process(
+            query,
+            db::consistency_level::QUORUM).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            role_config config;
+            config.is_superuser = row.get_as<bool>("super");
+            config.can_login = true;
 
-    const bool any_exists_quorum = !_qp.process(all_roles_query, db::consistency_level::QUORUM).get0()->empty();
-    return any_exists_quorum;
+            return do_with(
+                    row.get_as<sstring>("name"),
+                    std::move(config),
+                    [this](const auto& name, const auto& config) {
+                return this->create_or_replace(name, config);
+            });
+        }).finally([results] {});
+    }).then([] {
+        log.info("Finished migrating legacy user metadata.");
+    }).handle_exception([](std::exception_ptr ep) {
+        log.error("Encountered an error during migration!");
+        std::rethrow_exception(ep);
+    });
 }
 
 future<> standard_role_manager::start() {
@@ -211,23 +231,20 @@ future<> standard_role_manager::start() {
         return this->create_metadata_tables_if_missing().then([this] {
             _stopped = auth::do_after_system_ready(_as, [this] {
                 return seastar::async([this] {
-                    try {
-                        if (this->has_existing_roles()) {
-                            return;
+                    if (any_nondefault_role_row_satisfies(_qp, [](auto&&) { return true; }).get0()) {
+                        if (this->legacy_metadata_exists()) {
+                            log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }
-                        // Create the default superuser.
-                        _qp.process(
-                                sprint(
-                                        "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
-                                        meta::roles_table::qualified_name(),
-                                        meta::roles_table::role_col_name),
-                                db::consistency_level::QUORUM,
-                                {meta::DEFAULT_SUPERUSER_NAME}).get();
-                        log.info("Created default superuser role '{}'.", meta::DEFAULT_SUPERUSER_NAME);
-                    } catch (const exceptions::unavailable_exception& e) {
-                        log.warn("Skipped default role setup: some nodes were not ready; will retry");
-                        throw e;
+
+                        return;
                     }
+
+                    if (this->legacy_metadata_exists()) {
+                        this->migrate_legacy_metadata().get0();
+                        return;
+                    }
+
+                    create_default_role_if_missing().get0();
                 });
             });
         });
@@ -239,28 +256,32 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
-future<>
-standard_role_manager::create(const authenticated_user& performer, stdx::string_view role_name, const role_config& c) {
+future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) {
     static const sstring query = sprint(
             "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
+    return _qp.process(
+            query,
+            consistency_for_role(role_name),
+            {sstring(role_name), c.is_superuser, c.can_login},
+            true).discard_result();
+}
+
+future<>
+standard_role_manager::create(stdx::string_view role_name, const role_config& c) {
     return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
         if (role_exists) {
-            throw role_already_exists(sstring(role_name));
+            throw role_already_exists(role_name);
         }
 
-        return _qp.process(
-                query,
-                consistency_for_role(role_name),
-                {sstring(role_name), c.is_superuser, c.can_login},
-                true).discard_result();
+        return this->create_or_replace(role_name, c);
     });
 }
 
 future<>
-standard_role_manager::alter(const authenticated_user&, stdx::string_view role_name, const role_config_update& u) {
+standard_role_manager::alter(stdx::string_view role_name, const role_config_update& u) {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -276,6 +297,10 @@ standard_role_manager::alter(const authenticated_user&, stdx::string_view role_n
     };
 
     return require_record(_qp, role_name).then([this, role_name, &u](record) {
+        if (!u.is_superuser && !u.can_login) {
+            return make_ready_future<>();
+        }
+
         return _qp.process(
                 sprint(
                         "UPDATE %s SET %s WHERE %s = ?",
@@ -287,10 +312,10 @@ standard_role_manager::alter(const authenticated_user&, stdx::string_view role_n
     });
 }
 
-future<> standard_role_manager::drop(const authenticated_user&, stdx::string_view role_name) {
+future<> standard_role_manager::drop(stdx::string_view role_name) {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {
-            throw nonexistant_role(sstring(role_name));
+            throw nonexistant_role(role_name);
         }
 
         // First, revoke this role from all roles that are members of it.
@@ -317,10 +342,10 @@ future<> standard_role_manager::drop(const authenticated_user&, stdx::string_vie
         const auto revoke_members_of = [this, grantee = role_name] {
             return this->query_granted(
                     grantee,
-                    recursive_role_query::no).then([this, grantee](std::unordered_set<sstring> granted_roles) {
+                    recursive_role_query::no).then([this, grantee](role_set granted_roles) {
                 return do_with(
                         std::move(granted_roles),
-                        [this, grantee](const std::unordered_set<sstring>& granted_roles) {
+                        [this, grantee](const role_set& granted_roles) {
                     return parallel_for_each(
                             granted_roles.begin(),
                             granted_roles.end(),
@@ -367,7 +392,7 @@ standard_role_manager::modify_membership(
         return _qp.process(
                 query,
                 consistency_for_role(grantee_name),
-                {std::unordered_set<sstring>{sstring(role_name)}, sstring(grantee_name)}).discard_result();
+                {role_set{sstring(role_name)}, sstring(grantee_name)}).discard_result();
     };
 
     const auto modify_role_members = [this, role_name, grantee_name, ch] {
@@ -396,18 +421,13 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(
-        const authenticated_user&,
-        stdx::string_view grantee_name,
-        stdx::string_view role_name) {
+standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view role_name) {
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
                 grantee_name,
-                recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
-            const sstring role_name_string = sstring(role_name);
-
-            if (roles.count(role_name_string) != 0) {
-                throw role_already_included(sstring(grantee_name), role_name_string);
+                recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
+            if (roles.count(sstring(role_name)) != 0) {
+                throw role_already_included(grantee_name, role_name);
             }
 
             return make_ready_future<>();
@@ -417,11 +437,9 @@ standard_role_manager::grant(
     const auto check_cycle = [this, role_name, grantee_name] {
         return this->query_granted(
                 role_name,
-                recursive_role_query::yes).then([role_name, grantee_name](std::unordered_set<sstring> roles) {
-            const auto grantee_name_string = sstring(grantee_name);
-
-            if (roles.count(grantee_name_string) != 0) {
-                throw role_already_included(sstring(role_name), grantee_name_string);
+                recursive_role_query::yes).then([role_name, grantee_name](role_set roles) {
+            if (roles.count(sstring(grantee_name)) != 0) {
+                throw role_already_included(role_name, grantee_name);
             }
 
             return make_ready_future<>();
@@ -434,10 +452,7 @@ standard_role_manager::grant(
 }
 
 future<>
-standard_role_manager::revoke(
-        const authenticated_user&,
-        stdx::string_view revokee_name,
-        stdx::string_view role_name) {
+standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view role_name) {
     return this->exists(role_name).then([this, revokee_name, role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));
@@ -445,11 +460,9 @@ standard_role_manager::revoke(
     }).then([this, revokee_name, role_name] {
         return this->query_granted(
                 revokee_name,
-                recursive_role_query::no).then([revokee_name, role_name](std::unordered_set<sstring> roles) {
-            const auto role_name_string = sstring(role_name);
-
-            if (roles.count(role_name_string) == 0) {
-                throw revoke_ungranted_role(sstring(revokee_name), role_name_string);
+                recursive_role_query::no).then([revokee_name, role_name](role_set roles) {
+            if (roles.count(sstring(role_name)) == 0) {
+                throw revoke_ungranted_role(revokee_name, role_name);
             }
 
             return make_ready_future<>();
@@ -463,32 +476,33 @@ static future<> collect_roles(
         cql3::query_processor& qp,
         stdx::string_view grantee_name,
         bool recurse,
-        std::unordered_set<sstring>& roles) {
+        role_set& roles) {
     return require_record(qp, grantee_name).then([&qp, &roles, recurse](record r) {
-        return do_for_each(r.member_of, [&qp, &roles, recurse](const sstring& role_name) {
-            roles.insert(role_name);
+        return do_with(std::move(r.member_of), [&qp, &roles, recurse](const role_set& memberships) {
+            return do_for_each(memberships.begin(), memberships.end(), [&qp, &roles, recurse](const sstring& role_name) {
+                roles.insert(role_name);
 
-            if (recurse) {
-                return collect_roles(qp, role_name, true, roles);
-            }
+                if (recurse) {
+                    return collect_roles(qp, role_name, true, roles);
+                }
 
-            return make_ready_future<>();
+                return make_ready_future<>();
+            });
         });
     });
 }
 
-future<std::unordered_set<sstring>>
-standard_role_manager::query_granted(stdx::string_view grantee_name, recursive_role_query m) const {
+future<role_set> standard_role_manager::query_granted(stdx::string_view grantee_name, recursive_role_query m) const {
     const bool recurse = (m == recursive_role_query::yes);
 
     return do_with(
-            std::unordered_set<sstring>{sstring(grantee_name)},
-            [this, grantee_name, recurse](std::unordered_set<sstring>& roles) {
+            role_set{sstring(grantee_name)},
+            [this, grantee_name, recurse](role_set& roles) {
         return collect_roles(_qp, grantee_name, recurse, roles).then([&roles] { return roles; });
     });
 }
 
-future<std::unordered_set<sstring>> standard_role_manager::query_all() const {
+future<role_set> standard_role_manager::query_all() const {
     static const sstring query = sprint(
             "SELECT %s FROM %s",
             meta::roles_table::role_col_name,
@@ -498,7 +512,7 @@ future<std::unordered_set<sstring>> standard_role_manager::query_all() const {
     static const auto role_col_name_string = sstring(meta::roles_table::role_col_name);
 
     return _qp.process(query, db::consistency_level::QUORUM).then([](::shared_ptr<cql3::untyped_result_set> results) {
-        std::unordered_set<sstring> roles;
+        role_set roles;
 
         std::transform(
                 results->begin(),

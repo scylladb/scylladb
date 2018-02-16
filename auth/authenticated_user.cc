@@ -39,26 +39,30 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "auth/authenticated_user.hh"
 
-#include "authenticated_user.hh"
+#include <iostream>
 
-const sstring auth::authenticated_user::ANONYMOUS_USERNAME("anonymous");
+namespace auth {
 
-auth::authenticated_user::authenticated_user()
-                : _anon(true)
-{}
-
-auth::authenticated_user::authenticated_user(sstring name)
-                : _name(name), _anon(false)
-{}
-
-auth::authenticated_user::authenticated_user(authenticated_user&&) = default;
-auth::authenticated_user::authenticated_user(const authenticated_user&) = default;
-
-const sstring& auth::authenticated_user::name() const {
-    return _anon ? ANONYMOUS_USERNAME : _name;
+authenticated_user::authenticated_user(stdx::string_view name)
+        : name(sstring(name)) {
 }
 
-bool auth::authenticated_user::operator==(const authenticated_user& v) const {
-    return _anon ? v._anon : _name == v._name;
+std::ostream& operator<<(std::ostream& os, const authenticated_user& u) {
+    if (!u.name) {
+        os << "anonymous";
+    } else {
+        os << *u.name;
+    }
+
+    return os;
+}
+
+static const authenticated_user the_anonymous_user{};
+
+const authenticated_user& anonymous_user() noexcept {
+    return the_anonymous_user;
+}
+
 }

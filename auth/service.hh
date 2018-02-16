@@ -23,14 +23,14 @@
 
 #include <experimental/string_view>
 #include <memory>
+#include <optional>
 
-#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
-#include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/permissions_cache.hh"
 #include "auth/role_manager.hh"
@@ -52,12 +52,26 @@ class migration_listener;
 
 namespace auth {
 
+class role_or_anonymous;
+
 struct service_config final {
     static service_config from_db_config(const db::config&);
 
     sstring authorizer_java_name;
     sstring authenticator_java_name;
     sstring role_manager_java_name;
+};
+
+///
+/// Due to poor (in this author's opinion) decisions of Apache Cassandra, certain choices of one role-manager,
+/// authenticator, or authorizer imply restrictions on the rest.
+///
+/// This exception is thrown when an invalid combination of modules is selected, with a message explaining the
+/// incompatibility.
+///
+class incompatible_module_combination : public std::invalid_argument {
+public:
+    using std::invalid_argument::invalid_argument;
 };
 
 ///
@@ -79,15 +93,10 @@ class service final {
 
     std::unique_ptr<authenticator> _authenticator;
 
-    // Similar functionality as this class, except for roles. It will replace the user-based functions when Scylla
-    // switches over to role-based access-control. Until then, it's mostly dormant.
     std::unique_ptr<role_manager> _role_manager;
 
     // Only one of these should be registered, so we end up with some unused instances. Not the end of the world.
     std::unique_ptr<::service::migration_listener> _migration_listener;
-
-    future<> _stopped;
-    seastar::abort_source _as;
 
 public:
     service(
@@ -113,30 +122,32 @@ public:
 
     future<> stop();
 
-    future<bool> is_existing_user(const sstring& name) const;
+    ///
+    /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+    ///
+    future<permission_set> get_permissions(const role_or_anonymous&, const resource&) const;
 
-    future<bool> is_super_user(const sstring& name) const;
-
-    future<> insert_user(const sstring& name, bool is_superuser);
-
-    future<> delete_user(const sstring& name);
-
-    future<permission_set> get_permissions(::shared_ptr<authenticated_user>, resource) const;
+    ///
+    /// Like \ref get_permissions, but never returns cached permissions.
+    ///
+    future<permission_set> get_uncached_permissions(const role_or_anonymous&, const resource&) const;
 
     ///
     /// Query whether the named role has been granted a role that is a superuser.
     ///
     /// A role is always granted to itself. Therefore, a role that "is" a superuser also "has" superuser.
     ///
-    /// \throws \ref nonexistant_role if the role does not exist.
+    /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    future<bool> role_has_superuser(stdx::string_view role_name) const;
+    future<bool> has_superuser(stdx::string_view role_name) const;
 
     ///
     /// Return the set of all roles granted to the given role, including itself and roles granted through other roles.
     ///
-    /// \throws \ref nonexistent_role if the role does not exist.
-    future<std::unordered_set<sstring>> get_roles(stdx::string_view role_name) const;
+    /// \returns an exceptional future with \ref nonexistent_role if the role does not exist.
+    future<role_set> get_roles(stdx::string_view role_name) const;
+
+    future<bool> exists(const resource&) const;
 
     authenticator& underlying_authenticator() {
         return *_authenticator;
@@ -163,14 +174,16 @@ public:
     }
 
 private:
-    future<bool> has_existing_users() const;
+    future<bool> has_existing_legacy_users() const;
 
     future<> create_keyspace_if_missing() const;
-
-    future<> create_metadata_if_missing();
 };
 
-future<bool> is_super_user(const service&, const authenticated_user&);
+future<bool> has_superuser(const service&, const authenticated_user&);
+
+future<role_set> get_roles(const service&, const authenticated_user&);
+
+future<permission_set> get_permissions(const service&, const authenticated_user&, const resource&);
 
 ///
 /// Access-control is "enforcing" when either the authenticator or the authorizer are not their "allow-all" variants.
@@ -179,5 +192,95 @@ future<bool> is_super_user(const service&, const authenticated_user&);
 /// need to authenticate themselves.
 ///
 bool is_enforcing(const service&);
+
+///
+/// Protected resources cannot be modified even if the performer has permissions to do so.
+///
+bool is_protected(const service&, const resource&) noexcept;
+
+///
+/// Create a role with optional authentication information.
+///
+/// \returns an exceptional future with \ref role_already_exists if the user or role exists.
+///
+/// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
+///
+future<> create_role(
+        service&,
+        stdx::string_view name,
+        const role_config&,
+        const authentication_options&);
+
+///
+/// Alter an existing role and its authentication information.
+///
+/// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
+///
+future<> alter_role(
+        service&,
+        stdx::string_view name,
+        const role_config_update&,
+        const authentication_options&);
+
+///
+/// Drop a role from the system, including all permissions and authentication information.
+///
+/// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
+///
+future<> drop_role(service&, stdx::string_view name);
+
+///
+/// Check if `grantee` has been granted the named role.
+///
+/// \returns an exceptional future with \ref nonexistent_role if `grantee` or `name` do not exist.
+///
+future<bool> has_role(const service&, stdx::string_view grantee, stdx::string_view name);
+///
+/// Check if the authenticated user has been granted the named role.
+///
+/// \returns an exceptional future with \ref nonexistent_role if the user or `name` do not exist.
+///
+future<bool> has_role(const service&, const authenticated_user&, stdx::string_view name);
+
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+future<> grant_permissions(
+        service&,
+        stdx::string_view role_name,
+        permission_set,
+        const resource&);
+
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+future<> revoke_permissions(
+        service&,
+        stdx::string_view role_name,
+        permission_set,
+        const resource&);
+
+using recursive_permissions = bool_class<struct recursive_permissions_tag>;
+
+///
+/// Query for all granted permissions according to filtering criteria.
+///
+/// Only permissions included in the provided set are included.
+///
+/// If a role name is provided, only permissions granted (directly or recursively) to the role are included.
+///
+/// If a resource filter is provided, only permissions granted on the resource are included. When \ref
+/// recursive_permissions is `true`, permissions on a parent resource are included.
+///
+/// \returns an exceptional future with \ref nonexistent_role if a role name is included which refers to a role that
+/// does not exist.
+///
+future<std::vector<permission_details>> list_filtered_permissions(
+        const service&,
+        permission_set,
+        std::optional<stdx::string_view> role_name,
+        const std::optional<std::pair<resource, recursive_permissions>>& resource_filter);
 
 }

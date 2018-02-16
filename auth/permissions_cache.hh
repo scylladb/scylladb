@@ -22,31 +22,29 @@
 #pragma once
 
 #include <chrono>
+#include <experimental/string_view>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <utility>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 
 #include "auth/authenticated_user.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
+#include "auth/role_or_anonymous.hh"
 #include "log.hh"
+#include "stdx.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 
 namespace std {
 
-template <>
-struct hash<auth::authenticated_user> final {
-    size_t operator()(const auth::authenticated_user & v) const {
-        return utils::tuple_hash()(v.name(), v.is_anonymous());
-    }
-};
-
-inline std::ostream& operator<<(std::ostream& os, const std::pair<auth::authenticated_user, auth::resource>& p) {
-    os << "{user: " << p.first.name() << ", resource: " << p.second << "}";
+inline std::ostream& operator<<(std::ostream& os, const pair<auth::role_or_anonymous, auth::resource>& p) {
+    os << "{role: " << p.first << ", resource: " << p.second << "}";
     return os;
 }
 
@@ -70,7 +68,7 @@ struct permissions_cache_config final {
 
 class permissions_cache final {
     using cache_type = utils::loading_cache<
-            std::pair<authenticated_user, resource>,
+            std::pair<role_or_anonymous, resource>,
             permission_set,
             utils::loading_cache_reload_enabled::yes,
             utils::simple_entry_size<permission_set>,
@@ -87,7 +85,7 @@ public:
         return _cache.stop();
     }
 
-    future<permission_set> get(::shared_ptr<authenticated_user>, resource);
+    future<permission_set> get(const role_or_anonymous&, const resource&);
 };
 
 }

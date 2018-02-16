@@ -53,6 +53,10 @@
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 
+namespace auth {
+class resource;
+}
+
 namespace service {
 
 /**
@@ -315,11 +319,16 @@ public:
     future<> has_schema_access(const schema& s, auth::permission p) const;
 
 private:
-    future<> has_access(const sstring&, auth::permission, auth::resource) const;
+    future<> has_access(const sstring&, auth::permission, const auth::resource&) const;
 
 public:
-    future<bool> check_has_permission(auth::permission, auth::resource) const;
-    future<> ensure_has_permission(auth::permission, auth::resource) const;
+    future<bool> check_has_permission(auth::permission, const auth::resource&) const;
+    future<> ensure_has_permission(auth::permission, const auth::resource&) const;
+
+    /**
+     * Returns an exceptional future with \ref exceptions::invalid_request_exception if the resource does not exist.
+     */
+    future<> ensure_exists(const auth::resource&) const;
 
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error
