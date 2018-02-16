@@ -224,9 +224,9 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 }
 
 void mutation_partition::ensure_last_dummy(const schema& s) {
-    if (_rows.empty() || !_rows.rbegin()->position().is_after_all_clustered_rows(s)) {
+    if (_rows.empty() || !_rows.rbegin()->is_last_dummy()) {
         _rows.insert_before(_rows.end(),
-            *current_allocator().construct<rows_entry>(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, is_continuous::yes));
+            *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
     }
 }
 
@@ -2070,7 +2070,7 @@ mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const
     , _row_tombstones(s)
 {
     _rows.insert_before(_rows.end(),
-        *current_allocator().construct<rows_entry>(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, is_continuous::no));
+        *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
 }
 
 bool mutation_partition::is_fully_continuous() const {
@@ -2130,6 +2130,7 @@ void mutation_partition::evict() noexcept {
         e._flags._before_ck = false;
         e._flags._after_ck = true;
         e._flags._dummy = true;
+        e._flags._last_dummy = true;
         e._flags._continuous = false;
         e._row = {};
     }

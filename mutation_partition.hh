@@ -685,10 +685,14 @@ class rows_entry {
         bool _after_ck : 1;
         bool _continuous : 1; // See doc of is_continuous.
         bool _dummy : 1;
-        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false) { }
+        // Marks a dummy entry which is after_all_clustered_rows() position.
+        // Needed so that eviction, which can't use comparators, can check if it's dealing with it.
+        bool _last_dummy : 1;
+        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
     friend class mutation_partition;
 public:
+    struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
@@ -698,11 +702,15 @@ public:
     rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous)
         : _key(pos.key())
     {
+        _flags._last_dummy = bool(dummy) && pos.is_after_all_clustered_rows(s);
         _flags._dummy = bool(dummy);
         _flags._continuous = bool(continuous);
         _flags._before_ck = pos.is_before_key();
         _flags._after_ck = pos.is_after_key();
     }
+    rows_entry(const schema& s, last_dummy_tag, is_continuous continuous)
+        : rows_entry(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, continuous)
+    { }
     rows_entry(const clustering_key& key, deletable_row&& row)
         : _key(key), _row(std::move(row))
     { }
@@ -740,6 +748,7 @@ public:
     void set_continuous(bool value) { _flags._continuous = value; }
     void set_continuous(is_continuous value) { set_continuous(bool(value)); }
     is_dummy dummy() const { return is_dummy(_flags._dummy); }
+    bool is_last_dummy() const { return _flags._last_dummy; }
     void set_dummy(bool value) { _flags._dummy = value; }
     void set_dummy(is_dummy value) { _flags._dummy = bool(value); }
     void apply(row_tombstone t) {
