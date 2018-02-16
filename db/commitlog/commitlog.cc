@@ -517,7 +517,9 @@ public:
                     // When we get here, nothing should add ops,
                     // and we should have waited out all pending.
                     return me->_pending_ops.close().finally([me] {
-                        return me->_file.truncate(me->_flush_pos);
+                        return me->_file.truncate(me->_flush_pos).then([me] {
+                            return me->_file.close();
+                        });
                     });
                 });
             });
