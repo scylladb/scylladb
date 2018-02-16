@@ -26,6 +26,8 @@
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
 
+#include <boost/intrusive/parent_from_member.hpp>
+
 // This is MVCC implementation for mutation_partitions.
 //
 // It is assumed that mutation_partitions are stored in some sort of LSA-managed
@@ -144,6 +146,10 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
 
     friend class partition_version_ref;
 public:
+    static partition_version& container_of(mutation_partition& mp) {
+        return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
+    }
+
     using is_evictable = bool_class<class evictable_tag>;
 
     explicit partition_version(schema_ptr s) noexcept
@@ -158,6 +164,8 @@ public:
     const mutation_partition& partition() const { return _partition; }
 
     bool is_referenced() const { return _backref; }
+    // Returns true iff this version is directly referenced from a partition_entry (is its newset version).
+    bool is_referenced_from_entry() const;
     partition_version_ref& back_reference() { return *_backref; }
 
     size_t size_in_allocator(allocation_strategy& allocator) const;
@@ -221,6 +229,11 @@ public:
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
 };
+
+inline
+bool partition_version::is_referenced_from_entry() const {
+    return !prev() && _backref && !_backref->is_unique_owner();
+}
 
 class partition_entry;
 
@@ -347,6 +360,11 @@ public:
     partition_entry() = default;
     // Constructs a non-evictable entry
     explicit partition_entry(mutation_partition mp);
+    // Returns a reference to partition_entry containing given pv,
+    // assuming pv.is_referenced_from_entry().
+    static partition_entry& container_of(partition_version& pv) {
+        return *boost::intrusive::get_parent_from_member(&pv.back_reference(), &partition_entry::_version);
+    }
     // Constructs an evictable entry
     // Strong exception guarantees for the state of mp.
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);

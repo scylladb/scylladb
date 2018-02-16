@@ -27,6 +27,7 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/util/optimized_optional.hh>
@@ -881,6 +882,7 @@ public:
     mutation_partition(const mutation_partition&, const schema&, query::clustering_key_filter_ranges);
     mutation_partition(mutation_partition&&, const schema&, query::clustering_key_filter_ranges);
     ~mutation_partition();
+    static mutation_partition& container_of(rows_type&);
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
@@ -1068,3 +1070,8 @@ private:
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
     friend class counter_write_query_result_builder;
 };
+
+inline
+mutation_partition& mutation_partition::container_of(rows_type& rows) {
+    return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition::_rows);
+}

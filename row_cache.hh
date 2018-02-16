@@ -23,6 +23,7 @@
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/set.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include "core/memory.hh"
 #include <seastar/core/thread.hh>
@@ -120,6 +121,10 @@ public:
 
     cache_entry(cache_entry&&) noexcept;
     ~cache_entry();
+
+    static cache_entry& container_of(partition_entry& pe) {
+        return *boost::intrusive::get_parent_from_member(&pe, &cache_entry::_pe);
+    }
 
     bool is_evictable() { return _lru_link.is_linked(); }
     const dht::decorated_key& key() const { return _key; }
