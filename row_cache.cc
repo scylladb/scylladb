@@ -755,6 +755,7 @@ row_cache::~row_cache() {
             if (!p->is_dummy_entry()) {
                 _tracker.on_partition_erase();
             }
+            p->evict();
             deleter(p);
         });
     });
@@ -764,6 +765,7 @@ void row_cache::clear_now() noexcept {
     with_allocator(_tracker.allocator(), [this] {
         auto it = _partitions.erase_and_dispose(_partitions.begin(), partitions_end(), [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             _tracker.on_partition_erase();
+            p->evict();
             deleter(p);
         });
         _tracker.clear_continuity(*it);
@@ -1016,7 +1018,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,
             // which has to always be continuous.
             cache_entry& e = *cache_i;
-            e.partition().evict(); // FIXME: evict gradually
+            e.evict(); // FIXME: evict gradually
             upgrade_entry(e);
             e.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region());
         } else {
@@ -1048,6 +1050,7 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
         auto it = _partitions.erase_and_dispose(pos,
             [this, &dk, deleter = current_deleter<cache_entry>()](auto&& p) mutable {
                 _tracker.on_partition_erase();
+                p->evict();
                 deleter(p);
             });
         _tracker.clear_continuity(*it);
@@ -1088,6 +1091,7 @@ void row_cache::invalidate_unwrapped(const dht::partition_range& range) {
     with_allocator(_tracker.allocator(), [this, begin, end] {
         auto it = _partitions.erase_and_dispose(begin, end, [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             _tracker.on_partition_erase();
+            p->evict();
             deleter(p);
         });
         assert(it != _partitions.end());
@@ -1131,6 +1135,9 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
 }
 
 cache_entry::~cache_entry() {
+}
+
+void cache_entry::evict() noexcept {
     _pe.evict();
 }
 
@@ -1141,6 +1148,7 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
 void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
     auto it = row_cache::partitions_type::s_iterator_to(*this);
     std::next(it)->set_continuous(false);
+    evict(tracker);
     current_deleter<cache_entry>()(this);
     tracker.on_partition_eviction();
 }

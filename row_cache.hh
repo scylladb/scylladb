@@ -130,6 +130,9 @@ public:
     // Called when all contents have been evicted.
     // This object should unlink and destroy itself from the container.
     void on_evicted(cache_tracker&) noexcept;
+    // Evicts contents of this entry.
+    // The caller is still responsible for unlinking and destroying this entry.
+    void evict() noexcept;
     const dht::decorated_key& key() const { return _key; }
     dht::ring_position_view position() const {
         if (is_dummy_entry()) {
