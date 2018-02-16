@@ -1323,7 +1323,7 @@ future<> db::commitlog::segment_manager::shutdown() {
                 _shutdown = true; // no re-arm, no create new segments.
                 // Now first wait for periodic task to finish, then sync and close all
                 // segments, flushing out any remaining data.
-                return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true));
+                return _gate.close().then(std::bind(&segment_manager::sync_all_segments, this, true)).finally([permits = std::move(permits)] { });
             });
         }).finally([this] {
             discard_unused_segments();
