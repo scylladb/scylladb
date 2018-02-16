@@ -34,6 +34,7 @@
 #include "mutation_compactor.hh"
 #include "intrusive_set_external_comparator.hh"
 #include "counters.hh"
+#include "row_cache.hh"
 #include <seastar/core/execution_stage.hh>
 
 template<bool reversed>
@@ -283,7 +284,7 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p) {
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker) {
     _tombstone.apply(p._tombstone);
     _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
@@ -316,11 +317,11 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
 
 void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
     if (s.version() == p_schema.version()) {
-        apply_monotonically(s, std::move(p));
+        apply_monotonically(s, std::move(p), no_cache_tracker);
     } else {
         mutation_partition p2(p);
         p2.upgrade(p_schema, s);
-        apply_monotonically(s, std::move(p2));
+        apply_monotonically(s, std::move(p2), no_cache_tracker);
     }
 }
 
@@ -339,7 +340,7 @@ void mutation_partition::apply_weak(const schema& s, const mutation_partition& p
 }
 
 void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
-    apply_monotonically(s, std::move(p));
+    apply_monotonically(s, std::move(p), no_cache_tracker);
 }
 
 tombstone
@@ -2121,7 +2122,7 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
     return result;
 }
 
-void mutation_partition::evict() noexcept {
+void mutation_partition::evict(cache_tracker& tracker) noexcept {
     if (!_rows.empty()) {
         // We need to keep the last entry to mark the range containing all evicted rows as discontinuous.
         // No rows would mean it is continuous.

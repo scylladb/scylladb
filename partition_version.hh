@@ -237,6 +237,9 @@ bool partition_version::is_referenced_from_entry() const {
 }
 
 class partition_entry;
+class cache_tracker;
+
+static constexpr cache_tracker* no_cache_tracker = nullptr;
 
 class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot> {
 public:
@@ -277,14 +280,16 @@ private:
     partition_entry* _entry;
     phase_type _phase;
     logalloc::region& _region;
+    cache_tracker* _tracker;
 
     friend class partition_entry;
 public:
     explicit partition_snapshot(schema_ptr s,
                                 logalloc::region& region,
                                 partition_entry* entry,
+                                cache_tracker* tracker, // non-null for evictable snapshots
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _tracker(tracker) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -317,6 +322,7 @@ public:
 
     const schema_ptr& schema() const { return _schema; }
     logalloc::region& region() const { return _region; }
+    cache_tracker* tracker() const { return _tracker; }
 
     tombstone partition_tombstone() const;
     ::static_row static_row(bool digest_requested) const;
@@ -339,6 +345,16 @@ public:
 // are non-evictable have all their elements non-evictable and fully continuous.
 // Partition snapshots inherit evictability of the entry, which remains invariant
 // for a snapshot.
+//
+// After evictable partition_entry is linked into a cache_tracker, that cache_tracker
+// must always be passed to methods which accept a pointer to a cache_tracker.
+// Also, evict() must be called before the entry is unlinked from a cache_tracker.
+// For non-evictable entries, no_cache_tracker should be passed to methods which accept a cache_tracker.
+//
+// As long as an entry is linked to a cache_tracker, it must belong to a cache_entry.
+// partition_version objects may be linked with a cache_tracker and detached from a cache_entry
+// if owned by a snapshot.
+//
 class partition_entry {
     partition_snapshot* _snapshot = nullptr;
     partition_version_ref _version;
@@ -353,7 +369,7 @@ private:
 
     void set_version(partition_version*);
 
-    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&);
+    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&, cache_tracker&);
 public:
     struct evictable_tag {};
     class rows_iterator;
@@ -392,7 +408,7 @@ public:
 
     // Removes all data marking affected ranges as discontinuous.
     // Includes versions referenced by snapshots.
-    void evict() noexcept;
+    void evict(cache_tracker&) noexcept;
 
     partition_version_ref& version() {
         return _version;
@@ -429,17 +445,18 @@ public:
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&);
+    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&, cache_tracker&);
 
-    partition_version& add_version(const schema& s);
+    // If this entry is evictable, cache_tracker must be provided.
+    partition_version& add_version(const schema& s, cache_tracker*);
 
     // Ensures that the latest version can be populated with data from given phase
     // by inserting a new version if necessary.
     // Doesn't affect value or continuity of the partition.
     // Returns a reference to the new latest version.
-    partition_version& open_version(const schema& s, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
+    partition_version& open_version(const schema& s, cache_tracker* t, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
         if (_snapshot && _snapshot->_phase != phase) {
-            return add_version(s);
+            return add_version(s, t);
         }
         return *_version;
     }
@@ -449,10 +466,10 @@ public:
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
-    void upgrade(schema_ptr from, schema_ptr to);
+    void upgrade(schema_ptr from, schema_ptr to, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema,
+    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema, cache_tracker*,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_entry& e);

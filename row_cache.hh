@@ -132,7 +132,7 @@ public:
     void on_evicted(cache_tracker&) noexcept;
     // Evicts contents of this entry.
     // The caller is still responsible for unlinking and destroying this entry.
-    void evict() noexcept;
+    void evict(cache_tracker&) noexcept;
     const dht::decorated_key& key() const { return _key; }
     dht::ring_position_view position() const {
         if (is_dummy_entry()) {

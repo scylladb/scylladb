@@ -921,7 +921,7 @@ public:
     // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
     bool check_continuity(const schema&, const position_range&, is_continuous) const;
     // Removes all data, marking affected ranges as discontinuous.
-    void evict() noexcept;
+    void evict(cache_tracker&) noexcept;
     // Applies mutation_fragment.
     // The fragment must be goverened by the same schema as this object.
     void apply(const schema& s, const mutation_fragment&);
@@ -953,10 +953,13 @@ public:
     //
     // Monotonic exception guarantees. In case of exception the sum of p and this remains the same as before the exception.
     // This instance and p are governed by the same schema.
-    void apply_monotonically(const schema& s, mutation_partition&& p);
+    //
+    // Must be provided with a pointer to the cache_tracker, which owns both this and p.
+    void apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*);
     void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
 
     // Weak exception guarantees.
+    // Assumes this and p are not owned by a cache_tracker.
     void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema);
     void apply_weak(const schema& s, mutation_partition&&);
     void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema);

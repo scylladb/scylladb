@@ -527,7 +527,7 @@ public:
 };
 
 lw_shared_ptr<partition_snapshot> memtable_entry::snapshot(memtable& mtbl) {
-    return _pe.read(mtbl.region(), _schema);
+    return _pe.read(mtbl.region(), _schema, no_cache_tracker);
 }
 
 flat_mutation_reader
@@ -674,7 +674,7 @@ void memtable::upgrade_entry(memtable_entry& e) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e.partition().upgrade(e._schema, _schema);
+            e.partition().upgrade(e._schema, _schema, no_cache_tracker);
             e._schema = _schema;
           });
         });
