@@ -363,6 +363,8 @@ static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
                 auto dst = buf.get();
                 auto size = buf.size();
                 return f.dma_write(0, dst, size).then([buf = std::move(buf)](size_t) {});
+            }).finally([&f] {
+                return f.close();
             });
         });
     });
