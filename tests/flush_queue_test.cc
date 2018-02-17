@@ -81,7 +81,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
             BOOST_CHECK_EQUAL(e->result.size(), e->promises.size());
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
         }).finally([e] {
-            return e->queue.close();
+            return e->queue.close().finally([e] { });
         });
     });
 }
@@ -128,7 +128,7 @@ SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
             BOOST_CHECK_EQUAL(e->result.size(), e->n);
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
         }).finally([e] {
-            return e->queue.close();
+            return e->queue.close().finally([e] { });
         });
     });
 }
@@ -155,6 +155,8 @@ static future<> test_propagation(bool propagate, Func&& func, Post&& post, Then&
     return f.finally([sem, queue, want_except_in_run, want_except_in_wait, xr, xw] {
         BOOST_CHECK_EQUAL(want_except_in_run, *xr);
         BOOST_CHECK_EQUAL(want_except_in_wait, *xw);
+    }).finally([queue] {
+        return queue->close().finally([queue] { });
     });
 }
 
