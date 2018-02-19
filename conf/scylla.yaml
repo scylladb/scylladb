@@ -107,13 +107,6 @@ native_transport_port: 9042
 # keeping native_transport_port unencrypted.
 #native_transport_port_ssl: 9142
 
-# Throttles all outbound streaming file transfers on this node to the
-# given total throughput in Mbps. This is necessary because Scylla does
-# mostly sequential IO when streaming data during bootstrap or repair, which
-# can lead to saturating the network connection and degrading rpc performance.
-# When unset, the default is 200 Mbps or 25 MB/s.
-# stream_throughput_outbound_megabits_per_sec: 200
-
 # How long the coordinator should wait for read operations to complete
 read_request_timeout_in_ms: 5000
 
