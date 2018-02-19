@@ -1395,14 +1395,14 @@ SEASTAR_TEST_CASE(test_ttl) {
                 {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", make_my_list_type()}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql(
-                "update cf using ttl 1000 set r1 = 'value1_1', r3 = ['a', 'b', 'c'] where p1 = 'key1';").discard_result();
+                "update cf using ttl 100000 set r1 = 'value1_1', r3 = ['a', 'b', 'c'] where p1 = 'key1';").discard_result();
         }).then([&e] {
             return e.execute_cql(
-                "update cf using ttl 1 set r1 = 'value1_3', r3 = ['a', 'b', 'c'] where p1 = 'key3';").discard_result();
+                "update cf using ttl 100 set r1 = 'value1_3', r3 = ['a', 'b', 'c'] where p1 = 'key3';").discard_result();
         }).then([&e] {
-            return e.execute_cql("update cf using ttl 1 set r3[1] = 'b' where p1 = 'key1';").discard_result();
+            return e.execute_cql("update cf using ttl 100 set r3[1] = 'b' where p1 = 'key1';").discard_result();
         }).then([&e] {
-            return e.execute_cql("update cf using ttl 1 set r1 = 'value1_2' where p1 = 'key2';").discard_result();
+            return e.execute_cql("update cf using ttl 100 set r1 = 'value1_2' where p1 = 'key2';").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, r2) values ('key2', 'value2_2');").discard_result();
         }).then([&e, my_list_type] {
@@ -1420,7 +1420,7 @@ SEASTAR_TEST_CASE(test_ttl) {
                 });
             });
         }).then([&e] {
-            forward_jump_clocks(2s);
+            forward_jump_clocks(200s);
             return e.execute_cql("select r1, r2 from cf;").then([](auto msg) {
                 assert_that(msg).is_rows().with_size(2)
                     .with_row({{}, utf8_type->decompose(sstring("value2_2"))})
@@ -1448,7 +1448,7 @@ SEASTAR_TEST_CASE(test_ttl) {
         }).then([&e] {
             return e.execute_cql("create table cf2 (p1 text PRIMARY KEY, r1 text, r2 text);").discard_result();
         }).then([&e] {
-            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 500;").discard_result();
         }).then([&e] {
             return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
                 assert_that(msg).is_rows().with_rows({
@@ -1456,7 +1456,7 @@ SEASTAR_TEST_CASE(test_ttl) {
                 });
             });
         }).then([&e] {
-            forward_jump_clocks(6s);
+            forward_jump_clocks(600s);
             return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
                 assert_that(msg).is_rows().with_rows({ });
             });
@@ -1471,7 +1471,7 @@ SEASTAR_TEST_CASE(test_ttl) {
                 });
             });
         }).then([&e] {
-            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 500;").discard_result();
         }).then([&e] {
             return e.execute_cql("update cf2 set r1 = null where p1 = 'foo';").discard_result();
         }).then([&e] {
@@ -1481,16 +1481,16 @@ SEASTAR_TEST_CASE(test_ttl) {
                 });
             });
         }).then([&e] {
-            forward_jump_clocks(6s);
+            forward_jump_clocks(600s);
             return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
                 assert_that(msg).is_rows().with_rows({ });
             });
         }).then([&e] {
-            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 500;").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf2 (p1, r2) values ('foo', null);").discard_result();
         }).then([&e] {
-            forward_jump_clocks(6s);
+            forward_jump_clocks(600s);
             return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
                 assert_that(msg).is_rows().with_rows({
                     {utf8_type->decompose(sstring("foo")), { }}
