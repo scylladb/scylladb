@@ -63,6 +63,9 @@ enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 // different CPU (cpu 0) and that might be a deferring operation.
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
 
+// returns a vector with the ids of the active repairs
+future<std::vector<int>> get_active_repairs(seastar::sharded<database>& db);
+
 // repair_shutdown() stops all ongoing repairs started on this node (and
 // prevents any further repairs from being started). It returns a future
 // saying when all repairs have stopped, and attempts to stop them as
