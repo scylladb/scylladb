@@ -55,6 +55,9 @@ public:
             }
         }
     }
+    virtual future<> close() override {
+        return _ds.close();
+    }
 };
 
 input_stream<char> make_prepended_input_stream(temporary_buffer<char>&& buf, data_source&& ds) {
