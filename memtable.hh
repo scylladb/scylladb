@@ -180,7 +180,8 @@ private:
                 if (col.is_atomic()) {
                     update(item.as_atomic_cell());
                 } else {
-                    auto mview = collection_type_impl::deserialize_mutation_form(item.as_collection_mutation());
+                    auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
+                    auto mview = ctype->deserialize_mutation_form(item.as_collection_mutation());
                     update(mview.tomb);
                     for (auto& entry : mview.cells) {
                         update(entry.second);
