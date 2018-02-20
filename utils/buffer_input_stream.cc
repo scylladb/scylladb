@@ -37,7 +37,7 @@ public:
     virtual future<temporary_buffer<char>> get() override {
         return make_ready_future<temporary_buffer<char>>(std::move(_buf));
     }
-    virtual future<temporary_buffer<char>> skip(uint64_t n) {
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         auto min = std::min(n, _buf.size());
         _buf.trim_front(min);
         return make_ready_future<temporary_buffer<char>>(std::move(_buf));

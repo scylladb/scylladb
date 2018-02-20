@@ -41,7 +41,7 @@ public:
         }
         return _ds.get();
     }
-    virtual future<temporary_buffer<char>> skip(uint64_t n) {
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
         if (n < _buf.size()) {
             _buf.trim_front(n);
             return make_ready_future<temporary_buffer<char>>(std::move(_buf));
