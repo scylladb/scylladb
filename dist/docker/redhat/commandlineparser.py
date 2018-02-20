@@ -14,4 +14,5 @@ def parse():
     parser.add_argument('--broadcast-address', default=None, dest='broadcastAddress')
     parser.add_argument('--broadcast-rpc-address', default=None, dest='broadcastRpcAddress')
     parser.add_argument('--api-address', default=None, dest='apiAddress')
+    parser.add_argument('--disable-version-check', default=False, action='store_true', dest='disable_housekeeping', help="Disable version check")
     return parser.parse_args()
