@@ -1036,7 +1036,7 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
     // provided via an upper layer
     if (def.is_atomic()) {
         if (def.is_counter()) {
-            counter_cell_view::apply_reversibly(dst.cell, src); // FIXME: Optimize
+            counter_cell_view::apply(dst.cell, src); // FIXME: Optimize
             dst.hash = { };
         } else if (compare_atomic_cell_for_merge(dst.cell.as_atomic_cell(), src.as_atomic_cell()) < 0) {
             std::swap(dst.cell, src);

@@ -118,38 +118,10 @@ static bool apply_in_place(atomic_cell_or_collection& dst, atomic_cell_or_collec
     auto src_ts = src_ccmv.timestamp();
     dst_ccmv.set_timestamp(std::max(dst_ts, src_ts));
     src_ccmv.set_timestamp(dst_ts);
-    src.as_mutable_atomic_cell().set_counter_in_place_revert(true);
     return true;
 }
 
-static void revert_in_place_apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
-{
-    assert(dst.can_use_mutable_view() && src.can_use_mutable_view());
-    auto dst_ccmv = counter_cell_mutable_view(dst.as_mutable_atomic_cell());
-    auto src_ccmv = counter_cell_mutable_view(src.as_mutable_atomic_cell());
-    auto dst_shards = dst_ccmv.shards();
-    auto src_shards = src_ccmv.shards();
-
-    auto dst_it = dst_shards.begin();
-    auto src_it = src_shards.begin();
-
-    while (src_it != src_shards.end()) {
-        while (dst_it != dst_shards.end() && dst_it->id() < src_it->id()) {
-            ++dst_it;
-        }
-        assert(dst_it != dst_shards.end() && dst_it->id() == src_it->id());
-        dst_it->swap_value_and_clock(*src_it);
-        ++src_it;
-    }
-
-    auto dst_ts = dst_ccmv.timestamp();
-    auto src_ts = src_ccmv.timestamp();
-    dst_ccmv.set_timestamp(src_ts);
-    src_ccmv.set_timestamp(dst_ts);
-    src.as_mutable_atomic_cell().set_counter_in_place_revert(false);
-}
-
-bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
+void counter_cell_view::apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
 {
     auto dst_ac = dst.as_atomic_cell();
     auto src_ac = src.as_atomic_cell();
@@ -157,9 +129,8 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
     if (!dst_ac.is_live() || !src_ac.is_live()) {
         if (dst_ac.is_live() || (!src_ac.is_live() && compare_atomic_cell_for_merge(dst_ac, src_ac) < 0)) {
             std::swap(dst, src);
-            return true;
         }
-        return false;
+        return;
     }
 
     if (dst_ac.is_counter_update() && src_ac.is_counter_update()) {
@@ -167,7 +138,7 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
         auto dst_v = dst_ac.counter_update_value();
         dst = atomic_cell::make_live_counter_update(std::max(dst_ac.timestamp(), src_ac.timestamp()),
                                                     src_v + dst_v);
-        return true;
+        return;
     }
 
     assert(!dst_ac.is_counter_update());
@@ -176,11 +147,10 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
     if (counter_cell_view(dst_ac).shard_count() >= counter_cell_view(src_ac).shard_count()
         && dst.can_use_mutable_view() && src.can_use_mutable_view()) {
         if (apply_in_place(dst, src)) {
-            return true;
+            return;
         }
     }
 
-    src.as_mutable_atomic_cell().set_counter_in_place_revert(false);
     auto dst_shards = counter_cell_view(dst_ac).shards();
     auto src_shards = counter_cell_view(src_ac).shards();
 
@@ -192,21 +162,6 @@ bool counter_cell_view::apply_reversibly(atomic_cell_or_collection& dst, atomic_
 
     auto cell = result.build(std::max(dst_ac.timestamp(), src_ac.timestamp()));
     src = std::exchange(dst, atomic_cell_or_collection(cell));
-    return true;
-}
-
-void counter_cell_view::revert_apply(atomic_cell_or_collection& dst, atomic_cell_or_collection& src)
-{
-    if (dst.as_atomic_cell().is_counter_update()) {
-        auto src_v = src.as_atomic_cell().counter_update_value();
-        auto dst_v = dst.as_atomic_cell().counter_update_value();
-        dst = atomic_cell::make_live(dst.as_atomic_cell().timestamp(),
-                                     long_type->decompose(dst_v - src_v));
-    } else if (src.as_atomic_cell().is_counter_in_place_revert_set()) {
-        revert_in_place_apply(dst, src);
-    } else {
-        std::swap(dst, src);
-    }
 }
 
 stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
