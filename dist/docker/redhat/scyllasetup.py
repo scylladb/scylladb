@@ -15,6 +15,7 @@ class ScyllaSetup:
         self._smp = arguments.smp
         self._memory = arguments.memory
         self._overprovisioned = arguments.overprovisioned
+        self._housekeeping = not arguments.disable_housekeeping
         self._experimental = arguments.experimental
 
     def _run(self, *args, **kwargs):
@@ -37,6 +38,14 @@ class ScyllaSetup:
         hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
         with open("%s/.cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
+
+    def set_housekeeping(self):
+        with open("/etc/scylla.d/housekeeping.cfg", "w") as f:
+            f.write("[housekeeping]\ncheck-version: ")
+            if self._housekeeping:
+                f.write("True\n")
+            else:
+                f.write("False\n")
 
     def arguments(self):
         args = []

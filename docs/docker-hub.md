@@ -208,6 +208,12 @@ $ docker run --name some-scylla -d scylladb/scylla --experimental 1
 
 **Since: 2.0**
 
+### `--disable-version-check`
+
+The `--disable-version-check` disable the version validation check.
+
+**Since: 2.2**
+
 # User Feedback
 
 ## Issues
