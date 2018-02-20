@@ -179,6 +179,7 @@ private:
     mutable stdx::optional<dht::token> _token;
     uint64_t _position;
     stdx::optional<promoted_index_blocks_reader> _reader;
+    bool _reader_closed = false;
     uint32_t _promoted_index_size;
     stdx::optional<deletion_time> _del_time;
 
@@ -253,6 +254,14 @@ public:
     uint32_t get_total_pi_blocks_count() const { return _reader ? _reader->get_total_num_blocks() : 0; }
     uint32_t get_read_pi_blocks_count() const { return _reader ? _reader->get_read_num_blocks() : 0; }
     promoted_index_blocks* get_pi_blocks() { return _reader ? &_reader->get_pi_blocks() : nullptr; }
+    future<> close_pi_stream() {
+        if (_reader && !_reader_closed) {
+            _reader_closed = true;
+            return _reader->close();
+        }
+
+        return make_ready_future<>();
+    }
 };
 
 }

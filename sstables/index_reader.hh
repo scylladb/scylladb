@@ -228,6 +228,15 @@ public:
     }
 };
 
+inline static
+future<> close_index_list(shared_index_lists::list_ptr& list) {
+    return parallel_for_each(std::begin(*list), std::end(*list), [] (index_entry& ie) {
+        return ie.close_pi_stream();
+    }).finally([&list] {
+        list = {};
+    });
+}
+
 // Provides access to sstable indexes.
 //
 // Maintains logical cursor to sstable elements (partitions, cells).
@@ -695,12 +704,15 @@ public:
     }
 
     future<> close() {
-        // Explicitly reset list_ptrs so that they don't keep the index_lists cache alive.
+        // We explicitly reset list_ptrs inside close_index_list so that they don't keep the index_lists cache alive.
         // sstable_mutation_reader closes index_readers asynchronously from its destructor but it also
         // holds the index_lists object and it should have no external pointers to be cleaned up properly
-        _current_list = {};
-        _prev_list = {};
-        return close_reader();
+        auto f = _prev_list ? close_index_list(_prev_list) : make_ready_future<>();
+        return f.then([this] {
+            return _current_list ? close_index_list(_current_list) : make_ready_future<>();
+        }).then([this] {
+            return close_reader();
+        });
     }
 };
 

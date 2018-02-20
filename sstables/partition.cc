@@ -760,7 +760,7 @@ std::unique_ptr<index_reader> get_index_reader(shared_sstable sst,
 class sstable_mutation_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer;
     shared_sstable _sst;
-    shared_index_lists _index_lists;
+    lw_shared_ptr<shared_index_lists> _index_lists;
     mp_row_consumer _consumer;
     bool _index_in_current_partition = false; // Whether _lh_index is in current partition
     bool _will_likely_slice = false;
@@ -783,6 +783,7 @@ public:
          read_monitor& mon)
         : impl(std::move(schema))
         , _sst(std::move(sst))
+        , _index_lists(make_lw_shared<shared_index_lists>())
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
             _context = _sst->data_consume_rows(_consumer);
@@ -802,10 +803,11 @@ public:
          read_monitor& mon)
         : impl(std::move(schema))
         , _sst(std::move(sst))
+        , _index_lists(make_lw_shared<shared_index_lists>())
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
-            _lh_index = get_index_reader(_sst, pc, _index_lists); // lh = left hand
-            _rh_index = get_index_reader(_sst, pc, _index_lists);
+            _lh_index = get_index_reader(_sst, pc, *_index_lists); // lh = left hand
+            _rh_index = get_index_reader(_sst, pc, *_index_lists);
             auto f = seastar::when_all_succeed(_lh_index->advance_to_start(pr), _rh_index->advance_to_end(pr));
             return f.then([this, &pc, &slice, fwd_mr] () mutable {
                 sstable::disk_read_range drr{_lh_index->data_file_position(),
@@ -831,10 +833,11 @@ public:
                             read_monitor& mon)
         : impl(std::move(schema))
         , _sst(std::move(sst))
+        , _index_lists(make_lw_shared<shared_index_lists>())
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
-            _lh_index = get_index_reader(_sst, pc, _index_lists);
+            _lh_index = get_index_reader(_sst, pc, *_index_lists);
             auto f = _lh_index->advance_and_check_if_present(key);
             return f.then([this, &slice, &pc, key] (bool present) mutable {
                 if (!present) {
@@ -864,10 +867,10 @@ public:
     sstable_mutation_reader(const sstable_mutation_reader&) = delete;
     ~sstable_mutation_reader() {
         _monitor.on_read_completed();
-        auto close = [] (std::unique_ptr<index_reader>& ptr) {
+        auto close = [this] (std::unique_ptr<index_reader>& ptr) {
             if (ptr) {
                 auto f = ptr->close();
-                f.handle_exception([index = std::move(ptr)] (auto&&) { });
+                f.handle_exception([index = std::move(ptr), index_lists = _index_lists] (auto&&) { });
             }
         };
         close(_lh_index);
@@ -880,7 +883,7 @@ private:
     }
     index_reader& lh_index() {
         if (!_lh_index) {
-            _lh_index = get_index_reader(_sst, _consumer.io_priority(), _index_lists);
+            _lh_index = get_index_reader(_sst, _consumer.io_priority(), *_index_lists);
         }
         return *_lh_index;
     }
