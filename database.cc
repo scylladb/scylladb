@@ -1612,8 +1612,8 @@ inline bool column_family::manifest_json_filter(const lister::path&, const direc
 
 // TODO: possibly move it to seastar
 template <typename Service, typename PtrType, typename Func>
-static future<> invoke_all_with_ptr(distributed<Service>& s, PtrType ptr, Func&& func) {
-    return parallel_for_each(smp::all_cpus(), [&s, &func, ptr] (unsigned id) {
+static future<> invoke_shards_with_ptr(std::vector<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
+    return parallel_for_each(std::move(shards), [&s, &func, ptr] (shard_id id) {
         return s.invoke_on(id, [func, foreign = make_foreign(ptr)] (Service& s) mutable {
             return func(s, std::move(foreign));
         });
@@ -1637,9 +1637,9 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
 
             auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format, pc);
             return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
-                // shared components loaded, now opening sstable in all shards with shared components
+                // shared components loaded, now opening sstable in all shards that own it with shared components
                 return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
-                    return invoke_all_with_ptr(db, std::move(info.components),
+                    return invoke_shards_with_ptr(info.owners, db, std::move(info.components),
                             [owners = info.owners, data = info.data.dup(), index = info.index.dup(), comps, func] (database& db, auto components) {
                         auto& cf = db.find_column_family(comps.ks, comps.cf);
                         return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
