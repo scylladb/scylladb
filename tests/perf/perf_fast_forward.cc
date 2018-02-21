@@ -20,13 +20,18 @@
  */
 
 #include <boost/algorithm/string/replace.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
+#include <boost/range/adaptors.hpp>
+#include <boost/filesystem.hpp>
+#include <json/json.h>
 #include "tests/cql_test_env.hh"
 #include "tests/perf/perf.hh"
 #include "core/app-template.hh"
 #include "schema_builder.hh"
 #include "database.hh"
+#include "release.hh"
 #include "db/config.hh"
 #include "partition_slice_builder.hh"
 #include <seastar/core/reactor.hh>
@@ -35,6 +40,7 @@
 #include "sstables/shared_index_lists.hh"
 
 using namespace std::chrono_literals;
+namespace fs=boost::filesystem;
 using int_range = nonwrapping_range<int>;
 
 reactor::io_stats s;
@@ -190,6 +196,150 @@ public:
     }
 };
 
+static const std::string output_dir {"perf_fast_forward_output/"};
+
+std::string get_run_date_time() {
+    using namespace boost::posix_time;
+    const ptime current_time = second_clock::local_time();
+    auto facet = std::make_unique<time_facet>();
+    facet->format("%Y-%M-%d %H:%M:%S");
+    std::stringstream stream;
+    stream.imbue(std::locale(std::locale::classic(), facet.release()));
+    stream << current_time;
+    return stream.str();
+}
+
+class json_output_writer final
+    : public output_writer {
+private:
+    Json::Value _root;
+    Json::Value _tg_properties;
+    std::string _current_dir;
+    stdx::optional<std::pair<sstring, sstring>> _static_param; // .first = name, .second = description
+    std::unordered_map<std::string, size_t> _test_count;
+    struct metadata {
+        std::string version;
+        std::string date;
+        std::string commit_id;
+        std::string run_date_time;
+    };
+    metadata _metadata;
+
+    Json::Value get_json_metadata() {
+        Json::Value versions{Json::objectValue};
+        Json::Value scylla_server{Json::objectValue};
+        scylla_server["version"] = _metadata.version;
+        scylla_server["date"] = _metadata.date;
+        scylla_server["commit_id"] = _metadata.commit_id;
+        scylla_server["run_date_time"] = _metadata.run_date_time;
+        versions["scylla-server"] = scylla_server;
+        return versions;
+    }
+public:
+    json_output_writer() {
+        fs::create_directory(output_dir);
+
+        // scylla_version() string format is "<version>-<release"
+        boost::container::static_vector<std::string, 2> version_parts;
+        auto version = scylla_version();
+        boost::algorithm::split(version_parts, version, [](char c) { return c == '-';});
+
+        // release format is "<scylla-build>.<date>.<git-commit-hash>"
+        boost::container::static_vector<std::string, 3> release_parts;
+        boost::algorithm::split(release_parts, version_parts[1], [](char c) { return c == '.';});
+        _metadata.version = version_parts[0];
+        _metadata.date = release_parts[1];
+        _metadata.commit_id = release_parts[2];
+        _metadata.run_date_time = get_run_date_time();
+    }
+
+    void write_test_group(const test_group& group, bool running) override {
+        _static_param = stdx::nullopt;
+        _test_count.clear();
+        _root = Json::Value{Json::objectValue};
+        _tg_properties = Json::Value{Json::objectValue};
+        _current_dir = output_dir + group.name + "/";
+        fs::create_directory(_current_dir);
+        _tg_properties["name"] = group.name;
+        _tg_properties["message"] = group.message;
+        _tg_properties["partition_type"] = group.partition_type == test_group::large_partition ? "large" : "small";
+        _tg_properties["needs_cache"] = (group.needs_cache == test_group::requires_cache::yes);
+    }
+
+    void write_test_names(const output_items& param_names, const output_items& stats_names) override {
+    }
+
+    void write_test_static_param(sstring name, sstring description) override {
+        _static_param = std::pair(name, description);
+    }
+
+    template <std::size_t... Is>
+    void write_test_values_impl(Json::Value& stats_value,
+            const output_items& stats_names, const stats_values& values, std::index_sequence<Is...>) {
+        ((stats_value[stats_names.at(Is).value] = std::get<Is>(values)), ...);
+    }
+    template <typename... Ts>
+    void write_test_values_impl(Json::Value& stats_value,
+            const output_items& stats_names, const std::tuple<Ts...>& values) {
+        write_test_values_impl(stats_value, stats_names, values, std::index_sequence_for<Ts...>{});
+    }
+
+    void write_test_values(const sstring_vec& params, const stats_values& values,
+            const output_items& param_names, const output_items& stats_names) override {
+        Json::Value root{Json::objectValue};
+        root["test_group_properties"] = _tg_properties;
+        Json::Value params_value{Json::objectValue};
+        for (size_t i = 0; i < param_names.size(); ++i) {
+            const sstring& param_name = param_names.at(i).value;
+            if (!param_name.empty()) {
+                params_value[param_names.at(i).value.c_str()] = params.at(i).c_str();
+            }
+        }
+        if (_static_param) {
+            params_value[_static_param->first.c_str()] = _static_param->second.c_str();
+        }
+        std::string all_params_names = boost::algorithm::join(
+                param_names
+                    | boost::adaptors::transformed([](const output_item& item) { return item.value; })
+                    | boost::adaptors::filtered([](const sstring& s) { return !s.empty(); }),
+                ",");
+        std::string all_params_values = boost::algorithm::join(
+                params
+                    | boost::adaptors::indexed()
+                    | boost::adaptors::filtered([&param_names](const boost::range::index_value<const sstring&>& idx) {
+                        return !param_names[idx.index()].value.empty(); })
+                    | boost::adaptors::transformed([](const boost::range::index_value<const sstring&>& idx) { return idx.value(); }),
+                ",");
+        if (_static_param) {
+            all_params_names += "," + _static_param->first;
+            all_params_values += "," + _static_param->first;
+        }
+
+        // Increase the test run count before we append it to all_params_values
+        const size_t test_run_count = ++_test_count[all_params_values];
+
+        const std::string test_run_count_name = "test_run_count";
+        params_value[test_run_count_name.c_str()] = test_run_count;
+        params_value[all_params_names + "," + test_run_count_name] = all_params_values + sprint(",%d", test_run_count);
+
+        Json::Value stats_value{Json::objectValue};
+        for (size_t i = 0; i < stats_names.size(); ++i) {
+            write_test_values_impl(stats_value, stats_names, values);
+        }
+        Json::Value result_value{Json::objectValue};
+        result_value["parameters"] = params_value;
+        result_value["stats"] = stats_value;
+        root["results"] = result_value;
+
+        root["versions"] = get_json_metadata();
+
+        std::string filename = boost::algorithm::replace_all_copy(all_params_values, ",", "-") +
+                "." + std::to_string(test_run_count) + ".json";
+        std::ofstream result_file{(_current_dir + filename).c_str()};
+        result_file << root;
+    }
+};
+
 class output_manager {
 private:
     std::unique_ptr<output_writer> _writer;
@@ -197,8 +347,14 @@ private:
     output_items _stats_names;
 public:
 
-    output_manager() {
-        _writer = std::make_unique<text_output_writer>();
+    output_manager(sstring format) {
+        if (format == "text") {
+            _writer = std::make_unique<text_output_writer>();
+        } else if (format == "json") {
+            _writer = std::make_unique<json_output_writer>();
+        } else {
+            throw std::runtime_error(sprint("Unsupported output format: %s", format));
+        }
     }
 
     void add_test_group(const test_group& group, bool running) {
@@ -218,7 +374,6 @@ public:
     void add_test_static_param(sstring name, sstring description) {
         _writer->write_test_static_param(name, description);
     }
-
 };
 
 struct test_result {
@@ -1076,6 +1231,7 @@ int main(int argc, char** argv) {
         ("rows", bpo::value<int>()->default_value(1000000), "Number of CQL rows in a partition. Relevant only for population.")
         ("value-size", bpo::value<int>()->default_value(100), "Size of value stored in a cell. Relevant only for population.")
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
+        ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ;
 
     return app.run(argc, argv, [] {
@@ -1132,7 +1288,7 @@ int main(int argc, char** argv) {
 
                     std::cout << "Config: rows: " << cfg.n_rows << ", value size: " << cfg.value_size << "\n";
 
-                    output_mgr = std::make_unique<output_manager>();
+                    output_mgr = std::make_unique<output_manager>(app.configuration()["output-format"].as<sstring>());
 
                     sleep(1s).get(); // wait for system table flushes to quiesce
 
@@ -1173,6 +1329,7 @@ int main(int argc, char** argv) {
 
                     column_family& cf2 = db.find_column_family("ks", "small_part");
                     run_tests(cf2, test_group::type::small_partition);
+
                 }
             });
         }, db_cfg).then([] {
