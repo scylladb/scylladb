@@ -458,6 +458,12 @@ public:
         forward_buffer_to(pr.start());
         return _reader->fast_forward_to(std::move(pr), timeout);
     }
+    virtual size_t buffer_size() const override {
+        if (_reader) {
+            return flat_mutation_reader::impl::buffer_size() + _reader->buffer_size();
+        }
+        return flat_mutation_reader::impl::buffer_size();
+    }
 };
 
 void cache_tracker::clear_continuity(cache_entry& ce) {
@@ -746,6 +752,12 @@ public:
             _end_of_stream = true;
             return make_ready_future<>();
         }
+    }
+    virtual size_t buffer_size() const override {
+        if (_reader) {
+            return flat_mutation_reader::impl::buffer_size() + _reader->buffer_size();
+        }
+        return flat_mutation_reader::impl::buffer_size();
     }
 };
 

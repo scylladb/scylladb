@@ -124,6 +124,12 @@ public:
         }
         return make_ready_future<>();
     }
+    virtual size_t buffer_size() const override {
+        if (_partition_reader) {
+            return flat_mutation_reader::impl::buffer_size() + _partition_reader->buffer_size();
+        }
+        return flat_mutation_reader::impl::buffer_size();
+    }
     /**
      * Returns the primary ranges for the local node.
      * Used for testing as well.
