@@ -73,6 +73,26 @@ public:
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) = 0;
+
+    class only_view_notifications;
+};
+
+class migration_listener::only_view_notifications : public migration_listener {
+    virtual void on_create_keyspace(const sstring& ks_name) { }
+    virtual void on_create_column_family(const sstring& ks_name, const sstring& cf_name) { }
+    virtual void on_create_user_type(const sstring& ks_name, const sstring& type_name) { }
+    virtual void on_create_function(const sstring& ks_name, const sstring& function_name) { }
+    virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) { }
+    virtual void on_update_keyspace(const sstring& ks_name) { }
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) { }
+    virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) { }
+    virtual void on_update_function(const sstring& ks_name, const sstring& function_name) { }
+    virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) { }
+    virtual void on_drop_keyspace(const sstring& ks_name) { }
+    virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) { }
+    virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) { }
+    virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) { }
+    virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) { }
 };
 
 }
