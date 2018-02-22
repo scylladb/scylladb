@@ -365,7 +365,7 @@ public:
             });
 
             // Create the testing user.
-            {
+            try {
                 auth::role_config config;
                 config.is_superuser = true;
                 config.can_login = true;
@@ -375,6 +375,8 @@ public:
                         testing_superuser,
                         config,
                         auth::authentication_options()).get0();
+            } catch (const auth::role_already_exists&) {
+                // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
             single_node_cql_env env(db, auth_service);
