@@ -1804,6 +1804,85 @@ mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estim
     return m_to_apply;
 }
 
+future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token) {
+    sstring req = sprint("INSERT INTO system.%s (keyspace_name, view_name, generation_number, cpu_id, first_token) VALUES (?, ?, ?, ?, ?)",
+            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
+    return execute_cql(
+            std::move(req),
+            std::move(ks_name),
+            std::move(view_name),
+            0,
+            int32_t(engine().cpu_id()),
+            dht::global_partitioner().to_sstring(token)).discard_result();
+}
+
+future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
+    sstring req = sprint("INSERT INTO system.%s (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
+            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
+    return execute_cql(
+            std::move(req),
+            std::move(ks_name),
+            std::move(view_name),
+            dht::global_partitioner().to_sstring(token),
+            int32_t(engine().cpu_id())).discard_result();
+}
+
+future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name) {
+    return execute_cql(
+            sprint("DELETE FROM system.%s WHERE keyspace_name = ? AND view_name = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
+            std::move(ks_name),
+            std::move(view_name)).discard_result();
+}
+
+future<> mark_view_as_built(sstring ks_name, sstring view_name) {
+    return execute_cql(
+            sprint("INSERT INTO system.%s (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),
+            std::move(ks_name),
+            std::move(view_name)).discard_result();
+}
+
+future<> remove_built_view(sstring ks_name, sstring view_name) {
+    return execute_cql(
+            sprint("DELETE FROM system.%s WHERE keyspace_name = ? AND view_name = ?", v3::BUILT_VIEWS),
+            std::move(ks_name),
+            std::move(view_name)).discard_result();
+}
+
+future<std::vector<view_name>> load_built_views() {
+    return execute_cql(sprint("SELECT * FROM system.%s", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        return boost::copy_range<std::vector<view_name>>(*cql_result
+                | boost::adaptors::transformed([] (const cql3::untyped_result_set::row& row) {
+            auto ks_name = row.get_as<sstring>("keyspace_name");
+            auto cf_name = row.get_as<sstring>("view_name");
+            return std::pair(std::move(ks_name), std::move(cf_name));
+        }));
+    });
+}
+
+future<std::vector<view_build_progress>> load_view_build_progress() {
+    return execute_cql(sprint("SELECT keyspace_name, view_name, first_token, next_token, cpu_id FROM system.%s",
+            v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        std::vector<view_build_progress> progress;
+        for (auto& row : *cql_result) {
+            auto ks_name = row.get_as<sstring>("keyspace_name");
+            auto cf_name = row.get_as<sstring>("view_name");
+            auto first_token = dht::global_partitioner().from_sstring(row.get_as<sstring>("first_token"));
+            auto next_token_sstring = row.get_opt<sstring>("next_token");
+            std::optional<dht::token> next_token;
+            if (next_token_sstring) {
+                next_token = dht::global_partitioner().from_sstring(std::move(next_token_sstring).value());
+            }
+            auto cpu_id = row.get_as<int32_t>("cpu_id");
+            progress.emplace_back(view_build_progress{
+                    view_name(std::move(ks_name), std::move(cf_name)),
+                    std::move(first_token),
+                    std::move(next_token),
+                    static_cast<shard_id>(cpu_id)});
+        }
+        return progress;
+    });
+}
+
 } // namespace system_keyspace
 
 sstring system_keyspace_name() {
