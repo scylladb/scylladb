@@ -642,6 +642,22 @@ schema_ptr built_views() {
     return schema;
 }
 
+schema_ptr scylla_views_builds_in_progress() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
+        return schema_builder(NAME, SCYLLA_VIEWS_BUILDS_IN_PROGRESS, stdx::make_optional(id))
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("view_name", utf8_type, column_kind::clustering_key)
+                .with_column("cpu_id", int32_type, column_kind::clustering_key)
+                .with_column("next_token", utf8_type)
+                .with_column("generation_number", int32_type)
+                .with_column("first_token", utf8_type)
+                .with_version(generate_schema_version(id))
+                .build();
+    }();
+    return schema;
+}
+
 } //</v3>
 
 namespace legacy {
@@ -1542,6 +1558,7 @@ std::vector<schema_ptr> all_tables() {
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), v3::views_builds_in_progress(), v3::built_views(),
+                    v3::scylla_views_builds_in_progress(),
     });
     // legacy schema
     r.insert(r.end(), {
