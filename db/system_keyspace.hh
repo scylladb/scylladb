@@ -99,6 +99,7 @@ static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto AVAILABLE_RANGES = "available_ranges";
 static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
 static constexpr auto BUILT_VIEWS = "built_views";
+static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
 }
 
 namespace legacy {
