@@ -1541,7 +1541,7 @@ std::vector<schema_ptr> all_tables() {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), size_estimates(),
+                    sstable_activity(), size_estimates(), v3::views_builds_in_progress(), v3::built_views(),
     });
     // legacy schema
     r.insert(r.end(), {
