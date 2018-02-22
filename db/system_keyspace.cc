@@ -74,6 +74,7 @@
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/timeout_clock.hh"
 #include "sstables/sstables.hh"
+#include "db/view/build_progress_virtual_reader.hh"
 #include "db/schema_tables.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -1574,6 +1575,9 @@ std::vector<schema_ptr> all_tables() {
 static void maybe_add_virtual_reader(schema_ptr s, database& db) {
     if (s.get() == size_estimates().get()) {
         db.find_column_family(s).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader()));
+    }
+    if (s.get() == v3::views_builds_in_progress().get()) {
+        db.find_column_family(s).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
     }
 }
 
