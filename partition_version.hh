@@ -141,7 +141,7 @@ using partition_version_range = anchorless_list_base_hook<partition_version>::ra
 class partition_version_ref {
     partition_version* _version = nullptr;
     bool _unique_owner = false;
-    bool _evictable;
+    bool _evictable = false;
 
     friend class partition_version;
 public:
