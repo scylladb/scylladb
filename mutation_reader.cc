@@ -22,6 +22,7 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/reverse.hpp>
 #include <boost/move/iterator.hpp>
+#include <variant>
 
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
@@ -662,7 +663,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
     };
 
     const restricted_mutation_reader_config& _config;
-    boost::variant<mutation_source_and_params, flat_mutation_reader> _reader_or_mutation_source;
+    std::variant<mutation_source_and_params, flat_mutation_reader> _reader_or_mutation_source;
 
     static const std::size_t new_reader_base_cost{16 * 1024};
 
@@ -672,7 +673,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
                 : _config.resources_sem->wait(new_reader_base_cost);
 
         return f.then([this] {
-            flat_mutation_reader reader = boost::get<mutation_source_and_params>(_reader_or_mutation_source)();
+            flat_mutation_reader reader = std::get<mutation_source_and_params>(_reader_or_mutation_source)();
             _reader_or_mutation_source = std::move(reader);
 
             if (_config.active_reads) {
@@ -691,11 +692,11 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
             }
     )
     decltype(auto) with_reader(Function fn, db::timeout_clock::time_point timeout) {
-        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
+        if (auto* reader = std::get_if<flat_mutation_reader>(&_reader_or_mutation_source)) {
             return fn(*reader);
         }
         return create_reader(timeout).then([this, fn = std::move(fn)] () mutable {
-            return fn(boost::get<flat_mutation_reader>(_reader_or_mutation_source));
+            return fn(std::get<flat_mutation_reader>(_reader_or_mutation_source));
         });
     }
 public:
@@ -717,7 +718,7 @@ public:
         }
     }
     ~restricting_mutation_reader() {
-        if (boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
+        if (std::get_if<flat_mutation_reader>(&_reader_or_mutation_source)) {
             _config.resources_sem->signal(new_reader_base_cost);
             if (_config.active_reads) {
                 --(*_config.active_reads);
@@ -741,7 +742,7 @@ public:
             return;
         }
         _end_of_stream = false;
-        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
+        if (auto* reader = std::get_if<flat_mutation_reader>(&_reader_or_mutation_source)) {
             return reader->next_partition();
         }
     }
