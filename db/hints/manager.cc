@@ -161,24 +161,27 @@ void manager::end_point_hints_manager::start() {
 }
 
 future<> manager::end_point_hints_manager::stop() noexcept {
-    auto func = [this] () -> future<> {
+    return seastar::async([this] {
+        std::exception_ptr eptr;
+
         // This is going to prevent further storing of new hints and will break all sending in progress.
         set_stopping();
 
-        // Wait for all storing and sending in progress to complete and then shutdown the store backend...
-        return _store_gate.close().finally([this] () -> future<> {
-            return _sender.stop().finally([this] {
-                return with_lock(file_update_mutex(), [this] {
-                    if (_hints_store_anchor) {
-                        hints_store_ptr tmp = std::exchange(_hints_store_anchor, nullptr);
-                        return tmp->shutdown().finally([tmp] {});
-                    }
-                    return make_ready_future<>();
-                });
-            });
-        });
-    };
-    return futurize_apply(std::move(func));
+        _store_gate.close().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+        _sender.stop().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+
+        with_lock(file_update_mutex(), [this] {
+            if (_hints_store_anchor) {
+                hints_store_ptr tmp = std::exchange(_hints_store_anchor, nullptr);
+                return tmp->shutdown().finally([tmp] {});
+            }
+            return make_ready_future<>();
+        }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
+    });
 }
 
 manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, manager& shard_manager)
