@@ -1214,6 +1214,7 @@ userTypeName returns [uninitialized<cql3::ut_name> name]
 
 userOrRoleName returns [uninitialized<cql3::role_name> name]
     : t=IDENT              { $name = cql3::role_name($t.text, cql3::preserve_role_case::no); }
+    | t=STRING_LITERAL     { $name = cql3::role_name($t.text, cql3::preserve_role_case::yes); }
     | t=QUOTED_NAME        { $name = cql3::role_name($t.text, cql3::preserve_role_case::yes); }
     | k=unreserved_keyword { $name = cql3::role_name(k, cql3::preserve_role_case::no); }
     | QMARK {add_recognition_error("Bind variables cannot be used for role names");}
