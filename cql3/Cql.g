@@ -983,7 +983,7 @@ truncateStatement returns [::shared_ptr<truncate_statement> stmt]
     ;
 
 /**
- * GRANT <permission> ON <resource> TO <username>
+ * GRANT <permission> ON <resource> TO <grantee>
  */
 grantStatement returns [::shared_ptr<grant_statement> stmt]
     : K_GRANT
@@ -991,12 +991,12 @@ grantStatement returns [::shared_ptr<grant_statement> stmt]
       K_ON
           resource
       K_TO
-          username
-      { $stmt = ::make_shared<grant_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
+          grantee=userOrRoleName
+      { $stmt = ::make_shared<grant_statement>($permissionOrAll.perms, $resource.res, std::move(grantee)); } 
     ;
 
 /**
- * REVOKE <permission> ON <resource> FROM <username>
+ * REVOKE <permission> ON <resource> FROM <revokee>
  */
 revokeStatement returns [::shared_ptr<revoke_statement> stmt]
     : K_REVOKE
@@ -1004,8 +1004,8 @@ revokeStatement returns [::shared_ptr<revoke_statement> stmt]
       K_ON
           resource
       K_FROM
-          username
-      { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
+          revokee=userOrRoleName
+      { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, std::move(revokee)); } 
     ;
 
 /**
@@ -1027,15 +1027,15 @@ revokeRoleStatement returns [::shared_ptr<revoke_role_statement> stmt]
 listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
 		std::optional<auth::resource> r;
-		std::optional<sstring> u;
+		std::optional<sstring> role;
 		bool recursive = true;
     }
     : K_LIST
           permissionOrAll
       ( K_ON resource { r = $resource.res; } )?
-      ( K_OF username { u = sstring($username.text); } )?
+      ( K_OF rn=userOrRoleName { role = sstring(static_cast<cql3::role_name>(rn).to_string()); } )?
       ( K_NORECURSIVE { recursive = false; } )?
-      { $stmt = ::make_shared<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(u), recursive); } 
+      { $stmt = ::make_shared<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive); } 
     ;
 
 permission returns [auth::permission perm]
