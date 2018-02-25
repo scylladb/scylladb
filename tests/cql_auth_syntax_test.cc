@@ -102,18 +102,9 @@ BOOST_AUTO_TEST_CASE(user_name) {
     test("lord_sauron_42");
 }
 
-BOOST_AUTO_TEST_CASE(authentication_options) {
-    const auto test = make_tester(&cql3_parser::CqlParser::roleAuthenticationOptions);
-    cql3::role_options v;
-
-    test("PASSWORD 'shire'", v);
-    test("OPTIONS { 'foo': 10, 'bar': 20 }", v);
-    test("PASSWORD 'shire' AND OPTIONS { 'foo': 10, 'bar': 20 }", v);
-}
-
 BOOST_AUTO_TEST_CASE(create_user) {
     // (a) IF NOT EXISTS
-    // (b) PASSWORD | OPTIONS
+    // (b) PASSWORD
     // (c) SUPERUSER | NOSUPERUSER
 
     test_valid("CREATE USER sam;");
@@ -127,7 +118,7 @@ BOOST_AUTO_TEST_CASE(create_user) {
 }
 
 BOOST_AUTO_TEST_CASE(alter_user) {
-    // (a) PASSWORD | OPTIONS
+    // (a) PASSWORD
     // (b) SUPERUSER | NOSUPERUSER
 
     test_valid("ALTER USER sam;");
@@ -197,43 +188,32 @@ BOOST_AUTO_TEST_CASE(user_or_role_name) {
     BOOST_REQUIRE_EQUAL(static_cast<cql3::role_name>(test("LisT")).to_string(), "list");
 }
 
+BOOST_AUTO_TEST_CASE(role_options) {
+    const auto test = make_tester(&cql3_parser::CqlParser::roleOptions);
+    cql3::role_options v;
+
+    test("PASSWORD = 'shire'", v);
+    test("OPTIONS = { 'foo': 10, 'bar': 20 }", v);
+    test("LOGIN = false", v);
+    test("SUPERUSER = true", v);
+    test("PASSWORD = 'shire' AND OPTIONS = { 'foo': 10, 'bar': 20 }", v);
+    test("PASSWORD = 'shire' AND LOGIN = true AND SUPERUSER = false", v);
+}
+
 BOOST_AUTO_TEST_CASE(create_role) {
     // (a) IF NOT EXISTS
-    // (b) PASSWORD | OPTIONS
-    // (c) SUPERUSER | NOSUPERUSER
-    // (d) LOGIN | NOLOGIN
+    // (b) <roleOptions>
 
     test_valid("CREATE ROLE \"Ring-bearer\";");
     test_valid("CREATE ROLE IF NOT EXISTS soldier;");
-    test_valid("CREATE ROLE soldier WITH PASSWORD 'sword';");
-    test_valid("CREATE ROLE IF NOT EXISTS soldier WITH PASSWORD 'sword';");
-    test_valid("CREATE ROLE king SUPERUSER;");
-    test_valid("CREATE ROLE IF NOT EXISTS solider NOSUPERUSER");
-    test_valid("CREATE ROLE soldier WITH PASSWORD 'sword' SUPERUSER");
-    test_valid("CREATE ROLE IF NOT EXISTS soldier WITH PASSWORD 'sword' NOSUPERUSER");
-    test_valid("CREATE ROLE soldier LOGIN;");
-    test_valid("CREATE ROLE IF NOT EXISTS soldier NOLOGIN;");
-    test_valid("CREATE ROLE soldier WITH PASSWORD 'sword' LOGIN;");
-    test_valid("CREATE ROLE IF NOT EXISTS solider WITH OPTIONS { 'foo': 10, 'bar': 20 } LOGIN;");
-    test_valid("CREATE ROLE \"Ring-bearer\" SUPERUSER NOLOGIN;");
-    test_valid("CREATE ROLE IF NOT EXISTS soldier NOSUPERUSER NOLOGIN;");
-    test_valid("CREATE ROLE soldier WITH PASSWORD 'sword' NOSUPERUSER NOLOGIN;");
-    test_valid("CREATE ROLE IF NOT EXISTS soldier WITH PASSWORD 'sword' NOSUPERUSER NOLOGIN;");
+    test_valid("CREATE ROLE soldier WITH PASSWORD = 'sword';");
+    test_valid("CREATE ROLE IF NOT EXISTS soldier WITH PASSWORD = 'sword' AND LOGIN = true;");
 }
 
 BOOST_AUTO_TEST_CASE(alter_role) {
-    // (a) PASSWORD | OPTIONS
-    // (b) SUPERUSER | NOSUPERUSER
-    // (c) LOGIN | NOLOGIN
-
     test_valid("ALTER ROLE soldier;");
-    test_valid("ALTER ROLE soldier WITH PASSWORD 'sword';");
-    test_valid("ALTER ROLE soldier NOSUPERUSER;");
-    test_valid("ALTER ROLE soldier WITH PASSWORD 'sword' NOSUPERUSER;");
-    test_valid("ALTER ROLE soldier LOGIN;");
-    test_valid("ALTER ROLE soldier WITH PASSWORD 'sword' LOGIN;");
-    test_valid("ALTER ROLE \"Ring-bearer\" SUPERUSER NOLOGIN;");
-    test_valid("ALTER ROLE solider WITH PASSWORD 'sword' NOSUPERUSER NOLOGIN;");
+    test_valid("ALTER ROLE soldier WITH PASSWORD = 'sword';");
+    test_valid("ALTER ROLE soldier WITH PASSWORD = 'sword' AND SUPERUSER = false;");
 }
 
 BOOST_AUTO_TEST_CASE(drop_role) {

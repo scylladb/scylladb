@@ -94,6 +94,7 @@ options {
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 #include <map>
 }
@@ -239,6 +240,12 @@ struct uninitialized {
             res.emplace(left->get_raw_text(), right->get_raw_text());
         }
         return res;
+    }
+
+    bool convert_boolean_literal(stdx::string_view s) {
+        std::string lower_s(s.size(), '\0');
+        std::transform(s.cbegin(), s.cend(), lower_s.begin(), &::tolower);
+        return lower_s == "true";
     }
 
     void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
@@ -1059,7 +1066,7 @@ roleResource returns [uninitialized<auth::resource> res]
     ;
 
 /**
- * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password> [AND OPTIONS { ... }]] [SUPERUSER|NOSUPERUSER]
+ * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
 createUserStatement returns [::shared_ptr<create_role_statement> stmt]
     @init {
@@ -1070,20 +1077,20 @@ createUserStatement returns [::shared_ptr<create_role_statement> stmt]
         bool ifNotExists = false;
     }
     : K_CREATE K_USER (K_IF K_NOT K_EXISTS { ifNotExists = true; })? username
-      ( K_WITH roleAuthenticationOptions[opts] )?
+      ( K_WITH K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; })?
       ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
       { $stmt = ::make_shared<create_role_statement>(cql3::role_name($username.text, cql3::preserve_role_case::yes), std::move(opts), ifNotExists); }
     ;
 
 /**
- * ALTER USER <username> [WITH PASSWORD <password> [AND OPTIONS { ... }]] [SUPERUSER|NOSUPERUSER]
+ * ALTER USER <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
 alterUserStatement returns [::shared_ptr<alter_role_statement> stmt]
     @init {
         cql3::role_options opts;
     }
     : K_ALTER K_USER username
-      ( K_WITH roleAuthenticationOptions[opts] )?
+      ( K_WITH K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; })?
       ( K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; } )?
       { $stmt = ::make_shared<alter_role_statement>(cql3::role_name($username.text, cql3::preserve_role_case::yes), std::move(opts)); }
     ;
@@ -1105,7 +1112,7 @@ listUsersStatement returns [::shared_ptr<list_users_statement> stmt]
     ;
 
 /**
- * CREATE ROLE [IF NOT EXISTS] <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ * CREATE ROLE [IF NOT EXISTS] <role_name> [WITH <roleOption> [AND <roleOption>]*]
  */
 createRoleStatement returns [::shared_ptr<create_role_statement> stmt]
     @init {
@@ -1115,25 +1122,19 @@ createRoleStatement returns [::shared_ptr<create_role_statement> stmt]
         bool if_not_exists = false;
     }
     : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
-      (K_WITH roleAuthenticationOptions[opts])?
-      (K_SUPERUSER { opts.is_superuser = true; } | K_NOSUPERUSER { opts.is_superuser = false; })?
-      (K_LOGIN { opts.can_login = true; } | K_NOLOGIN { opts.can_login = false; })?
+      (K_WITH roleOptions[opts])?
       { $stmt = ::make_shared<create_role_statement>(name, std::move(opts), if_not_exists); }
     ;
 
 /**
- * ALTER ROLE <rolename> [WITH PASSWORD <password> [AND OPTIONS = { ... }]] [SUPERUSER|NOSUPERUSER] [LOGIN|NOLOGIN]
+ * ALTER ROLE <rolename> [WITH <roleOption> [AND <roleOption>]*]
  */
 alterRoleStatement returns [::shared_ptr<alter_role_statement> stmt]
     @init {
         cql3::role_options opts;
     }
     : K_ALTER K_ROLE name=userOrRoleName
-      (K_WITH roleAuthenticationOptions[opts])?
-      (K_SUPERUSER { opts.is_superuser = true; }
-        | K_NOSUPERUSER { opts.is_superuser = false; })?
-      (K_LOGIN { opts.can_login = true; }
-        | K_NOLOGIN { opts.can_login = false; })?
+      (K_WITH roleOptions[opts])?
       { $stmt = ::make_shared<alter_role_statement>(name, std::move(opts)); }
     ;
 
@@ -1162,13 +1163,15 @@ listRolesStatement returns [::shared_ptr<list_roles_statement> stmt]
         { $stmt = ::make_shared<list_roles_statement>(grantee, recursive); }
     ;
 
-roleAuthenticationOptions[cql3::role_options& opts]
-    : roleAuthenticationOption[opts] (K_AND roleAuthenticationOption[opts])*
+roleOptions[cql3::role_options& opts]
+    : roleOption[opts] (K_AND roleOption[opts])*
     ;
 
-roleAuthenticationOption[cql3::role_options& opts]
-    : K_PASSWORD v=STRING_LITERAL { opts.password = $v.text; }
-    | K_OPTIONS m=mapLiteral { opts.options = convert_property_map(m); }
+roleOption[cql3::role_options& opts]
+    : K_PASSWORD '=' v=STRING_LITERAL { opts.password = $v.text; }
+    | K_OPTIONS '=' m=mapLiteral { opts.options = convert_property_map(m); }
+    | K_SUPERUSER '=' b=BOOLEAN { opts.is_superuser = convert_boolean_literal($b.text); }
+    | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
     ;
 
 /** DEFINITIONS **/
