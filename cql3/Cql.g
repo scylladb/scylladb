@@ -1585,6 +1585,7 @@ tuple_type returns [shared_ptr<cql3::cql3_type::raw> t]
 username
     : IDENT
     | STRING_LITERAL
+    | QUOTED_NAME { add_recognition_error("Quoted strings are not supported for user names"); }
     ;
 
 // Basically the same as cident, but we need to exlude existing CQL3 types

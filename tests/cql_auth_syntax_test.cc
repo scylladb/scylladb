@@ -100,6 +100,11 @@ BOOST_AUTO_TEST_CASE(user_name) {
 
     test("'sam'");
     test("lord_sauron_42");
+
+    // Not worth generalizing `test_valid`.
+    BOOST_REQUIRE_THROW(
+            (cql3::util::do_with_parser("\"Ring-bearer\"", std::mem_fn(&cql3_parser::CqlParser::username))),
+            exceptions::syntax_exception);
 }
 
 BOOST_AUTO_TEST_CASE(create_user) {
