@@ -106,7 +106,7 @@ public:
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
-    schema_ptr get_cf_meta_data();
+    schema_ptr get_cf_meta_data(const database&);
 
     class raw_statement;
 
@@ -114,7 +114,7 @@ public:
 private:
     std::vector<column_definition> get_columns();
 
-    void apply_properties_to(schema_builder& builder);
+    void apply_properties_to(schema_builder& builder, const database&);
 
     void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind);
 };

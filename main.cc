@@ -28,6 +28,7 @@
 #include "http/httpd.hh"
 #include "api/api_init.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/legacy_schema_migrator.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
@@ -65,15 +66,6 @@ seastar::metrics::metric_groups app_metrics;
 using namespace std::chrono_literals;
 
 namespace bpo = boost::program_options;
-
-static std::vector<std::reference_wrapper<configurable>>& configurables() {
-    static std::vector<std::reference_wrapper<configurable>> configurables;
-    return configurables;
-}
-
-void configurable::register_configurable(configurable & c) {
-    configurables().emplace_back(std::ref(c));
-}
 
 template<typename K, typename V, typename... Args, typename K2, typename V2 = V>
 V get_or_default(const std::unordered_map<K, V, Args...>& ss, const K2& key, const V2& def = V()) {
@@ -299,7 +291,8 @@ int main(int ac, char** av) {
     app_cfg.default_task_quota = 500us;
     app_template app(std::move(app_cfg));
 
-    auto cfg = make_lw_shared<db::config>();
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();
 
     // If --version is requested, print it out and exit immediately to avoid
@@ -315,9 +308,7 @@ int main(int ac, char** av) {
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
     cfg->add_options(init);
-    for (configurable& c : configurables()) {
-        c.append_options(init);
-    }
+    configurable::append_all(init);
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -349,11 +340,9 @@ int main(int ac, char** av) {
 
         tcp_syncookies_sanity();
 
-        return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
+        return seastar::async([cfg, ext, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs, &pctx, &prometheus_server, &return_value, &cf_cache_hitrate_calculator] {
             read_config(opts, *cfg).get();
-            for (configurable& c : configurables()) {
-                c.initialize(opts).get();
-            }
+            configurable::init_all(opts, *cfg, *ext).get();
 
             logging::apply_settings(cfg->logging_settings(opts));
 

@@ -412,6 +412,32 @@ namespace query {
 class partition_slice;
 }
 
+/**
+ * Schema extension. An opaque type representing
+ * entries in the "extensions" part of a table/view (see schema_tables).
+ *
+ * An extension has a name (the mapping key), and it can re-serialize
+ * itself to bytes again, when we write back into schema tables.
+ *
+ * Code using a particular extension can locate it by name in the schema map,
+ * and barring the "is_placeholder" says true, cast it to whatever might
+ * be the expeceted implementation.
+ *
+ * We allow placeholder object since an extension written to schema tables
+ * might be unavailable on next boot/other node. To avoid loosing the config data,
+ * a placeholder object is put into schema map, which at least can
+ * re-serialize the data back.
+ *
+ */
+class schema_extension {
+public:
+    virtual ~schema_extension() {};
+    virtual bytes serialize() const = 0;
+    virtual bool is_placeholder() const {
+        return false;
+    }
+};
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -427,6 +453,7 @@ public:
             return type == rhs.type && timestamp == rhs.timestamp;
         }
     };
+    using extensions_map = std::map<sstring, ::shared_ptr<schema_extension>>;
 private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
@@ -444,6 +471,7 @@ private:
         data_type _default_validation_class = bytes_type;
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
+        extensions_map _extensions;
         bool _is_dense = false;
         bool _is_compound = true;
         bool _is_counter = false;
@@ -530,6 +558,9 @@ public:
     sstring thrift_key_validator() const;
     const compression_parameters& get_compressor_params() const {
         return _raw._compressor_params;
+    }
+    const extensions_map& extensions() const {
+        return _raw._extensions;
     }
     bool is_dense() const {
         return _raw._is_dense;

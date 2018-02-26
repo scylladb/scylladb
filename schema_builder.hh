@@ -188,7 +188,10 @@ public:
         _raw._compressor_params = cp;
         return *this;
     }
-
+    schema_builder& set_extensions(schema::extensions_map exts) {
+        _raw._extensions = std::move(exts);
+        return *this;
+    }
     schema_builder& set_compaction_strategy(sstables::compaction_strategy_type type) {
         _raw._compaction_strategy = type;
         return *this;

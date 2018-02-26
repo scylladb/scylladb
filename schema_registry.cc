@@ -23,7 +23,7 @@
 
 #include "schema_registry.hh"
 #include "log.hh"
-
+#include "db/schema_tables.hh"
 
 static logging::logger slogger("schema_registry");
 
@@ -58,6 +58,12 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
             slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
         }
     });
+}
+
+schema_registry::~schema_registry() = default;
+
+void schema_registry::init(const db::schema_ctxt& ctxt) {
+    _ctxt = std::make_unique<db::schema_ctxt>(ctxt);
 }
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
@@ -179,7 +185,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
 schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
-        auto s = _frozen_schema->unfreeze();
+        auto s = _frozen_schema->unfreeze(*_registry._ctxt);
         if (s->version() != _version) {
             throw std::runtime_error(sprint("Unfrozen schema version doesn't match entry version (%s): %s", _version, *s));
         }

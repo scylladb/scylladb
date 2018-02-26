@@ -62,6 +62,7 @@
 #include "checked-file-impl.hh"
 #include "integrity_checked_file_impl.hh"
 #include "service/storage_service.hh"
+#include "db/extensions.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -91,7 +92,7 @@ read_monitor_generator& default_read_monitor_generator() {
 
 static future<file> open_sstable_component_file(const io_error_handler& error_handler, sstring name, open_flags flags,
         file_open_options options) {
-    if (get_config().enable_sstable_data_integrity_check()) {
+    if (flags != open_flags::ro && get_config().enable_sstable_data_integrity_check()) {
         return open_integrity_checked_file_dma(name, flags, options).then([&error_handler] (auto f) {
             return make_checked_file(error_handler, std::move(f));
         });
@@ -988,7 +989,7 @@ future<> sstable::read_toc() {
 
 }
 
-void sstable::generate_toc(compressor c, double filter_fp_chance) {
+void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
     // Creating table of components.
     _recognized_components.insert(component_type::TOC);
     _recognized_components.insert(component_type::Statistics);
@@ -999,7 +1000,7 @@ void sstable::generate_toc(compressor c, double filter_fp_chance) {
     if (filter_fp_chance != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (c == compressor::none) {
+    if (c == nullptr) {
         _recognized_components.insert(component_type::CRC);
     } else {
         _recognized_components.insert(component_type::CompressionInfo);
@@ -1306,12 +1307,38 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     });
 }
 
+future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) {
+    auto f = new_sstable_component_file(_read_error_handler, filename(type), flags, opts);
+    if ((type != component_type::Data && type != component_type::Index)
+                    || get_config().extensions().sstable_file_io_extensions().empty()) {
+        return f;
+    }
+    return f.then([this, type, flags](file f) {
+        return do_with(std::move(f), [this, type, flags](file& f) {
+            auto ext_range = get_config().extensions().sstable_file_io_extensions();
+            return do_for_each(ext_range.begin(), ext_range.end(), [this, &f, type, flags](auto& ext) {
+                // note: we're potentially wrapping more than once. extension mechanism
+                // is responsible for order being sane.
+                return ext->wrap_file(*this, type, f, flags).then([&f](file of) {
+                    if (of) {
+                        f = std::move(of);
+                    }
+                });
+            }).then([&f] {
+                return f;
+            });
+        });
+    });
+}
+
 future<> sstable::open_data() {
-    return when_all(open_checked_file_dma(_read_error_handler, filename(component_type::Index), open_flags::ro),
-                    open_checked_file_dma(_read_error_handler, filename(component_type::Data), open_flags::ro))
+    return when_all(open_file(component_type::Index, open_flags::ro),
+                    open_file(component_type::Data, open_flags::ro))
                     .then([this] (auto files) {
+
         _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file  = std::get<file>(std::get<1>(files).get());
+        _data_file = std::get<file>(std::get<1>(files).get());
+
         return this->update_info_for_opened_data();
     }).then([this] {
         if (_shards.empty()) {
@@ -1367,14 +1394,15 @@ future<> sstable::create_data() {
     file_open_options opt;
     opt.extent_allocation_size_hint = 32 << 20;
     opt.sloppy_size = true;
-    return when_all(new_sstable_component_file(_write_error_handler, filename(component_type::Index), oflags, opt),
-                    new_sstable_component_file(_write_error_handler, filename(component_type::Data), oflags, opt)).then([this] (auto files) {
+    return when_all(open_file(component_type::Index, oflags, opt),
+                    open_file(component_type::Data, oflags, opt)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed
         // without its exception being examined.
+
         _index_file = std::get<file>(std::get<0>(files).get());
-        _data_file  = std::get<file>(std::get<1>(files).get());
+        _data_file = std::get<file>(std::get<1>(files).get());
     });
 }
 
@@ -1956,17 +1984,6 @@ static void seal_summary(summary& s,
     }
 }
 
-static void prepare_compression(compression& c, const schema& schema) {
-    const auto& cp = schema.get_compressor_params();
-    c.set_compressor(cp.get_compressor());
-    c.set_uncompressed_chunk_length(cp.chunk_length());
-    // FIXME: crc_check_chance can be configured by the user.
-    // probability to verify the checksum of a compressed chunk we read.
-    // defaults to 1.0.
-    c.options.elements.push_back({"crc_check_chance", "1.0"});
-    c.init_full_checksum();
-}
-
 static
 void
 populate_statistics_offsets(statistics& s) {
@@ -2284,12 +2301,17 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
     auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
+
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
     if (sm.token_ranges.elements.empty()) {
         throw std::runtime_error(sprint("Failed to generate sharding metadata for %s", get_filename()));
     }
-    _components->scylla_metadata.emplace();
+
+    if (!_components->scylla_metadata) {
+        _components->scylla_metadata.emplace();
+    }
+
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
 
@@ -2306,8 +2328,7 @@ void sstable_writer::prepare_file_writer()
     if (!_compression_enabled) {
         _writer = std::make_unique<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
     } else {
-        prepare_compression(_sst._components->compression, _schema);
-        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression));
+        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
     }
 }
 

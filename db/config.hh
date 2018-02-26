@@ -28,6 +28,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
@@ -37,6 +38,8 @@
 namespace seastar { class file; struct logging_settings; }
 
 namespace db {
+
+class extensions;
 
 /*
  * This type is not use, and probably never will be.
@@ -57,6 +60,8 @@ struct seed_provider_type {
 class config : public utils::config_file {
 public:
     config();
+    config(std::shared_ptr<db::extensions>);
+    ~config();
 
     // Throws exception if experimental feature is disabled.
     void check_experimental(const sstring& what) const;
@@ -742,6 +747,7 @@ public:
     boost::program_options::options_description_easy_init&
     add_options(boost::program_options::options_description_easy_init&);
 
+    const db::extensions& extensions() const;
 private:
     template<typename T>
     struct log_legacy_value : public named_value<T, value_status::Used> {
@@ -760,6 +766,8 @@ private:
     log_legacy_value<seastar::log_level> default_log_level;
     log_legacy_value<std::unordered_map<sstring, seastar::log_level>> logger_log_level;
     log_legacy_value<bool> log_to_stdout, log_to_syslog;
+
+    std::shared_ptr<db::extensions> _extensions;
 };
 
 }

@@ -49,6 +49,10 @@
 #include "compaction_strategy.hh"
 #include "utils/UUID.hh"
 
+namespace db {
+class extensions;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -85,7 +89,7 @@ public:
 private:
     std::experimental::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
-    void validate();
+    void validate(const db::extensions&);
     std::map<sstring, sstring> get_compaction_options() const;
     stdx::optional<std::map<sstring, sstring>> get_compression_options() const;
 #if 0
@@ -109,7 +113,7 @@ public:
     int32_t get_gc_grace_seconds() const;
     stdx::optional<utils::UUID> get_id() const;
 
-    void apply_to_builder(schema_builder& builder);
+    void apply_to_builder(schema_builder& builder, const db::extensions&);
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 

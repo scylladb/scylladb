@@ -2125,6 +2125,7 @@ database::database(const db::config& cfg, database_config dbcfg)
         return _compaction_manager->backlog() / memory::stats().total_memory();
     }))
 {
+    local_schema_registry().init(*this); // TODO: we're never unbound.
     _compaction_manager->start();
     setup_metrics();
 

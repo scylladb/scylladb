@@ -54,6 +54,24 @@ class result_set;
 }
 
 namespace db {
+
+class extensions;
+class config;
+
+class schema_ctxt {
+public:
+    schema_ctxt(const config&);
+    schema_ctxt(const database&);
+    schema_ctxt(distributed<database>&);
+    schema_ctxt(distributed<service::storage_proxy>&);
+
+    const db::extensions& extensions() const {
+        return _extensions;
+    }
+private:
+    const db::extensions& _extensions;
+};
+
 namespace schema_tables {
 
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
@@ -158,9 +176,9 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
 
 future<std::vector<mutation>> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
-schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
+schema_ptr create_table_from_mutations(const schema_ctxt&, schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
-view_ptr create_view_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
+view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 

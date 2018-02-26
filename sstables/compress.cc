@@ -28,12 +28,8 @@
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/fstream.hh>
 
+#include "../compress.hh"
 #include "compress.hh"
-
-#include <lz4.h>
-#include <zlib.h>
-#include <snappy-c.h>
-
 #include "unimplemented.hh"
 #include "stdx.hh"
 #include "segmented_compress_params.hh"
@@ -230,38 +226,95 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
     ++_size;
 }
 
+/**
+ * Thin wrapper type around a "compressor" object.
+ * This is the non-shared part of sstable compression,
+ * since the compressor might have both dependents and
+ * semi-state that cannot be shared across shards.
+ *
+ * The local state is instantiated in either
+ * reader/writer object for the sstable on demand,
+ * typically based on the shared compression
+ * info/table schema.
+ */
+class local_compression {
+    compressor_ptr _compressor;
+public:
+    local_compression()= default;
+    local_compression(const compression&);
+    local_compression(compressor_ptr);
+
+    size_t uncompress(const char* input, size_t input_len, char* output,
+                    size_t output_len) const;
+    size_t compress(const char* input, size_t input_len, char* output,
+                    size_t output_len) const;
+    size_t compress_max_size(size_t input_len) const;
+
+    operator bool() const {
+        return _compressor != nullptr;
+    }
+};
+
+local_compression::local_compression(compressor_ptr p)
+    : _compressor(std::move(p))
+{}
+
+local_compression::local_compression(const compression& c)
+    : _compressor([&c] {
+        sstring n(c.name.value.begin(), c.name.value.end());
+        return compressor::create(n, [&c, &n](const sstring& key) -> compressor::opt_string {
+            if (key == compression_parameters::CHUNK_LENGTH_KB) {
+                return to_sstring(c.chunk_len);
+            }
+            if (key == compression_parameters::SSTABLE_COMPRESSION) {
+                return n;
+            }
+            for (auto& o : c.options.elements) {
+                if (key == sstring(o.key.value.begin(), o.key.value.end())) {
+                    return sstring(o.value.value.begin(), o.value.value.end());
+                }
+            }
+            return std::experimental::nullopt;
+        });
+    }())
+{}
+
+size_t local_compression::uncompress(const char* input,
+                size_t input_len, char* output, size_t output_len) const {
+    if (!_compressor) {
+        throw std::runtime_error("uncompress is not supported");
+    }
+    return _compressor->uncompress(input, input_len, output, output_len);
+}
+size_t local_compression::compress(const char* input, size_t input_len,
+                char* output, size_t output_len) const {
+    if (!_compressor) {
+        throw std::runtime_error("compress is not supported");
+    }
+    return _compressor->compress(input, input_len, output, output_len);
+}
+size_t local_compression::compress_max_size(size_t input_len) const {
+    return _compressor ? _compressor->compress_max_size(input_len) : 0;
+}
+
+void compression::set_compressor(compressor_ptr c) {
+    if (c) {
+        auto& cn = c->name();
+        name.value = bytes(cn.begin(), cn.end());
+        for (auto& p : c->options()) {
+            if (p.first != compression_parameters::SSTABLE_COMPRESSION) {
+                auto& k = p.first;
+                auto& v = p.second;
+                options.elements.push_back({bytes(k.begin(), k.end()), bytes(v.begin(), v.end())});
+            }
+        }
+    }
+}
+
 void compression::update(uint64_t compressed_file_length) {
-    // FIXME: also process _compression.options (just for crc-check frequency)
-     if (name.value == "LZ4Compressor") {
-         _uncompress = uncompress_lz4;
-     } else if (name.value == "SnappyCompressor") {
-         _uncompress = uncompress_snappy;
-     } else if (name.value == "DeflateCompressor") {
-         _uncompress = uncompress_deflate;
-     } else {
-         throw std::runtime_error("unsupported compression type");
-     }
-
-     _compressed_file_length = compressed_file_length;
+    _compressed_file_length = compressed_file_length;
 }
 
-void compression::set_compressor(compressor c) {
-     if (c == compressor::lz4) {
-         _compress = compress_lz4;
-         _compress_max_size = compress_max_size_lz4;
-         name.value = "LZ4Compressor";
-     } else if (c == compressor::snappy) {
-         _compress = compress_snappy;
-         _compress_max_size = compress_max_size_snappy;
-         name.value = "SnappyCompressor";
-     } else if (c == compressor::deflate) {
-         _compress = compress_deflate;
-         _compress_max_size = compress_max_size_deflate;
-         name.value = "DeflateCompressor";
-     } else {
-         throw std::runtime_error("unsupported compressor type");
-     }
-}
 
 // locate() takes a byte position in the uncompressed stream, and finds the
 // the location of the compressed chunk on disk which contains it, and the
@@ -283,148 +336,11 @@ compression::locate(uint64_t position, const compression::segmented_offsets::acc
 
 }
 
-size_t uncompress_lz4(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    // We use LZ4_decompress_safe(). According to the documentation, the
-    // function LZ4_decompress_fast() is slightly faster, but maliciously
-    // crafted compressed data can cause it to overflow the output buffer.
-    // Theoretically, our compressed data is created by us so is not malicious
-    // (and accidental corruption is avoided by the compressed-data checksum),
-    // but let's not take that chance for now, until we've actually measured
-    // the performance benefit that LZ4_decompress_fast() would bring.
-
-    // Cassandra's LZ4Compressor prepends to the chunk its uncompressed length
-    // in 4 bytes little-endian (!) order. We don't need this information -
-    // we already know the uncompressed data is at most the given chunk size
-    // (and usually is exactly that, except in the last chunk). The advance
-    // knowledge of the uncompressed size could be useful if we used
-    // LZ4_decompress_fast(), but we prefer LZ4_decompress_safe() anyway...
-    input += 4;
-    input_len -= 4;
-
-    auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
-    if (ret < 0) {
-        throw std::runtime_error("LZ4 uncompression failure");
-    }
-    return ret;
-}
-
-size_t compress_lz4(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    if (output_len < LZ4_COMPRESSBOUND(input_len) + 4) {
-        throw std::runtime_error("LZ4 compression failure: length of output is too small");
-    }
-    // Write input_len (32-bit data) to beginning of output in little-endian representation.
-    output[0] = input_len & 0xFF;
-    output[1] = (input_len >> 8) & 0xFF;
-    output[2] = (input_len >> 16) & 0xFF;
-    output[3] = (input_len >> 24) & 0xFF;
-#ifdef HAVE_LZ4_COMPRESS_DEFAULT
-    auto ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
-#else
-    auto ret = LZ4_compress(input, output + 4, input_len);
-#endif
-    if (ret == 0) {
-        throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
-    }
-    return ret + 4;
-}
-
-size_t uncompress_deflate(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    z_stream zs;
-    zs.zalloc = Z_NULL;
-    zs.zfree = Z_NULL;
-    zs.opaque = Z_NULL;
-    zs.avail_in = 0;
-    zs.next_in = Z_NULL;
-    if (inflateInit(&zs) != Z_OK) {
-        throw std::runtime_error("deflate uncompression init failure");
-    }
-    // yuck, zlib is not const-correct, and also uses unsigned char while we use char :-(
-    zs.next_in = reinterpret_cast<unsigned char*>(const_cast<char*>(input));
-    zs.avail_in = input_len;
-    zs.next_out = reinterpret_cast<unsigned char*>(output);
-    zs.avail_out = output_len;
-    auto res = inflate(&zs, Z_FINISH);
-    inflateEnd(&zs);
-    if (res == Z_STREAM_END) {
-        return output_len - zs.avail_out;
-    } else {
-        throw std::runtime_error("deflate uncompression failure");
-    }
-}
-
-size_t compress_deflate(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    z_stream zs;
-    zs.zalloc = Z_NULL;
-    zs.zfree = Z_NULL;
-    zs.opaque = Z_NULL;
-    zs.avail_in = 0;
-    zs.next_in = Z_NULL;
-    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK) {
-        throw std::runtime_error("deflate compression init failure");
-    }
-    zs.next_in = reinterpret_cast<unsigned char*>(const_cast<char*>(input));
-    zs.avail_in = input_len;
-    zs.next_out = reinterpret_cast<unsigned char*>(output);
-    zs.avail_out = output_len;
-    auto res = deflate(&zs, Z_FINISH);
-    deflateEnd(&zs);
-    if (res == Z_STREAM_END) {
-        return output_len - zs.avail_out;
-    } else {
-        throw std::runtime_error("deflate compression failure");
-    }
-}
-
-size_t uncompress_snappy(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    if (snappy_uncompress(input, input_len, output, &output_len)
-            == SNAPPY_OK) {
-        return output_len;
-    } else {
-        throw std::runtime_error("snappy uncompression failure");
-    }
-}
-
-size_t compress_snappy(const char* input, size_t input_len,
-        char* output, size_t output_len) {
-    auto ret = snappy_compress(input, input_len, output, &output_len);
-    if (ret != SNAPPY_OK) {
-        throw std::runtime_error("snappy compression failure: snappy_compress() failed");
-    }
-    return output_len;
-}
-
-size_t compress_max_size_lz4(size_t input_len) {
-    return LZ4_COMPRESSBOUND(input_len) + 4;
-}
-
-size_t compress_max_size_deflate(size_t input_len) {
-    z_stream zs;
-    zs.zalloc = Z_NULL;
-    zs.zfree = Z_NULL;
-    zs.opaque = Z_NULL;
-    zs.avail_in = 0;
-    zs.next_in = Z_NULL;
-    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK) {
-        throw std::runtime_error("deflate compression init failure");
-    }
-    auto res = deflateBound(&zs, input_len);
-    deflateEnd(&zs);
-    return res;
-}
-
-size_t compress_max_size_snappy(size_t input_len) {
-    return snappy_max_compressed_length(input_len);
-}
-
 class compressed_file_data_source_impl : public data_source_impl {
     stdx::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
     sstables::compression::segmented_offsets::accessor _offsets;
+    sstables::local_compression _compression;
     uint64_t _underlying_pos;
     uint64_t _pos;
     uint64_t _beg_pos;
@@ -434,6 +350,7 @@ public:
                 uint64_t pos, size_t len, file_input_stream_options options)
             : _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_accessor())
+            , _compression(*cm)
     {
         _beg_pos = pos;
         if (pos > _compression_metadata->uncompressed_file_length()) {
@@ -489,13 +406,14 @@ public:
                         _compression_metadata->uncompressed_chunk_length());
                 // The compressed data is the whole chunk, minus the last 4
                 // bytes (which contain the checksum verified above).
-                auto len = _compression_metadata->uncompress(
-                        buf.get(), compressed_len,
-                        out.get_write(), out.size());
+
+                auto len = _compression.uncompress(buf.get(), compressed_len, out.get_write(), out.size());
+
                 out.trim(len);
                 out.trim_front(addr.offset);
                 _pos += out.size();
                 _underlying_pos += addr.chunk_len;
+
                 return out;
         });
     }
@@ -523,6 +441,7 @@ public:
     }
 };
 
+
 class compressed_file_data_source : public data_source {
 public:
     compressed_file_data_source(file f, sstables::compression* cm,
@@ -532,10 +451,90 @@ public:
         {}
 };
 
-input_stream<char> make_compressed_file_input_stream(
+input_stream<char> sstables::make_compressed_file_input_stream(
         file f, sstables::compression* cm, uint64_t offset, size_t len,
         file_input_stream_options options)
 {
     return input_stream<char>(compressed_file_data_source(
             std::move(f), cm, offset, len, std::move(options)));
 }
+
+// compressed_file_data_sink_impl works as a filter for a file output stream,
+// where the buffer flushed will be compressed and its checksum computed, then
+// the result passed to a regular output stream.
+class compressed_file_data_sink_impl : public data_sink_impl {
+    output_stream<char> _out;
+    sstables::compression* _compression_metadata;
+    sstables::compression::segmented_offsets::writer _offsets;
+    sstables::local_compression _compression;
+    size_t _pos = 0;
+public:
+    compressed_file_data_sink_impl(file f, sstables::compression* cm, sstables::local_compression lc, file_output_stream_options options)
+            : _out(make_file_output_stream(std::move(f), options))
+            , _compression_metadata(cm)
+            , _offsets(_compression_metadata->offsets.get_writer())
+            , _compression(lc)
+    {}
+
+    future<> put(net::packet data) { abort(); }
+    virtual future<> put(temporary_buffer<char> buf) override {
+        auto output_len = _compression.compress_max_size(buf.size());
+
+        // account space for checksum that goes after compressed data.
+        temporary_buffer<char> compressed(output_len + 4);
+
+        // compress flushed data.
+        auto len = _compression.compress(buf.get(), buf.size(), compressed.get_write(), output_len);
+        if (len > output_len) {
+            return make_exception_future(std::runtime_error("possible overflow during compression"));
+        }
+
+        // total length of the uncompressed data.
+        _compression_metadata->set_uncompressed_file_length(_compression_metadata->uncompressed_file_length() + buf.size());
+
+        _offsets.push_back(_pos);
+        // account compressed data + 32-bit checksum.
+        _pos += len + 4;
+        _compression_metadata->set_compressed_file_length(_pos);
+
+        // compute 32-bit checksum for compressed data.
+        uint32_t per_chunk_checksum = checksum_adler32(compressed.get(), len);
+        _compression_metadata->update_full_checksum(per_chunk_checksum, len);
+
+        // write checksum into buffer after compressed data.
+        write_be<uint32_t>(compressed.get_write() + len, per_chunk_checksum);
+
+        compressed.trim(len + 4);
+
+        auto f = _out.write(compressed.get(), compressed.size());
+        return f.then([compressed = std::move(compressed)] {});
+    }
+    virtual future<> close() override {
+        return _out.close();
+    }
+};
+
+class compressed_file_data_sink : public data_sink {
+public:
+    compressed_file_data_sink(file f, sstables::compression* cm, sstables::local_compression lc, file_output_stream_options options)
+        : data_sink(std::make_unique<compressed_file_data_sink_impl>(
+                std::move(f), cm, std::move(lc), options)) {}
+};
+
+output_stream<char> sstables::make_compressed_file_output_stream(file f, file_output_stream_options options, sstables::compression* cm, const compression_parameters& cp) {
+    // buffer of output stream is set to chunk length, because flush must
+    // happen every time a chunk was filled up.
+
+    auto p = cp.get_compressor();
+    cm->set_compressor(p);
+    cm->set_uncompressed_chunk_length(cp.chunk_length());
+    // FIXME: crc_check_chance can be configured by the user.
+    // probability to verify the checksum of a compressed chunk we read.
+    // defaults to 1.0.
+    cm->options.elements.push_back({"crc_check_chance", "1.0"});
+    cm->init_full_checksum();
+
+    auto outer_buffer_size = cm->uncompressed_chunk_length();
+    return output_stream<char>(compressed_file_data_sink(std::move(f), cm, p, options), outer_buffer_size, true);
+}
+

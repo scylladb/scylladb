@@ -37,7 +37,7 @@ future<> table_helper::setup_table() const {
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed->prepare(db, qp.get_cql_stats())->statement);
-    auto schema = statement->get_cf_meta_data();
+    auto schema = statement->get_cf_meta_data(db);
 
     // Generate the CF UUID based on its KF names. This is needed to ensure that
     // all Nodes that create it would create it with the same UUID and we don't

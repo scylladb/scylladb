@@ -536,6 +536,7 @@ private:
     const bool has_component(component_type f) const;
 
     const sstring filename(component_type f) const;
+    future<file> open_file(component_type, open_flags, file_open_options = {});
 
     template <sstable::component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
@@ -543,7 +544,7 @@ private:
     template <sstable::component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
 
-    void generate_toc(compressor c, double filter_fp_chance);
+    void generate_toc(compressor_ptr c, double filter_fp_chance);
     void write_toc(const io_priority_class& pc);
     future<> seal_sstable();
 
@@ -639,6 +640,16 @@ private:
     std::vector<unsigned> compute_shards_for_this_sstable() const;
 public:
     future<> read_toc();
+
+    shareable_components& get_shared_components() {
+        return *_components;
+    }
+    const shareable_components& get_shared_components() const {
+        return *_components;
+    }
+    schema_ptr get_schema() const {
+        return _schema;
+    }
 
     bool has_scylla_component() const {
         return has_component(component_type::Scylla);
@@ -917,5 +928,11 @@ struct sstable_open_info {
 future<> init_metrics();
 
 utils::phased_barrier& background_jobs();
+
+class file_io_extension {
+public:
+    virtual ~file_io_extension() {}
+    virtual future<file> wrap_file(sstable&, sstable::component_type, file, open_flags flags) = 0;
+};
 
 }

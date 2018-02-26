@@ -27,6 +27,8 @@
 #include "schema_registry.hh"
 #include "schema_builder.hh"
 #include "mutation_source_test.hh"
+#include "db/config.hh"
+#include "db/schema_tables.hh"
 
 static bytes random_column_name() {
     return to_bytes(to_hex(make_blob(32)));
@@ -39,9 +41,18 @@ static schema_ptr random_schema() {
            .build();
 }
 
+struct dummy_init {
+    db::config config;
+
+    dummy_init() {
+        local_schema_registry().init(config);
+    }
+};
+
 SEASTAR_TEST_CASE(test_async_loading) {
     return seastar::async([] {
         storage_service_for_tests ssft;
+        dummy_init dummy;
         auto s1 = random_schema();
         auto s2 = random_schema();
 
@@ -68,6 +79,7 @@ SEASTAR_TEST_CASE(test_async_loading) {
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
     return seastar::async([] {
         storage_service_for_tests ssft;
+        dummy_init dummy;
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());
@@ -79,6 +91,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_doesnt_defer) {
 SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
     return seastar::async([] {
         storage_service_for_tests ssft;
+        dummy_init dummy;
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());
@@ -90,6 +103,7 @@ SEASTAR_TEST_CASE(test_schema_is_synced_when_syncer_defers) {
 SEASTAR_TEST_CASE(test_failed_sync_can_be_retried) {
     return seastar::async([] {
         storage_service_for_tests ssft;
+        dummy_init dummy;
         auto s = random_schema();
         s = local_schema_registry().get_or_load(s->version(), [s] (table_schema_version) { return frozen_schema(s); });
         BOOST_REQUIRE(!s->is_synced());

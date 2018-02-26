@@ -155,7 +155,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    _properties.validate();
+    _properties.validate(proxy.local().get_db().local().get_config().extensions());
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(sprint(
@@ -317,7 +317,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     add_columns(target_partition_keys, column_kind::partition_key);
     add_columns(target_clustering_keys, column_kind::clustering_key);
     add_columns(target_non_pk_columns, column_kind::regular_column);
-    _properties.properties()->apply_to_builder(builder);
+    _properties.properties()->apply_to_builder(builder, proxy.local().get_db().local().get_config().extensions());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

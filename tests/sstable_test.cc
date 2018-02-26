@@ -1262,10 +1262,14 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         file_input_stream_options opts;
         opts.read_ahead = 0;
 
+        compression_parameters cp({
+            { compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor" },
+            { compression_parameters::CHUNK_LENGTH_KB, std::to_string(opts.buffer_size/1024) },
+        });
+
         sstables::compression c;
-        c.set_compressor(compressor::lz4);
-        c.set_uncompressed_chunk_length(opts.buffer_size);
-        c.init_full_checksum();
+        // this initializes "c"
+        auto out = make_compressed_file_output_stream(f, file_output_stream_options(), &c, cp);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -1274,7 +1278,6 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         strcpy(buf2.get_write(), "buf2");
 
         size_t uncompressed_size = 0;
-        auto out = make_compressed_file_output_stream(f, file_output_stream_options(), &c);
         out.write(buf1.get(), buf1.size()).get();
         uncompressed_size += buf1.size();
         out.write(buf2.get(), buf2.size()).get();

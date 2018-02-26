@@ -1,5 +1,6 @@
 /*
- * Copyright 2015 ScyllaDB
+ * Copyright (C) 2015 ScyllaDB
+ *
  */
 
 /*
@@ -19,27 +20,14 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "extensions.hh"
+#include "sstables/sstables.hh"
 
-#include "query-result.hh"
-#include "schema.hh"
-#include "frozen_mutation.hh"
+db::extensions::extensions()
+{}
+db::extensions::~extensions()
+{}
 
-namespace db {
-class schema_ctxt;
+void db::extensions::add_sstable_file_io_extension(sstring n, sstable_file_io_extension f) {
+    _sstable_file_io_extensions[n] = std::move(f);
 }
-
-// Transport for schema_ptr across shards/nodes.
-// It's safe to access from another shard by const&.
-class frozen_schema {
-    bytes _data;
-public:
-    explicit frozen_schema(bytes);
-    frozen_schema(const schema_ptr&);
-    frozen_schema(frozen_schema&&) = default;
-    frozen_schema(const frozen_schema&) = default;
-    frozen_schema& operator=(const frozen_schema&) = default;
-    frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze(const db::schema_ctxt&) const;
-    bytes_view representation() const;
-};

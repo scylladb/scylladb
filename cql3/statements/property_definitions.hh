@@ -52,19 +52,22 @@
 #include <string>
 #include <map>
 #include <set>
-
-#include <boost/any.hpp>
+#include <variant>
 
 namespace cql3 {
 
 namespace statements {
 
 class property_definitions {
+public:
+    using map_type = std::map<sstring, sstring>;
+    using value_type = std::variant<sstring, map_type>;
 protected:
 #if 0
     protected static final Logger logger = LoggerFactory.getLogger(PropertyDefinitions.class);
 #endif
-    std::unordered_map<sstring, boost::any> _properties;
+
+    std::unordered_map<sstring, value_type> _properties;
 
     property_definitions();
 public:
@@ -72,7 +75,7 @@ public:
 
     void add_property(const sstring& name, const std::map<sstring, sstring>& value);
 
-    void validate(const std::set<sstring>& keywords, const std::set<sstring>& obsolete);
+    void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {});
 
 protected:
     std::experimental::optional<sstring> get_simple(const sstring& name) const;

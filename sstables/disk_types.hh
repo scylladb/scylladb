@@ -47,6 +47,9 @@ struct disk_string {
     explicit operator bytes_view() const {
         return value;
     }
+    bool operator==(const disk_string& rhs) const {
+        return value == rhs.value;
+    }
 };
 
 template <typename Size>
@@ -109,6 +112,16 @@ struct disk_set_of_tagged_union {
     }
     struct serdes;
     static struct serdes s_serdes;
+};
+
+}
+
+namespace std {
+template <typename Size>
+struct hash<sstables::disk_string<Size>> {
+    size_t operator()(const sstables::disk_string<Size>& s) const {
+        return std::hash<bytes>()(s.value);
+    }
 };
 
 }

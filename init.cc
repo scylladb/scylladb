@@ -152,3 +152,31 @@ void init_ms_fd_gossiper(sstring listen_address_in
         g.set_cluster_name(cluster_name);
     });
 }
+
+
+std::vector<std::reference_wrapper<configurable>>& configurable::configurables() {
+    static std::vector<std::reference_wrapper<configurable>> configurables;
+    return configurables;
+}
+
+void configurable::register_configurable(configurable & c) {
+    configurables().emplace_back(std::ref(c));
+}
+
+void configurable::append_all(boost::program_options::options_description_easy_init& init) {
+    for (configurable& c : configurables()) {
+        c.append_options(init);
+    }
+}
+
+future<> configurable::init_all(const boost::program_options::variables_map& opts, const db::config& cfg, db::extensions& exts) {
+    return do_for_each(configurables(), [&](configurable& c) {
+        return c.initialize(opts, cfg, exts);
+    });
+}
+
+future<> configurable::init_all(const db::config& cfg, db::extensions& exts) {
+    return do_with(boost::program_options::variables_map{}, [&](auto& opts) {
+        return init_all(opts, cfg, exts);
+    });
+}

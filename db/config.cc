@@ -31,6 +31,7 @@
 #include <seastar/util/log.hh>
 
 #include "config.hh"
+#include "extensions.hh"
 #include "log.hh"
 #include "utils/config_file_impl.hh"
 
@@ -83,7 +84,7 @@ struct convert<db::config::seed_provider_type> {
 #define str(x)  #x
 #define _mk_init(name, type, deflt, status, desc, ...)  , name(str(name), type(deflt), desc)
 
-db::config::config()
+db::config::config(std::shared_ptr<db::extensions> exts)
     : utils::config_file({ _make_config_values(_mk_name)
         default_log_level, logger_log_level, log_to_stdout, log_to_syslog })
     _make_config_values(_mk_init)
@@ -91,6 +92,14 @@ db::config::config()
     , logger_log_level("logger_log_level")
     , log_to_stdout("log_to_stdout")
     , log_to_syslog("log_to_syslog")
+    , _extensions(std::move(exts))
+{}
+
+db::config::config()
+    : config(std::make_shared<db::extensions>())
+{}
+
+db::config::~config()
 {}
 
 namespace utils {
@@ -185,3 +194,6 @@ logging::settings db::config::logging_settings(const bpo::variables_map& map) co
     };
 }
 
+const db::extensions& db::config::extensions() const {
+    return *_extensions;
+}
