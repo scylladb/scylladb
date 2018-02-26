@@ -195,7 +195,7 @@ unsigned partition_snapshot::version_count()
 partition_entry::partition_entry(mutation_partition mp)
 {
     auto new_version = current_allocator().construct<partition_version>(std::move(mp));
-    _version = partition_version_ref(*new_version, partition_version::is_evictable::no);
+    _version = partition_version_ref(*new_version);
 }
 
 partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s, mutation_partition&& mp)
@@ -203,9 +203,7 @@ partition_entry::partition_entry(partition_entry::evictable_tag, const schema& s
         mp.ensure_last_dummy(s);
         return std::move(mp);
     }())
-{
-    _version.make_evictable();
-}
+{ }
 
 partition_entry partition_entry::make_evictable(const schema& s, mutation_partition&& mp) {
     return {evictable_tag(), s, std::move(mp)};
@@ -232,15 +230,13 @@ partition_entry::~partition_entry() {
 
 void partition_entry::set_version(partition_version* new_version)
 {
-    bool evictable = _version.evictable();
-
     if (_snapshot) {
         _snapshot->_version = std::move(_version);
         _snapshot->_entry = nullptr;
     }
 
     _snapshot = nullptr;
-    _version = partition_version_ref(*new_version, partition_version::is_evictable(evictable));
+    _version = partition_version_ref(*new_version);
 }
 
 partition_version& partition_entry::add_version(const schema& s) {
