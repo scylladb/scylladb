@@ -70,9 +70,11 @@ private:
 public:
     wrapping_range(optional<bound> start, optional<bound> end, bool singular = false)
         : _start(std::move(start))
-        , _end(std::move(end))
-        , _singular(singular)
-    { }
+        , _singular(singular) {
+        if (!_singular) {
+            _end = std::move(end);
+        }
+    }
     wrapping_range(T value)
         : _start(bound(std::move(value), true))
         , _end()
