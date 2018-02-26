@@ -49,11 +49,21 @@ namespace {
 
 class migrators : public enable_lw_shared_from_this<migrators> {
     std::vector<const migrate_fn_type*> _migrators;
-
+    std::deque<uint32_t> _unused_ids;
 public:
     uint32_t add(const migrate_fn_type* m) {
+        if (!_unused_ids.empty()) {
+            auto idx = _unused_ids.front();
+            _unused_ids.pop_front();
+            _migrators[idx] = m;
+            return idx;
+        }
         _migrators.push_back(m);
         return _migrators.size() - 1;
+    }
+    void remove(uint32_t idx) {
+        _migrators[idx] = nullptr;
+        _unused_ids.push_back(idx);
     }
     const migrate_fn_type*& operator[](uint32_t idx) {
         return _migrators[idx];
@@ -86,8 +96,7 @@ migrate_fn_type::register_migrator(migrate_fn_type* m) {
 
 void
 migrate_fn_type::unregister_migrator(uint32_t index) {
-    static_migrators()[index] = nullptr;
-    // reuse freed slots? no need now
+    static_migrators().remove(index);
 }
 
 namespace logalloc {
