@@ -50,23 +50,41 @@ namespace {
 class migrators : public enable_lw_shared_from_this<migrators> {
     std::vector<const migrate_fn_type*> _migrators;
     std::deque<uint32_t> _unused_ids;
+#ifdef DEBUG_LSA_SANITIZER
+    static constexpr uint32_t offset = 0x00ab'1234;
+#else
+    static constexpr uint32_t offset = 0;
+#endif
 public:
     uint32_t add(const migrate_fn_type* m) {
+#ifndef DEBUG_LSA_SANITIZER
         if (!_unused_ids.empty()) {
             auto idx = _unused_ids.front();
             _unused_ids.pop_front();
-            _migrators[idx] = m;
+            _migrators[idx - offset] = m;
             return idx;
         }
+#endif
         _migrators.push_back(m);
-        return _migrators.size() - 1;
+        return _migrators.size() - 1 + offset;
     }
     void remove(uint32_t idx) {
-        _migrators[idx] = nullptr;
+#ifdef DEBUG_LSA_SANITIZER
+        assert(idx >= offset);
+        assert(idx - offset < _migrators.size());
+        assert(_migrators[idx - offset]);
+        _migrators[idx - offset] = nullptr;
+#else
         _unused_ids.push_back(idx);
+#endif
     }
     const migrate_fn_type*& operator[](uint32_t idx) {
-        return _migrators[idx];
+#ifdef DEBUG_LSA_SANITIZER
+        assert(idx >= offset);
+        assert(idx - offset < _migrators.size());
+        assert(_migrators[idx - offset]);
+#endif
+        return _migrators[idx - offset];
     }
 };
 
