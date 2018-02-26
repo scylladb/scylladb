@@ -45,24 +45,43 @@ namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
 
+namespace {
+
+class migrators : public enable_lw_shared_from_this<migrators> {
+    std::vector<const migrate_fn_type*> _migrators;
+
+public:
+    uint32_t add(const migrate_fn_type* m) {
+        _migrators.push_back(m);
+        return _migrators.size() - 1;
+    }
+    const migrate_fn_type*& operator[](uint32_t idx) {
+        return _migrators[idx];
+    }
+};
+
 static
-std::vector<const migrate_fn_type*>&
+migrators&
 static_migrators() {
-    static std::vector<const migrate_fn_type*> obj;
-    return obj;
+    static thread_local lw_shared_ptr<migrators> obj = make_lw_shared<migrators>();
+    return *obj;
+}
+
 }
 
 namespace debug {
 
-std::vector<const migrate_fn_type*>* static_migrators = &::static_migrators();
+thread_local migrators* static_migrators = &::static_migrators();
 
 }
 
 
 uint32_t
-migrate_fn_type::register_migrator(const migrate_fn_type* m) {
-    static_migrators().push_back(m);
-    return static_migrators().size() - 1;
+migrate_fn_type::register_migrator(migrate_fn_type* m) {
+    auto& migrators = static_migrators();
+    auto idx = migrators.add(m);
+    m->_migrators = migrators.shared_from_this();
+    return idx;
 }
 
 void
