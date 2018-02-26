@@ -61,8 +61,6 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
         using namespace locator;
         using namespace boost::filesystem;
 
-        printf("Testing %s property file: %s\n", (exp_result ? "well-formed" : "ill-formed"), property_fname.c_str());
-
         path fname(test_files_subdir);
         fname /= path(property_fname);
 
