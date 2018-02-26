@@ -596,7 +596,7 @@ inline
 void cache_flat_mutation_reader::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
         clogger.trace("csm {}: populate({})", this, sr);
-        _read_context->cache().on_row_insert();
+        _read_context->cache().on_static_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
             if (_read_context->digest_requested()) {
                 sr.cells().prepare_hash(*_schema, column_kind::static_column);

@@ -97,6 +97,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits),
         sm::make_derive("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
         sm::make_derive("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
+        sm::make_derive("static_row_insertions", sm::description("total number of static rows added to cache"), _stats.static_row_insertions),
         sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
         sm::make_derive("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
         sm::make_derive("partition_evictions", sm::description("total number of evicted partitions"), _stats.partition_evictions),
@@ -445,6 +446,10 @@ void row_cache::on_row_miss() {
 
 void row_cache::on_row_insert() {
     ++_tracker._stats.row_insertions;
+}
+
+void row_cache::on_static_row_insert() {
+    ++_tracker._stats.static_row_insertions;
 }
 
 class range_populating_reader {

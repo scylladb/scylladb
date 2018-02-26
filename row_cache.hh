@@ -205,6 +205,7 @@ public:
         uint64_t row_misses;
         uint64_t partition_insertions;
         uint64_t row_insertions;
+        uint64_t static_row_insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t partition_merges;
         uint64_t partition_evictions;
@@ -352,6 +353,7 @@ private:
     void on_row_hit();
     void on_row_miss();
     void on_row_insert();
+    void on_static_row_insert();
     void on_mispopulate();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
