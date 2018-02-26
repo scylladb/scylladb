@@ -34,6 +34,7 @@
 #include <seastar/core/print.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/util/alloc_failure_injector.hh>
+#include <seastar/util/backtrace.hh>
 
 #include "utils/logalloc.hh"
 #include "log.hh"
@@ -71,6 +72,136 @@ migrate_fn_type::unregister_migrator(uint32_t index) {
 }
 
 namespace logalloc {
+
+#ifdef DEBUG_LSA_SANITIZER
+
+class region_sanitizer {
+    struct allocation {
+        size_t size;
+        saved_backtrace backtrace;
+    };
+private:
+    static logging::logger logger;
+
+    bool _broken = false;
+    std::unordered_map<const void*, allocation> _allocations;
+private:
+    template<typename Function>
+    void run_and_handle_errors(Function&& fn) noexcept {
+        if (_broken) {
+            return;
+        }
+        try {
+            fn();
+        } catch (...) {
+            logger.error("Internal error, disabling the sanitizer: {}", std::current_exception());
+            _broken = true;
+            _allocations.clear();
+        }
+    }
+private:
+    void on_error() { abort(); }
+public:
+    void on_region_destruction() noexcept {
+        run_and_handle_errors([&] {
+            if (_allocations.empty()) {
+                return;
+            }
+            for (auto [ptr, alloc] : _allocations) {
+                logger.error("Leaked {} byte object at {} allocated from:\n{}",
+                             alloc.size, ptr, alloc.backtrace);
+            }
+            on_error();
+        });
+    }
+    void on_allocation(const void* ptr, size_t size) noexcept {
+        run_and_handle_errors([&] {
+            auto [ it, success ] = _allocations.emplace(ptr, allocation { size, current_backtrace() });
+            if (!success) {
+                logger.error("Attempting to allocate an {} byte object at an already occupied address {}:\n{}\n"
+                             "Previous allocation of {} bytes:\n{}",
+                             ptr, size, current_backtrace(), it->second.size, it->second.backtrace);
+                on_error();
+            }
+        });
+    }
+    void on_free(const void* ptr, size_t size) noexcept {
+        run_and_handle_errors([&] {
+            auto it = _allocations.find(ptr);
+            if (it == _allocations.end()) {
+                logger.error("Attempting to free an object at {} (size: {}) that does not exist\n{}",
+                             ptr, size, current_backtrace());
+                on_error();
+            }
+            if (it->second.size != size) {
+                logger.error("Mismatch between allocation and deallocation size of object at {}: {} vs. {}:\n{}\n"
+                             "Allocated at:\n{}",
+                             ptr, it->second.size, size, current_backtrace(), it->second.backtrace);
+                on_error();
+            }
+            _allocations.erase(it);
+        });
+    }
+    void on_migrate(const void* src, size_t size, const void* dst) noexcept {
+        run_and_handle_errors([&] {
+            auto it_src = _allocations.find(src);
+            if (it_src == _allocations.end()) {
+                logger.error("Attempting to migrate an object at {} (size: {}) that does not exist",
+                             src, size);
+                on_error();
+            }
+            if (it_src->second.size != size) {
+                logger.error("Mismatch between allocation and migration size of object at {}: {} vs. {}\n"
+                             "Allocated at:\n{}",
+                             src, it_src->second.size, size, it_src->second.backtrace);
+                on_error();
+            }
+            auto [ it_dst, success ] = _allocations.emplace(dst, std::move(it_src->second));
+            if (!success) {
+                logger.error("Attempting to migrate an {} byte object to an already occupied address {}:\n"
+                             "Migrated object allocated from:\n{}\n"
+                             "Previous allocation of {} bytes at the destination:\n{}",
+                             size, dst, it_src->second.backtrace, it_dst->second.size, it_dst->second.backtrace);
+                on_error();
+            }
+            _allocations.erase(it_src);
+        });
+    }
+    void merge(region_sanitizer& other) noexcept {
+        run_and_handle_errors([&] {
+            _broken = other._broken;
+            if (_broken) {
+                _allocations.clear();
+            } else {
+                _allocations.merge(other._allocations);
+                if (!other._allocations.empty()) {
+                    for (auto [ptr, o_alloc] : other._allocations) {
+                        auto& alloc = _allocations.at(ptr);
+                        logger.error("Conflicting allocations at address {} in merged regions\n"
+                                     "{} bytes allocated from:\n{}\n"
+                                     "{} bytes allocated from:\n{}",
+                                     ptr, alloc.size, alloc.backtrace, o_alloc.size, o_alloc.backtrace);
+                    }
+                    on_error();
+                }
+            }
+        });
+    }
+};
+
+logging::logger region_sanitizer::logger("lsa-sanitizer");
+
+#else
+
+struct region_sanitizer {
+    void on_region_destruction() noexcept { }
+    void on_allocation(const void*, size_t) noexcept { }
+    void on_free(const void* ptr, size_t size) noexcept { }
+    void on_migrate(const void*, size_t, const void*) noexcept { }
+    void merge(region_sanitizer&) noexcept { }
+};
+
+#endif
 
 struct segment;
 
@@ -1080,6 +1211,7 @@ private:
     // but consistency is good.
     size_t _evictable_space = 0;
     bool _evictable = false;
+    region_sanitizer _sanitizer;
     uint64_t _id;
     eviction_fn _eviction_fn;
 
@@ -1190,6 +1322,7 @@ private:
         for_each_live(seg, [this] (const object_descriptor* desc, void* obj) {
             auto size = desc->live_size(obj);
             auto dst = alloc_small(desc->migrator(), size, desc->alignment());
+            _sanitizer.on_migrate(obj, size, dst);
             desc->migrator()->migrate(obj, dst);
         });
 
@@ -1240,6 +1373,8 @@ public:
     }
 
     virtual ~region_impl() {
+        _sanitizer.on_region_destruction();
+
         tracker_instance._impl->unregister_region(this);
 
         while (!_segment_descs.empty()) {
@@ -1319,7 +1454,9 @@ public:
             shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
-            return alloc_small(migrator, (segment::size_type) size, alignment);
+            auto ptr = alloc_small(migrator, (segment::size_type) size, alignment);
+            _sanitizer.on_allocation(ptr, size);
+            return ptr;
         }
     }
 
@@ -1338,6 +1475,8 @@ public:
             standard_allocator().free(obj, size);
             return;
         }
+
+        _sanitizer.on_free(obj, size);
 
         segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
 
@@ -1420,6 +1559,9 @@ public:
         // Make sure both regions will notice a future increment
         // to the reclaim counter
         _invalidate_counter = std::max(_invalidate_counter, other._invalidate_counter);
+
+        _sanitizer.merge(other._sanitizer);
+        other._sanitizer = { };
     }
 
     // Returns occupancy of the sparsest compactible segment.
@@ -1468,7 +1610,9 @@ public:
             desc.encode(dpos, pos - old_pos);
             if (desc.is_live()) {
                 offset += pos - old_pos;
-                offset += desc.live_size(pos);
+                auto size = desc.live_size(pos);
+                offset += size;
+                _sanitizer.on_migrate(pos, size, dpos);
                 desc.migrator()->migrate(const_cast<char*>(pos), dpos);
             } else {
                 offset += desc.dead_size();
