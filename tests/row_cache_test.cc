@@ -705,7 +705,9 @@ SEASTAR_TEST_CASE(test_eviction) {
         std::shuffle(keys.begin(), keys.end(), std::default_random_engine(random()));
 
         for (auto&& key : keys) {
-            cache.make_reader(s, dht::partition_range::make_singular(key));
+            auto rd = cache.make_reader(s, dht::partition_range::make_singular(key));
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
         }
 
         while (tracker.partitions() > 0) {
