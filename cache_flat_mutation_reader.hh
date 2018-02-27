@@ -372,24 +372,10 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
 inline
 void cache_flat_mutation_reader::maybe_update_continuity() {
     if (can_populate() && ensure_population_lower_bound()) {
-            if (_next_row.is_in_latest_version()) {
-                clogger.trace("csm {}: mark {} continuous", this, _next_row.get_iterator_in_latest_version()->position());
-                _next_row.get_iterator_in_latest_version()->set_continuous(true);
-            } else {
-                // Cover entry from older version
-                with_allocator(_snp->region().allocator(), [&] {
-                    auto& rows = _snp->version()->partition().clustered_rows();
-                    rows_entry::compare less(*_schema);
-                    auto e = alloc_strategy_unique_ptr<rows_entry>(
-                        current_allocator().construct<rows_entry>(*_schema, _next_row.position(), is_dummy(_next_row.dummy()), is_continuous::yes));
-                    auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
-                    auto inserted = insert_result.second;
-                    if (inserted) {
-                        clogger.trace("csm {}: inserted dummy at {}", this, e->position());
-                        e.release();
-                    }
-                });
-            }
+        with_allocator(_snp->region().allocator(), [&] {
+            rows_entry& e = _next_row.ensure_entry_in_latest();
+            e.set_continuous(true);
+        });
     } else {
         _read_context->cache().on_mispopulate();
     }

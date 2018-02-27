@@ -309,6 +309,24 @@ public:
         return mf;
     }
 
+    // Makes sure that a rows_entry for the row under the cursor exists in the latest version.
+    // Doesn't change logical value or continuity of the snapshot.
+    // Can be called only when cursor is valid and pointing at a row.
+    // The cursor remains valid after the call and points at the same row as before.
+    rows_entry& ensure_entry_in_latest() {
+        auto&& rows = _snp.version()->partition().clustered_rows();
+        auto latest_i = get_iterator_in_latest_version();
+        rows_entry& latest = *latest_i;
+        if (is_in_latest_version()) {
+            return latest;
+        } else {
+           auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
+               is_continuous(latest_i != rows.end() && latest_i->continuous()));
+            rows.insert_before(latest_i, *e);
+            return *e;
+        }
+    }
+
     // Returns a pointer to rows_entry with given position in latest version or
     // creates a neutral one, provided that it belongs to a continuous range.
     // Otherwise returns nullptr.
@@ -325,9 +343,7 @@ public:
                 if (dummy()) {
                     return nullptr;
                 }
-                if (is_in_latest_version()) {
-                    return &*get_iterator_in_latest_version();
-                }
+                return &ensure_entry_in_latest();
             } else if (!continuous()) {
                 return nullptr;
             }
