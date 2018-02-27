@@ -224,6 +224,23 @@ void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
     _expiry_timer.rearm(lowres_clock::now() + _entry_ttl / 2, _entry_ttl / 2);
 }
 
+bool querier_cache::evict_one() {
+    if (_entries.empty()) {
+        return false;
+    }
+
+    auto it = _meta_entries.begin();
+    const auto end = _meta_entries.end();
+    while (it != end) {
+        const auto is_live = bool(*it);
+        it = _meta_entries.erase(it);
+        if (is_live) {
+            return true;
+        }
+    }
+    return false;
+}
+
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)
     : _cache(&cache)
     , _key(key)

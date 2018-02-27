@@ -568,6 +568,9 @@ future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concur
         return make_exception_future<lw_shared_ptr<reader_permit>>(_make_queue_overloaded_exception());
     }
     auto r = resources(1, static_cast<ssize_t>(memory));
+    if (!may_proceed(r) && _evict_an_inactive_reader) {
+        while (_evict_an_inactive_reader() && !may_proceed(r));
+    }
     if (may_proceed(r)) {
         _resources -= r;
         return make_ready_future<lw_shared_ptr<reader_permit>>(make_lw_shared<reader_permit>(*this, r));
@@ -697,7 +700,7 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
     };
     std::variant<pending_state, admitted_state> _state;
 
-    static const std::size_t new_reader_base_cost{16 * 1024};
+    static const ssize_t new_reader_base_cost{16 * 1024};
 
     template<typename Function>
     GCC6_CONCEPT(

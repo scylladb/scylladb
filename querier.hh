@@ -224,6 +224,9 @@ public:
 /// Inserted queriers will have a TTL. When this expires the querier is
 /// evicted. This is to avoid excess and unnecessary resource usage due to
 /// abandoned queriers.
+/// Provides a way to evict readers one-by-one via `evict_one()`. This can be
+/// used by the concurrency-limiting code to evict cached readers to free up
+/// resources for admitting new ones.
 class querier_cache {
 public:
     static const std::chrono::seconds default_entry_ttl;
@@ -282,6 +285,10 @@ private:
         bool is_expired(const lowres_clock::time_point& now) const {
             return !_entry_ptr || _entry_ptr->is_expired(now);
         }
+
+        explicit operator bool() const {
+            return bool(_entry_ptr);
+        }
     };
 
     entries _entries;
@@ -329,8 +336,13 @@ public:
             tracing::trace_state_ptr trace_state,
             const noncopyable_function<querier()>& create_fun);
 
-
     void set_entry_ttl(std::chrono::seconds entry_ttl);
+
+    /// Evict a querier.
+    ///
+    /// Return true if a querier was evicted and false otherwise (if the cache
+    /// is empty).
+    bool evict_one();
 };
 
 class querier_cache_context {

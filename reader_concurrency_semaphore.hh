@@ -130,6 +130,7 @@ private:
 
     size_t _max_queue_length = std::numeric_limits<size_t>::max();
     std::function<std::exception_ptr()> _make_queue_overloaded_exception = default_make_queue_overloaded_exception;
+    std::function<bool()> _evict_an_inactive_reader;
 
     bool has_available_units(const resources& r) const {
         return bool(_resources) && _resources >= r;
@@ -152,10 +153,12 @@ public:
     reader_concurrency_semaphore(unsigned count,
             size_t memory,
             size_t max_queue_length = std::numeric_limits<size_t>::max(),
-            std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception)
+            std::function<std::exception_ptr()> raise_queue_overloaded_exception = default_make_queue_overloaded_exception,
+            std::function<bool()> evict_an_inactive_reader = {})
         : _resources(count, memory)
         , _max_queue_length(max_queue_length)
-        , _make_queue_overloaded_exception(raise_queue_overloaded_exception) {
+        , _make_queue_overloaded_exception(raise_queue_overloaded_exception)
+        , _evict_an_inactive_reader(std::move(evict_an_inactive_reader)) {
     }
 
     reader_concurrency_semaphore(const reader_concurrency_semaphore&) = delete;
