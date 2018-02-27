@@ -322,19 +322,21 @@ SEASTAR_TEST_CASE(test_eviction_with_active_reader) {
         with_allocator(r.allocator(), [&] {
             simple_schema table;
             auto&& s = *table.schema();
+            auto pk = table.make_pkey();
             auto ck1 = table.make_ckey(1);
             auto ck2 = table.make_ckey(2);
 
             auto e = partition_entry::make_evictable(s, mutation_partition(table.schema()));
 
-            auto&& p1 = e.open_version(s, &tracker).partition();
-            p1.clustered_row(s, ck2);
-            p1.ensure_last_dummy(s); // needed by partition_snapshot_row_cursor
+            mutation m1(table.schema(), pk);
+            m1.partition().clustered_row(s, ck2);
+            e.apply_to_incomplete(s, partition_entry(m1.partition()), s, r, tracker);
 
             auto snap1 = e.read(r, table.schema(), &tracker);
 
-            auto&& p2 = e.open_version(s, &tracker).partition();
-            p2.clustered_row(s, ck1);
+            mutation m2(table.schema(), pk);
+            m2.partition().clustered_row(s, ck1);
+            e.apply_to_incomplete(s, partition_entry(m2.partition()), s, r, tracker);
 
             auto snap2 = e.read(r, table.schema(), &tracker);
 
