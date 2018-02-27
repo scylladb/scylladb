@@ -199,7 +199,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete) {
             assert_that(table.schema(), e.squashed(s)).is_equal_to((m2 + m3).partition());
 
             // Check that snapshot data is not stolen when its entry is applied
-            auto e2 = partition_entry(mutation_partition(table.schema()));
+            auto e2 = partition_entry::make_evictable(s, mutation_partition(table.schema()));
             e2.apply_to_incomplete(s, std::move(e), s, r, tracker);
             assert_that(table.schema(), snap1->squashed()).is_equal_to(m1.partition());
             assert_that(table.schema(), e2.squashed(s)).is_equal_to((m2 + m3).partition());
