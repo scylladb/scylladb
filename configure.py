@@ -291,6 +291,7 @@ scylla_tests = [
     'tests/cql_roles_query_test',
     'tests/enum_set_test',
     'tests/extensions_test',
+    'tests/cql_auth_syntax_test',
 ]
 
 perf_tests = [
@@ -707,6 +708,7 @@ pure_boost_tests = set([
     'tests/caching_options_test',
     'tests/auth_resource_test',
     'tests/enum_set_test',
+    'tests/cql_auth_syntax_test',
 ])
 
 tests_not_using_seastar_test_framework = set([

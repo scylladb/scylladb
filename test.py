@@ -99,6 +99,7 @@ boost_tests = [
     'cql_roles_query_test',
     'enum_set_test',
     'extensions_test',
+    'cql_auth_syntax_test',
 ]
 
 other_tests = [
