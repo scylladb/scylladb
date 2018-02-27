@@ -215,14 +215,14 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
-utils::UUID token_metadata::get_host_id(inet_address endpoint) {
+utils::UUID token_metadata::get_host_id(inet_address endpoint) const {
     if (!_endpoint_to_host_id_map.count(endpoint)) {
         throw std::runtime_error(sprint("host_id for endpoint %s is not found", endpoint));
     }
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
-std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) {
+std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) const {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
