@@ -251,6 +251,9 @@ partition_version& partition_entry::add_version(const schema& s, cache_tracker* 
     new_version->partition().set_static_row_continuous(_version->partition().static_row_continuous());
     new_version->insert_before(*_version);
     set_version(new_version);
+    if (tracker) {
+        tracker->insert(*new_version);
+    }
     return *new_version;
 }
 
@@ -490,6 +493,9 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to, cache_tracker* tra
     auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
     auto old_version = &*_version;
     set_version(new_version);
+    if (tracker) {
+        tracker->insert(*new_version);
+    }
     remove_or_mark_as_unique_owner(old_version, tracker);
 }
 
@@ -559,9 +565,13 @@ void partition_entry::evict(cache_tracker& tracker) noexcept {
     if (!_version) {
         return;
     }
-    // Must evict from all versions atomically to keep snapshots consistent.
-    for (auto&& v : versions()) {
-        v.partition().evict(tracker);
+    if (_snapshot) {
+        _snapshot->_version = std::move(_version);
+        _snapshot->_version.mark_as_unique_owner();
+        _snapshot->_entry = nullptr;
+    } else {
+        auto v = &*_version;
+        _version = { };
+        remove_or_mark_as_unique_owner(v, &tracker);
     }
-    current_allocator().invalidate_references();
 }

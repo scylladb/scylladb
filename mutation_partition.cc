@@ -310,6 +310,7 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
             auto continuous = i->continuous() || src_e.continuous();
             auto dummy = i->dummy() && src_e.dummy();
             if (tracker) {
+                i->_lru_link.swap_nodes(src_e._lru_link);
                 // Newer evictable versions store complete rows
                 i->_row = std::move(src_e._row);
             } else {
@@ -1361,8 +1362,15 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
     : _link(std::move(o._link))
     , _key(std::move(o._key))
     , _row(std::move(o._row))
+    , _lru_link()
     , _flags(std::move(o._flags))
-{ }
+{
+    if (o._lru_link.is_linked()) {
+        auto prev = o._lru_link.prev_;
+        o._lru_link.unlink();
+        cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
+    }
+}
 
 row::row(const row& o)
     : _type(o._type)
@@ -2127,20 +2135,6 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
         result.add(s, position_range(std::move(prev_pos), position_in_partition::after_all_clustered_rows()));
     }
     return result;
-}
-
-void mutation_partition::evict(cache_tracker& tracker) noexcept {
-    {
-        assert(!_rows.empty());
-        auto del = current_deleter<rows_entry>();
-        auto i = _rows.erase_and_dispose(_rows.begin(), std::prev(_rows.end()), current_deleter<rows_entry>());
-        rows_entry& e = *i;
-        assert(e.is_last_dummy());
-        e.set_continuous(false);
-    }
-    _row_tombstones.clear();
-    _static_row_continuous = false;
-    _static_row = {};
 }
 
 bool

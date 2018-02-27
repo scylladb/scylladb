@@ -97,6 +97,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("row_hits", sm::description("total number of rows needed by reads and found in cache"), _stats.row_hits),
         sm::make_derive("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
         sm::make_derive("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
+        sm::make_derive("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions),
         sm::make_derive("static_row_insertions", sm::description("total number of static rows added to cache"), _stats.static_row_insertions),
         sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
         sm::make_derive("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
@@ -125,20 +126,36 @@ void cache_tracker::clear() {
     allocator().invalidate_references();
 }
 
-void cache_tracker::touch(cache_entry& e) {
-    auto move_to_front = [this] (lru_type& lru, cache_entry& e) {
-        lru.erase(lru.iterator_to(e));
-        lru.push_front(e);
-    };
-    move_to_front(_lru, e);
+void cache_tracker::touch(rows_entry& e) {
+    if (e._lru_link.is_linked()) { // last dummy may not be linked if evicted.
+        _lru.erase(_lru.iterator_to(e));
+    }
+    _lru.push_front(e);
+}
+
+void cache_tracker::insert(rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    _lru.push_front(entry);
+}
+
+void cache_tracker::insert(partition_version& pv) noexcept {
+    for (rows_entry& row : pv.partition().clustered_rows()) {
+        insert(row);
+    }
+}
+
+void cache_tracker::insert(partition_entry& pe) noexcept {
+    for (partition_version& pv : pe.versions_from_oldest()) {
+        insert(pv);
+    }
 }
 
 void cache_tracker::insert(cache_entry& entry) {
+    insert(entry.partition());
     ++_stats.partition_insertions;
     ++_stats.partitions;
     // partition_range_cursor depends on this to detect invalidation of _end
     _region.allocator().invalidate_references();
-    _lru.push_front(entry);
 }
 
 void cache_tracker::on_partition_erase() {
@@ -162,6 +179,10 @@ void cache_tracker::on_partition_miss() {
 void cache_tracker::on_partition_eviction() {
     --_stats.partitions;
     ++_stats.partition_evictions;
+}
+
+void cache_tracker::on_row_eviction() {
+    ++_stats.row_evictions;
 }
 
 void cache_tracker::on_row_hit() {
@@ -444,10 +465,6 @@ void row_cache::on_row_miss() {
     _tracker.on_row_miss();
 }
 
-void row_cache::on_row_insert() {
-    ++_tracker._stats.row_insertions;
-}
-
 void row_cache::on_static_row_insert() {
     ++_tracker._stats.static_row_insertions;
 }
@@ -553,7 +570,6 @@ class scanning_and_populating_reader final : public flat_mutation_reader::impl {
 private:
     flat_mutation_reader read_from_entry(cache_entry& ce) {
         _cache.upgrade_entry(ce);
-        _cache._tracker.touch(ce);
         _cache.on_partition_hit();
         return ce.read(_cache, *_read_context);
     }
@@ -736,7 +752,6 @@ row_cache::make_reader(schema_ptr s,
                 auto i = _partitions.lower_bound(pos, cmp);
                 if (i != _partitions.end() && !cmp(pos, i->position())) {
                     cache_entry& e = *i;
-                    _tracker.touch(e);
                     upgrade_entry(e);
                     on_partition_hit();
                     return e.read(*this, *ctx);
@@ -820,7 +835,6 @@ cache_entry& row_cache::find_or_create(const dht::decorated_key& key, tombstone 
         _tracker.on_miss_already_populated();
         cache_entry& e = *i;
         e.partition().open_version(*e.schema(), &_tracker, phase).partition().apply(t);
-        _tracker.touch(e);
         upgrade_entry(e);
     });
 }
@@ -1000,7 +1014,6 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
             entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker);
-            _tracker.touch(entry);
             _tracker.on_partition_merge();
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
@@ -1020,12 +1033,10 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             partition_presence_checker& is_present) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             // FIXME: Invalidate only affected row ranges.
-            // This invalidates all row ranges and the static row, leaving only the partition tombstone continuous,
-            // which has to always be continuous.
+            // This invalidates all information about the partition.
             cache_entry& e = *cache_i;
-            e.evict(_tracker);
-            upgrade_entry(e);
-            e.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker);
+            e.evict(_tracker); // FIXME: evict gradually
+            e.on_evicted(_tracker);
         } else {
             _tracker.clear_continuity(*cache_i);
         }
@@ -1041,7 +1052,11 @@ void row_cache::touch(const dht::decorated_key& dk) {
   with_linearized_managed_bytes([&] {
     auto i = _partitions.find(dk, cache_entry::compare(_schema));
     if (i != _partitions.end()) {
-        _tracker.touch(*i);
+        for (partition_version& pv : i->partition().versions_from_oldest()) {
+            for (rows_entry& row : pv.partition().clustered_rows()) {
+                _tracker.touch(row);
+            }
+        }
     }
   });
  });
@@ -1123,15 +1138,8 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     , _key(std::move(o._key))
     , _pe(std::move(o._pe))
     , _flags(o._flags)
-    , _lru_link()
     , _cache_link()
 {
-    if (o._lru_link.is_linked()) {
-        auto prev = o._lru_link.prev_;
-        o._lru_link.unlink();
-        cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
-    }
-
     {
         using container_type = row_cache::partitions_type;
         container_type::node_algorithms::replace_node(o._cache_link.this_ptr(), _cache_link.this_ptr());
@@ -1156,6 +1164,32 @@ void cache_entry::on_evicted(cache_tracker& tracker) noexcept {
     evict(tracker);
     current_deleter<cache_entry>()(this);
     tracker.on_partition_eviction();
+}
+
+void rows_entry::on_evicted(cache_tracker& tracker) noexcept {
+    auto it = mutation_partition::rows_type::iterator_to(*this);
+    if (is_last_dummy()) {
+        // Every evictable partition entry must have a dummy entry at the end,
+        // so don't remove it, just unlink from the LRU.
+        // That dummy is linked in the LRU, because there may be partitions
+        // with no regular rows, and we need to track them.
+        _lru_link.unlink();
+    } else {
+        ++it;
+        it->set_continuous(false);
+        current_deleter<rows_entry>()(this);
+        tracker.on_row_eviction();
+    }
+
+    if (mutation_partition::rows_type::is_only_member(*it)) {
+        assert(it->is_last_dummy());
+        partition_version& pv = partition_version::container_of(mutation_partition::container_of(
+            mutation_partition::rows_type::container_of_only_member(*it)));
+        if (pv.is_referenced_from_entry()) {
+            cache_entry& ce = cache_entry::container_of(partition_entry::container_of(pv));
+            ce.on_evicted(tracker);
+        }
+    }
 }
 
 flat_mutation_reader cache_entry::read(row_cache& rc, read_context& reader) {

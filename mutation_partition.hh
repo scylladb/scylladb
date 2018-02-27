@@ -675,10 +675,16 @@ public:
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
 
+class cache_tracker;
+
 class rows_entry {
+    using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    friend class cache_tracker;
+    friend class size_calculator;
     intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
     deletable_row _row;
+    lru_link_type _lru_link;
     struct flags {
         // _before_ck and _after_ck encode position_in_partition::weight
         bool _before_ck : 1;
@@ -815,6 +821,7 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage() const;
+    void on_evicted(cache_tracker&) noexcept;
 };
 
 // Represents a set of writes made to a single partition.
@@ -920,8 +927,6 @@ public:
     bool fully_discontinuous(const schema&, const position_range&);
     // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
     bool check_continuity(const schema&, const position_range&, is_continuous) const;
-    // Removes all data, marking affected ranges as discontinuous.
-    void evict(cache_tracker&) noexcept;
     // Applies mutation_fragment.
     // The fragment must be goverened by the same schema as this object.
     void apply(const schema& s, const mutation_fragment&);

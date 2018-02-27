@@ -407,8 +407,9 @@ public:
         return *this;
     }
 
-    // Removes all data marking affected ranges as discontinuous.
-    // Includes versions referenced by snapshots.
+    // Removes data contained by this entry, but not owned by snapshots.
+    // Snapshots will be unlinked and evicted independently by reclaimer.
+    // This entry is invalid after this and can only be destroyed.
     void evict(cache_tracker&) noexcept;
 
     partition_version_ref& version() {

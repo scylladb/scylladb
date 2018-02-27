@@ -713,6 +713,8 @@ SEASTAR_TEST_CASE(test_eviction) {
         while (tracker.partitions() > 0) {
             logalloc::shard_tracker().reclaim(100);
         }
+
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partition_evictions, keys.size());
     });
 }
 
