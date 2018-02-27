@@ -23,6 +23,8 @@
 
 #include "schema.hh"
 
+#include <boost/range/adaptor/map.hpp>
+
 static sstring cannot_use_reason(querier::can_use cu)
 {
     switch (cu)
@@ -145,6 +147,8 @@ querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, co
 // The time-to-live of a cache-entry.
 const std::chrono::seconds querier_cache::default_entry_ttl{10};
 
+const size_t querier_cache::max_queriers_memory_usage = memory::stats().total_memory() * 0.04;
+
 void querier_cache::scan_cache_entries() {
     const auto now = lowres_clock::now();
 
@@ -190,6 +194,28 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     }
 
     tracing::trace(trace_state, "Caching querier with key {}", key);
+
+    auto memory_usage = boost::accumulate(
+            _entries | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&querier_cache::entry::memory_usage)), size_t(0));
+
+    // We add the memory-usage of the to-be added querier to the memory-usage
+    // of all the cached queriers. We now need to makes sure this number is
+    // smaller then the maximum allowed memory usage. If it isn't we evict
+    // cached queriers and substract their memory usage from this number until
+    // it goes below the limit.
+    memory_usage += q.memory_usage();
+
+    if (memory_usage >= max_queriers_memory_usage) {
+        auto it = _meta_entries.begin();
+        const auto end = _meta_entries.end();
+        while (it != end && memory_usage >= max_queriers_memory_usage) {
+            if (*it) {
+                memory_usage -= it->get_entry().memory_usage();
+            }
+            it = _meta_entries.erase(it);
+        }
+    }
+
     const auto it = _entries.emplace(key, entry::param{std::move(q), _entry_ttl}).first;
     _meta_entries.emplace_back(_entries, it);
 }

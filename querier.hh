@@ -202,6 +202,11 @@ public:
             });
         }, _compaction_state);
     }
+
+    size_t memory_usage() const {
+        return _reader.buffer_size();
+    }
+
 };
 
 /// Special-purpose cache for saving queriers between pages.
@@ -227,9 +232,13 @@ public:
 /// Provides a way to evict readers one-by-one via `evict_one()`. This can be
 /// used by the concurrency-limiting code to evict cached readers to free up
 /// resources for admitting new ones.
+/// Keeps the total memory consumption of cached queriers
+/// below max_queriers_memory_usage by evicting older entries upon inserting
+/// new ones if the the memory consupmtion would go above the limit.
 class querier_cache {
 public:
     static const std::chrono::seconds default_entry_ttl;
+    static const size_t max_queriers_memory_usage;
 
 private:
     class entry : public weakly_referencable<entry> {
@@ -260,6 +269,10 @@ private:
         querier&& get() && {
             return std::move(_querier);
         }
+
+        size_t memory_usage() const {
+            return _querier.memory_usage();
+        }
     };
 
     using entries = std::unordered_map<utils::UUID, entry>;
@@ -288,6 +301,10 @@ private:
 
         explicit operator bool() const {
             return bool(_entry_ptr);
+        }
+
+        const entry& get_entry() const {
+            return *_entry_ptr;
         }
     };
 
