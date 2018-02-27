@@ -351,13 +351,10 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
         with_allocator(_snp->region().allocator(), [&] {
             auto& rows = _snp->version()->partition().clustered_rows();
             rows_entry::compare less(*_schema);
-            // We know that the row is complete in this snapshot, because it exists in older versions,
-            // so inserting an empty row in the latest version will not change the value.
-            // When partial row eviction is implemented, that would have to be a dummy entry, but
-            // cache cannot yet handle dummy entries at clustering row positions.
+            // FIXME: Avoid the copy by inserting an incomplete clustering row
             auto e = alloc_strategy_unique_ptr<rows_entry>(
-                current_allocator().construct<rows_entry>(*_schema, _last_row.position(),
-                    is_dummy(!_last_row.position().is_clustering_row()), is_continuous::no));
+                current_allocator().construct<rows_entry>(*_last_row));
+            e->set_continuous(false);
             auto insert_result = rows.insert_check(rows.end(), *e, less);
             auto inserted = insert_result.second;
             if (inserted) {

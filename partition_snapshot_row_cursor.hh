@@ -320,8 +320,10 @@ public:
         if (is_in_latest_version()) {
             return latest;
         } else {
-           auto e = current_allocator().construct<rows_entry>(_schema, pos, is_dummy(!pos.is_clustering_row()),
-               is_continuous(latest_i != rows.end() && latest_i->continuous()));
+            // Copy row from older version because rows in evictable versions must
+            // hold values which are independently complete to be consistent on eviction.
+            auto e = current_allocator().construct<rows_entry>(*_current_row[0].it);
+            e->set_continuous(latest_i != rows.end() && latest_i->continuous());
             rows.insert_before(latest_i, *e);
             return *e;
         }

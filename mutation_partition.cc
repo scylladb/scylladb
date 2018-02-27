@@ -307,9 +307,16 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
                 }
             }
         } else {
-            i->_row.apply_monotonically(s, std::move(src_e._row));
-            i->set_continuous(i->continuous() || src_e.continuous());
-            i->set_dummy(i->dummy() && src_e.dummy());
+            auto continuous = i->continuous() || src_e.continuous();
+            auto dummy = i->dummy() && src_e.dummy();
+            if (tracker) {
+                // Newer evictable versions store complete rows
+                i->_row = std::move(src_e._row);
+            } else {
+                i->_row.apply_monotonically(s, std::move(src_e._row));
+            }
+            i->set_continuous(continuous);
+            i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
     }
