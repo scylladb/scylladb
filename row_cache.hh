@@ -206,7 +206,9 @@ public:
         uint64_t partition_evictions;
         uint64_t partition_removals;
         uint64_t row_evictions;
+        uint64_t row_removals;
         uint64_t partitions;
+        uint64_t rows;
         uint64_t mispopulations;
         uint64_t underlying_recreations;
         uint64_t underlying_partition_skips;
@@ -236,6 +238,7 @@ public:
     void insert(partition_entry&) noexcept;
     void insert(partition_version&) noexcept;
     void insert(rows_entry&) noexcept;
+    void on_remove(rows_entry&) noexcept;
     void clear_continuity(cache_entry& ce);
     void on_partition_erase();
     void on_partition_merge();

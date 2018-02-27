@@ -31,6 +31,11 @@ static void remove_or_mark_as_unique_owner(partition_version* current, cache_tra
 {
     while (current && !current->is_referenced()) {
         auto next = current->next();
+        if (tracker) {
+            for (rows_entry& row : current->partition().clustered_rows()) {
+                tracker->on_remove(row);
+            }
+        }
         current_allocator().destroy(current);
         current = next;
     }

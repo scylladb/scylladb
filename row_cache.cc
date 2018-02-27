@@ -98,6 +98,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("row_misses", sm::description("total number of rows needed by reads and missing in cache"), _stats.row_misses),
         sm::make_derive("row_insertions", sm::description("total number of rows added to cache"), _stats.row_insertions),
         sm::make_derive("row_evictions", sm::description("total number of rows evicted from cache"), _stats.row_evictions),
+        sm::make_derive("row_removals", sm::description("total number of invalidated rows"), _stats.row_removals),
         sm::make_derive("static_row_insertions", sm::description("total number of static rows added to cache"), _stats.static_row_insertions),
         sm::make_derive("concurrent_misses_same_key", sm::description("total number of operation with misses same key"), _stats.concurrent_misses_same_key),
         sm::make_derive("partition_merges", sm::description("total number of partitions merged"), _stats.partition_merges),
@@ -105,6 +106,7 @@ cache_tracker::setup_metrics() {
         sm::make_derive("partition_removals", sm::description("total number of invalidated partitions"), _stats.partition_removals),
         sm::make_derive("mispopulations", sm::description("number of entries not inserted by reads"), _stats.mispopulations),
         sm::make_gauge("partitions", sm::description("total number of cached partitions"), _stats.partitions),
+        sm::make_gauge("rows", sm::description("total number of cached rows"), _stats.rows),
         sm::make_derive("reads", sm::description("number of started reads"), _stats.reads),
         sm::make_derive("reads_with_misses", sm::description("number of reads which had to read from sstables"), _stats.reads_with_misses),
         sm::make_gauge("active_reads", sm::description("number of currently active reads"), [this] { return _stats.active_reads(); }),
@@ -117,12 +119,14 @@ cache_tracker::setup_metrics() {
 
 void cache_tracker::clear() {
     auto partitions_before = _stats.partitions;
+    auto rows_before = _stats.rows;
     with_allocator(_region.allocator(), [this] {
         while (!_lru.empty()) {
             _lru.back().on_evicted(*this);
         }
     });
     _stats.partition_removals += partitions_before;
+    _stats.row_removals += rows_before;
     allocator().invalidate_references();
 }
 
@@ -135,6 +139,7 @@ void cache_tracker::touch(rows_entry& e) {
 
 void cache_tracker::insert(rows_entry& entry) noexcept {
     ++_stats.row_insertions;
+    ++_stats.rows;
     _lru.push_front(entry);
 }
 
@@ -164,6 +169,11 @@ void cache_tracker::on_partition_erase() {
     allocator().invalidate_references();
 }
 
+void cache_tracker::on_remove(rows_entry& row) noexcept {
+    --_stats.rows;
+    ++_stats.row_removals;
+}
+
 void cache_tracker::on_partition_merge() {
     ++_stats.partition_merges;
 }
@@ -182,6 +192,7 @@ void cache_tracker::on_partition_eviction() {
 }
 
 void cache_tracker::on_row_eviction() {
+    --_stats.rows;
     ++_stats.row_evictions;
 }
 

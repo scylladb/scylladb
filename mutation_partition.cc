@@ -303,6 +303,9 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
             if (i != _rows.end() && i->continuous()) {
                 src_e.set_continuous(true);
                 if (src_e.dummy()) {
+                    if (tracker) {
+                        tracker->on_remove(src_e);
+                    }
                     _rows.erase_and_dispose(src_i, del);
                 }
             }
@@ -310,6 +313,7 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
             auto continuous = i->continuous() || src_e.continuous();
             auto dummy = i->dummy() && src_e.dummy();
             if (tracker) {
+                tracker->on_remove(*i);
                 i->_lru_link.swap_nodes(src_e._lru_link);
                 // Newer evictable versions store complete rows
                 i->_row = std::move(src_e._row);
