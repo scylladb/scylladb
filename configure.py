@@ -288,7 +288,7 @@ scylla_tests = [
     'tests/role_manager_test',
     'tests/caching_options_test',
     'tests/auth_resource_test',
-    'tests/cql_roles_query_test',
+    'tests/cql_auth_query_test',
     'tests/enum_set_test',
     'tests/extensions_test',
     'tests/cql_auth_syntax_test',
