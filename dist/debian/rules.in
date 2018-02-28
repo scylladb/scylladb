@@ -15,8 +15,8 @@ override_dh_auto_clean:
 
 override_dh_installinit:
 	dh_installinit --no-start @@DH_INSTALLINIT@@
-	dh_installinit --no-start --name scylla-housekeeping-daily @@DH_INSTALLINIT@@
-	dh_installinit --no-start --name scylla-housekeeping-restart @@DH_INSTALLINIT@@
+	@@INSTALL_HK_DAILY_INIT@@
+	@@INSTALL_HK_RESTART_INIT@@
 	dh_installinit --no-start --name scylla-fstrim @@DH_INSTALLINIT@@
 	dh_installinit --no-start --name node-exporter @@DH_INSTALLINIT@@
 
