@@ -232,7 +232,7 @@ public:
     void insert(cache_entry&);
     void clear_continuity(cache_entry& ce);
     void on_partition_erase();
-    void on_merge();
+    void on_partition_merge();
     void on_partition_hit();
     void on_partition_miss();
     void on_row_hit();

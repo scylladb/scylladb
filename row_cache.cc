@@ -165,7 +165,7 @@ void cache_tracker::on_partition_erase() {
     allocator().invalidate_references();
 }
 
-void cache_tracker::on_merge() {
+void cache_tracker::on_partition_merge() {
     ++_stats.partition_merges;
 }
 
@@ -1008,7 +1008,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             upgrade_entry(entry);
             entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region());
             _tracker.touch(entry);
-            _tracker.on_merge();
+            _tracker.on_partition_merge();
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
             cache_entry* entry = current_allocator().construct<cache_entry>(cache_entry::evictable_tag(),
