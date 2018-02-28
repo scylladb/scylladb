@@ -1,7 +1,7 @@
 # Tracing
 
 ### Motivation
-Tracing is a ScyllaDB tool that is meant to help debugging and analysing the internal flows in the server. One example of such a flow is a CQL request processing.
+Tracing is a ScyllaDB tool that is meant to help debugging and analyzing the internal flows in the server. One example of such a flow is a CQL request processing.
 
 ### How to enable?
 #### cqlsh
@@ -98,7 +98,7 @@ Traces are created in a context of a `tracing session`. For instance, if we trac
 
 If we need trace points for a specific session we may query `events` table for this session's ID (see examples above).
 
-##### `events` columns descripton
+##### `events` columns description
 `events` columns are quite straight forward:
 
 * `session_id`: ID of a session this trace
@@ -193,7 +193,7 @@ Once one has this key the rest is trivial: `SELECT * FROM system_traces.events W
 If we invoke tracing from the `cqlsh` using a `TRACING ON` command the `session_id` is printed with traces themselves and one can easily grab it
 and get the same traces later if needed using the query above.
 
-If tracing was enabled using probabilistic tracing or with slow query log features (both described above) then one should use 
+If tracing was enabled using probabilistic tracing or with slow query log features (both described above) then one should use
 time based index tables: `system_traces.sessions_time_idx` and `system_traces.node_slow_log_time_idx`.
 
 These indexes allow getting `session_id`s of all tracing sessions that were recorded in a specific time period.

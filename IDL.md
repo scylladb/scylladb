@@ -47,8 +47,8 @@ Note that though C++ allows constexpr as an initialize value, it makes the docum
 
 ###template
 `template < parameter-list > class-declaration`
-* parameter-list - a non-empty comma-separated list of the template parameters. 
-* class-decleration - (See class section) The class name declared become a template name.
+* parameter-list - a non-empty comma-separated list of the template parameters.
+* class-declaration - (See class section) The class name declared become a template name.
 
 ##IDL example
 Forward slashes comments are ignored until the end of the line.
@@ -100,4 +100,3 @@ class gossip_digest_ack {
 }
 }
 ```
-
