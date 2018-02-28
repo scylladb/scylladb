@@ -1418,6 +1418,12 @@ future<> storage_service::init_server(int delay) {
             }
             slogger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
+
+        if (_db.local().get_config().enable_sstable_data_integrity_check()) {
+            slogger.info0("SSTable data integrity checker is enabled.");
+        } else {
+            slogger.info0("SSTable data integrity checker is disabled.");
+        }
     });
 }
 
