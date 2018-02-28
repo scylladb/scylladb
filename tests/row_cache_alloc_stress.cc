@@ -122,13 +122,13 @@ int main(int argc, char** argv) {
             std::deque<dht::decorated_key> cache_stuffing;
             auto fill_cache_to_the_top = [&] {
                 std::cout << "Filling up memory with evictable data\n";
+                // Ensure that entries matching memtable partitions are not evicted,
+                // we want to hit the merge path in row_cache::update()
+                for (auto&& key : keys) {
+                    cache.unlink_from_lru(key);
+                }
                 while (true) {
                     auto evictions_before = tracker.get_stats().partition_evictions;
-                    // Ensure that entries matching memtable partitions are evicted
-                    // last, we want to hit the merge path in row_cache::update()
-                    for (auto&& key : keys) {
-                        cache.touch(key);
-                    }
                     auto m = make_small_mutation();
                     cache_stuffing.push_back(m.decorated_key());
                     cache.populate(m);
