@@ -105,6 +105,7 @@ private:
 public:
     intrusive_set_external_comparator() { algo::init_header(_header.this_ptr()); }
     intrusive_set_external_comparator(intrusive_set_external_comparator&& o) {
+        algo::init_header(_header.this_ptr());
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
     }
     iterator begin() { return iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
