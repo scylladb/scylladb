@@ -203,6 +203,9 @@ public:
         uint64_t static_row_insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t partition_merges;
+        uint64_t rows_processed_from_memtable;
+        uint64_t rows_dropped_from_memtable;
+        uint64_t rows_merged_from_memtable;
         uint64_t partition_evictions;
         uint64_t partition_removals;
         uint64_t row_evictions;
@@ -250,6 +253,9 @@ public:
     void on_row_miss();
     void on_miss_already_populated();
     void on_mispopulate();
+    void on_row_processed_from_memtable() { ++_stats.rows_processed_from_memtable; }
+    void on_row_dropped_from_memtable() { ++_stats.rows_dropped_from_memtable; }
+    void on_row_merged_from_memtable() { ++_stats.rows_merged_from_memtable; }
     void pinned_dirty_memory_overload(uint64_t bytes);
     allocation_strategy& allocator();
     logalloc::region& region();

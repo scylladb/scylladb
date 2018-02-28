@@ -114,6 +114,12 @@ cache_tracker::setup_metrics() {
         sm::make_derive("sstable_partition_skips", sm::description("number of times sstable reader was fast forwarded across partitions"), _stats.underlying_partition_skips),
         sm::make_derive("sstable_row_skips", sm::description("number of times sstable reader was fast forwarded within a partition"), _stats.underlying_row_skips),
         sm::make_derive("pinned_dirty_memory_overload", sm::description("amount of pinned bytes that we tried to unpin over the limit. This should sit constantly at 0, and any number different than 0 is indicative of a bug"), _stats.pinned_dirty_memory_overload),
+        sm::make_derive("rows_processed_from_memtable", _stats.rows_processed_from_memtable,
+            sm::description("total number of rows in memtables which were processed during cache update on memtable flush")),
+        sm::make_derive("rows_dropped_from_memtable", _stats.rows_dropped_from_memtable,
+            sm::description("total number of rows in memtables which were dropped during cache update on memtable flush")),
+        sm::make_derive("rows_merged_from_memtable", _stats.rows_merged_from_memtable,
+            sm::description("total number of rows in memtables which were merged with existing rows during cache update on memtable flush")),
     });
 }
 
