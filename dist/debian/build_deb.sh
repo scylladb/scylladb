@@ -127,6 +127,8 @@ if [ "$TARGET" = "jessie" ]; then
     cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@/dh_installinit --no-start --name scylla-housekeeping-restart/g" debian/rules
     sed -i -e "s#@@COMPILER@@#/opt/scylladb/bin/g++-7#g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, scylla-gcc72-g++-7, libunwind-dev, scylla-antlr35, scylla-libthrift010-dev, scylla-antlr35-c++-dev, scylla-libboost-program-options163-dev, scylla-libboost-filesystem163-dev, scylla-libboost-system163-dev, scylla-libboost-thread163-dev, scylla-libboost-test163-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@//g" debian/control
@@ -141,6 +143,8 @@ elif [ "$TARGET" = "stretch" ]; then
     cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@/dh_installinit --no-start --name scylla-housekeeping-restart/g" debian/rules
     sed -i -e "s#@@COMPILER@@#/opt/scylladb/bin/g++-7#g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, scylla-gcc72-g++-7, libunwind-dev, antlr3, scylla-libthrift010-dev, scylla-antlr35-c++-dev, libboost-program-options1.62-dev, libboost-filesystem1.62-dev, libboost-system1.62-dev, libboost-thread1.62-dev, libboost-test1.62-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@//g" debian/control
@@ -155,6 +159,8 @@ elif [ "$TARGET" = "trusty" ]; then
     cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping --upstart-only/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@//g" debian/rules
     sed -i -e "s#@@COMPILER@@#/opt/scylladb/bin/g++-7#g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/scylla-gcc72-g++-7, libunwind8-dev, scylla-antlr35, scylla-libthrift010-dev, scylla-antlr35-c++-dev, scylla-libboost-program-options163-dev, scylla-libboost-filesystem163-dev, scylla-libboost-system163-dev, scylla-libboost-thread163-dev, scylla-libboost-test163-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, num-utils/g" debian/control
@@ -168,6 +174,8 @@ elif [ "$TARGET" = "trusty" ]; then
 elif [ "$TARGET" = "xenial" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@/dh_installinit --no-start --name scylla-housekeeping-restart/g" debian/rules
     sed -i -e "s#@@COMPILER@@#/opt/scylladb/bin/g++-7#g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, scylla-gcc72-g++-7, libunwind-dev, antlr3, scylla-libthrift010-dev, scylla-antlr35-c++-dev, scylla-libboost-program-options163-dev, scylla-libboost-filesystem163-dev, scylla-libboost-system163-dev, scylla-libboost-thread163-dev, scylla-libboost-test163-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
@@ -181,6 +189,8 @@ elif [ "$TARGET" = "xenial" ]; then
 elif [ "$TARGET" = "bionic" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@/dh_installinit --no-start --name scylla-housekeeping-restart/g" debian/rules
     sed -i -e "s#@@COMPILER@@#g++-7#g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++, libunwind-dev, antlr3, scylla-libthrift010-dev, scylla-antlr35-c++-dev, libboost-program-options-dev, libboost-filesystem-dev, libboost-system-dev, libboost-thread-dev, libboost-test-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
@@ -194,6 +204,8 @@ elif [ "$TARGET" = "bionic" ]; then
 elif [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ]; then
     sed -i -e "s/@@REVISION@@/0ubuntu1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
+    sed -i -e "s/@@INSTALL_HK_RESTART_INIT@@/dh_installinit --no-start --name scylla-housekeeping-restart/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-7/g" debian/rules
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++-7, libunwind-dev, antlr3, scylla-libthrift010-dev, scylla-antlr35-c++-dev, libboost-program-options-dev, libboost-filesystem-dev, libboost-system-dev, libboost-thread-dev, libboost-test-dev/g" debian/control
     sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
