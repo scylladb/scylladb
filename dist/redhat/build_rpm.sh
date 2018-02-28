@@ -2,7 +2,7 @@
 
 . /etc/os-release
 print_usage() {
-    echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-x86_64"
+    echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-$(uname -m)"
     echo "  --jobs  specify number of jobs"
     echo "  --dist  create a public distribution rpm"
     echo "  --target target distribution in mock cfg name"
@@ -58,15 +58,11 @@ if [ ! -e dist/redhat/build_rpm.sh ]; then
     exit 1
 fi
 
-if [ "$(arch)" != "x86_64" ]; then
-    echo "Unsupported architecture: $(arch)"
-    exit 1
-fi
 if [ -z "$TARGET" ]; then
     if [ "$ID" = "centos" -o "$ID" = "rhel" ] && [ "$VERSION_ID" = "7" ]; then
-        TARGET=epel-7-x86_64
+        TARGET=epel-7-$(uname -m)
     elif [ "$ID" = "fedora" ]; then
-        TARGET=$ID-$VERSION_ID-x86_64
+        TARGET=$ID-$VERSION_ID-$(uname -m)
     else
         echo "Please specify target"
         exit 1
@@ -81,6 +77,9 @@ if [ ! -f /usr/bin/git ]; then
 fi
 if [ ! -f /usr/bin/wget ]; then
     pkg_install wget
+fi
+if [ ! -f /usr/bin/yum-builddep ]; then
+    pkg_install yum-utils
 fi
 
 VERSION=$(./SCYLLA-VERSION-GEN)
@@ -104,7 +103,7 @@ if [ $JOBS -gt 0 ]; then
     RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
 fi
 sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
-if [ "$TARGET" = "epel-7-x86_64" ]; then
+if [[ "$TARGET" =~ ^epel-7- ]]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
