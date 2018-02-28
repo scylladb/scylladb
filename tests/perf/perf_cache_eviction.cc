@@ -101,8 +101,8 @@ int main(int argc, char** argv) {
             timer<> stats_printer;
             monotonic_counter<uint64_t> reads_ctr([&] { return reads; });
             monotonic_counter<uint64_t> mutations_ctr([&] { return mutations; });
-            monotonic_counter<uint64_t> eviction_ctr([&] { return global_cache_tracker().get_stats().partition_evictions; });
             monotonic_counter<uint64_t> pmerges_ctr([&] { return global_cache_tracker().get_stats().partition_merges; });
+            monotonic_counter<uint64_t> eviction_ctr([&] { return global_cache_tracker().get_stats().row_evictions; });
             monotonic_counter<uint64_t> miss_ctr([&] { return global_cache_tracker().get_stats().reads_with_misses; });
             stats_printer.set_callback([&] {
                 auto MB = 1024 * 1024;
