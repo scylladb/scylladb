@@ -180,6 +180,10 @@ void cache_tracker::on_remove(rows_entry& row) noexcept {
     ++_stats.row_removals;
 }
 
+void cache_tracker::unlink(rows_entry& row) noexcept {
+    row._lru_link.unlink();
+}
+
 void cache_tracker::on_partition_merge() {
     ++_stats.partition_merges;
 }
@@ -1077,6 +1081,21 @@ void row_cache::touch(const dht::decorated_key& dk) {
     }
   });
  });
+}
+
+void row_cache::unlink_from_lru(const dht::decorated_key& dk) {
+    _read_section(_tracker.region(), [&] {
+        with_linearized_managed_bytes([&] {
+            auto i = _partitions.find(dk, cache_entry::compare(_schema));
+            if (i != _partitions.end()) {
+                for (partition_version& pv : i->partition().versions_from_oldest()) {
+                    for (rows_entry& row : pv.partition().clustered_rows()) {
+                        _tracker.unlink(row);
+                    }
+                }
+            }
+        });
+    });
 }
 
 void row_cache::invalidate_locked(const dht::decorated_key& dk) {

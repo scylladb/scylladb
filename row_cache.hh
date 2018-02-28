@@ -242,6 +242,7 @@ public:
     void insert(partition_version&) noexcept;
     void insert(rows_entry&) noexcept;
     void on_remove(rows_entry&) noexcept;
+    void unlink(rows_entry&) noexcept;
     void clear_continuity(cache_entry& ce);
     void on_partition_erase();
     void on_partition_merge();
@@ -495,6 +496,10 @@ public:
 
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
+
+    // Detaches current contents of given partition from LRU, so
+    // that they are not evicted by memory reclaimer.
+    void unlink_from_lru(const dht::decorated_key&);
 
     // Synchronizes cache with the underlying mutation source
     // by invalidating ranges which were modified. This will force
