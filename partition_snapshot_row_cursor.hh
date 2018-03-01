@@ -334,7 +334,7 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_snapshot_row_cursor& cur) {
-        out << "{cursor: position=" << cur._position << ", ";
+        out << "{cursor: position=" << cur._position << ", cont=" << cur.continuous() << ", ";
         if (!cur.iterators_valid()) {
             return out << " iterators invalid}";
         }
@@ -347,21 +347,21 @@ public:
             first = false;
             out << v.version_no;
         }
-        out << "], heap=[";
+        out << "], heap=[\n  ";
         first = true;
         for (auto&& v : cur._heap) {
             if (!first) {
-                out << ", ";
+                out << ",\n  ";
             }
             first = false;
-            out << "{v=" << v.version_no << ", pos=" << v.it->position() << "}";
+            out << "{v=" << v.version_no << ", pos=" << v.it->position() << ", cont=" << v.it->continuous() << "}";
         }
-        out << "], iterators=[";
+        out << "], iterators=[\n  ";
         first = true;
         auto v = cur._snp.versions().begin();
         for (auto&& i : cur._iterators) {
             if (!first) {
-                out << ", ";
+                out << ",\n  ";
             }
             first = false;
             if (i == v->partition().clustered_rows().end()) {
