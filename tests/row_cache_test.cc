@@ -117,6 +117,30 @@ snapshot_source snapshot_source_from_snapshot(mutation_source src) {
     });
 }
 
+bool has_key(row_cache& cache, const dht::decorated_key& key) {
+    auto range = dht::partition_range::make_singular(key);
+    auto reader = cache.make_reader(cache.schema(), range);
+    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
+    if (!bool(mo)) {
+        return false;
+    }
+    return !mo->partition().empty();
+}
+
+void verify_has(row_cache& cache, const dht::decorated_key& key) {
+    BOOST_REQUIRE(has_key(cache, key));
+}
+
+void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
+    BOOST_REQUIRE(!has_key(cache, key));
+}
+
+void verify_has(row_cache& cache, const mutation& m) {
+    auto range = dht::partition_range::make_singular(m.decorated_key());
+    auto reader = cache.make_reader(cache.schema(), range);
+    assert_that(std::move(reader)).next_mutation().is_equal_to(m);
+}
+
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
     return seastar::async([] {
         auto s = make_schema();
@@ -716,30 +740,6 @@ SEASTAR_TEST_CASE(test_eviction) {
 
         BOOST_REQUIRE_EQUAL(tracker.get_stats().partition_evictions, keys.size());
     });
-}
-
-bool has_key(row_cache& cache, const dht::decorated_key& key) {
-    auto range = dht::partition_range::make_singular(key);
-    auto reader = cache.make_reader(cache.schema(), range);
-    auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
-    if (!bool(mo)) {
-        return false;
-    }
-    return !mo->partition().empty();
-}
-
-void verify_has(row_cache& cache, const dht::decorated_key& key) {
-    BOOST_REQUIRE(has_key(cache, key));
-}
-
-void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
-    BOOST_REQUIRE(!has_key(cache, key));
-}
-
-void verify_has(row_cache& cache, const mutation& m) {
-    auto range = dht::partition_range::make_singular(m.decorated_key());
-    auto reader = cache.make_reader(cache.schema(), range);
-    assert_that(std::move(reader)).next_mutation().is_equal_to(m);
 }
 
 void test_sliced_read_row_presence(flat_mutation_reader reader, schema_ptr s, std::deque<int> expected)
