@@ -50,6 +50,12 @@ static schema_ptr make_schema() {
         .build();
 }
 
+static schema_ptr make_schema_with_extra_column() {
+    return schema_builder(make_schema())
+        .with_column("a", bytes_type, column_kind::regular_column)
+        .build();
+}
+
 static thread_local api::timestamp_type next_timestamp = 1;
 
 static
@@ -739,6 +745,36 @@ SEASTAR_TEST_CASE(test_eviction) {
         }
 
         BOOST_REQUIRE_EQUAL(tracker.get_stats().partition_evictions, keys.size());
+    });
+}
+
+SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto s2 = make_schema_with_extra_column();
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+        auto m = make_new_mutation(s);
+        cache.populate(m);
+
+        cache.set_schema(s2);
+
+        {
+            auto rd = cache.make_reader(s2, dht::partition_range::make_singular(m.decorated_key()));
+            rd.set_max_buffer_size(1);
+            rd.fill_buffer().get();
+        }
+
+        while (tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) ;
+
+        // The partition should be evictable after schema change
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().rows, 0);
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partitions, 0);
+        BOOST_REQUIRE_EQUAL(tracker.get_stats().partition_evictions, 1);
+        verify_does_not_have(cache, m.decorated_key());
     });
 }
 
