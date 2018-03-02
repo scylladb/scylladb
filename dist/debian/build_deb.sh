@@ -124,7 +124,6 @@ cp dist/debian/scylla-server.install.in debian/scylla-server.install
 cp dist/debian/scylla-conf.preinst.in debian/scylla-conf.preinst
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/scylla-conf.preinst
 if [ "$TARGET" = "jessie" ]; then
-    cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
@@ -142,7 +141,6 @@ if [ "$TARGET" = "jessie" ]; then
     sed -i -e "s#@@SCRIPTS_SAVE_COREDUMP@@#dist/debian/scripts/scylla_save_coredump usr/lib/scylla#g" debian/scylla-server.install
     sed -i -e "s#@@SCRIPTS_DELAY_FSTRIM@@#dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla#g" debian/scylla-server.install
 elif [ "$TARGET" = "stretch" ]; then
-    cp dist/debian/scylla-server.cron.d debian/
     sed -i -e "s/@@REVISION@@/1~$TARGET/g" debian/changelog
     sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
     sed -i -e "s/@@INSTALL_HK_DAILY_INIT@@/dh_installinit --no-start --name scylla-housekeeping-daily/g" debian/rules
