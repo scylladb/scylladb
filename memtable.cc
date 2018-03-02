@@ -66,10 +66,13 @@ future<> memtable::clear_gently() noexcept {
             while (!p.empty()) {
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
-                    while (!p.empty() && !need_preempt()) {
+                    while (!p.empty()) {
                         p.erase_and_dispose(p.begin(), [&] (auto e) {
                             alloc.destroy(e);
                         });
+                        if (need_preempt()) {
+                            break;
+                        }
                     }
                 });
                 remove_flushed_memory(dirty_before - dirty_size());
