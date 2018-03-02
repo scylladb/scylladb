@@ -1557,6 +1557,15 @@ static void evict_one_partition(cache_tracker& tracker) {
     }
 }
 
+static void evict_one_row(cache_tracker& tracker) {
+    auto initial = tracker.get_stats().rows;
+    assert(initial > 0);
+    while (tracker.get_stats().rows == initial) {
+        auto ret = tracker.region().evict_some();
+        BOOST_REQUIRE(ret == memory::reclaiming_result::reclaimed_something);
+    }
+}
+
 SEASTAR_TEST_CASE(test_lru) {
     return seastar::async([] {
         auto s = make_schema();
@@ -3211,5 +3220,137 @@ SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
 
         // After all readers are gone
         make_reader().produces(m1 + m2 + m3);
+    });
+}
+
+SEASTAR_TEST_CASE(test_static_row_is_kept_alive_by_reads_with_no_clustering_ranges) {
+    return seastar::async([] {
+        simple_schema table;
+        auto s = table.schema();
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+        auto keys = table.make_pkeys(3);
+
+        mutation m1(s, keys[0]);
+        table.add_static_row(m1, "v1");
+
+        mutation m2(s, keys[1]);
+        table.add_static_row(m2, "v2");
+
+        mutation m3(s, keys[2]);
+        table.add_static_row(m3, "v3");
+
+        cache.populate(m1);
+        cache.populate(m2);
+        cache.populate(m3);
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_ranges({})
+                .build();
+            assert_that(cache.make_reader(s, dht::partition_range::make_singular(keys[0]), slice))
+                .produces(m1);
+        }
+
+        evict_one_partition(tracker); // should evict keys[1], not keys[0]
+
+        verify_does_not_have(cache, keys[1]);
+        verify_has(cache, keys[0]);
+        verify_has(cache, keys[2]);
+    });
+}
+
+SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_later_snapshot_consistent) {
+    return seastar::async([] {
+        simple_schema table;
+        auto s = table.schema();
+
+        {
+            memtable_snapshot_source underlying(s);
+            cache_tracker tracker;
+            row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+            auto pk = table.make_pkey();
+
+            mutation m1(s, pk);
+            table.add_row(m1, table.make_ckey(0), "1");
+            table.add_row(m1, table.make_ckey(1), "2");
+            table.add_row(m1, table.make_ckey(2), "3");
+
+            mutation m2(s, pk);
+            table.add_row(m2, table.make_ckey(0), "1'");
+            table.add_row(m2, table.make_ckey(1), "2'");
+            table.add_row(m2, table.make_ckey(2), "3'");
+
+            apply(cache, underlying, m1);
+
+            populate_range(cache);
+
+            auto rd1 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            rd1.set_max_buffer_size(1);
+            rd1.fill_buffer().get();
+
+            apply(cache, underlying, m2);
+
+            auto rd2 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            rd2.set_max_buffer_size(1);
+
+            auto rd1_a = assert_that(std::move(rd1));
+            rd1_a.produces(m1);
+
+            evict_one_row(tracker);
+            evict_one_row(tracker);
+            evict_one_row(tracker);
+
+            assert_that(std::move(rd2)).produces(m1 + m2);
+        }
+        {
+            memtable_snapshot_source underlying(s);
+            cache_tracker tracker;
+            row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+            auto pk = table.make_pkey();
+
+            mutation m1(s, pk);
+            table.add_row(m1, table.make_ckey(0), "1");
+            table.add_row(m1, table.make_ckey(1), "2");
+            table.add_row(m1, table.make_ckey(2), "3");
+
+            mutation m2(s, pk);
+            table.add_row(m2, table.make_ckey(2), "3'");
+
+            apply(cache, underlying, m1);
+
+            populate_range(cache, dht::partition_range::make_singular(pk),
+                query::clustering_range::make_singular(table.make_ckey(0)));
+
+            populate_range(cache, dht::partition_range::make_singular(pk),
+                query::clustering_range::make_singular(table.make_ckey(1)));
+
+            populate_range(cache, dht::partition_range::make_singular(pk),
+                query::clustering_range::make_singular(table.make_ckey(2)));
+
+            auto rd1 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            rd1.set_max_buffer_size(1);
+            rd1.fill_buffer().get();
+
+            apply(cache, underlying, m2);
+
+            auto rd2 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            rd2.set_max_buffer_size(1);
+
+            auto rd1_a = assert_that(std::move(rd1));
+            rd1_a.produces(m1);
+
+            evict_one_row(tracker);
+            evict_one_row(tracker);
+            evict_one_row(tracker);
+
+            assert_that(std::move(rd2)).produces(m1 + m2);
+        }
     });
 }
