@@ -118,7 +118,7 @@ SEASTAR_TEST_CASE(create_role_restrictions) {
         // Only a superuser can create a superuser role.
         //
 
-        verify_unauthorized_then_ok(env, bob, "CREATE ROLE emperor SUPERUSER", [&env] {
+        verify_unauthorized_then_ok(env, bob, "CREATE ROLE emperor WITH SUPERUSER = true", [&env] {
             env.execute_cql("ALTER USER bob SUPERUSER").get0();
         });
     }, db_config_with_auth());
@@ -136,7 +136,7 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         // A user cannot alter a role without ALTER on the role.
         //
 
-        verify_unauthorized_then_ok(env, alice, "ALTER ROLE lord LOGIN", [&env] {
+        verify_unauthorized_then_ok(env, alice, "ALTER ROLE lord WITH LOGIN = true", [&env] {
             env.execute_cql("GRANT ALTER ON ROLE lord TO alice").get0();
         });
 
@@ -145,14 +145,14 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         //
 
         with_user(env, bob, [&env] {
-            env.execute_cql("ALTER ROLE bob LOGIN").get0();
+            env.execute_cql("ALTER ROLE bob WITH LOGIN = true").get0();
         });
 
         //
         // Only superusers can alter superuser status.
         //
 
-        verify_unauthorized_then_ok(env, bob, "ALTER ROLE lord SUPERUSER", [&env] {
+        verify_unauthorized_then_ok(env, bob, "ALTER ROLE lord WITH SUPERUSER = true", [&env] {
             env.execute_cql("ALTER USER bob SUPERUSER").get0();
         });
 
@@ -162,7 +162,9 @@ SEASTAR_TEST_CASE(alter_role_restrictions) {
         // Note that `bob` is still a superuser.
 
         with_user(env, bob, [&env] {
-            BOOST_REQUIRE_THROW(env.execute_cql("ALTER ROLE bob SUPERUSER").get0(), exceptions::unauthorized_exception);
+            BOOST_REQUIRE_THROW(
+                    env.execute_cql("ALTER ROLE bob WITH SUPERUSER = true").get0(),
+                    exceptions::unauthorized_exception);
         });
     }, db_config_with_auth());
 }
@@ -195,7 +197,7 @@ SEASTAR_TEST_CASE(drop_role_restrictions) {
         // Only a superuser can drop a role that has been granted a superuser role.
         //
 
-        env.execute_cql("CREATE ROLE emperor SUPERUSER").get0();
+        env.execute_cql("CREATE ROLE emperor WITH SUPERUSER = true").get0();
 
         verify_unauthorized_then_ok(env, bob, "DROP ROLE emperor", [&env] {
             env.execute_cql("ALTER USER bob SUPERUSER").get0();

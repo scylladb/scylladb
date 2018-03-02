@@ -45,6 +45,7 @@
 #include "permission_altering_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
+#include "cql3/role_name.hh"
 #include "cql3/selection/selection.hh"
 #include "service/storage_service.hh"
 
@@ -61,10 +62,10 @@ static auth::permission_set filter_applicable_permissions(const auth::permission
 
 cql3::statements::permission_altering_statement::permission_altering_statement(
                 auth::permission_set permissions, auth::resource resource,
-                sstring role_name)
+                const role_name& rn)
                 : _permissions(filter_applicable_permissions(permissions, resource))
                 , _resource(std::move(resource))
-                , _role_name(std::move(role_name)) {
+                , _role_name(rn.to_string()) {
 }
 
 void cql3::statements::permission_altering_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
