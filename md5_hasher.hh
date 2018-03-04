@@ -33,6 +33,7 @@ public:
     static constexpr size_t size = CryptoPP::Weak::MD5::DIGESTSIZE;
 
     void update(const char* ptr, size_t length) {
+        using namespace CryptoPP;
         static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
         hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
     }
