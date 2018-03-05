@@ -140,19 +140,19 @@ static future<> test_propagation(bool propagate, Func&& func, Post&& post, Then&
     auto xr = ::make_shared<bool>(false);
     auto xw = ::make_shared<bool>(false);
 
-    queue->run_with_ordered_post_op(0, [sem, func = std::forward<Func>(func)]() mutable {
+    auto f1 = queue->run_with_ordered_post_op(0, [sem, func = std::forward<Func>(func)]() mutable {
         return sem->wait().then(std::forward<Func>(func));
     }, std::forward<Post>(post)).handle_exception([xr](auto p) {
         *xr = true;
     }).discard_result();
 
-    auto f = queue->wait_for_pending(0).then(std::forward<Then>(thn)).handle_exception([xw](auto p) {
+    auto f2 = queue->wait_for_pending(0).then(std::forward<Then>(thn)).handle_exception([xw](auto p) {
         *xw = true;
     }).discard_result();
 
     sem->signal();
 
-    return f.finally([sem, queue, want_except_in_run, want_except_in_wait, xr, xw] {
+    return seastar::when_all_succeed(std::move(f1), std::move(f2)).finally([sem, queue, want_except_in_run, want_except_in_wait, xr, xw] {
         BOOST_CHECK_EQUAL(want_except_in_run, *xr);
         BOOST_CHECK_EQUAL(want_except_in_wait, *xw);
     }).finally([queue] {
