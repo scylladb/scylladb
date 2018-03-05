@@ -454,6 +454,9 @@ class sha256_hasher {
     CryptoPP::SHA256 hash{};
 public:
     void update(const char* ptr, size_t length) {
+        // In Crypto++ v6, the `byte` typedef has been moved to CryptoPP:: namespace
+        // We bring the namespace in to make the same code work for both 5.x and 6.x versions
+        using namespace CryptoPP;
         static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
         hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
     }
