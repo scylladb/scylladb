@@ -714,6 +714,38 @@ mutation_reader make_empty_reader() {
     return make_mutation_reader<empty_reader>();
 }
 
+const reader_concurrency_semaphore::timeout_clock::duration
+reader_concurrency_semaphore::no_timeout{reader_concurrency_semaphore::timeout_clock::duration::max()};
+
+void reader_concurrency_semaphore::signal(const resources& r) {
+    _resources += r;
+    while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
+        auto& x = _wait_list.front();
+        _resources -= x.res;
+        x.pr.set_value(make_lw_shared<reader_permit>(*this, x.res));
+        _wait_list.pop_front();
+    }
+}
+
+future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concurrency_semaphore::wait_admission(size_t memory) {
+    if (_wait_list.size() >= _max_queue_length) {
+        return make_exception_future<lw_shared_ptr<reader_permit>>(_make_queue_overloaded_exception());
+    }
+    auto r = resources(1, static_cast<ssize_t>(memory));
+    if (may_proceed(r)) {
+        _resources -= r;
+        return make_ready_future<lw_shared_ptr<reader_permit>>(make_lw_shared<reader_permit>(*this, r));
+    }
+    promise<lw_shared_ptr<reader_permit>> pr;
+    auto fut = pr.get_future();
+    if (_timeout == no_timeout) {
+        _wait_list.push_back(entry(std::move(pr), r));
+    } else {
+        _wait_list.push_back(entry(std::move(pr), r), timeout_clock::now() + _timeout);
+    }
+    return fut;
+}
+
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
