@@ -756,18 +756,17 @@ class tracking_reader : public flat_mutation_reader::impl {
     std::size_t _call_count{0};
     std::size_t _ff_count{0};
 public:
-    tracking_reader(db::timeout_semaphore* resources_sem, schema_ptr schema, lw_shared_ptr<sstables::sstable> sst)
+    tracking_reader(schema_ptr schema, lw_shared_ptr<sstables::sstable> sst, reader_resource_tracker tracker)
         : impl(schema)
         , _reader(sst->read_range_rows_flat(
                         schema,
                         query::full_partition_range,
                         schema->full_slice(),
                         default_priority_class(),
-                        reader_resource_tracker(resources_sem),
+                        tracker,
                         streamed_mutation::forwarding::no,
                         mutation_reader::forwarding::yes)) {
     }
-
 
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
         ++_call_count;
@@ -814,28 +813,35 @@ class reader_wrapper {
     db::timeout_clock::time_point _timeout;
 public:
     reader_wrapper(
-            const restricted_mutation_reader_config& config,
+            reader_concurrency_semaphore& semaphore,
             schema_ptr schema,
             lw_shared_ptr<sstables::sstable> sst,
             db::timeout_clock::time_point timeout = db::no_timeout)
         : _reader(make_empty_flat_reader(schema))
         , _timeout(timeout)
     {
-        auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
-            auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
+        auto ms = mutation_source([this, sst=std::move(sst)] (schema_ptr schema,
+                    const dht::partition_range&,
+                    const query::partition_slice&,
+                    const io_priority_class&,
+                    tracing::trace_state_ptr,
+                    streamed_mutation::forwarding,
+                    mutation_reader::forwarding,
+                    reader_resource_tracker res_tracker) {
+            auto tracker_ptr = std::make_unique<tracking_reader>(std::move(schema), std::move(sst), res_tracker);
             _tracker = tracker_ptr.get();
             return flat_mutation_reader(std::move(tracker_ptr));
         });
 
-        _reader = make_restricted_flat_reader(config, std::move(ms), schema);
+        _reader = make_restricted_flat_reader(semaphore, std::move(ms), schema);
     }
 
     reader_wrapper(
-            const restricted_mutation_reader_config& config,
+            reader_concurrency_semaphore& semaphore,
             schema_ptr schema,
             lw_shared_ptr<sstables::sstable> sst,
             db::timeout_clock::duration timeout_duration)
-        : reader_wrapper(config, std::move(schema), std::move(sst), db::timeout_clock::now() + timeout_duration) {
+        : reader_wrapper(semaphore, std::move(schema), std::move(sst), db::timeout_clock::now() + timeout_duration) {
     }
 
     future<> operator()() {
@@ -861,19 +867,6 @@ public:
         return bool(_tracker);
     }
 };
-
-struct restriction_data {
-    std::unique_ptr<db::timeout_semaphore> reader_semaphore;
-    restricted_mutation_reader_config config;
-
-    restriction_data(std::size_t units,
-            std::size_t max_queue_length = std::numeric_limits<std::size_t>::max())
-        : reader_semaphore(std::make_unique<db::timeout_semaphore>(units)) {
-        config.resources_sem = reader_semaphore.get();
-        config.max_queue_length = max_queue_length;
-    }
-};
-
 
 class dummy_file_impl : public file_impl {
     virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, const io_priority_class& pc) override {
@@ -935,41 +928,43 @@ class dummy_file_impl : public file_impl {
 
 SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
     return async([&] {
-        restriction_data rd(4 * 1024);
+        reader_concurrency_semaphore semaphore(100, 4 * 1024);
+        // Testing the tracker here, no need to have a base cost.
+        auto permit = semaphore.wait_admission(0).get0();
 
         {
-            reader_resource_tracker resource_tracker(rd.config.resources_sem);
+            reader_resource_tracker resource_tracker(permit);
 
             auto tracked_file = resource_tracker.track(
                     file(shared_ptr<file_impl>(make_shared<dummy_file_impl>())));
 
-            BOOST_REQUIRE_EQUAL(4 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(4 * 1024, semaphore.available_resources().memory);
 
             auto buf1 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(3 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(3 * 1024, semaphore.available_resources().memory);
 
             auto buf2 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(2 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(2 * 1024, semaphore.available_resources().memory);
 
             auto buf3 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(1 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(1 * 1024, semaphore.available_resources().memory);
 
             auto buf4 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(0 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(0 * 1024, semaphore.available_resources().memory);
 
             auto buf5 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(-1 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(-1 * 1024, semaphore.available_resources().memory);
 
             // Reassing buf1, should still have the same amount of units.
             buf1 = tracked_file.dma_read_bulk<char>(0, 0).get0();
-            BOOST_REQUIRE_EQUAL(-1 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(-1 * 1024, semaphore.available_resources().memory);
 
             // Move buf1 to the heap, so that we can safely destroy it
             auto buf1_ptr = std::make_unique<temporary_buffer<char>>(std::move(buf1));
-            BOOST_REQUIRE_EQUAL(-1 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(-1 * 1024, semaphore.available_resources().memory);
 
             buf1_ptr.reset();
-            BOOST_REQUIRE_EQUAL(0 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(0 * 1024, semaphore.available_resources().memory);
 
             // Move tracked_file to the heap, so that we can safely destroy it.
             auto tracked_file_ptr = std::make_unique<file>(std::move(tracked_file));
@@ -977,37 +972,37 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 
             // Move buf4 to the heap, so that we can safely destroy it
             auto buf4_ptr = std::make_unique<temporary_buffer<char>>(std::move(buf4));
-            BOOST_REQUIRE_EQUAL(0 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(0 * 1024, semaphore.available_resources().memory);
 
             // Releasing buffers that overlived the tracked-file they
             // originated from should succeed.
             buf4_ptr.reset();
-            BOOST_REQUIRE_EQUAL(1 * 1024, rd.reader_semaphore->available_units());
+            BOOST_REQUIRE_EQUAL(1 * 1024, semaphore.available_resources().memory);
         }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(4 * 1024, rd.reader_semaphore->available_units());
+        REQUIRE_EVENTUALLY_EQUAL(4 * 1024, semaphore.available_resources().memory);
     });
 }
 
 SEASTAR_TEST_CASE(restricted_reader_reading) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
 
         {
             simple_schema s;
             auto tmp = make_lw_shared<tmpdir>();
             auto sst = create_sstable(s, tmp->path);
 
-            auto reader1 = reader_wrapper(rd.config, s.schema(), sst);
+            auto reader1 = reader_wrapper(semaphore, s.schema(), sst);
 
             reader1().get();
 
-            BOOST_REQUIRE_LE(rd.reader_semaphore->available_units(), 0);
+            BOOST_REQUIRE_LE(semaphore.available_resources().memory, 0);
             BOOST_REQUIRE_EQUAL(reader1.call_count(), 1);
 
-            auto reader2 = reader_wrapper(rd.config, s.schema(), sst);
+            auto reader2 = reader_wrapper(semaphore, s.schema(), sst);
             auto read_fut = reader2();
 
             // reader2 shouldn't be allowed just yet.
@@ -1022,8 +1017,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
             read_fut.get();
 
             {
-                // Consume all available units.
-                const auto consume_guard = consume_units(*rd.reader_semaphore, rd.reader_semaphore->current());
+                BOOST_REQUIRE_LE(semaphore.available_resources().memory, 0);
 
                 // Already allowed readers should not be blocked anymore even if
                 // there are no more units available.
@@ -1034,25 +1028,26 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
         }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
+
         {
             simple_schema s;
             auto tmp = make_lw_shared<tmpdir>();
             auto sst = create_sstable(s, tmp->path);
 
             auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{10});
-            auto reader1 = reader_wrapper(rd.config, s.schema(), sst, timeout);
+            auto reader1 = reader_wrapper(semaphore, s.schema(), sst, timeout);
 
             reader1().get();
 
-            auto reader2 = reader_wrapper(rd.config, s.schema(), sst, timeout);
+            auto reader2 = reader_wrapper(semaphore, s.schema(), sst, timeout);
             auto read_fut = reader2();
 
             seastar::sleep<db::timeout_clock>(std::chrono::milliseconds(40)).get();
@@ -1063,45 +1058,50 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
                                        // cleaner.
             // The read should have timed out.
             BOOST_REQUIRE(read_fut.failed());
-            BOOST_REQUIRE_THROW(std::rethrow_exception(read_fut.get_exception()), timed_out_error);
+            BOOST_REQUIRE_THROW(std::rethrow_exception(read_fut.get_exception()), semaphore_timed_out);
         }
 
         // All units should have been deposited back.
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 
 SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost, 1);
+
+        struct queue_overloaded_exception {};
+
+        reader_concurrency_semaphore semaphore(100, new_reader_base_cost, 1, [] { return std::make_exception_ptr(queue_overloaded_exception()); });
 
         {
             simple_schema s;
             auto tmp = make_lw_shared<tmpdir>();
             auto sst = create_sstable(s, tmp->path);
 
-            auto reader1_ptr = std::make_unique<reader_wrapper>(rd.config, s.schema(), sst);
+            auto reader1_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
             (*reader1_ptr)().get();
 
-            auto reader2_ptr = std::make_unique<reader_wrapper>(rd.config, s.schema(), sst);
+            auto reader2_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
             auto read_fut = (*reader2_ptr)();
 
+            auto reader3 = reader_wrapper(semaphore, s.schema(), sst);
+
             // The queue should now be full.
-            BOOST_REQUIRE_THROW(reader_wrapper(rd.config, s.schema(), sst), std::runtime_error);
+            BOOST_REQUIRE_THROW(reader3().get(), queue_overloaded_exception);
 
             reader1_ptr.reset();
             read_fut.get();
         }
 
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 
 SEASTAR_TEST_CASE(restricted_reader_create_reader) {
     return async([&] {
         storage_service_for_tests ssft;
-        restriction_data rd(new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
 
         {
             simple_schema s;
@@ -1109,7 +1109,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
             auto sst = create_sstable(s, tmp->path);
 
             {
-                auto reader = reader_wrapper(rd.config, s.schema(), sst);
+                auto reader = reader_wrapper(semaphore, s.schema(), sst);
                 // This fast-forward is stupid, I know but the
                 // underlying dummy reader won't care, so it's fine.
                 reader.fast_forward_to(query::full_partition_range).get();
@@ -1120,7 +1120,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
             }
 
             {
-                auto reader = reader_wrapper(rd.config, s.schema(), sst);
+                auto reader = reader_wrapper(semaphore, s.schema(), sst);
                 reader().get();
 
                 BOOST_REQUIRE(reader.created());
@@ -1129,7 +1129,7 @@ SEASTAR_TEST_CASE(restricted_reader_create_reader) {
             }
         }
 
-        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, rd.reader_semaphore->available_units());
+        REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
     });
 }
 

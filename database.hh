@@ -298,8 +298,8 @@ public:
         bool enable_incremental_backups = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
-        restricted_mutation_reader_config read_concurrency_config;
-        restricted_mutation_reader_config streaming_read_concurrency_config;
+        reader_concurrency_semaphore* read_concurrency_semaphore;
+        reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
@@ -977,8 +977,8 @@ public:
         bool enable_incremental_backups = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
-        restricted_mutation_reader_config read_concurrency_config;
-        restricted_mutation_reader_config streaming_read_concurrency_config;
+        reader_concurrency_semaphore* read_concurrency_semaphore;
+        reader_concurrency_semaphore* streaming_read_concurrency_semaphore;
         ::cf_stats* cf_stats = nullptr;
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
@@ -1076,10 +1076,17 @@ struct database_config {
 class database {
 private:
     ::cf_stats _cf_stats;
+    static const size_t max_count_concurrent_reads{100};
     static size_t max_memory_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    // Assume a queued read takes up 10kB of memory, and allow 2% of memory to be filled up with such reads.
+    static size_t max_inactive_queue_length() { return memory::stats().total_memory() * 0.02 / 10000; }
+    // They're rather heavyweight, so limit more
+    static const size_t max_count_streaming_concurrent_reads{10};
     static size_t max_memory_streaming_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    static const size_t max_count_system_concurrent_reads{10};
     static size_t max_memory_system_concurrent_reads() { return memory::stats().total_memory() * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
+
     struct db_stats {
         uint64_t total_writes = 0;
         uint64_t total_writes_failed = 0;
@@ -1087,10 +1094,6 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t sstable_read_queue_overloaded = 0;
-
-        uint64_t active_reads = 0;
-        uint64_t active_reads_streaming = 0;
-        uint64_t active_reads_system_keyspace = 0;
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
@@ -1108,9 +1111,9 @@ private:
     database_config _dbcfg;
     flush_controller _memtable_controller;
 
-    db::timeout_semaphore _read_concurrency_sem{max_memory_concurrent_reads()};
-    db::timeout_semaphore _streaming_concurrency_sem{max_memory_streaming_concurrent_reads()};
-    db::timeout_semaphore _system_read_concurrency_sem{max_memory_system_concurrent_reads()};
+    reader_concurrency_semaphore _read_concurrency_sem;
+    reader_concurrency_semaphore _streaming_concurrency_sem;
+    reader_concurrency_semaphore _system_read_concurrency_sem;
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
@@ -1287,7 +1290,7 @@ public:
     std::unordered_set<sstring> get_initial_tokens();
     std::experimental::optional<gms::inet_address> get_replace_address();
     bool is_replacing();
-    db::timeout_semaphore& system_keyspace_read_concurrency_sem() {
+    reader_concurrency_semaphore& system_keyspace_read_concurrency_sem() {
         return _system_read_concurrency_sem;
     }
     semaphore& sstable_load_concurrency_sem() {

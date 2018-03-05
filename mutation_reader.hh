@@ -30,6 +30,7 @@
 #include "core/do_with.hh"
 #include "tracing/trace_state.hh"
 #include "flat_mutation_reader.hh"
+#include "reader_concurrency_semaphore.hh"
 
 namespace mutation_reader {
     // mutation_reader::forwarding determines whether fast_forward_to() may
@@ -318,17 +319,6 @@ public:
 mutation_source make_empty_mutation_source();
 snapshot_source make_empty_snapshot_source();
 
-struct restricted_mutation_reader_config {
-    db::timeout_semaphore* resources_sem = nullptr;
-    uint64_t* active_reads = nullptr;
-    size_t max_queue_length = std::numeric_limits<size_t>::max();
-    std::function<void ()> raise_queue_overloaded_exception = default_raise_queue_overloaded_exception;
-
-    static void default_raise_queue_overloaded_exception() {
-        throw std::runtime_error("restricted mutation reader queue overload");
-    }
-};
-
 // Creates a restricted reader whose resource usages will be tracked
 // during it's lifetime. If there are not enough resources (dues to
 // existing readers) to create the new reader, it's construction will
@@ -338,7 +328,7 @@ struct restricted_mutation_reader_config {
 // a semaphore to track and limit the memory usage of readers. It also
 // contains a timeout and a maximum queue size for inactive readers
 // whose construction is blocked.
-flat_mutation_reader make_restricted_flat_reader(const restricted_mutation_reader_config& config,
+flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
         mutation_source ms,
         schema_ptr s,
         const dht::partition_range& range,
@@ -348,12 +338,12 @@ flat_mutation_reader make_restricted_flat_reader(const restricted_mutation_reade
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
-inline flat_mutation_reader make_restricted_flat_reader(const restricted_mutation_reader_config& config,
+inline flat_mutation_reader make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
                                               mutation_source ms,
                                               schema_ptr s,
                                               const dht::partition_range& range = query::full_partition_range) {
     auto& full_slice = s->full_slice();
-    return make_restricted_flat_reader(config, std::move(ms), std::move(s), range, full_slice);
+    return make_restricted_flat_reader(semaphore, std::move(ms), std::move(s), range, full_slice);
 }
 
 using mutation_source_opt = optimized_optional<mutation_source>;
