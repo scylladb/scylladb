@@ -151,7 +151,7 @@ if __name__ == "__main__":
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
-        seastar_args = '-c2 -m2G'.split()
+        seastar_args = '-c2 -m2G --overprovisioned'.split()
         for test in other_tests:
             test_to_run.append((os.path.join(prefix, test), 'other', seastar_args))
         for test in boost_tests:
