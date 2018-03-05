@@ -181,24 +181,24 @@ public:
 };
 
 class reader_resource_tracker {
-    seastar::semaphore* _sem = nullptr;
+    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> _permit;
 public:
     reader_resource_tracker() = default;
-    explicit reader_resource_tracker(seastar::semaphore* sem)
-        : _sem(sem) {
+    explicit reader_resource_tracker(lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit)
+        : _permit(std::move(permit)) {
     }
 
     bool operator==(const reader_resource_tracker& other) const {
-        return _sem == other._sem;
+        return _permit == other._permit;
     }
 
     file track(file f) const;
 
-    semaphore* get_semaphore() const {
-        return _sem;
+    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> get_permit() const {
+        return _permit;
     }
 };
 
 inline reader_resource_tracker no_resource_tracking() {
-    return reader_resource_tracker(nullptr);
+    return {};
 }
