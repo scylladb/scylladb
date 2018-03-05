@@ -127,13 +127,6 @@ class Alarm(Exception):
 def alarm_handler(signum, frame):
     raise Alarm
 
-def boost_test_wants_double_dash(path):
-    magic = b'All the arguments after the -- are ignored'
-    try:
-        return magic in subprocess.check_output([path, '--help'], stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError:
-        return False
-
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
@@ -205,7 +198,7 @@ if __name__ == "__main__":
                       os.path.basename(test[0].split()[0]) + ".boost.xml")
             boost_args += ['--output_format=XML', '--log_level=test_suite', '--report_level=no', '--log_sink=' + xmlout]
         print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
-        if test[1] == 'boost' and boost_test_wants_double_dash(path):
+        if test[1] == 'boost':
             boost_args += ['--']
         proc = subprocess.Popen([path] + boost_args + exec_args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
