@@ -817,9 +817,9 @@ public:
             const restricted_mutation_reader_config& config,
             schema_ptr schema,
             lw_shared_ptr<sstables::sstable> sst,
-            db::timeout_clock::duration timeout_duration = {})
+            db::timeout_clock::time_point timeout = db::no_timeout)
         : _reader(make_empty_flat_reader(schema))
-        , _timeout(db::timeout_clock::now() + timeout_duration)
+        , _timeout(timeout)
     {
         auto ms = mutation_source([this, &config, sst=std::move(sst)] (schema_ptr schema, const dht::partition_range&) {
             auto tracker_ptr = std::make_unique<tracking_reader>(config.resources_sem, std::move(schema), std::move(sst));
@@ -828,6 +828,14 @@ public:
         });
 
         _reader = make_restricted_flat_reader(config, std::move(ms), schema);
+    }
+
+    reader_wrapper(
+            const restricted_mutation_reader_config& config,
+            schema_ptr schema,
+            lw_shared_ptr<sstables::sstable> sst,
+            db::timeout_clock::duration timeout_duration)
+        : reader_wrapper(config, std::move(schema), std::move(sst), db::timeout_clock::now() + timeout_duration) {
     }
 
     future<> operator()() {
