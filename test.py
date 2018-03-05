@@ -151,10 +151,11 @@ if __name__ == "__main__":
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
+        seastar_args = '-c2 -m2G'.split()
         for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test), 'other', '-c2 -m2G'.split()))
+            test_to_run.append((os.path.join(prefix, test), 'other', seastar_args))
         for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test), 'boost', '-c2 -m2G'.split()))
+            test_to_run.append((os.path.join(prefix, test), 'boost', seastar_args))
 
     if 'release' in modes_to_run:
         test_to_run.append(('build/release/tests/lsa_async_eviction_test', 'other',
@@ -188,7 +189,8 @@ if __name__ == "__main__":
         exec_args = test[2] if len(test) >= 3 else []
         boost_args = []
         prefix = '[%d/%d]' % (n + 1, n_total)
-        exec_args += '--collectd 0'.split()
+        # avoid modifying in-place, it will change test_to_run
+        exec_args = exec_args + '--collectd 0'.split()
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
             mode = 'release'
