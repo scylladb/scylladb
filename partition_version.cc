@@ -462,10 +462,11 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_version* ve
 
     while (!source.done()) {
         if (!source.is_dummy()) {
-            rows_entry* e = cur.ensure_entry_if_complete(source.position());
-            if (e) {
+            auto ropt = cur.ensure_entry_if_complete(source.position());
+            if (ropt) {
+                rows_entry& e = ropt->row;
                 source.consume_row([&] (deletable_row&& row) {
-                    e->row().apply_monotonically(s, std::move(row));
+                    e.row().apply_monotonically(s, std::move(row));
                 });
             }
         }

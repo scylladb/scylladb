@@ -383,7 +383,7 @@ inline
 void cache_flat_mutation_reader::maybe_update_continuity() {
     if (can_populate() && ensure_population_lower_bound()) {
         with_allocator(_snp->region().allocator(), [&] {
-            rows_entry& e = _next_row.ensure_entry_in_latest();
+            rows_entry& e = _next_row.ensure_entry_in_latest().row;
             e.set_continuous(true);
         });
     } else {

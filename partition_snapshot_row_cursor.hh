@@ -310,11 +310,16 @@ public:
         return mf;
     }
 
+    struct ensure_result {
+        rows_entry& row;
+        bool inserted = false;
+    };
+
     // Makes sure that a rows_entry for the row under the cursor exists in the latest version.
     // Doesn't change logical value or continuity of the snapshot.
     // Can be called only when cursor is valid and pointing at a row.
     // The cursor remains valid after the call and points at the same row as before.
-    rows_entry& ensure_entry_in_latest() {
+    ensure_result ensure_entry_in_latest() {
         auto&& rows = _snp.version()->partition().clustered_rows();
         auto latest_i = get_iterator_in_latest_version();
         rows_entry& latest = *latest_i;
@@ -322,7 +327,7 @@ public:
             if (_snp.at_latest_version()) {
                 _snp.tracker()->touch(latest);
             }
-            return latest;
+            return {latest, false};
         } else {
             // Copy row from older version because rows in evictable versions must
             // hold values which are independently complete to be consistent on eviction.
@@ -330,7 +335,7 @@ public:
             e->set_continuous(latest_i != rows.end() && latest_i->continuous());
             _snp.tracker()->insert(*e);
             rows.insert_before(latest_i, *e);
-            return *e;
+            return {*e, true};
         }
     }
 
@@ -341,18 +346,18 @@ public:
     // The cursor doesn't have to be valid.
     // The cursor is invalid after the call.
     // Assumes the snapshot is evictable.
-    rows_entry* ensure_entry_if_complete(position_in_partition_view pos) {
+    stdx::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
         prepare_heap(pos);
         if (!_heap.empty()) {
             recreate_current_row();
             position_in_partition::equal_compare eq(_schema);
             if (eq(position(), pos)) {
                 if (dummy()) {
-                    return nullptr;
+                    return stdx::nullopt;
                 }
-                return &ensure_entry_in_latest();
+                return ensure_entry_in_latest();
             } else if (!continuous()) {
-                return nullptr;
+                return stdx::nullopt;
             }
         }
         auto&& rows = _snp.version()->partition().clustered_rows();
@@ -361,7 +366,7 @@ public:
             is_continuous(latest_i != rows.end() && latest_i->continuous()));
         _snp.tracker()->insert(*e);
         rows.insert_before(latest_i, *e);
-        return e;
+        return ensure_result{*e, true};
     }
 
     // Brings the entry pointed to by the cursor to the front of the LRU
