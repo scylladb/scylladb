@@ -22,6 +22,7 @@
 
 #include "core/reactor.hh"
 #include "core/app-template.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
@@ -69,7 +70,8 @@ int main(int ac, char ** av) {
         utils::fb_utilities::set_broadcast_rpc_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&auth_service, &db] {
-            return service::init_storage_service(db, auth_service);
+            sharded<db::system_distributed_keyspace> sys_dist_ks;
+            return service::init_storage_service(db, auth_service, sys_dist_ks);
         }).then([vv, listen, config] {
             return netw::get_messaging_service().start(listen);
         }).then([config] {

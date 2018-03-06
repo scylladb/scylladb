@@ -47,6 +47,7 @@
 #include "service/storage_service.hh"
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 
 namespace sstables {
 
@@ -308,9 +309,11 @@ public:
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             auto auth_service = ::make_shared<sharded<auth::service>>();
+            auto sys_dist_ks = seastar::sharded<db::system_distributed_keyspace>();
+            auto stop_sys_dist_ks = defer([&sys_dist_ks] { sys_dist_ks.stop().get(); });
 
             auto& ss = service::get_storage_service();
-            ss.start(std::ref(*db), std::ref(*auth_service)).get();
+            ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             db->start(std::move(*cfg), database_config()).get();
@@ -423,12 +426,13 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func) {
 class storage_service_for_tests::impl {
     distributed<database> _db;
     sharded<auth::service> _auth_service;
+    sharded<db::system_distributed_keyspace> _sys_dist_ks;
 public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
-        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service)).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service), std::ref(_sys_dist_ks)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
         }).get();
