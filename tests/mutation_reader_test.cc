@@ -988,7 +988,7 @@ SEASTAR_TEST_CASE(reader_restriction_file_tracking) {
 SEASTAR_TEST_CASE(restricted_reader_reading) {
     return async([&] {
         storage_service_for_tests ssft;
-        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
 
         {
             simple_schema s;
@@ -999,31 +999,55 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 
             reader1().get();
 
+            BOOST_REQUIRE_LE(semaphore.available_resources().count, 1);
             BOOST_REQUIRE_LE(semaphore.available_resources().memory, 0);
             BOOST_REQUIRE_EQUAL(reader1.call_count(), 1);
 
             auto reader2 = reader_wrapper(semaphore, s.schema(), sst);
-            auto read_fut = reader2();
+            auto read2_fut = reader2();
 
-            // reader2 shouldn't be allowed just yet.
+            // reader2 shouldn't be allowed yet
             BOOST_REQUIRE_EQUAL(reader2.call_count(), 0);
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+
+            auto reader3 = reader_wrapper(semaphore, s.schema(), sst);
+            auto read3_fut = reader3();
+
+            // reader3 shouldn't be allowed yet
+            BOOST_REQUIRE_EQUAL(reader3.call_count(), 0);
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
             // Move reader1 to the heap, so that we can safely destroy it.
             auto reader1_ptr = std::make_unique<reader_wrapper>(std::move(reader1));
             reader1_ptr.reset();
 
-            // reader1's destruction should've made some space for reader2 by now.
+            // reader1's destruction should've freed up enough memory for
+            // reader2 by now.
             REQUIRE_EVENTUALLY_EQUAL(reader2.call_count(), 1);
-            read_fut.get();
+            read2_fut.get();
+
+            // But reader3 should still not be allowed
+            BOOST_REQUIRE_EQUAL(reader3.call_count(), 0);
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 1);
+
+            // Move reader2 to the heap, so that we can safely destroy it.
+            auto reader2_ptr = std::make_unique<reader_wrapper>(std::move(reader2));
+            reader2_ptr.reset();
+
+            // Again, reader2's destruction should've freed up enough memory
+            // for reader3 by now.
+            REQUIRE_EVENTUALLY_EQUAL(reader3.call_count(), 1);
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 0);
+            read3_fut.get();
 
             {
                 BOOST_REQUIRE_LE(semaphore.available_resources().memory, 0);
 
                 // Already allowed readers should not be blocked anymore even if
                 // there are no more units available.
-                read_fut = reader2();
-                BOOST_REQUIRE_EQUAL(reader2.call_count(), 2);
-                read_fut.get();
+                read3_fut = reader3();
+                BOOST_REQUIRE_EQUAL(reader3.call_count(), 2);
+                read3_fut.get();
             }
         }
 
@@ -1035,7 +1059,7 @@ SEASTAR_TEST_CASE(restricted_reader_reading) {
 SEASTAR_TEST_CASE(restricted_reader_timeout) {
     return async([&] {
         storage_service_for_tests ssft;
-        reader_concurrency_semaphore semaphore(100, new_reader_base_cost);
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost);
 
         {
             simple_schema s;
@@ -1043,23 +1067,38 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
             auto sst = create_sstable(s, tmp->path);
 
             auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{10});
-            auto reader1 = reader_wrapper(semaphore, s.schema(), sst, timeout);
 
+            auto reader1 = reader_wrapper(semaphore, s.schema(), sst, timeout);
             reader1().get();
 
             auto reader2 = reader_wrapper(semaphore, s.schema(), sst, timeout);
-            auto read_fut = reader2();
+            auto read2_fut = reader2();
+
+            auto reader3 = reader_wrapper(semaphore, s.schema(), sst, timeout);
+            auto read3_fut = reader3();
+
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
             seastar::sleep<db::timeout_clock>(std::chrono::milliseconds(40)).get();
 
-            assert(read_fut.failed()); // If this isn't true, the test already failed. But since we can't
-                                       // cancel existing requests, if the test keeps going it will
-                                       // SIGSEGV when accessing destroyed memory. This is just
-                                       // cleaner.
-            // The read should have timed out.
-            BOOST_REQUIRE(read_fut.failed());
-            BOOST_REQUIRE_THROW(std::rethrow_exception(read_fut.get_exception()), semaphore_timed_out);
-        }
+            // Altough we have regular BOOST_REQUIREs for this below, if
+            // the test goes wrong these futures will be still pending
+            // when we leave scope and deleted memory will be accessed.
+            // To stop people from trying to debug a failing test just
+            // assert here so they know this is really just the test
+            // failing and the underlying problem is that the timeout
+            // doesn't work.
+            assert(read2_fut.failed());
+            assert(read3_fut.failed());
+
+            // reader2 should have timed out.
+            BOOST_REQUIRE(read2_fut.failed());
+            BOOST_REQUIRE_THROW(std::rethrow_exception(read2_fut.get_exception()), semaphore_timed_out);
+
+            // readerk should have timed out.
+            BOOST_REQUIRE(read3_fut.failed());
+            BOOST_REQUIRE_THROW(std::rethrow_exception(read3_fut.get_exception()), semaphore_timed_out);
+       }
 
         // All units should have been deposited back.
         REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
@@ -1072,7 +1111,7 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
 
         struct queue_overloaded_exception {};
 
-        reader_concurrency_semaphore semaphore(100, new_reader_base_cost, 1, [] { return std::make_exception_ptr(queue_overloaded_exception()); });
+        reader_concurrency_semaphore semaphore(2, new_reader_base_cost, 2, [] { return std::make_exception_ptr(queue_overloaded_exception()); });
 
         {
             simple_schema s;
@@ -1083,15 +1122,22 @@ SEASTAR_TEST_CASE(restricted_reader_max_queue_length) {
             (*reader1_ptr)().get();
 
             auto reader2_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
-            auto read_fut = (*reader2_ptr)();
+            auto read2_fut = (*reader2_ptr)();
 
-            auto reader3 = reader_wrapper(semaphore, s.schema(), sst);
+            auto reader3_ptr = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst);
+            auto read3_fut = (*reader3_ptr)();
+
+            auto reader4 = reader_wrapper(semaphore, s.schema(), sst);
+
+            BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
             // The queue should now be full.
-            BOOST_REQUIRE_THROW(reader3().get(), queue_overloaded_exception);
+            BOOST_REQUIRE_THROW(reader4().get(), queue_overloaded_exception);
 
             reader1_ptr.reset();
-            read_fut.get();
+            read2_fut.get();
+            reader2_ptr.reset();
+            read3_fut.get();
         }
 
         REQUIRE_EVENTUALLY_EQUAL(new_reader_base_cost, semaphore.available_resources().memory);
