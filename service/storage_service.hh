@@ -51,6 +51,7 @@
 #include "dht/token_range_endpoints.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"
@@ -130,7 +131,7 @@ private:
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
 public:
-    storage_service(distributed<database>& db, sharded<auth::service>&);
+    storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
     void isolate_on_error();
     void isolate_on_commit_error();
 
@@ -727,6 +728,7 @@ private:
     future<> do_replicate_to_all_cores();
     serialized_action _replicate_action;
     serialized_action _update_pending_ranges_action;
+    sharded<db::system_distributed_keyspace>& _sys_dist_ks;
 private:
     /**
      * Replicates token_metadata contents on shard0 instance to other shards.
@@ -2021,6 +2023,8 @@ public:
     }
 #endif
 
+    future<std::unordered_map<sstring, sstring>> view_build_statuses(sstring keyspace, sstring view_name) const;
+
 private:
     /**
      * Seed data to the endpoints that will be responsible for it at the future
@@ -2298,8 +2302,8 @@ public:
     }
 };
 
-inline future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service) {
-    return service::get_storage_service().start(std::ref(db), std::ref(auth_service));
+inline future<> init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    return service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks));
 }
 
 inline future<> deinit_storage_service() {

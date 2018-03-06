@@ -35,6 +35,7 @@
 #include "service/load_broadcaster.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
@@ -469,9 +470,11 @@ int main(int ac, char** av) {
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;
+            static sharded<db::system_distributed_keyspace> sys_dist_ks;
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service);
+            init_storage_service(db, auth_service, sys_dist_ks);
             supervisor::notify("starting per-shard database core");
+
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
             auto make_sched_group = [&] (sstring name, unsigned shares) {
@@ -629,7 +632,7 @@ int main(int ac, char** av) {
             }
             // If the same sstable is shared by several shards, it cannot be
             // deleted until all shards decide to compact it. So we want to
-            // start thse compactions now. Note we start compacting only after
+            // start these compactions now. Note we start compacting only after
             // all sstables in this CF were loaded on all shards - otherwise
             // we will have races between the compaction and loading processes
             // We also want to trigger regular compaction on boot.
