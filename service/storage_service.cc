@@ -1011,6 +1011,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
         if (pieces.empty()) {
             slogger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
+            return;
         }
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
