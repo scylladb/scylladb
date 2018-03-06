@@ -483,7 +483,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             test(ds, query::full_partition_range, partitions.size() + 1);
             test(ds, query::full_partition_range, partitions.size() + 1);
 
-            cache->invalidate([] {}, key_after_all);
+            cache->invalidate([] {}, key_after_all).get();
 
             assert_that(ds.make_reader(s, query::full_partition_range))
                 .produces(slice(partitions, query::full_partition_range))
