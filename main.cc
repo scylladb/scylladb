@@ -307,8 +307,9 @@ int main(int ac, char** av) {
 
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
+
+    configurable::append_all(*cfg, init);
     cfg->add_options(init);
-    configurable::append_all(init);
 
     distributed<database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;

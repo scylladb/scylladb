@@ -66,8 +66,8 @@ public:
     }
     virtual ~configurable()
     {}
-    // Hook to add command line options
-    virtual void append_options(boost::program_options::options_description_easy_init&)
+    // Hook to add command line options and/or add main config options
+    virtual void append_options(db::config&, boost::program_options::options_description_easy_init&)
     {};
     // Called after command line is parsed and db/config populated.
     // Hooked config can for example take this oppurtunity to load any file(s).
@@ -82,7 +82,7 @@ public:
     static std::vector<std::reference_wrapper<configurable>>& configurables();
     static future<> init_all(const boost::program_options::variables_map&, const db::config&, db::extensions&);
     static future<> init_all(const db::config&, db::extensions&);
-    static void append_all(boost::program_options::options_description_easy_init&);
+    static void append_all(db::config&, boost::program_options::options_description_easy_init&);
 private:
     static void register_configurable(configurable &);
 };
