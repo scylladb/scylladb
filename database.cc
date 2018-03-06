@@ -2773,6 +2773,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.query_scheduling_group = _config.query_scheduling_group;
     cfg.commitlog_scheduling_group = _config.commitlog_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
+    cfg.large_partition_warning_threshold_bytes = db_config.compaction_large_partition_warning_threshold_mb()*1024*1024;
 
     return cfg;
 }

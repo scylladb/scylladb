@@ -219,7 +219,7 @@ public:
             "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"  \
             "Related information: Configuring compaction"   \
     )                                                   \
-    val(compaction_large_partition_warning_threshold_mb, uint32_t, 100, Unused, \
+    val(compaction_large_partition_warning_threshold_mb, uint32_t, 1000, Used, \
             "Log a warning when compacting partitions larger than this value"   \
     )                                               \
     /* Common memtable settings */  \

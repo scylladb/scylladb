@@ -547,6 +547,7 @@ public:
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
             cfg.monitor = &_active_write_monitors.back();
+            cfg.large_partition_warning_threshold_bytes = _cf.large_partition_warning_threshold_bytes();
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority));
         }
         return &*_writer;

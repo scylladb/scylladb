@@ -125,6 +125,7 @@ struct sstable_writer_config {
     stdx::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
+    uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
 };
 
 static constexpr inline size_t default_sstable_buffer_size() {
@@ -837,6 +838,7 @@ class components_writer {
     stdx::optional<key> _partition_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
+    uint64_t _large_partition_warning_threshold_bytes;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
     uint64_t get_offset() const;
@@ -856,7 +858,8 @@ public:
     components_writer(components_writer&& o) : _sst(o._sst), _schema(o._schema), _out(o._out), _index(std::move(o._index)),
             _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
             _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
-            _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)) {
+            _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)),
+            _large_partition_warning_threshold_bytes(o._large_partition_warning_threshold_bytes) {
         o._index_needs_close = false;
     }
 

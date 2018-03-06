@@ -308,6 +308,7 @@ public:
         seastar::scheduling_group query_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
+        uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
     };
     struct no_commitlog {};
     struct stats {
@@ -790,6 +791,10 @@ public:
 
     secondary_index::secondary_index_manager& get_index_manager() {
         return _index_manager;
+    }
+
+    uint64_t large_partition_warning_threshold_bytes() const {
+        return _config.large_partition_warning_threshold_bytes;
     }
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
