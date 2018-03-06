@@ -1957,7 +1957,7 @@ future<> gossiper::wait_for_gossip(std::chrono::milliseconds initial_delay, stdx
                 num_okay = 0;
             }
             ep_size = current_size;
-            if (force_after && total_polls > *force_after) {
+            if (force_after && *force_after > 0 && total_polls > *force_after) {
                 logger.warn("Gossip not settled but startup forced by skip_wait_for_gossip_to_settle. Gossp total polls: {}", total_polls);
                 break;
             }
