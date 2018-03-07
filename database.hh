@@ -82,7 +82,7 @@
 #include "utils/phased_barrier.hh"
 #include "backlog_controller.hh"
 #include "dirty_memory_manager.hh"
-#include "reader_resource_tracker.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "db/timeout_clock.hh"
 
 class cell_locker;
