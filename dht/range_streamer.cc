@@ -332,11 +332,11 @@ future<> range_streamer::do_stream_async() {
                         range_vec.push_back(range);
                     }
                     auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
-                    logger.warn("{} with {} for keyspace={} failed, took {} seconds: {}", description, keyspace, source, t, std::current_exception());
+                    logger.warn("{} with {} for keyspace={} failed, took {} seconds: {}", description, source, keyspace, t, std::current_exception());
                     throw;
                 }
                 auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
-                logger.info("{} with {} for keyspace={} succeeded, took {} seconds", description, keyspace, source, t);
+                logger.info("{} with {} for keyspace={} succeeded, took {} seconds", description, source, keyspace, t);
             });
 
         });
