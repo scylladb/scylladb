@@ -53,6 +53,6 @@ probe end {
     println(@sum(partition_count));
     println("Average time spent per partition batch (nsec)");
     println(@avg(batch_latencies));
-    println("Average time per partition per partition (nsec)");
+    println("Average time per partition (nsec)");
     println(@sum(batch_latencies) / @sum(partition_count));
 }
