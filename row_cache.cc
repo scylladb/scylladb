@@ -957,6 +957,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
             with_allocator(_tracker.allocator(), [&] () {
                 auto cmp = cache_entry::compare(_schema);
                 {
+                    size_t partition_count = 0;
                     _update_section(_tracker.region(), [&] {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
                         // FIXME: we should really be checking should_yield() here instead of
@@ -976,6 +977,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             real_dirty_acc.unpin_memory(size_entry);
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
+                            ++partition_count;
                            }
                           });
                           STAP_PROBE(scylla, row_cache_update_partition_end);
@@ -987,7 +989,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                                 _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
                             }
                         });
-                        STAP_PROBE(scylla, row_cache_update_one_batch_end);
+                        STAP_PROBE1(scylla, row_cache_update_one_batch_end, partition_count);
                     });
                 }
             });
