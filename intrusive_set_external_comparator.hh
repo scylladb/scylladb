@@ -30,12 +30,13 @@
 
 #include <boost/intrusive/set.hpp>
 #include <iterator>
+#include <boost/intrusive/parent_from_member.hpp>
 
 namespace bi = boost::intrusive;
 
 typedef bi::rbtree_algorithms<bi::rbtree_node_traits<void*, true>> algo;
 
-class intrusive_set_external_comparator_member_hook : public bi::set_member_hook<bi::optimize_size<true>> {
+class intrusive_set_external_comparator_member_hook : public bi::set_member_hook<bi::optimize_size<true>, bi::link_mode<bi::auto_unlink>> {
 public:
     intrusive_set_external_comparator_member_hook() = default;
     intrusive_set_external_comparator_member_hook(intrusive_set_external_comparator_member_hook&& o) noexcept {
@@ -90,7 +91,7 @@ private:
 
     using const_value_traits_ptr = typename std::pointer_traits<typename value_traits::node_ptr>::template rebind<const value_traits>;
 
-    const_value_traits_ptr priv_value_traits_ptr() const {
+    static const_value_traits_ptr priv_value_traits_ptr() {
         return bi::pointer_traits<const_value_traits_ptr>::pointer_to(_value_traits);
     }
     template <typename Comparator>
@@ -107,6 +108,23 @@ public:
     intrusive_set_external_comparator(intrusive_set_external_comparator&& o) {
         algo::init_header(_header.this_ptr());
         algo::swap_tree(_header.this_ptr(), node_ptr(o._header.this_ptr()));
+    }
+    static iterator iterator_to(Elem& e) { return iterator(_value_traits.to_node_ptr(e), priv_value_traits_ptr()); }
+    // Returns container of e, assuming is_only_member(e).
+    static intrusive_set_external_comparator& container_of_only_member(Elem& e) {
+        auto header_ptr = static_cast<intrusive_set_external_comparator_member_hook*>(
+            algo::node_traits::get_parent(_value_traits.to_node_ptr(e)));
+        return *boost::intrusive::get_parent_from_member(header_ptr, &intrusive_set_external_comparator::_header);
+    }
+    static bool is_root(Elem& e) {
+        auto node = _value_traits.to_node_ptr(e);
+        auto e_parent = algo::node_traits::get_parent(node);
+        return algo::node_traits::get_parent(e_parent) == node;
+    }
+    // Returns true if and only if e is the only member of the tree.
+    static bool is_only_member(Elem& e) {
+        auto node = _value_traits.to_node_ptr(e);
+        return is_root(e) && !algo::node_traits::get_left(node) && !algo::node_traits::get_right(node);
     }
     iterator begin() { return iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }
     const_iterator begin() const { return const_iterator(algo::begin_node(_header.this_ptr()), priv_value_traits_ptr()); }

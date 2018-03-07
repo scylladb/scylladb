@@ -778,11 +778,11 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                 mutation_partition m2 = second.partition();
                 alloc.fail_after(fail_offset++);
                 try {
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                     alloc.stop_failing();
                     break;
                 } catch (const std::bad_alloc&) {
-                    m.partition().apply_monotonically(*m.schema(), std::move(m2));
+                    m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                 }
                 assert_that(m).is_equal_to(expected)
                     .has_same_continuity(expected);
@@ -1450,6 +1450,20 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
     });
 }
 
+SEASTAR_TEST_CASE(test_continuity_merging_of_complete_mutations) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+
+    mutation m1 = gen();
+    m1.partition().make_fully_continuous();
+    mutation m2 = gen();
+    m2.partition().make_fully_continuous();
+    mutation m3 = m1 + m2;
+
+    assert_that(m3).is_continuous(position_range::all_clustered_rows(), is_continuous::yes);
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_continuity_merging) {
     return seastar::async([] {
         simple_schema table;
@@ -1475,15 +1489,15 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 
             left.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
             right.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::no);
-            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::yes, is_continuous::yes);
+            result.partition().clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(4), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(5), is_dummy::yes, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::yes);
 
             left.partition().clustered_row(s, table.make_ckey(6), is_dummy::no, is_continuous::yes);
             right.partition().clustered_row(s, table.make_ckey(6), is_dummy::yes, is_continuous::no);
@@ -1495,7 +1509,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
 
             left.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
             right.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
-            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::no);
+            result.partition().clustered_row(s, table.make_ckey(8), is_dummy::yes, is_continuous::yes);
 
             assert_that(right + left).has_same_continuity(result);
         }
@@ -1507,7 +1521,7 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
             incomplete.partition().set_static_row_continuous(false);
 
             assert_that(complete + complete).has_same_continuity(complete);
-            assert_that(complete + incomplete).has_same_continuity(incomplete);
+            assert_that(complete + incomplete).has_same_continuity(complete);
             assert_that(incomplete + complete).has_same_continuity(complete);
             assert_that(incomplete + incomplete).has_same_continuity(incomplete);
         }

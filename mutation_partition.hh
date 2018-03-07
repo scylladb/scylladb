@@ -27,6 +27,7 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/util/optimized_optional.hh>
@@ -674,20 +675,30 @@ public:
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
 
+class cache_tracker;
+
 class rows_entry {
+    using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    friend class cache_tracker;
+    friend class size_calculator;
     intrusive_set_external_comparator_member_hook _link;
     clustering_key _key;
     deletable_row _row;
+    lru_link_type _lru_link;
     struct flags {
         // _before_ck and _after_ck encode position_in_partition::weight
         bool _before_ck : 1;
         bool _after_ck : 1;
         bool _continuous : 1; // See doc of is_continuous.
         bool _dummy : 1;
-        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false) { }
+        // Marks a dummy entry which is after_all_clustered_rows() position.
+        // Needed so that eviction, which can't use comparators, can check if it's dealing with it.
+        bool _last_dummy : 1;
+        flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
     friend class mutation_partition;
 public:
+    struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
         : _key(std::move(key))
     { }
@@ -697,11 +708,15 @@ public:
     rows_entry(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous)
         : _key(pos.key())
     {
+        _flags._last_dummy = bool(dummy) && pos.is_after_all_clustered_rows(s);
         _flags._dummy = bool(dummy);
         _flags._continuous = bool(continuous);
         _flags._before_ck = pos.is_before_key();
         _flags._after_ck = pos.is_after_key();
     }
+    rows_entry(const schema& s, last_dummy_tag, is_continuous continuous)
+        : rows_entry(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, continuous)
+    { }
     rows_entry(const clustering_key& key, deletable_row&& row)
         : _key(key), _row(std::move(row))
     { }
@@ -739,6 +754,7 @@ public:
     void set_continuous(bool value) { _flags._continuous = value; }
     void set_continuous(is_continuous value) { set_continuous(bool(value)); }
     is_dummy dummy() const { return is_dummy(_flags._dummy); }
+    bool is_last_dummy() const { return _flags._last_dummy; }
     void set_dummy(bool value) { _flags._dummy = value; }
     void set_dummy(is_dummy value) { _flags._dummy = bool(value); }
     void apply(row_tombstone t) {
@@ -805,6 +821,7 @@ public:
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
     size_t memory_usage() const;
+    void on_evicted(cache_tracker&) noexcept;
 };
 
 // Represents a set of writes made to a single partition.
@@ -841,13 +858,9 @@ public:
 // Continuity doesn't affect how the write part is added.
 //
 // Addition of continuity is not commutative in general, but is associative.
-// Continuity flags on objects representing the same thing (e.g. rows_entry
-// with the same key) are merged such that the information stored in the left-
-// hand operand wins. Flags on objects which are present only in one of the
-// operands are transferred as-is. Such merging rules are useful for layering
-// information in MVCC, where newer versions specify continuity with respect
-// to the combined set of rows in all prior versions, not just in their
-// versions.
+// The default continuity merging rules are those required by MVCC to
+// preserve its invariants. For details, refer to "Continuity merging rules" section
+// in the doc in partition_version.hh.
 class mutation_partition final {
 public:
     using rows_type = intrusive_set_external_comparator<rows_entry, &rows_entry::_link>;
@@ -885,6 +898,7 @@ public:
     mutation_partition(const mutation_partition&, const schema&, query::clustering_key_filter_ranges);
     mutation_partition(mutation_partition&&, const schema&, query::clustering_key_filter_ranges);
     ~mutation_partition();
+    static mutation_partition& container_of(rows_type&);
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
@@ -913,8 +927,6 @@ public:
     bool fully_discontinuous(const schema&, const position_range&);
     // Returns true iff all keys from given range have continuity membership as specified by is_continuous.
     bool check_continuity(const schema&, const position_range&, is_continuous) const;
-    // Removes all data, marking affected ranges as discontinuous.
-    void evict() noexcept;
     // Applies mutation_fragment.
     // The fragment must be goverened by the same schema as this object.
     void apply(const schema& s, const mutation_fragment&);
@@ -946,10 +958,13 @@ public:
     //
     // Monotonic exception guarantees. In case of exception the sum of p and this remains the same as before the exception.
     // This instance and p are governed by the same schema.
-    void apply_monotonically(const schema& s, mutation_partition&& p);
+    //
+    // Must be provided with a pointer to the cache_tracker, which owns both this and p.
+    void apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*);
     void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
 
     // Weak exception guarantees.
+    // Assumes this and p are not owned by a cache_tracker.
     void apply_weak(const schema& s, const mutation_partition& p, const schema& p_schema);
     void apply_weak(const schema& s, mutation_partition&&);
     void apply_weak(const schema& s, mutation_partition_view p, const schema& p_schema);
@@ -1072,3 +1087,8 @@ private:
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;
     friend class counter_write_query_result_builder;
 };
+
+inline
+mutation_partition& mutation_partition::container_of(rows_type& rows) {
+    return *boost::intrusive::get_parent_from_member(&rows, &mutation_partition::_rows);
+}

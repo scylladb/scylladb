@@ -23,6 +23,7 @@
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/set.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include "core/memory.hh"
 #include <seastar/core/thread.hh>
@@ -43,6 +44,7 @@ namespace bi = boost::intrusive;
 
 class row_cache;
 class memtable_entry;
+class cache_tracker;
 
 namespace cache {
 
@@ -60,11 +62,7 @@ class lsa_manager;
 class cache_entry {
     // We need auto_unlink<> option on the _cache_link because when entry is
     // evicted from cache via LRU we don't have a reference to the container
-    // and don't want to store it with each entry. As for the _lru_link, we
-    // have a global LRU, so technically we could not use auto_unlink<> on
-    // _lru_link, but it's convenient to do so too. We may also want to have
-    // multiple eviction spaces in the future and thus multiple LRUs.
-    using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
+    // and don't want to store it with each entry.
     using cache_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
 
     schema_ptr _schema;
@@ -75,7 +73,6 @@ class cache_entry {
         bool _continuous : 1;
         bool _dummy_entry : 1;
     } _flags{};
-    lru_link_type _lru_link;
     cache_link_type _cache_link;
     friend class size_calculator;
 
@@ -121,7 +118,16 @@ public:
     cache_entry(cache_entry&&) noexcept;
     ~cache_entry();
 
-    bool is_evictable() { return _lru_link.is_linked(); }
+    static cache_entry& container_of(partition_entry& pe) {
+        return *boost::intrusive::get_parent_from_member(&pe, &cache_entry::_pe);
+    }
+
+    // Called when all contents have been evicted.
+    // This object should unlink and destroy itself from the container.
+    void on_evicted(cache_tracker&) noexcept;
+    // Evicts contents of this entry.
+    // The caller is still responsible for unlinking and destroying this entry.
+    void evict(cache_tracker&) noexcept;
     const dht::decorated_key& key() const { return _key; }
     dht::ring_position_view position() const {
         if (is_dummy_entry()) {
@@ -178,8 +184,8 @@ public:
 // Tracks accesses and performs eviction of cache entries.
 class cache_tracker final {
 public:
-    using lru_type = bi::list<cache_entry,
-        bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
+    using lru_type = bi::list<rows_entry,
+        bi::member_hook<rows_entry, rows_entry::lru_link_type, &rows_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
 public:
     friend class row_cache;
@@ -194,11 +200,18 @@ public:
         uint64_t row_misses;
         uint64_t partition_insertions;
         uint64_t row_insertions;
+        uint64_t static_row_insertions;
         uint64_t concurrent_misses_same_key;
         uint64_t partition_merges;
+        uint64_t rows_processed_from_memtable;
+        uint64_t rows_dropped_from_memtable;
+        uint64_t rows_merged_from_memtable;
         uint64_t partition_evictions;
         uint64_t partition_removals;
+        uint64_t row_evictions;
+        uint64_t row_removals;
         uint64_t partitions;
+        uint64_t rows;
         uint64_t mispopulations;
         uint64_t underlying_recreations;
         uint64_t underlying_partition_skips;
@@ -223,17 +236,27 @@ public:
     cache_tracker();
     ~cache_tracker();
     void clear();
-    void touch(cache_entry&);
+    void touch(rows_entry&);
     void insert(cache_entry&);
+    void insert(partition_entry&) noexcept;
+    void insert(partition_version&) noexcept;
+    void insert(rows_entry&) noexcept;
+    void on_remove(rows_entry&) noexcept;
+    void unlink(rows_entry&) noexcept;
     void clear_continuity(cache_entry& ce);
-    void on_erase();
-    void on_merge();
+    void on_partition_erase();
+    void on_partition_merge();
     void on_partition_hit();
     void on_partition_miss();
+    void on_partition_eviction();
+    void on_row_eviction();
     void on_row_hit();
     void on_row_miss();
     void on_miss_already_populated();
     void on_mispopulate();
+    void on_row_processed_from_memtable() { ++_stats.rows_processed_from_memtable; }
+    void on_row_dropped_from_memtable() { ++_stats.rows_dropped_from_memtable; }
+    void on_row_merged_from_memtable() { ++_stats.rows_merged_from_memtable; }
     void pinned_dirty_memory_overload(uint64_t bytes);
     allocation_strategy& allocator();
     logalloc::region& region();
@@ -339,7 +362,7 @@ private:
     void on_partition_miss();
     void on_row_hit();
     void on_row_miss();
-    void on_row_insert();
+    void on_static_row_insert();
     void on_mispopulate();
     void upgrade_entry(cache_entry&);
     void invalidate_locked(const dht::decorated_key&);
@@ -473,6 +496,10 @@ public:
 
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
+
+    // Detaches current contents of given partition from LRU, so
+    // that they are not evicted by memory reclaimer.
+    void unlink_from_lru(const dht::decorated_key&);
 
     // Synchronizes cache with the underlying mutation source
     // by invalidating ranges which were modified. This will force

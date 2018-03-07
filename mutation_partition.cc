@@ -34,6 +34,7 @@
 #include "mutation_compactor.hh"
 #include "intrusive_set_external_comparator.hh"
 #include "counters.hh"
+#include "row_cache.hh"
 #include <seastar/core/execution_stage.hh>
 
 template<bool reversed>
@@ -224,9 +225,9 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 }
 
 void mutation_partition::ensure_last_dummy(const schema& s) {
-    if (_rows.empty() || !_rows.rbegin()->position().is_after_all_clustered_rows(s)) {
+    if (_rows.empty() || !_rows.rbegin()->is_last_dummy()) {
         _rows.insert_before(_rows.end(),
-            *current_allocator().construct<rows_entry>(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, is_continuous::yes));
+            *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::yes));
     }
 }
 
@@ -283,11 +284,11 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p) {
+void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker) {
     _tombstone.apply(p._tombstone);
     _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
-    _static_row_continuous = p._static_row_continuous;
+    _static_row_continuous |= p._static_row_continuous;
 
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
@@ -297,11 +298,30 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
         auto i = _rows.lower_bound(src_e, less);
         if (i == _rows.end() || less(src_e, *i)) {
             p_i = p._rows.erase(p_i);
-            _rows.insert_before(i, src_e);
+            auto src_i = _rows.insert_before(i, src_e);
+            // When falling into a continuous range, preserve continuity.
+            if (i != _rows.end() && i->continuous()) {
+                src_e.set_continuous(true);
+                if (src_e.dummy()) {
+                    if (tracker) {
+                        tracker->on_remove(src_e);
+                    }
+                    _rows.erase_and_dispose(src_i, del);
+                }
+            }
         } else {
-            i->_row.apply_monotonically(s, std::move(src_e._row));
-            i->set_continuous(src_e.continuous());
-            i->set_dummy(src_e.dummy());
+            auto continuous = i->continuous() || src_e.continuous();
+            auto dummy = i->dummy() && src_e.dummy();
+            if (tracker) {
+                tracker->on_remove(*i);
+                i->_lru_link.swap_nodes(src_e._lru_link);
+                // Newer evictable versions store complete rows
+                i->_row = std::move(src_e._row);
+            } else {
+                i->_row.apply_monotonically(s, std::move(src_e._row));
+            }
+            i->set_continuous(continuous);
+            i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
     }
@@ -309,11 +329,11 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
 
 void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
     if (s.version() == p_schema.version()) {
-        apply_monotonically(s, std::move(p));
+        apply_monotonically(s, std::move(p), no_cache_tracker);
     } else {
         mutation_partition p2(p);
         p2.upgrade(p_schema, s);
-        apply_monotonically(s, std::move(p2));
+        apply_monotonically(s, std::move(p2), no_cache_tracker);
     }
 }
 
@@ -332,7 +352,7 @@ void mutation_partition::apply_weak(const schema& s, const mutation_partition& p
 }
 
 void mutation_partition::apply_weak(const schema& s, mutation_partition&& p) {
-    apply_monotonically(s, std::move(p));
+    apply_monotonically(s, std::move(p), no_cache_tracker);
 }
 
 tombstone
@@ -1346,8 +1366,15 @@ rows_entry::rows_entry(rows_entry&& o) noexcept
     : _link(std::move(o._link))
     , _key(std::move(o._key))
     , _row(std::move(o._row))
+    , _lru_link()
     , _flags(std::move(o._flags))
-{ }
+{
+    if (o._lru_link.is_linked()) {
+        auto prev = o._lru_link.prev_;
+        o._lru_link.unlink();
+        cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
+    }
+}
 
 row::row(const row& o)
     : _type(o._type)
@@ -2063,7 +2090,7 @@ mutation_partition::mutation_partition(mutation_partition::incomplete_tag, const
     , _row_tombstones(s)
 {
     _rows.insert_before(_rows.end(),
-        *current_allocator().construct<rows_entry>(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, is_continuous::no));
+        *current_allocator().construct<rows_entry>(s, rows_entry::last_dummy_tag(), is_continuous::no));
 }
 
 bool mutation_partition::is_fully_continuous() const {
@@ -2112,23 +2139,6 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
         result.add(s, position_range(std::move(prev_pos), position_in_partition::after_all_clustered_rows()));
     }
     return result;
-}
-
-void mutation_partition::evict() noexcept {
-    if (!_rows.empty()) {
-        // We need to keep the last entry to mark the range containing all evicted rows as discontinuous.
-        // No rows would mean it is continuous.
-        auto i = _rows.erase_and_dispose(_rows.begin(), std::prev(_rows.end()), current_deleter<rows_entry>());
-        rows_entry& e = *i;
-        e._flags._before_ck = false;
-        e._flags._after_ck = true;
-        e._flags._dummy = true;
-        e._flags._continuous = false;
-        e._row = {};
-    }
-    _row_tombstones.clear();
-    _static_row_continuous = false;
-    _static_row = {};
 }
 
 bool

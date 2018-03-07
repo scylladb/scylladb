@@ -101,7 +101,13 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     void start_reading_from_underlying();
     bool after_current_range(position_in_partition_view position);
     bool can_populate() const;
+    // Marks the range between _last_row (exclusive) and _next_row (exclusive) as continuous,
+    // provided that the underlying reader still matches the latest version of the partition.
     void maybe_update_continuity();
+    // Tries to ensure that the lower bound of the current population range exists.
+    // Returns false if it failed and range cannot be populated.
+    // Assumes can_populate().
+    bool ensure_population_lower_bound();
     void maybe_add_to_cache(const mutation_fragment& mf);
     void maybe_add_to_cache(const clustering_row& cr);
     void maybe_add_to_cache(const range_tombstone& rt);
@@ -112,6 +118,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
         _end_of_stream = true;
         _state = state::end_of_stream;
     }
+    void touch_partition();
 public:
     cache_flat_mutation_reader(schema_ptr s,
                                dht::decorated_key dk,
@@ -181,10 +188,19 @@ future<> cache_flat_mutation_reader::process_static_row(db::timeout_clock::time_
 }
 
 inline
+void cache_flat_mutation_reader::touch_partition() {
+    if (_snp->at_latest_version()) {
+        rows_entry& last_dummy = *_snp->version()->partition().clustered_rows().rbegin();
+        _snp->tracker()->touch(last_dummy);
+    }
+}
+
+inline
 future<> cache_flat_mutation_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     if (_state == state::before_static_row) {
         auto after_static_row = [this, timeout] {
             if (_ck_ranges_curr == _ck_ranges_end) {
+                touch_partition();
                 finish_reader();
                 return make_ready_future<>();
             }
@@ -294,13 +310,14 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                 auto inserted = insert_result.second;
                                 auto it = insert_result.first;
                                 if (inserted) {
+                                    _snp->tracker()->insert(*e);
                                     e.release();
                                     auto next = std::next(it);
                                     it->set_continuous(next->continuous());
                                     clogger.trace("csm {}: inserted dummy at {}, cont={}", this, it->position(), it->continuous());
                                 }
                             });
-                        } else if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+                        } else if (ensure_population_lower_bound()) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
                                     current_allocator().construct<rows_entry>(*_schema, _upper_bound, is_dummy::yes, is_continuous::yes));
@@ -309,6 +326,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
                                 auto inserted = insert_result.second;
                                 if (inserted) {
                                     clogger.trace("csm {}: inserted dummy at {}", this, _upper_bound);
+                                    _snp->tracker()->insert(*e);
                                     e.release();
                                 } else {
                                     clogger.trace("csm {}: mark {} as continuous", this, insert_result.first->position());
@@ -332,26 +350,42 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
 }
 
 inline
-void cache_flat_mutation_reader::maybe_update_continuity() {
-    if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
-            if (_next_row.is_in_latest_version()) {
-                clogger.trace("csm {}: mark {} continuous", this, _next_row.get_iterator_in_latest_version()->position());
-                _next_row.get_iterator_in_latest_version()->set_continuous(true);
-            } else {
-                // Cover entry from older version
-                with_allocator(_snp->region().allocator(), [&] {
-                    auto& rows = _snp->version()->partition().clustered_rows();
-                    rows_entry::compare less(*_schema);
-                    auto e = alloc_strategy_unique_ptr<rows_entry>(
-                        current_allocator().construct<rows_entry>(*_schema, _next_row.position(), is_dummy(_next_row.dummy()), is_continuous::yes));
-                    auto insert_result = rows.insert_check(_next_row.get_iterator_in_latest_version(), *e, less);
-                    auto inserted = insert_result.second;
-                    if (inserted) {
-                        clogger.trace("csm {}: inserted dummy at {}", this, e->position());
-                        e.release();
-                    }
-                });
+bool cache_flat_mutation_reader::ensure_population_lower_bound() {
+    if (!_ck_ranges_curr->start()) {
+        return true;
+    }
+    if (!_last_row.refresh(*_snp)) {
+        return false;
+    }
+    // Continuity flag we will later set for the upper bound extends to the previous row in the same version,
+    // so we need to ensure we have an entry in the latest version.
+    if (!_last_row.is_in_latest_version()) {
+        with_allocator(_snp->region().allocator(), [&] {
+            auto& rows = _snp->version()->partition().clustered_rows();
+            rows_entry::compare less(*_schema);
+            // FIXME: Avoid the copy by inserting an incomplete clustering row
+            auto e = alloc_strategy_unique_ptr<rows_entry>(
+                current_allocator().construct<rows_entry>(*_last_row));
+            e->set_continuous(false);
+            auto insert_result = rows.insert_check(rows.end(), *e, less);
+            auto inserted = insert_result.second;
+            if (inserted) {
+                clogger.trace("csm {}: inserted lower bound dummy at {}", this, e->position());
+                _snp->tracker()->insert(*e);
+                e.release();
             }
+        });
+    }
+    return true;
+}
+
+inline
+void cache_flat_mutation_reader::maybe_update_continuity() {
+    if (can_populate() && ensure_population_lower_bound()) {
+        with_allocator(_snp->region().allocator(), [&] {
+            rows_entry& e = _next_row.ensure_entry_in_latest().row;
+            e.set_continuous(true);
+        });
     } else {
         _read_context->cache().on_mispopulate();
     }
@@ -390,20 +424,20 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
                                               : mp.clustered_rows().lower_bound(cr.key(), less);
         auto insert_result = mp.clustered_rows().insert_check(it, *new_entry, less);
         if (insert_result.second) {
-            _read_context->cache().on_row_insert();
+            _snp->tracker()->insert(*new_entry);
             new_entry.release();
         }
         it = insert_result.first;
 
         rows_entry& e = *it;
-        if (!_ck_ranges_curr->start() || _last_row.refresh(*_snp)) {
+        if (ensure_population_lower_bound()) {
             clogger.trace("csm {}: set_continuous({})", this, e.position());
             e.set_continuous(true);
         } else {
             _read_context->cache().on_mispopulate();
         }
         with_allocator(standard_allocator(), [&] {
-            _last_row = partition_snapshot_row_weakref(*_snp, it);
+            _last_row = partition_snapshot_row_weakref(*_snp, it, true);
         });
     });
 }
@@ -417,11 +451,13 @@ inline
 void cache_flat_mutation_reader::start_reading_from_underlying() {
     clogger.trace("csm {}: start_reading_from_underlying(), range=[{}, {})", this, _lower_bound, _next_row_in_range ? _next_row.position() : _upper_bound);
     _state = state::move_to_underlying;
+    _next_row.touch();
 }
 
 inline
 void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     clogger.trace("csm {}: copy_from_cache, next={}, next_row_in_range={}", this, _next_row.position(), _next_row_in_range);
+    _next_row.touch();
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
     for (auto &&rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
         // This guarantees that rts starts after any emitted clustering_row
@@ -488,7 +524,8 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
                     auto new_entry = current_allocator().construct<rows_entry>(*_schema, _lower_bound, is_dummy::yes, is_continuous::no);
                     return rows.insert_before(_next_row.get_iterator_in_latest_version(), *new_entry);
                 });
-                _last_row = partition_snapshot_row_weakref(*_snp, it);
+                _snp->tracker()->insert(*it);
+                _last_row = partition_snapshot_row_weakref(*_snp, it, true);
             } else {
                 _read_context->cache().on_mispopulate();
             }
@@ -575,7 +612,7 @@ inline
 void cache_flat_mutation_reader::maybe_add_to_cache(const static_row& sr) {
     if (can_populate()) {
         clogger.trace("csm {}: populate({})", this, sr);
-        _read_context->cache().on_row_insert();
+        _read_context->cache().on_static_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
             if (_read_context->digest_requested()) {
                 sr.cells().prepare_hash(*_schema, column_kind::static_column);

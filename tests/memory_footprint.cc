@@ -58,7 +58,6 @@ public:
         {
             nest n;
             std::cout << prefix() << "sizeof(decorated_key) = " << sizeof(dht::decorated_key) << "\n";
-            std::cout << prefix() << "sizeof(lru_link_type) = " << sizeof(cache_entry::lru_link_type) << "\n";
             std::cout << prefix() << "sizeof(cache_link_type) = " << sizeof(cache_entry::cache_link_type) << "\n";
             print_mutation_partition_size();
         }
@@ -66,6 +65,7 @@ public:
         std::cout << "\n";
 
         std::cout << prefix() << "sizeof(rows_entry) = " << sizeof(rows_entry) << "\n";
+        std::cout << prefix() << "sizeof(lru_link_type) = " << sizeof(rows_entry::lru_link_type) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
         std::cout << prefix() << "sizeof(atomic_cell_or_collection) = " << sizeof(atomic_cell_or_collection) << "\n";
