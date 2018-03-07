@@ -27,7 +27,7 @@
 #include "core/temporary_buffer.hh"
 #include "consumer.hh"
 #include "sstables/types.hh"
-#include "reader_resource_tracker.hh"
+#include "reader_concurrency_semaphore.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:

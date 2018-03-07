@@ -27,7 +27,7 @@
 #include "core/future-util.hh"
 #include "utils/move.hh"
 #include "stdx.hh"
-#include "reader_resource_tracker.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "flat_mutation_reader.hh"
 
 
