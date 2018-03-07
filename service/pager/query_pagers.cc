@@ -43,6 +43,7 @@
 #include "query_pager.hh"
 #include "cql3/selection/selection.hh"
 #include "log.hh"
+#include "service/storage_proxy.hh"
 #include "to_string.hh"
 
 static logging::logger qlogger("paging");

@@ -74,6 +74,7 @@
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/timeout_clock.hh"
 #include "sstables/sstables.hh"
+#include "db/schema_tables.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 

@@ -43,14 +43,15 @@
 #include <unordered_map>
 #include <utility>
 #include "schema.hh"
-#include "db/schema_tables.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"
 #include "locator/token_metadata.hh"
 #include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
+#include "mutation_query.hh"
 #include <map>
+#include <seastar/core/distributed.hh>
 
 namespace service {
 
