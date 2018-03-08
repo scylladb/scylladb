@@ -4604,3 +4604,37 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
+    BOOST_REQUIRE(smp::count == 1);
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto s = schema_builder("tests", "ts_correcness_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            return make_sstable(s, tmp->path, (*gen)++, la, big);
+        };
+
+        auto make_insert = [&] (partition_key key, api::timestamp_type ts) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts);
+            return m;
+        };
+
+        auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
+        auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+
+        auto mut1 = make_insert(alpha, -50);
+        auto mut2 = make_insert(beta, 5);
+
+        auto sst = make_sstable_containing(sst_gen, {mut1, mut2});
+
+        BOOST_REQUIRE(sst->get_stats_metadata().min_timestamp == -50);
+        BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp == 5);
+    });
+}

@@ -51,17 +51,18 @@ namespace sstables {
 
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
 
-class min_long_tracker {
-    uint64_t _default_value;
+template <typename T>
+class min_tracker {
+    T _default_value;
     bool _is_set = false;
-    uint64_t _value;
+    T _value;
 public:
-    min_long_tracker() {}
-    min_long_tracker(uint64_t default_value) {
+    min_tracker() {}
+    min_tracker(T default_value) {
         _default_value = default_value;
     }
 
-    void update(uint64_t value) {
+    void update(T value) {
         if (!_is_set) {
             _value = value;
             _is_set = true;
@@ -72,7 +73,7 @@ public:
         }
     }
 
-    uint64_t get() {
+    T get() {
         if (_is_set) {
             return _value;
         }
@@ -80,17 +81,18 @@ public:
     }
 };
 
-class max_long_tracker {
-    uint64_t _default_value;
+template <typename T>
+class max_tracker {
+    T _default_value;
     bool _is_set = false;
-    uint64_t _value;
+    T _value;
 public:
-    max_long_tracker() {}
-    max_long_tracker(uint64_t default_value) {
+    max_tracker() {}
+    max_tracker(T default_value) {
         _default_value = default_value;
     }
 
-    void update(uint64_t value) {
+    void update(T value) {
         if (!_is_set) {
             _value = value;
             _is_set = true;
@@ -101,36 +103,7 @@ public:
         }
     }
 
-    uint64_t get() {
-        if (_is_set) {
-            return _value;
-        }
-        return _default_value;
-    }
-};
-
-class max_int_tracker {
-    int _default_value;
-    bool _is_set = false;
-    int _value;
-public:
-    max_int_tracker() {}
-    max_int_tracker(int default_value) {
-        _default_value = default_value;
-    }
-
-    void update(int value) {
-        if (!_is_set) {
-            _value = value;
-            _is_set = true;
-        } else {
-            if (value > _value) {
-                _value = value;
-            }
-        }
-    }
-
-    int get() {
+    T get() {
         if (_is_set) {
             return _value;
         }
@@ -149,9 +122,9 @@ struct column_stats {
     uint64_t row_size;
 
     /** the largest (client-supplied) timestamp in the row */
-    min_long_tracker min_timestamp;
-    max_long_tracker max_timestamp;
-    max_int_tracker max_local_deletion_time;
+    min_tracker<api::timestamp_type> min_timestamp;
+    max_tracker<api::timestamp_type> max_timestamp;
+    max_tracker<int32_t> max_local_deletion_time;
     /** histogram of tombstone drop time */
     utils::streaming_histogram tombstone_histogram;
 
@@ -161,9 +134,9 @@ struct column_stats {
         column_count(0),
         start_offset(0),
         row_size(0),
-        min_timestamp(min_long_tracker(std::numeric_limits<uint64_t>::min())),
-        max_timestamp(max_long_tracker(std::numeric_limits<uint64_t>::max())),
-        max_local_deletion_time(max_int_tracker(std::numeric_limits<int>::max())),
+        min_timestamp(std::numeric_limits<api::timestamp_type>::min()),
+        max_timestamp(std::numeric_limits<api::timestamp_type>::max()),
+        max_local_deletion_time(std::numeric_limits<int32_t>::max()),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
         has_legacy_counter_shards(false)
         {
@@ -173,13 +146,13 @@ struct column_stats {
         *this = column_stats();
     }
 
-    void update_min_timestamp(uint64_t potential_min) {
+    void update_min_timestamp(api::timestamp_type potential_min) {
         min_timestamp.update(potential_min);
     }
-    void update_max_timestamp(uint64_t potential_max) {
+    void update_max_timestamp(api::timestamp_type potential_max) {
         max_timestamp.update(potential_max);
     }
-    void update_max_local_deletion_time(int potential_value) {
+    void update_max_local_deletion_time(int32_t potential_value) {
         max_local_deletion_time.update(potential_value);
     }
 
@@ -199,10 +172,10 @@ private:
     // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
     utils::estimated_histogram _estimated_column_count{114};
     db::replay_position _replay_position;
-    uint64_t _min_timestamp = std::numeric_limits<uint64_t>::max();
-    uint64_t _max_timestamp = std::numeric_limits<uint64_t>::min();
+    api::timestamp_type _min_timestamp = std::numeric_limits<api::timestamp_type>::max();
+    api::timestamp_type _max_timestamp = std::numeric_limits<api::timestamp_type>::min();
     uint64_t _repaired_at = 0;
-    int _max_local_deletion_time = std::numeric_limits<int>::min();
+    int32_t _max_local_deletion_time = std::numeric_limits<int32_t>::min();
     double _compression_ratio = NO_COMPRESSION_RATIO;
     std::set<int> _ancestors;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
@@ -258,15 +231,15 @@ public:
         _compression_ratio = (double) compressed/uncompressed;
     }
 
-    void update_min_timestamp(uint64_t potential_min) {
+    void update_min_timestamp(api::timestamp_type potential_min) {
         _min_timestamp = std::min(_min_timestamp, potential_min);
     }
 
-    void update_max_timestamp(uint64_t potential_max) {
+    void update_max_timestamp(api::timestamp_type potential_max) {
         _max_timestamp = std::max(_max_timestamp, potential_max);
     }
 
-    void update_max_local_deletion_time(int max_local_deletion_time) {
+    void update_max_local_deletion_time(int32_t max_local_deletion_time) {
         _max_local_deletion_time = std::max(_max_local_deletion_time, max_local_deletion_time);
     }
 

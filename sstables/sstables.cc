@@ -1689,7 +1689,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
     }
 }
 
-static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
+static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type timestamp) {
     c_stats.update_min_timestamp(timestamp);
     c_stats.update_max_timestamp(timestamp);
     c_stats.column_count++;
@@ -1697,7 +1697,7 @@ static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) 
 
 // Intended to write all cell components that follow column name.
 void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef) {
-    uint64_t timestamp = cell.timestamp();
+    api::timestamp_type timestamp = cell.timestamp();
 
     update_cell_stats(_c_stats, timestamp);
 
