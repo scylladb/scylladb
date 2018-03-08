@@ -27,7 +27,6 @@
 #include "core/future-util.hh"
 #include "utils/move.hh"
 #include "stdx.hh"
-#include "reader_resource_tracker.hh"
 #include "flat_mutation_reader.hh"
 
 
@@ -715,23 +714,55 @@ mutation_reader make_empty_reader() {
     return make_mutation_reader<empty_reader>();
 }
 
+const reader_concurrency_semaphore::timeout_clock::duration
+reader_concurrency_semaphore::no_timeout{reader_concurrency_semaphore::timeout_clock::duration::max()};
+
+void reader_concurrency_semaphore::signal(const resources& r) {
+    _resources += r;
+    while (!_wait_list.empty() && has_available_units(_wait_list.front().res)) {
+        auto& x = _wait_list.front();
+        _resources -= x.res;
+        x.pr.set_value(make_lw_shared<reader_permit>(*this, x.res));
+        _wait_list.pop_front();
+    }
+}
+
+future<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> reader_concurrency_semaphore::wait_admission(size_t memory) {
+    if (_wait_list.size() >= _max_queue_length) {
+        return make_exception_future<lw_shared_ptr<reader_permit>>(_make_queue_overloaded_exception());
+    }
+    auto r = resources(1, static_cast<ssize_t>(memory));
+    if (may_proceed(r)) {
+        _resources -= r;
+        return make_ready_future<lw_shared_ptr<reader_permit>>(make_lw_shared<reader_permit>(*this, r));
+    }
+    promise<lw_shared_ptr<reader_permit>> pr;
+    auto fut = pr.get_future();
+    if (_timeout == no_timeout) {
+        _wait_list.push_back(entry(std::move(pr), r));
+    } else {
+        _wait_list.push_back(entry(std::move(pr), r), timeout_clock::now() + _timeout);
+    }
+    return fut;
+}
+
 // A file that tracks the memory usage of buffers resulting from read
 // operations.
 class tracking_file_impl : public file_impl {
     file _tracked_file;
-    semaphore* _semaphore;
+    lw_shared_ptr<reader_concurrency_semaphore::reader_permit> _permit;
 
     // Shouldn't be called if semaphore is NULL.
     temporary_buffer<uint8_t> make_tracked_buf(temporary_buffer<uint8_t> buf) {
         return seastar::temporary_buffer<uint8_t>(buf.get_write(),
                 buf.size(),
-                make_deleter(buf.release(), std::bind(&semaphore::signal, _semaphore, buf.size())));
+                make_deleter(buf.release(), std::bind(&reader_concurrency_semaphore::reader_permit::signal_memory, _permit, buf.size())));
     }
 
 public:
     tracking_file_impl(file file, reader_resource_tracker resource_tracker)
         : _tracked_file(std::move(file))
-        , _semaphore(resource_tracker.get_semaphore()) {
+        , _permit(resource_tracker.get_permit()) {
     }
 
     tracking_file_impl(const tracking_file_impl&) = delete;
@@ -793,9 +824,9 @@ public:
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, const io_priority_class& pc) override {
         return get_file_impl(_tracked_file)->dma_read_bulk(offset, range_size, pc).then([this] (temporary_buffer<uint8_t> buf) {
-            if (_semaphore) {
+            if (_permit) {
                 buf = make_tracked_buf(std::move(buf));
-                _semaphore->consume(buf.size());
+                _permit->consume_memory(buf.size());
             }
             return make_ready_future<temporary_buffer<uint8_t>>(std::move(buf));
         });
@@ -819,32 +850,22 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
         streamed_mutation::forwarding _fwd;
         mutation_reader::forwarding _fwd_mr;
 
-        flat_mutation_reader operator()() {
-            return _ms.make_flat_mutation_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr);
+        flat_mutation_reader operator()(reader_resource_tracker tracker) {
+            return _ms.make_flat_mutation_reader(std::move(_s), _range.get(), _slice.get(), _pc.get(), std::move(_trace_state), _fwd, _fwd_mr, tracker);
         }
     };
 
-    const restricted_mutation_reader_config& _config;
-    boost::variant<mutation_source_and_params, flat_mutation_reader> _reader_or_mutation_source;
+    struct pending_state {
+        reader_concurrency_semaphore* semaphore;
+        mutation_source_and_params reader_factory;
+    };
+    struct admitted_state {
+        lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit;
+        flat_mutation_reader reader;
+    };
+    boost::variant<pending_state, admitted_state> _state;
 
     static const std::size_t new_reader_base_cost{16 * 1024};
-
-    future<> create_reader() {
-        auto f = _config.timeout.count() != 0
-                ? _config.resources_sem->wait(_config.timeout, new_reader_base_cost)
-                : _config.resources_sem->wait(new_reader_base_cost);
-
-        return f.then([this] {
-            flat_mutation_reader reader = boost::get<mutation_source_and_params>(_reader_or_mutation_source)();
-            _reader_or_mutation_source = std::move(reader);
-
-            if (_config.active_reads) {
-                ++(*_config.active_reads);
-            }
-
-            return make_ready_future<>();
-        });
-    }
 
     template<typename Function>
     GCC6_CONCEPT(
@@ -854,15 +875,19 @@ class restricting_mutation_reader : public flat_mutation_reader::impl {
             }
     )
     decltype(auto) with_reader(Function fn) {
-        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
-            return fn(*reader);
+        if (auto* state = boost::get<admitted_state>(&_state)) {
+            return fn(state->reader);
         }
-        return create_reader().then([this, fn = std::move(fn)] () mutable {
-            return fn(boost::get<flat_mutation_reader>(_reader_or_mutation_source));
+
+        return boost::get<pending_state>(_state).semaphore->wait_admission(new_reader_base_cost).then(
+                [this, fn = std::move(fn)] (lw_shared_ptr<reader_concurrency_semaphore::reader_permit> permit) mutable {
+            auto reader_factory = std::move(boost::get<pending_state>(_state).reader_factory);
+            _state = admitted_state{permit, reader_factory(reader_resource_tracker(permit))};
+            return fn(boost::get<admitted_state>(_state).reader);
         });
     }
 public:
-    restricting_mutation_reader(const restricted_mutation_reader_config& config,
+    restricting_mutation_reader(reader_concurrency_semaphore& semaphore,
             mutation_source ms,
             schema_ptr s,
             const dht::partition_range& range,
@@ -872,20 +897,8 @@ public:
             streamed_mutation::forwarding fwd,
             mutation_reader::forwarding fwd_mr)
         : impl(s)
-        , _config(config)
-        , _reader_or_mutation_source(
-                mutation_source_and_params{std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr}) {
-        if (_config.resources_sem->waiters() >= _config.max_queue_length) {
-            _config.raise_queue_overloaded_exception();
-        }
-    }
-    ~restricting_mutation_reader() {
-        if (boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
-            _config.resources_sem->signal(new_reader_base_cost);
-            if (_config.active_reads) {
-                --(*_config.active_reads);
-            }
-        }
+        , _state(pending_state{&semaphore,
+                mutation_source_and_params{std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr}}) {
     }
 
     virtual future<> fill_buffer() override {
@@ -904,8 +917,8 @@ public:
             return;
         }
         _end_of_stream = false;
-        if (auto* reader = boost::get<flat_mutation_reader>(&_reader_or_mutation_source)) {
-            return reader->next_partition();
+        if (auto* state = boost::get<admitted_state>(&_state)) {
+            return state->reader.next_partition();
         }
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
@@ -925,7 +938,7 @@ public:
 };
 
 flat_mutation_reader
-make_restricted_flat_reader(const restricted_mutation_reader_config& config,
+make_restricted_flat_reader(reader_concurrency_semaphore& semaphore,
                        mutation_source ms,
                        schema_ptr s,
                        const dht::partition_range& range,
@@ -934,7 +947,7 @@ make_restricted_flat_reader(const restricted_mutation_reader_config& config,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<restricting_mutation_reader>(config, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+    return make_flat_mutation_reader<restricting_mutation_reader>(semaphore, std::move(ms), std::move(s), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
 }
 
 
