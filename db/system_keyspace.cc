@@ -1579,9 +1579,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             kscfg.enable_commitlog = !volatile_testing_only;
             kscfg.enable_cache = true;
             // don't make system keyspace reads wait for user reads
-            kscfg.read_concurrency_config.resources_sem = &db.system_keyspace_read_concurrency_sem();
-            kscfg.read_concurrency_config.active_reads = &db.get_stats().active_reads_system_keyspace;
-            kscfg.read_concurrency_config.max_queue_length = std::numeric_limits<size_t>::max();
+            kscfg.read_concurrency_semaphore = &db.system_keyspace_read_concurrency_sem();
             // don't make system keyspace writes wait for user writes (if under pressure)
             kscfg.dirty_memory_manager = &db._system_dirty_memory_manager;
             keyspace _ks{ksm, std::move(kscfg)};
