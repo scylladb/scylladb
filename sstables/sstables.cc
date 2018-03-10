@@ -1447,7 +1447,6 @@ future<> sstable::load(const io_priority_class& pc) {
                 read_summary(pc)).then([this] {
             validate_min_max_metadata();
             validate_max_local_deletion_time();
-            set_clustering_components_ranges();
             return open_data();
         });
     });
