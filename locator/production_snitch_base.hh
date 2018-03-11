@@ -45,11 +45,7 @@
 #include <boost/filesystem.hpp>
 
 #include "gms/endpoint_state.hh"
-#include "gms/gossiper.hh"
-#include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
-#include "db/system_keyspace.hh"
-#include "db/config.hh"
 #include "core/sstring.hh"
 #include "snitch_base.hh"
 
@@ -73,95 +69,20 @@ public:
     static constexpr const char* dc_suffix_property_key    = "dc_suffix";
     const std::unordered_set<sstring> allowed_property_keys;
 
-    production_snitch_base(const sstring& prop_file_name = "")
-    : allowed_property_keys({ dc_property_key,
-                              rack_property_key,
-                              prefer_local_property_key,
-                              dc_suffix_property_key }){
-        if (!prop_file_name.empty()) {
-            _prop_file_name = prop_file_name;
-        } else {
-            using namespace boost::filesystem;
+    production_snitch_base(const sstring& prop_file_name = "");
 
-            path def_prop_file(db::config::get_conf_dir());
-            def_prop_file /= path(snitch_properties_filename);
+    virtual sstring get_rack(inet_address endpoint);
+    virtual sstring get_datacenter(inet_address endpoint);
+    virtual void set_my_distributed(distributed<snitch_ptr>* d) override;
 
-            _prop_file_name = def_prop_file.string();
-        }
-    }
-
-    virtual sstring get_rack(inet_address endpoint) {
-        if (endpoint == utils::fb_utilities::get_broadcast_address()) {
-            return _my_rack;
-        }
-
-        return get_endpoint_info(endpoint,
-                                 gms::application_state::RACK,
-                                 default_rack);
-    }
-
-    virtual sstring get_datacenter(inet_address endpoint) {
-        if (endpoint == utils::fb_utilities::get_broadcast_address()) {
-            return _my_dc;
-        }
-
-        return get_endpoint_info(endpoint,
-                                 gms::application_state::DC,
-                                 default_dc);
-    }
-
-    virtual void set_my_distributed(distributed<snitch_ptr>* d) override {
-        _my_distributed = d;
-    }
-
-    void reset_io_state() {
-        //
-        // Reset the promise to allow repeating
-        // start()+stop()/pause_io()+resume_io() call sequences.
-        //
-        _io_is_stopped = promise<>();
-    }
+    void reset_io_state();
 
 private:
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
-                              const sstring& default_val) {
-        gms::gossiper& local_gossiper = gms::get_local_gossiper();
-        auto* ep_state = local_gossiper.get_application_state_ptr(endpoint, key);
-        if (ep_state) {
-            return ep_state->value;
-        }
-
-        // ...if not found - look in the SystemTable...
-        if (!_saved_endpoints) {
-            _saved_endpoints = db::system_keyspace::load_dc_rack_info();
-        }
-
-        auto it = _saved_endpoints->find(endpoint);
-
-        if (it != _saved_endpoints->end()) {
-            if (key == gms::application_state::RACK) {
-                return it->second.rack;
-            } else { // gms::application_state::DC
-                return it->second.dc;
-            }
-        }
-
-        // ...if still not found - return a default value
-        return default_val;
-    }
-
-    virtual void set_my_dc(const sstring& new_dc) override {
-        _my_dc = new_dc;
-    }
-
-    virtual void set_my_rack(const sstring& new_rack) override {
-        _my_rack = new_rack;
-    }
-
-    virtual void set_prefer_local(bool prefer_local) override {
-        _prefer_local = prefer_local;
-    }
-
+                              const sstring& default_val);
+    virtual void set_my_dc(const sstring& new_dc) override;
+    virtual void set_my_rack(const sstring& new_rack) override;
+    virtual void set_prefer_local(bool prefer_local) override;
     void parse_property_file();
 
 protected:
@@ -172,20 +93,14 @@ protected:
      */
     future<> load_property_file();
 
-    void throw_double_declaration(const sstring& key) const {
-        logger().error("double \"{}\" declaration in {}", key, _prop_file_name);
-        throw bad_property_file_error();
-    }
+    [[noreturn]]
+    void throw_double_declaration(const sstring& key) const;
 
-    void throw_bad_format(const sstring& line) const {
-        logger().error("Bad format in properties file {}: {}", _prop_file_name, line);
-        throw bad_property_file_error();
-    }
+    [[noreturn]]
+    void throw_bad_format(const sstring& line) const;
 
-    void throw_incomplete_file() const {
-        logger().error("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
-        throw bad_property_file_error();
-    }
+    [[noreturn]]
+    void throw_incomplete_file() const;
 
 protected:
     promise<> _io_is_stopped;

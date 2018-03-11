@@ -22,6 +22,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/ec2_snitch.hh"
+#include "utils/fb_utilities.hh"
 #include "tests/test-utils.hh"
 #include <boost/filesystem.hpp>
 #include <vector>

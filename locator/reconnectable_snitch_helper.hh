@@ -41,6 +41,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "message/messaging_service.hh"
 #include "locator/snitch_base.hh"
+#include "db/system_keyspace.hh"
 
 namespace locator {
 
