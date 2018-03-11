@@ -34,6 +34,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "locator/gce_snitch.hh"
+#include "utils/fb_utilities.hh"
 #include "tests/test-utils.hh"
 #include <seastar/http/httpd.hh>
 #include <seastar/net/inet_address.hh>

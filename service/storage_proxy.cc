@@ -57,6 +57,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/hints/manager.hh"
+#include "db/system_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/iterator/counting_iterator.hpp>

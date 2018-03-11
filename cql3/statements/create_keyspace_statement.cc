@@ -46,6 +46,8 @@
 
 #include <regex>
 
+bool is_system_keyspace(const sstring& keyspace);
+
 namespace cql3 {
 
 namespace statements {

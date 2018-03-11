@@ -42,9 +42,15 @@
 #pragma once
 
 #include "core/sstring.hh"
-#include "db/system_keyspace.hh"
+#include "seastarx.hh"
 #include <iosfwd>
 #include <functional>
+
+namespace db {
+
+sstring system_keyspace_name();
+
+}
 
 namespace cql3 {
 
@@ -56,7 +62,7 @@ public:
     sstring name;
 
     static function_name native_function(sstring name) {
-        return function_name(db::system_keyspace::NAME, name);
+        return function_name(db::system_keyspace_name(), name);
     }
 
     function_name() = default; // for ANTLR

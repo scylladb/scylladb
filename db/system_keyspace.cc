@@ -1782,4 +1782,9 @@ mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estim
 }
 
 } // namespace system_keyspace
+
+sstring system_keyspace_name() {
+    return system_keyspace::NAME;
+}
+
 } // namespace db
