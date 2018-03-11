@@ -1,6 +1,8 @@
 #include "locator/production_snitch_base.hh"
+#include "reconnectable_snitch_helper.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
+#include "message/messaging_service.hh"
 #include "utils/fb_utilities.hh"
 #include "db/config.hh"
 
@@ -169,6 +171,78 @@ void production_snitch_base::throw_incomplete_file() const {
     throw bad_property_file_error();
 }
 
+logging::logger& reconnectable_snitch_helper::logger() {
+    static logging::logger _logger("reconnectable_snitch_helper");
+    return _logger;
+}
 
+
+void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, const gms::versioned_value& local_address_value) {
+    reconnect(public_address, gms::inet_address(local_address_value.value));
+}
+
+void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
+    auto& ms = netw::get_local_messaging_service();
+    auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+
+    if (sn_ptr->get_datacenter(public_address) == _local_dc &&
+        ms.get_preferred_ip(public_address) != local_address) {
+        //
+        // First, store the local address in the system_table...
+        //
+        db::system_keyspace::update_preferred_ip(public_address, local_address).get();
+
+        //
+        // ...then update messaging_service cache and reset the currently
+        // open connections to this endpoint on all shards...
+        //
+        netw::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
+            local_ms.cache_preferred_ip(public_address, local_address);
+
+            netw::msg_addr id = {
+                .addr = public_address
+            };
+            local_ms.remove_rpc_client(id);
+        }).get();
+
+        logger().debug("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);
+    }
+}
+
+reconnectable_snitch_helper::reconnectable_snitch_helper(sstring local_dc)
+        : _local_dc(local_dc) {}
+
+void reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
+    // do nothing.
+}
+
+void reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+    auto* internal_ip_state = ep_state.get_application_state_ptr(gms::application_state::INTERNAL_IP);
+    if (internal_ip_state) {
+        reconnect(endpoint, *internal_ip_state);
+    }
+}
+
+void reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+    if (state == gms::application_state::INTERNAL_IP) {
+        reconnect(endpoint, value);
+    }
+}
+
+void reconnectable_snitch_helper::on_alive(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+    on_join(std::move(endpoint), std::move(ep_state));
+}
+
+void reconnectable_snitch_helper::on_dead(gms::inet_address endpoint, gms::endpoint_state ep_state) {
+    // do nothing.
+}
+
+void reconnectable_snitch_helper::on_remove(gms::inet_address endpoint) {
+    // do nothing.
+}
+
+void reconnectable_snitch_helper::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+    // do nothing.
+}
 
 } // namespace locator
