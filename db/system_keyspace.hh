@@ -66,6 +66,9 @@ namespace cql3 {
 bool is_system_keyspace(const sstring& ks_name);
 
 namespace db {
+
+sstring system_keyspace_name();
+
 namespace system_keyspace {
 
 static constexpr auto NAME = "system";
