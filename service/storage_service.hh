@@ -51,7 +51,6 @@
 #include "dht/token_range_endpoints.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
-#include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
 #include "utils/serialized_action.hh"

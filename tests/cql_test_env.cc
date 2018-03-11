@@ -44,6 +44,7 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "auth/service.hh"
+#include "db/system_keyspace.hh"
 
 namespace sstables {
 

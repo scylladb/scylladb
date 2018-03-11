@@ -33,6 +33,7 @@
 #include "query-result.hh"
 #include "rpc/rpc.hh"
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "frozen_schema.hh"
