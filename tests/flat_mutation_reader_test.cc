@@ -34,6 +34,7 @@
 #include "sstables/sstables.hh"
 #include "tmpdir.hh"
 #include "sstable_test.hh"
+#include "repair/repair.hh"
 
 #include "tests/test_services.hh"
 #include "tests/simple_schema.hh"

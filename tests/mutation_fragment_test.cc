@@ -30,6 +30,7 @@
 #include "schema_builder.hh"
 #include "total_order_check.hh"
 #include "schema_upgrader.hh"
+#include "memtable.hh"
 
 #include "mutation_assertions.hh"
 

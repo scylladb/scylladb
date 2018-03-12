@@ -32,11 +32,13 @@
 #include "service/migration_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "auth/service.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
 #include "tmpdir.hh"
 #include "db/query_context.hh"
+#include "test_services.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
@@ -415,3 +417,28 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const d
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func) {
     return do_with_cql_env_thread(std::move(func), db::config{});
 }
+
+class storage_service_for_tests::impl {
+    distributed<database> _db;
+    sharded<auth::service> _auth_service;
+public:
+    impl() {
+        auto thread = seastar::thread_impl::get();
+        assert(thread);
+        netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        service::get_storage_service().start(std::ref(_db), std::ref(_auth_service)).get();
+        service::get_storage_service().invoke_on_all([] (auto& ss) {
+            ss.enable_all_features();
+        }).get();
+    }
+    ~impl() {
+        service::get_storage_service().stop().get();
+        netw::get_messaging_service().stop().get();
+        _db.stop().get();
+    }
+};
+
+storage_service_for_tests::storage_service_for_tests() : _impl(std::make_unique<impl>()) {
+}
+
+storage_service_for_tests::~storage_service_for_tests() = default;
