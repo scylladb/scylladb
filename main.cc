@@ -40,6 +40,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
+#include "db/view/view_builder.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
 #include "log.hh"
@@ -706,6 +707,11 @@ int main(int ac, char** av) {
                 proxy.invoke_on_all([] (service::storage_proxy& local_proxy) { local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this()); }).get();
             }
 
+            static sharded<db::view::view_builder> view_builder;
+            supervisor::notify("starting the view builder");
+            view_builder.start(std::ref(db), std::ref(sys_dist_ks)).get();
+            view_builder.invoke_on_all(&db::view::view_builder::start).get();
+
             supervisor::notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
             if (start_thrift) {
@@ -734,6 +740,10 @@ int main(int ac, char** av) {
             });
             engine().at_exit([] {
                 return service::get_local_storage_service().drain_on_shutdown();
+            });
+
+            engine().at_exit([] {
+                return view_builder.stop();
             });
 
             engine().at_exit([&db] {
