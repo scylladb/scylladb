@@ -76,6 +76,7 @@ public:
 
     static constexpr int MAX_LEVELS = 9; // log10(1000^3);
 
+    static constexpr unsigned leveled_fan_out = 10;
     // Lowest score (score is about how much data a level contains vs its ideal amount) for a
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
@@ -146,7 +147,7 @@ public:
         if (level == 0) {
             return 4L * max_sstable_size_in_bytes;
         }
-        double bytes = pow(10, level) * max_sstable_size_in_bytes;
+        double bytes = pow(leveled_fan_out, level) * max_sstable_size_in_bytes;
         if (bytes > std::numeric_limits<int64_t>::max()) {
             throw std::runtime_error(sprint("At most %ld bytes may be in a compaction level; your maxSSTableSize must be absurdly high to compute %f", 
                 std::numeric_limits<int64_t>::max(), bytes));
