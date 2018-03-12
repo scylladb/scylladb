@@ -304,6 +304,10 @@ public:
         return get_compound_type(s)->end(_bytes);
     }
 
+    bool is_empty(const schema& s) const {
+        return begin(s) == end(s);
+    }
+
     // Returns a range of bytes_view
     auto components() const {
         return TopLevelView::compound::element_type::components(representation());
