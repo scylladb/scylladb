@@ -3264,7 +3264,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress()] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
         tracing::trace(trace_state, "Acquiring counter locks");
         return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
@@ -3496,16 +3496,19 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
+
+    // Signal to view building code that a write is in progress,
+    // so it knows when new writes start being sent to a new view.
+    auto op = cf.write_in_progress();
     if (cf.views().empty()) {
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally([op = std::move(op)] { });
     }
     future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m);
-    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] (row_locker::lock_holder lock) {
-        auto& cf = find_column_family(uuid);
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op)] (row_locker::lock_holder lock) mutable {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally(
                 // Hold the local lock on the base-table partition or row
                 // taken before the read, until the update is done.
-                [lock = std::move(lock)] { });
+                [lock = std::move(lock), op = std::move(op)] { });
     });
   });
 }

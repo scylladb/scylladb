@@ -461,6 +461,11 @@ private:
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
+
+    // Phaser used to synchronize with in-progress writes. This is useful for code that,
+    // after some modification, needs to ensure that news writes will see it before
+    // it can proceed, such as the view building code.
+    utils::phased_barrier _pending_writes_phaser;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -783,6 +788,14 @@ public:
     void drop_hit_rate(gms::inet_address addr);
 
     future<> run_with_compaction_disabled(std::function<future<> ()> func);
+
+    utils::phased_barrier::operation write_in_progress() {
+        return _pending_writes_phaser.start();
+    }
+
+    future<> await_pending_writes() {
+        return _pending_writes_phaser.advance_and_await();
+    }
 
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
