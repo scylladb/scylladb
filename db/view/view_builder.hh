@@ -53,6 +53,14 @@ namespace db::view {
  *
  * We employ a flat_mutation_reader for each base table for which we're building views.
  *
+ * We aim to be resource-conscious. On a given shard, at any given moment, we consume at most
+ * from one reader. We also strive for fairness, in that each build step inserts entries for
+ * the views of a different base. Each build step reads and generates updates for batch_size rows.
+ *
+ * We lack a controller, which could potentially allow us to go faster (to execute multiple steps at
+ * the same time, or consume more rows per batch), and also which would apply backpressure, so we
+ * could, for example, delay executing a build step.
+ *
  * View building is necessarily a sharded process. That means that on restart, if the number of shards
  * has changed, we need to calculate the most conservative token range that has been built, and build
  * the remainder.
@@ -87,7 +95,7 @@ namespace db::view {
  *            also be in the in-progress system table - we don't detect this and will
  *            redo the missing step, for simplicity.
  */
-class view_builder final : public service::migration_listener::only_view_notifications {
+class view_builder final : public service::migration_listener::only_view_notifications, public seastar::peering_sharded_service<view_builder> {
     /**
      * Keeps track of the build progress for a particular view.
      * When the view is built, next_token == first_token.
@@ -138,6 +146,11 @@ class view_builder final : public service::migration_listener::only_view_notific
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
     seastar::semaphore _sem{1};
     seastar::abort_source _as;
+    // Used to coordinate between shards the conclusion of the build process for a particular view.
+    std::unordered_set<utils::UUID> _built_views;
+
+public:
+    static constexpr size_t batch_size = 128;
 
 public:
     view_builder(database&, db::system_distributed_keyspace&, service::migration_manager&);
@@ -167,6 +180,10 @@ private:
     future<> calculate_shard_build_step(std::vector<system_keyspace::view_name>, std::vector<system_keyspace::view_build_progress>);
     future<> add_new_view(view_ptr, build_step&);
     future<> do_build_step();
+    void execute(build_step&, exponential_backoff_retry);
+    future<> maybe_mark_view_as_built(view_ptr, dht::token);
+
+    struct consumer;
 };
 
 }
