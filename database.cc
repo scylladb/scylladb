@@ -4270,9 +4270,10 @@ void column_family::set_schema(schema_ptr s) {
 
 static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
     return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
-        return e->cf_name() == v->cf_name();
+        return e->id() == v->id();
     });
 }
+
 void column_family::add_or_update_view(view_ptr v) {
     auto existing = find_view(_views, v);
     if (existing != _views.end()) {
