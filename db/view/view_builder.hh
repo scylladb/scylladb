@@ -87,7 +87,7 @@ namespace db::view {
  *            also be in the in-progress system table - we don't detect this and will
  *            redo the missing step, for simplicity.
  */
-class view_builder final {
+class view_builder final : public service::migration_listener::only_view_notifications {
     /**
      * Keeps track of the build progress for a particular view.
      * When the view is built, next_token == first_token.
@@ -129,12 +129,18 @@ class view_builder final {
 
     database& _db;
     db::system_distributed_keyspace& _sys_dist_ks;
+    service::migration_manager& _mm;
     base_to_build_step_type _base_to_build_step;
     base_to_build_step_type::iterator _current_step = _base_to_build_step.end();
     serialized_action _build_step{std::bind(&view_builder::do_build_step, this)};
+    // Ensures bookkeeping operations are serialized, meaning that while we execute
+    // a build step we don't consider newly added or removed views. This simplifies
+    // the algorithms. Also synchronizes an operation wrt. a call to stop().
+    seastar::semaphore _sem{1};
+    seastar::abort_source _as;
 
 public:
-    view_builder(database&, db::system_distributed_keyspace&);
+    view_builder(database&, db::system_distributed_keyspace&, service::migration_manager&);
     view_builder(view_builder&&) = delete;
 
     /**
@@ -148,6 +154,10 @@ public:
      * Stops the view building process.
      */
     future<> stop();
+
+    virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
+    virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
 private:
     build_step& get_or_create_build_step(utils::UUID);

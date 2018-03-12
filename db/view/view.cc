@@ -915,9 +915,10 @@ future<> mutate_MV(const dht::token& base_token,
     return f.finally([fs = std::move(fs)] { });
 }
 
-view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks)
+view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_manager& mm)
         : _db(db)
-        , _sys_dist_ks(sys_dist_ks) {
+        , _sys_dist_ks(sys_dist_ks)
+        , _mm(mm) {
 }
 
 future<> view_builder::start() {
@@ -925,6 +926,7 @@ future<> view_builder::start() {
         auto built = system_keyspace::load_built_views().get0();
         auto in_progress = system_keyspace::load_view_build_progress().get0();
         calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
+        _mm.register_listener(this);
         _current_step = _base_to_build_step.begin();
         _build_step.trigger();
     });
@@ -932,7 +934,12 @@ future<> view_builder::start() {
 
 future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
-    return _build_step.join();
+    _mm.unregister_listener(this);
+    _as.request_abort();
+    return _sem.wait().then([this] {
+        _sem.broken();
+        return _build_step.join();
+    });
 }
 
 static query::partition_slice make_partition_slice(const schema& s) {
@@ -1164,6 +1171,86 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     return when_all_succeed(
             system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()),
             _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()));
+}
+
+static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
+    struct empty_state { };
+    return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
+        return base->flush().then_wrapped([base] (future<> f) -> stdx::optional<empty_state> {
+            if (f.failed()) {
+                vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
+                return { };
+            }
+            return { empty_state{} };
+        });
+    }).discard_result();
+}
+
+void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        auto view = view_ptr(_db.find_schema(ks_name, view_name));
+        auto& step = get_or_create_build_step(view->view_info()->base_id());
+        return step.base->await_pending_writes().then([this, &step] {
+            return flush_base(step.base, _as);
+        }).then([this, view, &step] () mutable {
+            // This resets the build step to the current token. It may result in views currently
+            // being built to receive duplicate updates, but it simplifies things as we don't have
+            // to keep around a list of new views to build the next time the reader crosses a token
+            // threshold.
+            initialize_reader_at_current_token(step);
+            return add_new_view(view, step).then_wrapped([this, view] (future<>&& f) {
+                if (f.failed()) {
+                    vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), f.get_exception());
+                }
+                _build_step.trigger();
+            });
+        });
+    }).handle_exception_type([] (no_such_column_family&) { });
+}
+
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        auto view = view_ptr(_db.find_schema(ks_name, view_name));
+        auto step_it = _base_to_build_step.find(view->view_info()->base_id());
+        if (step_it == _base_to_build_step.end()) {
+            return;// In case all the views for this CF have finished building already.
+        }
+        auto status_it = boost::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+            return bs.view->id() == view->id();
+        });
+        if (status_it != step_it->second.build_status.end()) {
+            status_it->view = std::move(view);
+        }
+    }).handle_exception_type([] (no_such_column_family&) { });
+}
+
+void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        // The view is absent from the database at this point, so find it by brute force.
+        ([&, this] {
+            for (auto& [_, step] : _base_to_build_step) {
+                if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
+                    continue;
+                }
+                for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
+                    if (it->view->cf_name() == view_name) {
+                        step.build_status.erase(it);
+                        return;
+                    }
+                }
+            }
+        })();
+        if (engine().cpu_id() != 0) {
+            return make_ready_future();
+        }
+        return when_all_succeed(
+                    system_keyspace::remove_view_build_progress_across_all_shards(ks_name, view_name),
+                    system_keyspace::remove_built_view(ks_name, view_name),
+                    _sys_dist_ks.remove_view(ks_name, view_name)).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+            vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
+        });
+    });
 }
 
 future<> view_builder::do_build_step() {
