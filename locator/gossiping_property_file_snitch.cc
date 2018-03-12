@@ -38,6 +38,8 @@
 
 #include "locator/gossiping_property_file_snitch.hh"
 #include "gms/versioned_value.hh"
+#include "message/msg_addr.hh"
+#include "message/messaging_service.hh"
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
