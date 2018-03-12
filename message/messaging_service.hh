@@ -22,6 +22,7 @@
 #pragma once
 
 #include "messaging_service_fwd.hh"
+#include "msg_addr.hh"
 #include "core/reactor.hh"
 #include "core/distributed.hh"
 #include "core/sstring.hh"
@@ -127,17 +128,6 @@ public:
 namespace netw {
 
 struct serializer {};
-
-struct msg_addr {
-    gms::inet_address addr;
-    uint32_t cpu_id;
-    friend bool operator==(const msg_addr& x, const msg_addr& y);
-    friend bool operator<(const msg_addr& x, const msg_addr& y);
-    friend std::ostream& operator<<(std::ostream& os, const msg_addr& x);
-    struct hash {
-        size_t operator()(const msg_addr& id) const;
-    };
-};
 
 class messaging_service : public seastar::async_sharded_service<messaging_service> {
 public:
