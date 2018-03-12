@@ -811,6 +811,12 @@ public:
     uint64_t large_partition_warning_threshold_bytes() const {
         return _config.large_partition_warning_threshold_bytes;
     }
+
+    future<> populate_views(
+            std::vector<view_ptr>,
+            dht::token base_token,
+            flat_mutation_reader&&);
+
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,

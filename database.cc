@@ -4465,6 +4465,31 @@ column_family::local_base_lock(const schema_ptr& s, const dht::decorated_key& pk
     }
 }
 
+/**
+ * Given some updates on the base table and assuming there are no pre-existing, overlapping updates,
+ * generates the mutations to be applied to the base table's views, and sends them to the paired
+ * view replicas. The future resolves when the updates have been acknowledged by the repicas, i.e.,
+ * propagating the view updates to the view replicas happens synchronously.
+ *
+ * @param views the affected views which need to be updated.
+ * @param base_token The token to use to match the base replica with the paired replicas.
+ * @param reader the base table updates being applied, which all correspond to the base token.
+ * @return a future that resolves when the updates have been acknowledged by the view replicas
+ */
+future<> column_family::populate_views(
+        std::vector<view_ptr> views,
+        dht::token base_token,
+        flat_mutation_reader&& reader) {
+    auto& schema = reader.schema();
+    return db::view::generate_view_updates(
+            schema,
+            std::move(views),
+            std::move(reader),
+            { }).then([base_token = std::move(base_token)] (auto&& updates) {
+        return db::view::mutate_MV(std::move(base_token), std::move(updates));
+    });
+}
+
 void column_family::set_hit_rate(gms::inet_address addr, cache_temperature rate) {
     auto& e = _cluster_cache_hit_rates[addr];
     e.rate = rate;
