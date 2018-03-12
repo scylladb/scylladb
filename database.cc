@@ -2914,6 +2914,11 @@ bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const 
     return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
 }
 
+std::vector<view_ptr> database::get_views() const {
+    return boost::copy_range<std::vector<view_ptr>>(get_non_system_column_families()
+            | boost::adaptors::filtered([] (auto& cf) { return cf->schema()->is_view(); })
+            | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
+}
 
 void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));

@@ -1273,6 +1273,8 @@ public:
 
     std::vector<lw_shared_ptr<column_family>> get_non_system_column_families() const;
 
+    std::vector<view_ptr> get_views() const;
+
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;
