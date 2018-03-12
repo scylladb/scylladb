@@ -46,7 +46,7 @@
 #include "db/schema_tables.hh"
 #include "core/distributed.hh"
 #include "gms/inet_address.hh"
-#include "message/messaging_service.hh"
+#include "message/msg_addr.hh"
 #include "utils/UUID.hh"
 #include "utils/serialized_action.hh"
 
@@ -56,7 +56,7 @@ namespace service {
 
 class migration_manager : public seastar::async_sharded_service<migration_manager> {
     std::vector<migration_listener*> _listeners;
-    std::unordered_map<netw::messaging_service::msg_addr, serialized_action, netw::messaging_service::msg_addr::hash> _schema_pulls;
+    std::unordered_map<netw::msg_addr, serialized_action, netw::msg_addr::hash> _schema_pulls;
     static const std::chrono::milliseconds migration_delay;
 public:
     migration_manager();

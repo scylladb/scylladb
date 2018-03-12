@@ -41,6 +41,7 @@
 #include "utils/UUID_gen.hh"
 #include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/rp_set.hh"
 #include "log.hh"
 #include "schema.hh"
 

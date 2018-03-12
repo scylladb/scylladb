@@ -30,6 +30,8 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
+#include <seastar/core/thread.hh>
+
 static schema_builder new_table() {
     return { "some_keyspace", "some_table" };
 }
