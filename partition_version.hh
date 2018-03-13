@@ -160,6 +160,9 @@ public:
     partition_version(partition_version&& pv) noexcept;
     partition_version& operator=(partition_version&& pv) noexcept;
     ~partition_version();
+    // Frees elements of this version in batches.
+    // Returns stop_iteration::yes iff there are no more elements to free.
+    stop_iteration clear_gently() noexcept;
 
     mutation_partition& partition() { return _partition; }
     const mutation_partition& partition() const { return _partition; }
@@ -387,7 +390,10 @@ public:
     // Strong exception guarantees for the state of mp.
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
     ~partition_entry();
-
+    // Frees elements of this entry in batches.
+    // Active snapshots are detached, data referenced by them is not cleared.
+    // Returns stop_iteration::yes iff there are no more elements to free.
+    stop_iteration clear_gently() noexcept;
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
     static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
 

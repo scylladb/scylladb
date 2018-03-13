@@ -70,6 +70,10 @@ partition_version::~partition_version()
     }
 }
 
+stop_iteration partition_version::clear_gently() noexcept {
+    return _partition.clear_gently();
+}
+
 size_t partition_version::size_in_allocator(allocation_strategy& allocator) const {
     return allocator.object_memory_size_in_allocator(this) +
            partition().external_memory_usage();
@@ -231,6 +235,36 @@ partition_entry::~partition_entry() {
         _version = { };
         remove_or_mark_as_unique_owner(v, no_cache_tracker);
     }
+}
+
+stop_iteration partition_entry::clear_gently() noexcept {
+    if (!_version) {
+        return stop_iteration::yes;
+    }
+
+    if (_snapshot) {
+        _snapshot->_version = std::move(_version);
+        _snapshot->_version.mark_as_unique_owner();
+        _snapshot->_entry = nullptr;
+        return stop_iteration::yes;
+    }
+
+    partition_version* v = &*_version;
+    _version = {};
+    while (v) {
+        if (v->is_referenced()) {
+            v->back_reference().mark_as_unique_owner();
+            break;
+        }
+        auto next = v->next();
+        if (v->clear_gently() == stop_iteration::no) {
+            _version = partition_version_ref(*v);
+            return stop_iteration::no;
+        }
+        current_allocator().destroy(&*v);
+        v = next;
+    }
+    return stop_iteration::yes;
 }
 
 void partition_entry::set_version(partition_version* new_version)

@@ -56,7 +56,9 @@ public:
     { }
 
     memtable_entry(memtable_entry&& o) noexcept;
-
+    // Frees elements of the entry in batches.
+    // Returns stop_iteration::yes iff there are no more elements to free.
+    stop_iteration clear_gently() noexcept;
     const dht::decorated_key& key() const { return _key; }
     dht::decorated_key& key() { return _key; }
     const partition_entry& partition() const { return _pe; }

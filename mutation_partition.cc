@@ -2202,6 +2202,27 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
     return result;
 }
 
+stop_iteration mutation_partition::clear_gently() noexcept {
+    if (_row_tombstones.clear_gently() == stop_iteration::no) {
+        return stop_iteration::no;
+    }
+
+    auto del = current_deleter<rows_entry>();
+    auto i = _rows.begin();
+    auto end = _rows.end();
+    while (i != end) {
+        i = _rows.erase_and_dispose(i, del);
+        // The iterator comparison below is to not defer destruction of now empty
+        // mutation_partition objects. Not doing this would cause eviction to leave garbage
+        // versions behind unnecessarily.
+        if (need_preempt() && i != end) {
+            return stop_iteration::no;
+        }
+    }
+
+    return stop_iteration::yes;
+}
+
 bool
 mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) const {
     auto less = rows_entry::compare(s);
