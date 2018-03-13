@@ -678,11 +678,12 @@ future<> parse(random_access_reader& in, summary& s) {
 
                 auto entrysize = next - pos;
 
-                return in.read_exactly(entrysize).then([&entry, entrysize] (auto buf) {
+                return in.read_exactly(entrysize).then([&s, &entry, entrysize] (auto buf) mutable {
                     check_buf_size(buf, entrysize);
 
                     auto keysize = entrysize - 8;
-                    entry.key = bytes(reinterpret_cast<const int8_t*>(buf.get()), keysize);
+                    entry.key = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
+
                     buf.trim_front(keysize);
 
                     // position is little-endian encoded
@@ -2054,7 +2055,8 @@ void components_writer::maybe_add_summary_entry(summary& s, const dht::token& to
     if (data_offset >= state.next_data_offset_to_write_summary) {
         auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
-        s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
+        auto key_data = s.add_summary_data(key);
+        s.entries.push_back({ token, key_data, index_offset });
     }
 }
 
