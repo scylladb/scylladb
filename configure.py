@@ -273,6 +273,7 @@ scylla_tests = [
     'tests/input_stream_test',
     'tests/virtual_reader_test',
     'tests/view_schema_test',
+    'tests/view_build_test',
     'tests/counter_test',
     'tests/cell_locker_test',
     'tests/row_locker_test',
