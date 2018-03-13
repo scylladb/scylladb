@@ -39,6 +39,7 @@
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "flat_mutation_reader.hh"
+#include "mutation_cleaner.hh"
 
 namespace bi = boost::intrusive;
 
@@ -231,6 +232,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru_type _lru;
+    mutation_cleaner _garbage;
 private:
     void setup_metrics();
 public:
@@ -262,6 +264,7 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
+    mutation_cleaner& cleaner() { return _garbage; }
     uint64_t partitions() const { return _stats.partitions; }
     const stats& get_stats() const { return _stats; }
 };

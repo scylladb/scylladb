@@ -2174,6 +2174,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                     .produces_end_of_stream();
             }
         } while (injector.failed());
+        tracker.cleaner().drain().get();
         BOOST_REQUIRE_EQUAL(0, tracker.get_stats().rows);
         BOOST_REQUIRE_EQUAL(0, tracker.get_stats().partitions);
     });

@@ -56,7 +56,9 @@ cache_tracker& global_cache_tracker() {
     return instance;
 }
 
-cache_tracker::cache_tracker() {
+cache_tracker::cache_tracker()
+    : _garbage(_region, this)
+{
     setup_metrics();
 
     _region.make_evictable([this] {
@@ -65,6 +67,10 @@ cache_tracker::cache_tracker() {
           // the rbtree, so linearize anything we read
           return with_linearized_managed_bytes([&] {
            try {
+            if (!_garbage.empty()) {
+                _garbage.clear_some();
+                return memory::reclaiming_result::reclaimed_something;
+            }
             if (_lru.empty()) {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
@@ -126,7 +132,10 @@ cache_tracker::setup_metrics() {
 void cache_tracker::clear() {
     auto partitions_before = _stats.partitions;
     auto rows_before = _stats.rows;
+    // We need to clear garbage first because garbage versions cannot be evicted from,
+    // mutation_partition::clear_gently() destroys intrusive tree invariants.
     with_allocator(_region.allocator(), [this] {
+        _garbage.clear();
         while (!_lru.empty()) {
             _lru.back().on_evicted(*this);
         }
@@ -1047,7 +1056,7 @@ future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
             // FIXME: Invalidate only affected row ranges.
             // This invalidates all information about the partition.
             cache_entry& e = *cache_i;
-            e.evict(_tracker); // FIXME: evict gradually
+            e.evict(_tracker);
             e.on_evicted(_tracker);
         } else {
             _tracker.clear_continuity(*cache_i);

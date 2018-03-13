@@ -35,7 +35,12 @@ static void remove_or_mark_as_unique_owner(partition_version* current, cache_tra
                 tracker->on_remove(row);
             }
         }
-        current_allocator().destroy(current);
+        current->erase();
+        if (tracker) {
+            tracker->cleaner().destroy_later(*current);
+        } else {
+            current_allocator().destroy(current);
+        }
         current = next;
     }
     if (current) {
