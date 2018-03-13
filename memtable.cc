@@ -68,6 +68,9 @@ future<> memtable::clear_gently() noexcept {
                 auto dirty_before = dirty_size();
                 with_allocator(alloc, [&] () noexcept {
                     while (!p.empty()) {
+                        if (p.begin()->clear_gently() == stop_iteration::no) {
+                            break;
+                        }
                         p.erase_and_dispose(p.begin(), [&] (auto e) {
                             alloc.destroy(e);
                         });
