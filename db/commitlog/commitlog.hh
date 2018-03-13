@@ -268,7 +268,13 @@ public:
      *
      * The list will be empty when called for the second time.
      */
-    std::vector<sstring> get_segments_to_replay();
+    std::vector<sstring> get_segments_to_replay() const;
+
+    /**
+     * Delete aforementioned segments, and possible metadata
+     * associated with them
+     */
+    future<> delete_segments(std::vector<sstring>) const;
 
     uint64_t get_total_size() const;
     uint64_t get_completed_tasks() const;

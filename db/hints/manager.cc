@@ -733,8 +733,9 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
     }
 
     // If we got here we are done with the current segment and we can remove it.
-    with_shared(_file_update_mutex, [&fname] {
-        return io_check(remove_file, fname);
+    with_shared(_file_update_mutex, [&fname, this] {
+        auto p = _ep_manager.get_or_load().get0();
+        return p->delete_segments({ fname });
     }).get();
 
     // clear the replay position - we are going to send the next segment...
