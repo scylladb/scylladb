@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
- *
+ * Copyright 2018 ScyllaDB
  */
 
 /*
@@ -20,19 +19,20 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "extensions.hh"
-#include "sstables/sstables.hh"
-#include "commitlog/commitlog_extensions.hh"
+#pragma once
 
-db::extensions::extensions()
-{}
-db::extensions::~extensions()
-{}
+#include <tuple>
+#include <optional>
+#include <seastar/core/seastar.hh>
 
-void db::extensions::add_sstable_file_io_extension(sstring n, sstable_file_io_extension f) {
-    _sstable_file_io_extensions[n] = std::move(f);
+#include "commitlog.hh"
+
+namespace db {
+    class commitlog_file_extension {
+    public:
+        virtual ~commitlog_file_extension() {}
+        virtual future<file> wrap_file(const sstring& filename, file, open_flags flags) = 0;
+        virtual future<> before_delete(const sstring& filename) = 0;
+    };
 }
 
-void db::extensions::add_commitlog_file_extension(sstring n, commitlog_file_extension_ptr f) {
-    _commitlog_file_extensions[n] = std::move(f);
-}

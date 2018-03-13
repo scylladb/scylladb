@@ -43,7 +43,7 @@
 #include <set>
 #include <stdexcept>
 #include <functional>
-#include <unordered_map>
+#include <map>
 #include <variant>
 
 #include <boost/any.hpp>
@@ -61,6 +61,8 @@ class file_io_extension;
 }
 
 namespace db {
+class commitlog_file_extension;
+
 class extensions {
 public:
     extensions();
@@ -70,11 +72,12 @@ public:
     using schema_ext_config = std::variant<sstring, map_type, bytes>;
     using schema_ext_create_func = std::function<seastar::shared_ptr<schema_extension>(schema_ext_config)>;
     using sstable_file_io_extension = std::unique_ptr<sstables::file_io_extension>;
+    using commitlog_file_extension_ptr = std::unique_ptr<db::commitlog_file_extension>;
 
     /**
      * Registered extensions
      */
-    const std::unordered_map<sstring, schema_ext_create_func>& schema_extensions() const {
+    const std::map<sstring, schema_ext_create_func>& schema_extensions() const {
         return _schema_extensions;
     }
     /**
@@ -83,6 +86,13 @@ public:
      */
     auto sstable_file_io_extensions() const {
         return _sstable_file_io_extensions | boost::adaptors::map_values;
+    }
+    /**
+     * Returns iterable range of registered commitlog IO extensions (see commitlog_extensions.hh#commitlog_file_extension)
+     * For any commitlogs wanting to call these on file open or descriptor scan...
+     */
+    auto commitlog_file_extensions() const {
+        return _commitlog_file_extensions | boost::adaptors::map_values;
     }
 
     /**
@@ -104,8 +114,13 @@ public:
      * Init time method to add sstable extension
      */
     void add_sstable_file_io_extension(sstring n, sstable_file_io_extension);
+    /**
+     * Init time method to add sstable extension
+     */
+    void add_commitlog_file_extension(sstring n, commitlog_file_extension_ptr);
 private:
-    std::unordered_map<sstring, schema_ext_create_func> _schema_extensions;
-    std::unordered_map<sstring, sstable_file_io_extension> _sstable_file_io_extensions;
+    std::map<sstring, schema_ext_create_func> _schema_extensions;
+    std::map<sstring, sstable_file_io_extension> _sstable_file_io_extensions;
+    std::map<sstring, commitlog_file_extension_ptr> _commitlog_file_extensions;
 };
 }

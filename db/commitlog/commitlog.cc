@@ -44,6 +44,7 @@
 #include <malloc.h>
 #include <regex>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <exception>
@@ -67,12 +68,14 @@
 #include "commitlog.hh"
 #include "rp_set.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "utils/data_input.hh"
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
 #include "log.hh"
 #include "commitlog_entry.hh"
+#include "commitlog_extensions.hh"
 #include "service/priority_manager.hh"
 
 #include <boost/range/numeric.hpp>
@@ -119,6 +122,7 @@ db::commitlog::config::config(const db::config& cfg)
     , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
     , commitlog_sync_period_in_ms(cfg.commitlog_sync_period_in_ms())
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
+    , extensions(&cfg.extensions())
 {}
 
 db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v)
@@ -1174,12 +1178,39 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
+    static const auto flags = open_flags::wo | open_flags::create;
+
     descriptor d(next_id(), cfg.fname_prefix);
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
+    auto filename = cfg.commit_log_location + "/" + d.filename();
+    auto fut = do_io_check(commit_error_handler, [&] {
+        auto fut = open_file_dma(filename, flags, opt);
+        if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
+            fut = fut.then([this, filename](file f) {
+                return do_with(std::move(f), [this, filename](file& f) {
+                    auto ext_range = cfg.extensions->commitlog_file_extensions();
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                        // note: we're potentially wrapping more than once. extension mechanism
+                        // is responsible for order being sane.
+                        return ext->wrap_file(filename, f, flags).then([&f](file of) {
+                            if (of) {
+                                f = std::move(of);
+                            }
+                        });
+                    }).then([&f] {
+                        return f;
+                    });
+                });
+            });
+        }
+        return fut;
+    });
+
+    return fut.then([this, d, active, filename](file f) {
+        f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
-        return f.truncate(max_size).then([this, d, active, f] () mutable {
+        return f.truncate(max_size).then([this, d, active, f, filename] () mutable {
             auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
         });
@@ -1364,9 +1395,13 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     auto e = files.end();
 
     return parallel_for_each(i, e, [this](auto& filename) {
-        // doing this intentionally hung on a future to
-        // allow adding extension processing here once they exist.
         auto f = make_ready_future();
+        auto exts = cfg.extensions;
+        if (exts && !exts->commitlog_file_extensions().empty()) {
+            f = parallel_for_each(exts->commitlog_file_extensions(), [&](auto& ext) {
+                return ext->before_delete(filename);
+            });
+        }
         return f.finally([&] {
             clogger.debug("Deleting segment file {}", filename);
             return commit_io_check(&seastar::remove_file, filename);
@@ -1641,17 +1676,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
-db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
-    return open_checked_file_dma(commit_error_handler, filename, open_flags::ro).then([next = std::move(next), off](file f) {
-       return std::make_unique<subscription<temporary_buffer<char>, replay_position>>(
-           read_log_file(std::move(f), std::move(next), off));
-    });
-}
-
-// No commit_io_check needed in the log reader since the database will fail
-// on error at startup if required
-subscription<temporary_buffer<char>, db::replay_position>
-db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type off) {
+db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
         file_input_stream_options make_file_input_stream_options() {
@@ -1873,18 +1898,44 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
     };
 
-    auto w = make_lw_shared<work>(std::move(f), off);
-    auto ret = w->s.listen(std::move(next));
-
-    w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
-        if (!w->failed) {
-            w->s.close();
+    auto fut = do_io_check(commit_error_handler, [&] {
+        auto fut = open_file_dma(filename, open_flags::ro);
+        if (exts && !exts->commitlog_file_extensions().empty()) {
+            fut = fut.then([filename, exts](file f) {
+                return do_with(std::move(f), [filename, exts](file& f) {
+                    auto ext_range = exts->commitlog_file_extensions() | boost::adaptors::reversed;
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                        // note: we're potentially wrapping more than once. extension mechanism
+                        // is responsible for order being sane.
+                        return ext->wrap_file(filename, f, open_flags::ro).then([&f](file of) {
+                            if (of) {
+                                f = std::move(of);
+                            }
+                        });
+                    }).then([&f] {
+                        return make_ready_future<file>(f);
+                    });
+                });
+            });
         }
-    }).handle_exception([w](auto ep) {
-        w->s.set_exception(ep);
+        return fut;
     });
 
-    return ret;
+    return fut.then([off, next](file f) {
+        f = make_checked_file(commit_error_handler, std::move(f));
+        auto w = make_lw_shared<work>(std::move(f), off);
+        auto ret = w->s.listen(next);
+
+        w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
+            if (!w->failed) {
+                w->s.close();
+            }
+        }).handle_exception([w](auto ep) {
+            w->s.set_exception(ep);
+        });
+
+        return std::make_unique<subscription<temporary_buffer<char>, db::replay_position>>(std::move(ret));
+    });
 }
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
