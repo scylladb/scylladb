@@ -71,6 +71,14 @@ protected:
 
     schema_altering_statement(::shared_ptr<cf_name> name);
 
+    /**
+     * When a new database object (keyspace, table) is created, the creator needs to be granted all applicable
+     * permissions on it.
+     *
+     * By default, this function does nothing.
+     */
+    virtual future<> grant_permissions_to_creator(const service::client_state&);
+
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;

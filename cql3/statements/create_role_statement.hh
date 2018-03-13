@@ -70,6 +70,8 @@ public:
                 , _if_not_exists(if_not_exists) {
     }
 
+    future<> grant_permissions_to_creator(const service::client_state&) const;
+
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
 
     virtual future<> check_access(const service::client_state&) override;

@@ -106,6 +106,8 @@ public:
 
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 
+    virtual future<> grant_permissions_to_creator(const service::client_state&) override;
+
     schema_ptr get_cf_meta_data(const database&);
 
     class raw_statement;

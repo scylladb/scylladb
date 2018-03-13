@@ -49,6 +49,8 @@
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
 
+#include "auth/resource.hh"
+#include "auth/service.hh"
 #include "schema_builder.hh"
 #include "service/storage_service.hh"
 
@@ -162,6 +164,16 @@ create_table_statement::prepare(database& db, cql_stats& stats) {
     abort();
 }
 
+future<> create_table_statement::grant_permissions_to_creator(const service::client_state& cs) {
+    return do_with(auth::make_data_resource(keyspace(), column_family()), [&cs](const auth::resource& r) {
+        return auth::grant_applicable_permissions(
+                *cs.get_auth_service(),
+                *cs.user(),
+                r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
+            // Nothing.
+        });
+    });
+}
 
 create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name, bool if_not_exists)
     : cf_statement{std::move(name)}

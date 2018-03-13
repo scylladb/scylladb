@@ -28,6 +28,8 @@
 #include <seastar/util/defer.hh>
 
 #include "auth/authenticated_user.hh"
+#include "auth/permission.hh"
+#include "auth/service.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/role_name.hh"
 #include "cql3/role_options.hh"
@@ -260,5 +262,69 @@ SEASTAR_TEST_CASE(revoke_role_restrictions) {
         verify_unauthorized_then_ok(env, alice, "REVOKE lord FROM alice", [&env] {
             env.execute_cql("GRANT AUTHORIZE ON ROLE lord TO alice").get0();
         });
+    }, db_config_with_auth());
+}
+
+//
+// The creator of a database object is granted all applicable permissions on it.
+//
+
+///
+/// Grant a user appropriate permissions (with `grant_query`) then create a new database object (with `creation_query`).
+/// Verify that the user has been granted all applicable permissions on the new object.
+///
+static void verify_default_permissions(
+        cql_test_env& env,
+        stdx::string_view user,
+        stdx::string_view grant_query,
+        stdx::string_view creation_query,
+        const auth::resource& r) {
+    create_user_if_not_exists(env, user);
+    env.execute_cql(sstring(grant_query)).get0();
+
+    with_user(env, user, [&env, creation_query] {
+        env.execute_cql(sstring(creation_query)).get0();
+    });
+
+    const auto default_permissions = auth::get_permissions(
+            env.local_auth_service(),
+            auth::authenticated_user(user),
+            r).get0();
+
+    BOOST_REQUIRE_EQUAL(
+            auth::permissions::to_strings(default_permissions),
+            auth::permissions::to_strings(r.applicable_permissions()));
+}
+
+SEASTAR_TEST_CASE(create_role_default_permissions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        verify_default_permissions(
+                env,
+                alice,
+                "GRANT CREATE ON ALL ROLES TO alice",
+                "CREATE ROLE lord",
+                auth::make_role_resource("lord"));
+    }, db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(create_keyspace_default_permissions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        verify_default_permissions(
+                env,
+                alice,
+                "GRANT CREATE ON ALL KEYSPACES TO alice",
+                "CREATE KEYSPACE armies WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }",
+                auth::make_data_resource("armies"));
+    }, db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(create_table_default_permissions) {
+    return do_with_cql_env_thread([](auto&& env) {
+        verify_default_permissions(
+                env,
+                alice,
+                "GRANT CREATE ON KEYSPACE ks TO alice",
+                "CREATE TABLE orcs (id int PRIMARY KEY, strength int)",
+                auth::make_data_resource("ks", "orcs"));
     }, db_config_with_auth());
 }

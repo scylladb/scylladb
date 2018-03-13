@@ -492,6 +492,17 @@ future<> grant_permissions(
     });
 }
 
+future<> grant_applicable_permissions(const service& ser, stdx::string_view role_name, const resource& r) {
+    return grant_permissions(ser, role_name, r.applicable_permissions(), r);
+}
+future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r) {
+    if (is_anonymous(u)) {
+        return make_ready_future<>();
+    }
+
+    return grant_applicable_permissions(ser, *u.name, r);
+}
+
 future<> revoke_permissions(
         const service& ser,
         stdx::string_view role_name,

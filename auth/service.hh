@@ -247,6 +247,17 @@ future<> grant_permissions(
         const resource&);
 
 ///
+/// Like \ref grant_permissions, but grants all applicable permissions on the resource.
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
+/// supported.
+///
+future<> grant_applicable_permissions(const service&, stdx::string_view role_name, const resource&);
+future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&);
+
+///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
 ///
 /// \returns an exceptional future with \ref unsupported_authorization_operation if revoking permissions is not

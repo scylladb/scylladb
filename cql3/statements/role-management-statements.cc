@@ -93,6 +93,17 @@ void validate_cluster_support() {
 // `create_role_statement`
 //
 
+future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs) const {
+    return do_with(auth::make_role_resource(_role), [&cs](const auth::resource& r) {
+        return auth::grant_applicable_permissions(
+                *cs.get_auth_service(),
+                *cs.user(),
+                r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
+            // Nothing.
+        });
+    });
+}
+
 void create_role_statement::validate(distributed<service::storage_proxy>&, const service::client_state&) {
     validate_cluster_support();
 }
@@ -123,9 +134,12 @@ create_role_statement::execute(distributed<service::storage_proxy>&,
             std::move(config),
             extract_authentication_options(_options),
             [this, &state](const auth::role_config& config, const auth::authentication_options& authen_options) {
-        auto& as = *state.get_client_state().get_auth_service();
+        const auto& cs = state.get_client_state();
+        auto& as = *cs.get_auth_service();
 
-        return auth::create_role(as, _role, config, authen_options).then([] {
+        return auth::create_role(as, _role, config, authen_options).then([this, &cs] {
+            return grant_permissions_to_creator(cs);
+        }).then([] {
             return void_result_message();
         }).handle_exception_type([this](const auth::role_already_exists& e) {
             if (!_if_not_exists) {
