@@ -22,7 +22,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include "range_tombstone_list.hh"
 #include "utils/allocation_strategy.hh"
-#include "utils/to_boost_visitor.hh"
+#include <seastar/util/variant_utils.hh>
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
         : _tombstones(x._tombstones.value_comp()) {
@@ -377,9 +377,9 @@ void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, 
 
 void range_tombstone_list::reverter::revert() noexcept {
     for (auto&& rt : _ops | boost::adaptors::reversed) {
-        boost::apply_visitor(to_boost_visitor([this] (auto& op) {
+        seastar::visit(rt, [this] (auto& op) {
             op.undo(_s, _dst);
-        }), rt);
+        });
     }
     cancel();
 }

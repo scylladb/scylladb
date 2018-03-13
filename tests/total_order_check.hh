@@ -23,7 +23,7 @@
 
 #include <vector>
 #include <boost/test/unit_test.hpp>
-#include "utils/to_boost_visitor.hh"
+#include <seastar/util/variant_utils.hh>
 
 template<typename Comparator, typename... T>
 class total_order_check {
@@ -39,16 +39,16 @@ private:
     void check_order(const std::vector<element>& left, const std::vector<element>& right, int order) {
         for (const element& left_e : left) {
             for (const element& right_e : right) {
-                boost::apply_visitor(to_boost_visitor([&] (auto&& a) {
-                    boost::apply_visitor(to_boost_visitor([&] (auto&& b) {
+                seastar::visit(left_e, [&] (auto&& a) {
+                    seastar::visit(right_e, [&] (auto&& b) {
                         BOOST_TEST_MESSAGE(sprint("cmp(%s, %s) == %d", a, b, order));
                         auto r = _cmp(a, b);
                         auto actual = this->sgn(r);
                         if (actual != order) {
                             BOOST_FAIL(sprint("Expected cmp(%s, %s) == %d, but got %d", a, b, order, actual));
                         }
-                    }), right_e);
-                }), left_e);
+                    });
+                });
             }
         }
     }
