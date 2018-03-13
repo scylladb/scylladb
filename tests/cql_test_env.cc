@@ -39,6 +39,7 @@
 #include "tmpdir.hh"
 #include "db/query_context.hh"
 #include "test_services.hh"
+#include "db/view/view_builder.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
@@ -89,6 +90,7 @@ public:
 private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<sharded<auth::service>> _auth_service;
+    ::shared_ptr<sharded<db::view::view_builder>> _view_builder;
     lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
@@ -113,7 +115,13 @@ private:
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
-    single_node_cql_env(::shared_ptr<distributed<database>> db, ::shared_ptr<sharded<auth::service>> auth_service) : _db(db), _auth_service(std::move(auth_service))
+    single_node_cql_env(
+            ::shared_ptr<distributed<database>> db,
+            ::shared_ptr<sharded<auth::service>> auth_service,
+            ::shared_ptr<sharded<db::view::view_builder>> view_builder)
+            : _db(db)
+            , _auth_service(std::move(auth_service))
+            , _view_builder(std::move(view_builder))
     { }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -256,6 +264,10 @@ public:
         return _auth_service->local();
     }
 
+    virtual db::view::view_builder& local_view_builder() override {
+        return _view_builder->local();
+    }
+
     future<> start() {
         return _core_local.start(std::ref(*_auth_service));
     }
@@ -372,6 +384,13 @@ public:
                 auth_service->stop().get();
             });
 
+            auto view_builder = ::make_shared<seastar::sharded<db::view::view_builder>>();
+            view_builder->start(std::ref(*db), std::ref(sys_dist_ks), std::ref(mm)).get();
+            view_builder->invoke_on_all(&db::view::view_builder::start).get();
+            auto stop_view_builder = defer([view_builder] {
+                view_builder->stop().get();
+            });
+
             // Create the testing user.
             try {
                 auth::role_config config;
@@ -387,7 +406,7 @@ public:
                 // The default user may already exist if this `cql_test_env` is starting with previously populated data.
             }
 
-            single_node_cql_env env(db, auth_service);
+            single_node_cql_env env(db, auth_service, view_builder);
             env.start().get();
             auto stop_env = defer([&env] { env.stop().get(); });
 
