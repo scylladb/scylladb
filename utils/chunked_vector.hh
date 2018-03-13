@@ -325,8 +325,10 @@ chunked_vector<T, max_contiguous_allocation>::operator=(chunked_vector&& x) noex
 
 template <typename T, size_t max_contiguous_allocation>
 chunked_vector<T, max_contiguous_allocation>::~chunked_vector() {
-    for (auto i = size_t(0); i != _size; ++i) {
-        addr(i)->~T();
+    if constexpr (!std::is_trivially_destructible_v<T>) {
+        for (auto i = size_t(0); i != _size; ++i) {
+            addr(i)->~T();
+        }
     }
 }
 
