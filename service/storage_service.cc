@@ -1336,11 +1336,16 @@ future<> storage_service::drain_on_shutdown() {
 #endif
 }
 
-future<> storage_service::init_server(int delay) {
-    return seastar::async([this, delay] {
+future<> storage_service::init_messaging_service_part() {
+    return seastar::async([this] {
         get_storage_service().invoke_on_all([] (auto& ss) {
             ss.init_messaging_service();
         }).get();
+    });
+}
+
+future<> storage_service::init_server(int delay) {
+    return seastar::async([this, delay] {
         auto& gossiper = gms::get_local_gossiper();
 #if 0
         slogger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());

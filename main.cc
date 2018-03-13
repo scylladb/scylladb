@@ -661,9 +661,10 @@ int main(int ac, char** av) {
             }).get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
-            ss.init_server().get();
+            ss.init_messaging_service_part().get();
             api::set_server_messaging_service(ctx).get();
             api::set_server_storage_service(ctx).get();
+            ss.init_server_without_the_messaging_service_part().get();
             supervisor::notify("starting batchlog manager");
             db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                 return b.start();

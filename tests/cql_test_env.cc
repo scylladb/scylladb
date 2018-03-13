@@ -361,7 +361,8 @@ public:
             db::system_keyspace::init_local_cache().get();
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
-            service::get_local_storage_service().init_server().get();
+            service::get_local_storage_service().init_messaging_service_part().get();
+            service::get_local_storage_service().init_server_without_the_messaging_service_part().get();
             auto deinit_storage_service_server = defer([auth_service] {
                 gms::stop_gossiping().get();
                 auth_service->stop().get();

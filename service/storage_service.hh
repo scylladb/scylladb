@@ -401,7 +401,31 @@ public:
     }
 #endif
 public:
-    future<> init_server() {
+    /*!
+     * \brief Init the messaging service part of the service.
+     *
+     * This is the first part of the initialization, call this method
+     * first.
+     *
+     * After this method is completed, it is ok to start the storage_service
+     * API.
+     * \see init_server_without_the_messaging_service_part
+     */
+    future<> init_messaging_service_part();
+
+    /*!
+     * \brief complete the server initialization
+     *
+     * The storage_service initialization is done in two parts.
+     *
+     * you first call init_messaging_service_part and then
+     * you call init_server_without_the_messaging_service_part.
+     *
+     * It is safe to start the API after init_messaging_service_part
+     * completed
+     * \see init_messaging_service_part
+     */
+    future<> init_server_without_the_messaging_service_part() {
         return init_server(get_ring_delay().count());
     }
 
