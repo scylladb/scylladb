@@ -100,10 +100,12 @@ boost_tests = [
     'enum_set_test',
     'extensions_test',
     'cql_auth_syntax_test',
+    'querier_cache',
 ]
 
 other_tests = [
     'memory_footprint',
+    'querier_cache_resource_based_eviction',
 ]
 
 last_len = 0

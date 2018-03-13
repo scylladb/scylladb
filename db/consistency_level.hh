@@ -79,7 +79,10 @@ std::vector<gms::inet_address>
 filter_for_query(consistency_level cl,
                  keyspace& ks,
                  std::vector<gms::inet_address> live_endpoints,
-                 read_repair_decision read_repair, gms::inet_address* extra, column_family* cf);
+                 const std::vector<gms::inet_address>& preferred_endpoints,
+                 read_repair_decision read_repair,
+                 gms::inet_address* extra,
+                 column_family* cf);
 
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf);
 

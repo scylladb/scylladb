@@ -145,6 +145,9 @@ flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutatio
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
             throw std::bad_function_call();
         }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _source->buffer_size();
+        }
     };
 
     return make_flat_mutation_reader<partition_reversing_mutation_reader>(original);
@@ -250,6 +253,9 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             };
             return _underlying.fast_forward_to(pr, timeout);
         }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _underlying.buffer_size();
+        }
     };
     return make_flat_mutation_reader<reader>(std::move(m));
 }
@@ -308,6 +314,9 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
             _end_of_stream = false;
             clear_buffer();
             return _underlying.fast_forward_to(pr, timeout);
+        }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _underlying.buffer_size();
         }
     };
     return make_flat_mutation_reader<reader>(std::move(r), single_partition);
@@ -597,6 +606,9 @@ public:
         if (is_buffer_empty() && !is_end_of_stream()) {
             _reader.next_partition();
         }
+    }
+    virtual size_t buffer_size() const override {
+        return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
     }
 };
 

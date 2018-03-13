@@ -84,6 +84,7 @@
 #include "dirty_memory_manager.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "db/timeout_clock.hh"
+#include "querier.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -660,7 +661,8 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         uint64_t max_result_size,
-        db::timeout_clock::time_point timeout = db::no_timeout);
+        db::timeout_clock::time_point timeout = db::no_timeout,
+        querier_cache_context cache_ctx = { });
 
     void start();
     future<> stop();
@@ -1117,8 +1119,17 @@ private:
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
-    concrete_execution_stage<future<lw_shared_ptr<query::result>>, column_family*, schema_ptr, const query::read_command&, query::result_options,
-            const dht::partition_range_vector&, tracing::trace_state_ptr, query::result_memory_limiter&, uint64_t, db::timeout_clock::time_point> _data_query_stage;
+    concrete_execution_stage<future<lw_shared_ptr<query::result>>,
+        column_family*,
+        schema_ptr,
+        const query::read_command&,
+        query::result_options,
+        const dht::partition_range_vector&,
+        tracing::trace_state_ptr,
+        query::result_memory_limiter&,
+        uint64_t,
+        db::timeout_clock::time_point,
+        querier_cache_context> _data_query_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
@@ -1131,6 +1142,9 @@ private:
     bool _enable_incremental_backups = false;
 
     compaction_controller _compaction_controller;
+
+    querier_cache _querier_cache;
+
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
     future<> apply_in_memory(const mutation& m, column_family& cf, db::rp_handle&&, db::timeout_clock::time_point timeout);
@@ -1300,6 +1314,14 @@ public:
 
     db_stats& get_stats() {
         return *_stats;
+    }
+
+    void set_querier_cache_entry_ttl(std::chrono::seconds entry_ttl) {
+        _querier_cache.set_entry_ttl(entry_ttl);
+    }
+
+    const querier_cache::stats& get_querier_cache_stats() const {
+        return _querier_cache.get_stats();
     }
 
     friend class distributed_loader;

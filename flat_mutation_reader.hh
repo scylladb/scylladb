@@ -278,6 +278,14 @@ public:
          */
         virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point timeout) = 0;
         virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point timeout) = 0;
+
+        // Altough for most cases this is a mere getter some readers might have
+        // one or more subreaders and will need to account for their buffer-size
+        // as well so we need to allow these readers to override the default
+        // implementation.
+        virtual size_t buffer_size() const {
+            return _buffer_size;
+        }
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -394,6 +402,13 @@ public:
             return peek();
         });
     }
+    // The actual buffer size of the reader.
+    // Altough we consistently refer to this as buffer size throught the code
+    // we really use "buffer size" as the size of the collective memory
+    // used by all the mutation fragments stored in the buffer of the reader.
+    size_t buffer_size() const {
+        return _impl->buffer_size();
+    }
 };
 
 using flat_mutation_reader_opt = optimized_optional<flat_mutation_reader>;
@@ -474,11 +489,15 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             throw std::bad_function_call();
         }
+        virtual size_t buffer_size() const override {
+            return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();
+        }
     };
     return make_flat_mutation_reader<transforming_reader>(std::move(r), std::move(t));
 }
 
 inline flat_mutation_reader& to_reference(flat_mutation_reader& r) { return r; }
+inline const flat_mutation_reader& to_reference(const flat_mutation_reader& r) { return r; }
 
 template <typename Underlying>
 class delegating_reader : public flat_mutation_reader::impl {
@@ -506,6 +525,9 @@ public:
         _end_of_stream = false;
         clear_buffer();
         return to_reference(_underlying).fast_forward_to(pr, timeout);
+    }
+    virtual size_t buffer_size() const override {
+        return flat_mutation_reader::impl::buffer_size() + to_reference(_underlying).buffer_size();
     }
 };
 flat_mutation_reader make_delegating_reader(flat_mutation_reader&);

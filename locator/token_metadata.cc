@@ -222,6 +222,14 @@ utils::UUID token_metadata::get_host_id(inet_address endpoint) const {
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
+std::optional<utils::UUID> token_metadata::get_host_id_if_known(inet_address endpoint) const {
+    auto it = _endpoint_to_host_id_map.find(endpoint);
+    if (it == _endpoint_to_host_id_map.end()) {
+        return { };
+    }
+    return it->second;
+}
+
 std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) const {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();

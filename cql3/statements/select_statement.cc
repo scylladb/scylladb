@@ -248,7 +248,7 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
     ++_stats.reads;
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, options.get_timestamp(state));
+        make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
 
     int32_t page_size = options.get_page_size();
 
@@ -326,14 +326,20 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
-                return proxy.local().query(_schema, command, std::move(prange), options.get_consistency(), state.get_trace_state());
+                return proxy.local().query(_schema,
+                        command,
+                        std::move(prange),
+                        options.get_consistency(),
+                        state.get_trace_state()).then([] (foreign_ptr<lw_shared_ptr<query::result>>&& result, service::replicas_per_token_range) {
+                    return std::move(result);
+                });
             }, std::move(merger));
         }).then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
         return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), state.get_trace_state())
-            .then([this, &options, now, cmd] (auto result) {
+            .then([this, &options, now, cmd] (auto result, service::replicas_per_token_range) {
                 return this->process_results(std::move(result), cmd, options, now);
             });
     }
@@ -351,7 +357,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
     int32_t limit = get_limit(options);
     auto now = gc_clock::now();
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, now, std::experimental::nullopt, query::max_partitions, options.get_timestamp(state));
+        make_partition_slice(options), limit, now, std::experimental::nullopt, query::max_partitions, utils::UUID(), options.get_timestamp(state));
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
 
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
@@ -366,14 +372,16 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
                 dht::partition_range_vector prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
                 return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, state.get_trace_state(),
-                                           db::no_timeout);
+                        db::no_timeout, {}).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, service::replicas_per_token_range) {
+                    return std::move(result);
+                });
             }, std::move(merger));
         }).then([command, this, &options, now] (auto result) {
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] { });
     } else {
         auto query = proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, state.get_trace_state(), db::no_timeout);
-        return query.then([command, this, &options, now] (auto result) {
+        return query.then([command, this, &options, now] (auto result, service::replicas_per_token_range) {
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] {});
     }
@@ -501,6 +509,7 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
                 now,
                 tracing::make_trace_info(state.get_trace_state()),
                 query::max_partitions,
+                utils::UUID(),
                 options.get_timestamp(state));
         return this->execute(proxy, command, std::move(partition_ranges), state, options, now);
     });
@@ -536,12 +545,14 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
             now,
             tracing::make_trace_info(state.get_trace_state()),
             query::max_partitions,
+            utils::UUID(),
             options.get_timestamp(state));
     return proxy.local().query(view.schema(),
-                               cmd,
-                               std::move(partition_ranges),
-                               options.get_consistency(),
-                               state.get_trace_state()).then([cmd, this, &options, now, &view] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+            cmd,
+            std::move(partition_ranges),
+            options.get_consistency(),
+            state.get_trace_state()).then([cmd, this, &options, now, &view] (foreign_ptr<lw_shared_ptr<query::result>> result,
+                service::replicas_per_token_range) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
             columns.emplace_back(view.schema()->get_column_definition(cdef.name()));

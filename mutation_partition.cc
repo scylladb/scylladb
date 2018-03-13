@@ -1904,22 +1904,26 @@ future<> data_query(
         gc_clock::time_point query_time,
         query::result::builder& builder,
         tracing::trace_state_ptr trace_ptr,
-        db::timeout_clock::time_point timeout)
+        db::timeout_clock::time_point timeout,
+        querier_cache_context cache_ctx)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<>();
     }
 
-    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto q = cache_ctx.lookup(emit_only_live_rows::yes, *s, range, slice, trace_ptr, [&, trace_ptr] {
+        return querier(source, s, range, slice, service::get_local_sstable_query_read_priority(),
+                std::move(trace_ptr), emit_only_live_rows::yes);
+    });
 
-    auto qrb = query_result_builder(*s, builder);
-    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, query_result_builder>>(
-            *s, query_time, slice, row_limit, partition_limit, std::move(qrb));
-
-    return do_with(source.make_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
-                                                    streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
-                   [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
-        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
+    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (querier& q) mutable {
+        auto qrb = query_result_builder(*s, builder);
+        return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout).then(
+                [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
+            if (q.are_limits_reached() || builder.is_short_read()) {
+                cache_ctx.insert(std::move(q), std::move(trace_ptr));
+            }
+        });
     });
 }
 
@@ -1928,7 +1932,7 @@ class reconcilable_result_builder {
     const query::partition_slice& _slice;
 
     std::vector<partition> _result;
-    uint32_t _live_rows;
+    uint32_t _live_rows{};
 
     bool _has_ck_selector{};
     bool _static_row_is_alive{};
@@ -2012,22 +2016,28 @@ static do_mutation_query(schema_ptr s,
                gc_clock::time_point query_time,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
-               db::timeout_clock::time_point timeout)
+               db::timeout_clock::time_point timeout,
+               querier_cache_context cache_ctx)
 {
     if (row_limit == 0 || slice.partition_row_limit() == 0 || partition_limit == 0) {
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
-    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto q = cache_ctx.lookup(emit_only_live_rows::no, *s, range, slice, trace_ptr, [&, trace_ptr] {
+        return querier(source, s, range, slice, service::get_local_sstable_query_read_priority(),
+                std::move(trace_ptr), emit_only_live_rows::no);
+    });
 
-    auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
-    auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::no, reconcilable_result_builder>>(
-            *s, query_time, slice, row_limit, partition_limit, std::move(rrb));
-
-    return do_with(source.make_reader(s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
-                                                    streamed_mutation::forwarding::no, mutation_reader::forwarding::no),
-                   [cfq = std::move(cfq), is_reversed, timeout] (flat_mutation_reader& reader) mutable {
-        return reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions(is_reversed), timeout);
+    return do_with(std::move(q),
+            [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (querier& q) mutable {
+        auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
+        return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout).then(
+                [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {
+            if (q.are_limits_reached() || r.is_short_read()) {
+                cache_ctx.insert(std::move(q), std::move(trace_ptr));
+            }
+            return r;
+        });
     });
 }
 
@@ -2043,10 +2053,11 @@ mutation_query(schema_ptr s,
                gc_clock::time_point query_time,
                query::result_memory_accounter&& accounter,
                tracing::trace_state_ptr trace_ptr,
-               db::timeout_clock::time_point timeout)
+               db::timeout_clock::time_point timeout,
+               querier_cache_context cache_ctx)
 {
     return mutation_query_stage(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
-                                row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr), timeout);
+            row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr), timeout, std::move(cache_ctx));
 }
 
 deletable_row::deletable_row(clustering_row&& cr)

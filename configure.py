@@ -292,6 +292,8 @@ scylla_tests = [
     'tests/enum_set_test',
     'tests/extensions_test',
     'tests/cql_auth_syntax_test',
+    'tests/querier_cache',
+    'tests/querier_cache_resource_based_eviction',
 ]
 
 perf_tests = [
@@ -601,6 +603,7 @@ scylla_core = (['database.cc',
                  'duration.cc',
                  'vint-serialization.cc',
                  'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
+                 'querier.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -724,6 +727,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/memory_footprint',
     'tests/gossip',
     'tests/perf/perf_sstable',
+    'tests/querier_cache_resource_based_eviction',
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:

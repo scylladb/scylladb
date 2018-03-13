@@ -270,7 +270,7 @@ public:
                         cmd,
                         std::move(pranges),
                         cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto result) {
+                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto result, service::replicas_per_token_range) {
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         if (schema->is_counter()) {
                             counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
@@ -301,7 +301,7 @@ public:
                         cmd,
                         std::move(pranges),
                         cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto&& result) {
+                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto&& result, service::replicas_per_token_range) {
                     return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         column_counter counter(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, counter);
@@ -341,7 +341,7 @@ public:
                         cmd,
                         std::move(prange),
                         cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd](auto result) {
+                        nullptr).then([schema, cmd](auto result, service::replicas_per_token_range) {
                     return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
                         return to_key_slices(*schema, cmd->slice, v, std::numeric_limits<uint32_t>::max());
                     });
@@ -402,7 +402,8 @@ public:
             range = {dht::partition_range::make_singular(std::move(range[0].start()->value()))};
         }
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
-        return service::get_local_storage_proxy().query(schema, cmd, std::move(range), consistency_level, nullptr).then([schema, cmd, column_limit](auto result) {
+        return service::get_local_storage_proxy().query(schema, cmd, std::move(range),
+                consistency_level, nullptr).then([schema, cmd, column_limit](auto result, service::replicas_per_token_range) {
             return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
@@ -650,7 +651,7 @@ public:
                         cmd,
                         {dht::partition_range::make_singular(dk)},
                         cl_from_thrift(cl),
-                        nullptr).then([schema, cmd, column_limit](auto result) {
+                        nullptr).then([schema, cmd, column_limit](auto result, service::replicas_per_token_range) {
                     return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
                         column_aggregator<query_order::no> aggregator(*schema, cmd->slice, column_limit, { });
                         v.consume(cmd->slice, aggregator);

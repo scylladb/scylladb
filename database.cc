@@ -2117,6 +2117,9 @@ database::database(const db::config& cfg, database_config dbcfg)
         [this] {
             ++_stats->sstable_read_queue_overloaded;
             return std::make_exception_ptr(std::runtime_error("sstable inactive read queue overloaded"));
+        },
+        [this] {
+            return _querier_cache.evict_one();
         })
     // No timeouts or queue length limits - a failure here can kill an entire repair.
     // Trust the caller to limit concurrency.
@@ -2258,6 +2261,29 @@ database::setup_metrics() {
         sm::make_derive("total_reads_failed", _stats->total_reads_failed,
                        sm::description("Counts the total number of failed read operations. "
                                        "Add the total_reads to this value to get the total amount of reads issued on this shard.")),
+
+        sm::make_derive("querier_cache_lookups", _querier_cache.get_stats().lookups,
+                       sm::description("Counts querier cache lookups (paging queries)")),
+
+        sm::make_derive("querier_cache_misses", _querier_cache.get_stats().misses,
+                       sm::description("Counts querier cache lookups that failed to find a cached querier")),
+
+        sm::make_derive("querier_cache_drops", _querier_cache.get_stats().drops,
+                       sm::description("Counts querier cache lookups that found a cached querier but had to drop it due to position mismatch")),
+
+        sm::make_derive("querier_cache_time_based_evictions", _querier_cache.get_stats().time_based_evictions,
+                       sm::description("Counts querier cache entries that timed out and were evicted.")),
+
+        sm::make_derive("querier_cache_resource_based_evictions", _querier_cache.get_stats().resource_based_evictions,
+                       sm::description("Counts querier cache entries that were evicted to free up resources "
+                                       "(limited by reader concurency limits) necessary to create new readers.")),
+
+        sm::make_derive("querier_cache_memory_based_evictions", _querier_cache.get_stats().memory_based_evictions,
+                       sm::description("Counts querier cache entries that were evicted because the memory usage "
+                                       "of the cached queriers were above the limit.")),
+
+        sm::make_gauge("querier_cache_population", _querier_cache.get_stats().population,
+                       sm::description("The number of entries currently in the querier cache.")),
 
         sm::make_derive("sstable_read_queue_overloads", _stats->sstable_read_queue_overloaded,
                        sm::description("Counts the number of times the sstable read queue was overloaded. "
@@ -2999,22 +3025,27 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(schema_ptr s, const query::read_command& cmd, query::result_options opts,
-                     const dht::partition_range_vector& partition_ranges,
-                     tracing::trace_state_ptr trace_state, query::result_memory_limiter& memory_limiter,
-                     uint64_t max_size, db::timeout_clock::time_point timeout) {
+column_family::query(schema_ptr s,
+        const query::read_command& cmd,
+        query::result_options opts,
+        const dht::partition_range_vector& partition_ranges,
+        tracing::trace_state_ptr trace_state,
+        query::result_memory_limiter& memory_limiter,
+        uint64_t max_size,
+        db::timeout_clock::time_point timeout,
+        querier_cache_context cache_ctx) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = opts.request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
-    return f.then([this, lc, s = std::move(s), &cmd, opts, &partition_ranges, trace_state = std::move(trace_state), timeout] (query::result_memory_accounter accounter) mutable {
+    return f.then([this, lc, s = std::move(s), &cmd, opts, &partition_ranges,
+            trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] (query::result_memory_accounter accounter) mutable {
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;
-        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout] {
+        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] {
             auto&& range = *qs.current_partition_range++;
             return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
-                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state,
-                              timeout);
+                              qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state, timeout, cache_ctx);
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
@@ -3058,10 +3089,17 @@ future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return _data_query_stage(&cf, std::move(s), seastar::cref(cmd), opts, seastar::cref(ranges),
-                            std::move(trace_state), seastar::ref(get_result_memory_limiter()),
-                            max_result_size,
-                            timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+    querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
+    return _data_query_stage(&cf,
+            std::move(s),
+            seastar::cref(cmd),
+            opts,
+            seastar::cref(ranges),
+            std::move(trace_state),
+            seastar::ref(get_result_memory_limiter()),
+            max_result_size,
+            timeout,
+            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
@@ -3078,9 +3116,18 @@ future<reconcilable_result, cache_temperature>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.partition_limit,
-            cmd.timestamp, std::move(accounter), std::move(trace_state),
-            timeout).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+    querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
+    return mutation_query(std::move(s),
+            cf.as_mutation_source(),
+            range,
+            cmd.slice,
+            cmd.row_limit,
+            cmd.partition_limit,
+            cmd.timestamp,
+            std::move(accounter),
+            std::move(trace_state),
+            timeout,
+            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());

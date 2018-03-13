@@ -48,6 +48,8 @@ class read_command {
     std::chrono::time_point<gc_clock, gc_clock::duration> timestamp;
     std::experimental::optional<tracing::trace_info> trace_info [[version 1.3]];
     uint32_t partition_limit [[version 1.3]] = std::numeric_limits<uint32_t>::max();
+    utils::UUID query_uuid [[version 2.2]] = utils::UUID();
+    bool is_first_page [[version 2.2]] = false;
 };
 
 }

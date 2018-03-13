@@ -469,6 +469,9 @@ public:
     /** Return the unique host ID for an end-point. */
     UUID get_host_id(inet_address endpoint) const;
 
+    /// Return the unique host ID for an end-point or nullopt if not found.
+    std::optional<UUID> get_host_id_if_known(inet_address endpoint) const;
+
     /** Return the end-point for a unique host ID */
     std::experimental::optional<inet_address> get_endpoint_for_host_id(UUID host_id) const;
 
