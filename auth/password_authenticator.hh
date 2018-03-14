@@ -81,11 +81,11 @@ public:
 
     virtual future<authenticated_user> authenticate(const credentials_map& credentials) const override;
 
-    virtual future<> create(stdx::string_view role_name, const authentication_options& options) override;
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) const override;
 
-    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) override;
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) const override;
 
-    virtual future<> drop(stdx::string_view role_name) override;
+    virtual future<> drop(stdx::string_view role_name) const override;
 
     virtual const resource_set& protected_resources() const override;
 
@@ -94,9 +94,9 @@ public:
 private:
     bool legacy_metadata_exists() const;
 
-    future<> migrate_legacy_metadata();
+    future<> migrate_legacy_metadata() const;
 
-    future<> create_default_if_missing();
+    future<> create_default_if_missing() const;
 };
 
 }

@@ -80,7 +80,9 @@ inline bool operator<(const permission_details& pd1, const permission_details& p
 }
 
 ///
-/// Abstract interface for authorizing users to access resources.
+/// Abstract client for authorizing roles to access resources.
+///
+/// All state necessary to authorize a role is stored externally to the client instance.
 ///
 class authorizer {
 public:
@@ -107,12 +109,12 @@ public:
     ///
     /// Grant a set of permissions to a role for a particular \ref resource.
     ///
-    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) = 0;
+    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
-    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) = 0;
+    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Query for all directly granted permissions.
@@ -122,12 +124,12 @@ public:
     ///
     /// Revoke all permissions granted directly to a particular role.
     ///
-    virtual future<> revoke_all(stdx::string_view role_name) = 0;
+    virtual future<> revoke_all(stdx::string_view role_name) const = 0;
 
     ///
     /// Revoke all permissions granted to any role for a particular resource.
     ///
-    virtual future<> revoke_all(const resource&) = 0;
+    virtual future<> revoke_all(const resource&) const = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

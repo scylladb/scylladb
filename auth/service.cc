@@ -402,7 +402,7 @@ static void validate_authentication_options_are_supported(
 
 
 future<> create_role(
-        service& ser,
+        const service& ser,
         stdx::string_view name,
         const role_config& config,
         const authentication_options& options) {
@@ -426,7 +426,7 @@ future<> create_role(
 }
 
 future<> alter_role(
-        service& ser,
+        const service& ser,
         stdx::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
@@ -444,7 +444,7 @@ future<> alter_role(
     });
 }
 
-future<> drop_role(service& ser, stdx::string_view name) {
+future<> drop_role(const service& ser, stdx::string_view name) {
     return do_with(make_role_resource(name), [&ser, name](const resource& r) {
         auto& a = ser.underlying_authorizer();
         return when_all_succeed(a.revoke_all(name), a.revoke_all(r));
@@ -471,7 +471,7 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
 }
 
 future<> grant_permissions(
-        service& ser,
+        const service& ser,
         stdx::string_view role_name,
         permission_set perms,
         const resource& r) {
@@ -481,7 +481,7 @@ future<> grant_permissions(
 }
 
 future<> revoke_permissions(
-        service& ser,
+        const service& ser,
         stdx::string_view role_name,
         permission_set perms,
         const resource& r) {

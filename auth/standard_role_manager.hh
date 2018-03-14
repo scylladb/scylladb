@@ -66,15 +66,15 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<> create(stdx::string_view role_name, const role_config&) override;
+    virtual future<> create(stdx::string_view role_name, const role_config&) const override;
 
-    virtual future<> drop(stdx::string_view role_name) override;
+    virtual future<> drop(stdx::string_view role_name) const override;
 
-    virtual future<> alter(stdx::string_view role_name, const role_config_update&) override;
+    virtual future<> alter(stdx::string_view role_name, const role_config_update&) const override;
 
-    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) override;
+    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) const override;
 
-    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) override;
+    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) const override;
 
     virtual future<role_set> query_granted(stdx::string_view grantee_name, recursive_role_query) const override;
 
@@ -89,17 +89,17 @@ public:
 private:
     enum class membership_change { add, remove };
 
-    future<> create_metadata_tables_if_missing();
+    future<> create_metadata_tables_if_missing() const;
 
     bool legacy_metadata_exists() const;
 
-    future<> migrate_legacy_metadata();
+    future<> migrate_legacy_metadata() const;
 
-    future<> create_default_role_if_missing();
+    future<> create_default_role_if_missing() const;
 
-    future<> create_or_replace(stdx::string_view role_name, const role_config&);
+    future<> create_or_replace(stdx::string_view role_name, const role_config&) const;
 
-    future<> modify_membership(stdx::string_view role_name, stdx::string_view grantee_name, membership_change);
+    future<> modify_membership(stdx::string_view role_name, stdx::string_view grantee_name, membership_change) const;
 };
 
 }

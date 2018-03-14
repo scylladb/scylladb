@@ -93,10 +93,12 @@ using role_set = std::unordered_set<sstring>;
 enum class recursive_role_query { yes, no };
 
 ///
-/// Abstract role manager.
+/// Abstract client for managing roles.
 ///
-/// All implementations should throw role-related exceptions as documented, but authorization-related checking is
-/// handled by the CQL layer, and not here.
+/// All state necessary for managing roles is stored externally to the client instance.
+///
+/// All implementations should throw role-related exceptions as documented. Authorization is not addressed here, and
+/// access-control should never be enforced in implementations.
 ///
 class role_manager {
 public:
@@ -113,17 +115,17 @@ public:
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
-    virtual future<> create(stdx::string_view role_name, const role_config&) = 0;
+    virtual future<> create(stdx::string_view role_name, const role_config&) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> drop(stdx::string_view role_name) = 0;
+    virtual future<> drop(stdx::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.
     ///
-    virtual future<> alter(stdx::string_view role_name, const role_config_update&) = 0;
+    virtual future<> alter(stdx::string_view role_name, const role_config_update&) const = 0;
 
     ///
     /// Grant `role_name` to `grantee_name`.
@@ -133,7 +135,7 @@ public:
     /// \returns an exceptional future with \ref role_already_included if granting the role would be redundant, or
     /// create a cycle.
     ///
-    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) = 0;
+    virtual future<> grant(stdx::string_view grantee_name, stdx::string_view role_name) const = 0;
 
     ///
     /// Revoke `role_name` from `revokee_name`.
@@ -142,7 +144,7 @@ public:
     ///
     /// \returns an exceptional future with \ref revoke_ungranted_role if the role was not granted.
     ///
-    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) = 0;
+    virtual future<> revoke(stdx::string_view revokee_name, stdx::string_view role_name) const = 0;
 
     ///
     /// \returns an exceptional future with \ref nonexistant_role if the role does not exist.

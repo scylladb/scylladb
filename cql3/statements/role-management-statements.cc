@@ -318,7 +318,7 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
                     make_column_spec("super", boolean_type),
                     make_column_spec("login", boolean_type)});
 
-    static const auto make_results = [](auth::role_manager& rm, auth::role_set&& roles)
+    static const auto make_results = [](const auth::role_manager& rm, auth::role_set&& roles)
             -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
 
@@ -348,12 +348,12 @@ list_roles_statement::execute(distributed<service::storage_proxy>&, service::que
         });
     };
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
+    const auto& cs = state.get_client_state();
+    const auto& as = *cs.get_auth_service();
     const auto user = cs.user();
 
     return auth::has_superuser(as, *user).then([this, &state, &cs, &as, user](bool super) {
-        auto& rm = as.underlying_role_manager();
+        const auto& rm = as.underlying_role_manager();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
         if (!_grantee) {
