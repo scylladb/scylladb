@@ -646,22 +646,23 @@ future<> parse(random_access_reader& in, summary& s) {
             check_buf_size(buf, len);
 
             s.entries.resize(s.header.size);
-
             // Positions are encoded in little-endian.
             auto b = buf.get();
             s.positions = utils::chunked_vector<pos_type>();
-            for (size_t i = 0; i < s.header.size; ++i) {
+            return do_until([&s] { return s.positions.size() == s.header.size; }, [&s, b] () mutable {
                 s.positions.push_back(seastar::read_le<pos_type>(b));
                 b += sizeof(pos_type);
-            }
-
-            // Since the keys in the index are not sized, we need to calculate
-            // the start position of the index i+1 to determine the boundaries
-            // of index i. The "memory_size" field in the header determines the
-            // total memory used by the map, so if we push it to the vector, we
-            // can guarantee that no conditionals are used, and we can always
-            // query the position of the "next" index.
-            s.positions.push_back(s.header.memory_size);
+                return make_ready_future<>();
+            }).then([&s] {
+                // Since the keys in the index are not sized, we need to calculate
+                // the start position of the index i+1 to determine the boundaries
+                // of index i. The "memory_size" field in the header determines the
+                // total memory used by the map, so if we push it to the vector, we
+                // can guarantee that no conditionals are used, and we can always
+                // query the position of the "next" index.
+                s.positions.push_back(s.header.memory_size);
+                return make_ready_future<>();
+            });
         }).then([&in, &s] {
             in.seek(sizeof(summary::header) + s.header.memory_size);
             return parse(in, s.first_key, s.last_key);
