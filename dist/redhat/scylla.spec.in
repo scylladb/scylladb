@@ -7,7 +7,7 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-tools-core = @@VERSION@@ scylla-kernel-conf = @@VERSION@@ scylla-libgcc72 scylla-libstdc++72
+Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-tools-core = @@VERSION@@ scylla-kernel-conf = @@VERSION@@ scylla-libgcc73 scylla-libstdc++73
 Obsoletes:	scylla-server < 1.1
 
 %description
@@ -52,7 +52,7 @@ License:        AGPLv3
 URL:            http://www.scylladb.com/
 BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel yaml-cpp-static lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler libunwind-devel systemtap-sdt-devel ninja-build cmake python ragel grep kernel-headers
 %{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
-%{?rhel:BuildRequires: scylla-libstdc++72-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc72-c++, scylla-python34-pyparsing20}
+%{?rhel:BuildRequires: scylla-libstdc++73-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc73-c++, scylla-python34-pyparsing20}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs
 %{?rhel:Requires: python34 python34-PyYAML kernel >= 3.10.0-514}
 %{?fedora:Requires: python3 python3-PyYAML}
@@ -90,7 +90,7 @@ cflags="--cflags=${defines[*]}"
 %endif
 %if 0%{?rhel}
 . /etc/profile.d/scylla.sh
-python3.4 ./configure.py %{?configure_opt} --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.2 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
+python3.4 ./configure.py %{?configure_opt} --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
