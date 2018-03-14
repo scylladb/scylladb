@@ -174,8 +174,6 @@ private:
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     stream_plan _stream_plan;
     std::unordered_map<sstring, std::vector<sstring>> _column_families;
-    // Number of ranges to stream per stream plan
-    unsigned _nr_ranges_per_stream_plan = 10;
     // Retry the stream plan _nr_max_retry times
     unsigned _nr_retried = 0;
     unsigned _nr_max_retry = 5;
