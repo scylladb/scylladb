@@ -4533,12 +4533,12 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
         };
         auto sst = make_sstable_containing(sst_gen, mutations);
 
-        summary s1 = sstables::test(sst).get_summary();
+        summary s1 = sstables::test(sst).move_summary();
         BOOST_REQUIRE(s1.entries.size() > 1);
 
         sstables::test(sst).remove_component(sstable::component_type::Summary).get();
         sst = reusable_sst(s, tmp->path, 1).get0();
-        summary s2 = sstables::test(sst).get_summary();
+        summary& s2 = sstables::test(sst).get_summary();
 
         BOOST_REQUIRE(::memcmp(&s1.header, &s2.header, sizeof(summary::header)) == 0);
         BOOST_REQUIRE(s1.positions == s2.positions);
