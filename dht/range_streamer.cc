@@ -300,6 +300,7 @@ future<> range_streamer::do_stream_async() {
                 unsigned sp_index = 0;
                 unsigned nr_ranges_streamed = 0;
                 size_t nr_ranges_total = range_vec.size();
+                size_t nr_ranges_per_stream_plan = nr_ranges_total / 10;
                 dht::token_range_vector ranges_to_stream;
                 auto do_streaming = [&] {
                     auto sp = stream_plan(sprint("%s-%s-index-%d", description, keyspace, sp_index++));
@@ -318,7 +319,7 @@ future<> range_streamer::do_stream_async() {
                         ranges_to_stream.push_back(*it);
                         it = range_vec.erase(it);
                         nr_ranges_streamed++;
-                        if (ranges_to_stream.size() < _nr_ranges_per_stream_plan) {
+                        if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;
                         } else {
                             do_streaming();
