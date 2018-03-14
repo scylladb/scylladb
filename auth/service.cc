@@ -77,11 +77,18 @@ private:
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
-        _authorizer.revoke_all(auth::make_data_resource(ks_name));
+        _authorizer.revoke_all(
+                auth::make_data_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        _authorizer.revoke_all(auth::make_data_resource(ks_name, cf_name));
+        _authorizer.revoke_all(
+                auth::make_data_resource(
+                        ks_name, cf_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
@@ -447,7 +454,12 @@ future<> alter_role(
 future<> drop_role(const service& ser, stdx::string_view name) {
     return do_with(make_role_resource(name), [&ser, name](const resource& r) {
         auto& a = ser.underlying_authorizer();
-        return when_all_succeed(a.revoke_all(name), a.revoke_all(r));
+
+        return when_all_succeed(
+                a.revoke_all(name),
+                a.revoke_all(r)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }).then([&ser, name] {
         return ser.underlying_authenticator().drop(name);
     }).then([&ser, name] {

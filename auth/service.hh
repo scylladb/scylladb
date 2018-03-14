@@ -237,6 +237,9 @@ future<bool> has_role(const service&, const authenticated_user&, stdx::string_vi
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
 ///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
+/// supported.
+///
 future<> grant_permissions(
         const service&,
         stdx::string_view role_name,
@@ -245,6 +248,9 @@ future<> grant_permissions(
 
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if revoking permissions is not
+/// supported.
 ///
 future<> revoke_permissions(
         const service&,
@@ -266,6 +272,9 @@ using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 ///
 /// \returns an exceptional future with \ref nonexistent_role if a role name is included which refers to a role that
 /// does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if listing permissions is not
+/// supported.
 ///
 future<std::vector<permission_details>> list_filtered_permissions(
         const service&,

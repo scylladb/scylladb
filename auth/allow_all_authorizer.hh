@@ -59,23 +59,29 @@ public:
     }
 
     virtual future<> grant(stdx::string_view, permission_set, const resource&) const override {
-        throw exceptions::invalid_request_exception("GRANT operation is not supported by AllowAllAuthorizer");
+        return make_exception_future<>(
+                unsupported_authorization_operation("GRANT operation is not supported by AllowAllAuthorizer"));
     }
 
     virtual future<> revoke(stdx::string_view, permission_set, const resource&) const override {
-        throw exceptions::invalid_request_exception("REVOKE operation is not supported by AllowAllAuthorizer");
+        return make_exception_future<>(
+                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }
 
     virtual future<std::vector<permission_details>> list_all() const override {
-        throw exceptions::invalid_request_exception("LIST PERMISSIONS operation is not supported by AllowAllAuthorizer");
+        return make_exception_future<std::vector<permission_details>>(
+                unsupported_authorization_operation(
+                        "LIST PERMISSIONS operation is not supported by AllowAllAuthorizer"));
     }
 
     virtual future<> revoke_all(stdx::string_view) const override {
-        return make_ready_future();
+        return make_exception_future(
+                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }
 
     virtual future<> revoke_all(const resource&) const override {
-        return make_ready_future();
+        return make_exception_future(
+                unsupported_authorization_operation("REVOKE operation is not supported by AllowAllAuthorizer"));
     }
 
     virtual const resource_set& protected_resources() const override {
