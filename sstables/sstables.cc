@@ -428,7 +428,9 @@ parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) 
     auto eoarr = [count, len] { return *count == len; };
 
     return do_until(eoarr, [count, &in, &arr] {
-        return parse(in, arr[(*count)++]);
+        arr.emplace_back();
+        (*count)++;
+        return parse(in, arr.back());
     });
 }
 
@@ -443,7 +445,7 @@ parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) 
 
             auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
             for (size_t i = 0; i < now; ++i) {
-                arr[*done + i] = net::ntoh(nr[i]);
+                arr.push_back(net::ntoh(nr[i]));
             }
             *done += now;
             return make_ready_future<stop_iteration>(*done == len ? stop_iteration::yes : stop_iteration::no);
@@ -458,7 +460,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
     auto len = make_lw_shared<Size>();
     auto f = parse(in, *len);
     return f.then([&in, &arr, len] {
-        arr.elements.resize(*len);
+        arr.elements.reserve(*len);
         return parse(in, *len, arr.elements);
     }).finally([len] {});
 }
@@ -789,20 +791,25 @@ future<> parse(random_access_reader& in, utils::estimated_histogram& eh) {
         if (length == 0) {
             throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
         }
-        eh.bucket_offsets.resize(length - 1);
-        eh.buckets.resize(length);
+        eh.bucket_offsets.reserve(length - 1);
+        eh.buckets.reserve(length);
 
         auto type_size = sizeof(uint64_t) * 2;
         return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto buf) {
             check_buf_size(buf, length * type_size);
 
             auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
-            size_t j = 0;
-            for (size_t i = 0; i < length; ++i) {
-                eh.bucket_offsets[i == 0 ? 0 : i - 1] = net::ntoh(nr[j++]);
-                eh.buckets[i] = net::ntoh(nr[j++]);
-            }
-            return make_ready_future<>();
+            return do_with(size_t(0), [nr, &eh, length] (size_t& j) mutable {
+                return do_until([&eh, length] { return eh.buckets.size() == length; }, [nr, &eh, &j] () mutable {
+                    auto offset = net::ntoh(nr[j++]);
+                    auto bucket = net::ntoh(nr[j++]);
+                    if (eh.buckets.size() > 0) {
+                        eh.bucket_offsets.push_back(offset);
+                    }
+                    eh.buckets.push_back(bucket);
+                    return make_ready_future<>();
+                });
+            });
         });
     });
 }
@@ -817,13 +824,17 @@ inline void write(file_writer& out, const utils::estimated_histogram& eh) {
         uint64_t buckets;
     };
     std::vector<element> elements;
-    elements.resize(eh.buckets.size());
+    elements.reserve(eh.buckets.size());
 
     auto *offsets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.bucket_offsets.data());
     auto *buckets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.buckets.data());
     for (size_t i = 0; i < eh.buckets.size(); i++) {
-        elements[i].offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
-        elements[i].buckets = net::hton(buckets_nr[i]);
+        auto offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
+        auto buckets = net::hton(buckets_nr[i]);
+        elements.emplace_back(element{offsets, buckets});
+        if (need_preempt()) {
+            seastar::thread::yield();
+        }
     }
 
     auto p = reinterpret_cast<const char*>(elements.data());
