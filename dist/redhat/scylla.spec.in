@@ -86,11 +86,11 @@ cflags="--cflags=${defines[*]}"
 
 %define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
 %if 0%{?fedora}
-./configure.py %{?configure_opt} --mode=release "$cflags"
+./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags"
 %endif
 %if 0%{?rhel}
 . /etc/profile.d/scylla.sh
-python3.4 ./configure.py %{?configure_opt} --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
+python3.4 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
