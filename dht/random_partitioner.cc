@@ -31,7 +31,7 @@ static const boost::multiprecision::uint128_t cppint_one{1};
 static const boost::multiprecision::uint128_t cppint127_max = cppint_one << 127;
 
 // Convert token's byte array to integer value.
-static boost::multiprecision::uint128_t token_to_cppint(const token& t) {
+static boost::multiprecision::uint128_t token_to_cppint(token_view t) {
     boost::multiprecision::uint128_t ret{0};
     // If the token is minimum token, token._data will be empty,
     // zero will be returned
@@ -109,7 +109,7 @@ token random_partitioner::get_token(const sstables::key_view& key) {
     return get_token(bytes(v.begin(), v.end()));
 }
 
-int random_partitioner::tri_compare(const token& t1, const token& t2) const {
+int random_partitioner::tri_compare(token_view t1, token_view t2) const {
     auto l1 = token_to_cppint(t1);
     auto l2 = token_to_cppint(t2);
 

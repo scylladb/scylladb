@@ -113,7 +113,7 @@ midpoint_unsigned_tokens(const token& t1, const token& t2) {
     return token{token::kind::key, std::move(avg)};
 }
 
-int tri_compare(const token& t1, const token& t2) {
+int tri_compare(token_view t1, token_view t2) {
     if (t1._kind == t2._kind) {
         return global_partitioner().tri_compare(t1, t2);
     } else if (t1._kind < t2._kind) {
@@ -122,8 +122,7 @@ int tri_compare(const token& t1, const token& t2) {
     return 1;
 }
 
-bool operator==(const token& t1, const token& t2)
-{
+bool operator==(token_view t1, token_view t2) {
     if (t1._kind != t2._kind) {
         return false;
     } else if (t1._kind == token::kind::key) {
@@ -132,8 +131,7 @@ bool operator==(const token& t1, const token& t2)
     return true;
 }
 
-bool operator<(const token& t1, const token& t2)
-{
+bool operator<(token_view t1, token_view t2) {
     if (t1._kind < t2._kind) {
         return true;
     } else if (t1._kind == token::kind::key && t2._kind == token::kind::key) {

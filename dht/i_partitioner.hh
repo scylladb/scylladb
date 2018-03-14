@@ -80,13 +80,34 @@ using token_range = nonwrapping_range<token>;
 using partition_range_vector = std::vector<partition_range>;
 using token_range_vector = std::vector<token_range>;
 
+enum class token_kind {
+    before_all_keys,
+    key,
+    after_all_keys,
+};
+
+
+class token_view {
+public:
+    token_kind _kind;
+    bytes_view _data;
+
+    token_view(token_kind kind, bytes_view data) : _kind(kind), _data(data) {}
+    explicit token_view(const token& token);
+
+    bool is_minimum() const {
+        return _kind == token_kind::before_all_keys;
+    }
+
+    bool is_maximum() const {
+        return _kind == token_kind::after_all_keys;
+    }
+};
+
+
 class token {
 public:
-    enum class kind {
-        before_all_keys,
-        key,
-        after_all_keys,
-    };
+    using kind = token_kind;
     kind _kind;
     // _data can be interpreted as a big endian binary fraction
     // in the range [0.0, 1.0).
@@ -119,14 +140,23 @@ public:
     size_t memory_usage() const {
         return sizeof(token) + external_memory_usage();
     }
+
+    explicit token(token_view v) : _kind(v._kind), _data(v._data) {}
+
+    operator token_view() const {
+        return token_view(*this);
+    }
 };
+
+inline token_view::token_view(const token& token) : _kind(token._kind), _data(bytes_view(token._data)) {}
 
 token midpoint_unsigned(const token& t1, const token& t2);
 const token& minimum_token();
 const token& maximum_token();
-bool operator==(const token& t1, const token& t2);
-bool operator<(const token& t1, const token& t2);
-int tri_compare(const token& t1, const token& t2);
+bool operator==(token_view t1, token_view t2);
+bool operator<(token_view t1, token_view t2);
+int tri_compare(token_view t1, token_view t2);
+
 inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
 inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
 inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
@@ -329,17 +359,17 @@ public:
     /**
      * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
      */
-    virtual int tri_compare(const token& t1, const token& t2) const = 0;
+    virtual int tri_compare(token_view t1, token_view t2) const = 0;
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
      */
-    bool is_equal(const token& t1, const token& t2) const {
+    bool is_equal(token_view t1, token_view t2) const {
         return tri_compare(t1, t2) == 0;
     }
     /**
      * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
      */
-    bool is_less(const token& t1, const token& t2) const {
+    bool is_less(token_view t1, token_view t2) const {
         return tri_compare(t1, t2) < 0;
     }
 
@@ -350,9 +380,9 @@ public:
         return _shard_count;
     }
 
-    friend bool operator==(const token& t1, const token& t2);
-    friend bool operator<(const token& t1, const token& t2);
-    friend int tri_compare(const token& t1, const token& t2);
+    friend bool operator==(token_view t1, token_view t2);
+    friend bool operator<(token_view t1, token_view t2);
+    friend int tri_compare(token_view t1, token_view t2);
 };
 
 //
