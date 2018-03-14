@@ -36,8 +36,10 @@
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 
 #include <optional>
@@ -148,6 +150,8 @@ class view_builder final : public service::migration_listener::only_view_notific
     seastar::abort_source _as;
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<utils::UUID> _built_views;
+    // Used for testing.
+    std::unordered_map<std::pair<sstring, sstring>, seastar::shared_promise<>, utils::tuple_hash> _build_notifiers;
 
 public:
     static constexpr size_t batch_size = 128;
@@ -171,6 +175,9 @@ public:
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
+
+    // For tests
+    future<> wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout);
 
 private:
     build_step& get_or_create_build_step(utils::UUID);

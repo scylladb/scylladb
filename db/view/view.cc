@@ -1478,10 +1478,22 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                         system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()),
                         builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then([view] {
                     return system_keyspace::remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
+                }).then([&builder, view] {
+                    auto it = builder._build_notifiers.find(std::pair(view->ks_name(), view->cf_name()));
+                    if (it != builder._build_notifiers.end()) {
+                        it->second.set_value();
+                    }
                 });
             });
         }
         return system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), next_token);
+    });
+}
+
+future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout) {
+    return container().invoke_on(0, [ks_name, view_name, timeout] (view_builder& builder) {
+        auto v = std::pair(std::move(ks_name), std::move(view_name));
+        return builder._build_notifiers[std::move(v)].get_shared_future(timeout);
     });
 }
 
