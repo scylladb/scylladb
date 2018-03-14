@@ -647,7 +647,6 @@ future<> parse(random_access_reader& in, summary& s) {
             auto len = s.header.size * sizeof(pos_type);
             check_buf_size(buf, len);
 
-            s.entries.resize(s.header.size);
             // Positions are encoded in little-endian.
             auto b = buf.get();
             s.positions = utils::chunked_vector<pos_type>();
@@ -669,31 +668,28 @@ future<> parse(random_access_reader& in, summary& s) {
             in.seek(sizeof(summary::header) + s.header.memory_size);
             return parse(in, s.first_key, s.last_key);
         }).then([&in, &s] {
-
             in.seek(s.positions[0] + sizeof(summary::header));
+            s.entries.reserve(s.header.size);
 
-            assert(s.positions.size() == (s.entries.size() + 1));
+            return do_with(int(0), [&in, &s] (int& idx) mutable {
+                return do_until([&s] { return s.entries.size() == s.header.size; }, [&s, &in, &idx] () mutable {
+                    auto pos = s.positions[idx++];
+                    auto next = s.positions[idx];
 
-            auto idx = make_lw_shared<size_t>(0);
-            return do_for_each(s.entries.begin(), s.entries.end(), [idx, &in, &s] (auto& entry) {
-                auto pos = s.positions[(*idx)++];
-                auto next = s.positions[*idx];
+                    auto entrysize = next - pos;
+                    return in.read_exactly(entrysize).then([&s, entrysize] (auto buf) mutable {
+                        check_buf_size(buf, entrysize);
 
-                auto entrysize = next - pos;
+                        auto keysize = entrysize - 8;
+                        auto key_data = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
+                        buf.trim_front(keysize);
 
-                return in.read_exactly(entrysize).then([&s, &entry, entrysize] (auto buf) mutable {
-                    check_buf_size(buf, entrysize);
-
-                    auto keysize = entrysize - 8;
-                    entry.key = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
-
-                    buf.trim_front(keysize);
-
-                    // position is little-endian encoded
-                    entry.position = seastar::read_le<uint64_t>(buf.get());
-                    entry.token = dht::global_partitioner().get_token(entry.get_key());
-
-                    return make_ready_future<>();
+                        // position is little-endian encoded
+                        auto position = seastar::read_le<uint64_t>(buf.get());
+                        auto token = dht::global_partitioner().get_token(key_view(key_data));
+                        s.entries.push_back({ token, key_data, position });
+                        return make_ready_future<>();
+                    });
                 });
             }).then([&s] {
                 // Delete last element which isn't part of the on-disk format.
