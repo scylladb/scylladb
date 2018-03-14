@@ -175,10 +175,10 @@ private:
     bool _complete_sent = false;
     bool _received_failed_complete_message = false;
 
-    // If the session is idle for 300 minutes, close the session
-    std::chrono::seconds _keep_alive_timeout{60 * 300};
-    // Check every 10 minutes
-    std::chrono::seconds _keep_alive_interval{60 * 10};
+    // If the session is idle for 10 minutes, close the session
+    std::chrono::seconds _keep_alive_timeout{60 * 10};
+    // Check every 1 minutes
+    std::chrono::seconds _keep_alive_interval{60};
     timer<lowres_clock> _keep_alive;
     stream_bytes _last_stream_bytes;
     lowres_clock::time_point _last_stream_progress;
