@@ -133,7 +133,7 @@ using promoted_index_blocks = seastar::circular_buffer<promoted_index_block>;
 
 class summary_entry {
 public:
-    dht::token token;
+    dht::token_view token;
     bytes_view key;
     uint64_t position;
 
