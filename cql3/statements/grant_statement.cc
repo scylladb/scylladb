@@ -51,5 +51,8 @@ cql3::statements::grant_statement::execute(distributed<service::storage_proxy>& 
     }).handle_exception_type([](const auth::nonexistant_role& e) {
         return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
                 exceptions::invalid_request_exception(e.what()));
+    }).handle_exception_type([](const auth::unsupported_authorization_operation& e) {
+        return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
+                exceptions::invalid_request_exception(e.what()));
     });
 }

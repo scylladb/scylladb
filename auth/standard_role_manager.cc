@@ -135,7 +135,7 @@ const resource_set& standard_role_manager::protected_resources() const {
     return resources;
 }
 
-future<> standard_role_manager::create_metadata_tables_if_missing() {
+future<> standard_role_manager::create_metadata_tables_if_missing() const {
     static const sstring create_roles_query = sprint(
             "CREATE TABLE %s ("
             "  %s text PRIMARY KEY,"
@@ -169,7 +169,7 @@ future<> standard_role_manager::create_metadata_tables_if_missing() {
                     _migration_manager));
 }
 
-future<> standard_role_manager::create_default_role_if_missing() {
+future<> standard_role_manager::create_default_role_if_missing() const {
     return default_role_row_satisfies(_qp, [](auto&&) { return true; }).then([this](bool exists) {
         if (!exists) {
             static const sstring query = sprint(
@@ -199,7 +199,7 @@ bool standard_role_manager::legacy_metadata_exists() const {
     return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
 }
 
-future<> standard_role_manager::migrate_legacy_metadata() {
+future<> standard_role_manager::migrate_legacy_metadata() const {
     log.info("Starting migration of legacy user metadata.");
     static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
 
@@ -256,7 +256,7 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { });
 }
 
-future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) {
+future<> standard_role_manager::create_or_replace(stdx::string_view role_name, const role_config& c) const {
     static const sstring query = sprint(
             "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, ?, ?)",
             meta::roles_table::qualified_name(),
@@ -270,7 +270,7 @@ future<> standard_role_manager::create_or_replace(stdx::string_view role_name, c
 }
 
 future<>
-standard_role_manager::create(stdx::string_view role_name, const role_config& c) {
+standard_role_manager::create(stdx::string_view role_name, const role_config& c) const {
     return this->exists(role_name).then([this, role_name, &c](bool role_exists) {
         if (role_exists) {
             throw role_already_exists(role_name);
@@ -281,7 +281,7 @@ standard_role_manager::create(stdx::string_view role_name, const role_config& c)
 }
 
 future<>
-standard_role_manager::alter(stdx::string_view role_name, const role_config_update& u) {
+standard_role_manager::alter(stdx::string_view role_name, const role_config_update& u) const {
     static const auto build_column_assignments = [](const role_config_update& u) -> sstring {
         std::vector<sstring> assignments;
 
@@ -312,7 +312,7 @@ standard_role_manager::alter(stdx::string_view role_name, const role_config_upda
     });
 }
 
-future<> standard_role_manager::drop(stdx::string_view role_name) {
+future<> standard_role_manager::drop(stdx::string_view role_name) const {
     return this->exists(role_name).then([this, role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(role_name);
@@ -379,7 +379,7 @@ future<>
 standard_role_manager::modify_membership(
         stdx::string_view grantee_name,
         stdx::string_view role_name,
-        membership_change ch) {
+        membership_change ch) const {
 
 
     const auto modify_roles = [this, role_name, grantee_name, ch] {
@@ -421,7 +421,7 @@ standard_role_manager::modify_membership(
 }
 
 future<>
-standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view role_name) {
+standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view role_name) const {
     const auto check_redundant = [this, role_name, grantee_name] {
         return this->query_granted(
                 grantee_name,
@@ -452,7 +452,7 @@ standard_role_manager::grant(stdx::string_view grantee_name, stdx::string_view r
 }
 
 future<>
-standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view role_name) {
+standard_role_manager::revoke(stdx::string_view revokee_name, stdx::string_view role_name) const {
     return this->exists(role_name).then([this, revokee_name, role_name](bool role_exists) {
         if (!role_exists) {
             throw nonexistant_role(sstring(role_name));

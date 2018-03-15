@@ -77,15 +77,15 @@ public:
 
     virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override;
 
-    virtual future<> grant(stdx::string_view, permission_set, const resource&) override;
+    virtual future<> grant(stdx::string_view, permission_set, const resource&) const override;
 
-    virtual future<> revoke( stdx::string_view, permission_set, const resource&) override;
+    virtual future<> revoke( stdx::string_view, permission_set, const resource&) const override;
 
     virtual future<std::vector<permission_details>> list_all() const override;
 
-    virtual future<> revoke_all(stdx::string_view) override;
+    virtual future<> revoke_all(stdx::string_view) const override;
 
-    virtual future<> revoke_all(const resource&) override;
+    virtual future<> revoke_all(const resource&) const override;
 
     virtual const resource_set& protected_resources() const override;
 
@@ -94,9 +94,9 @@ private:
 
     future<bool> any_granted() const;
 
-    future<> migrate_legacy_metadata();
+    future<> migrate_legacy_metadata() const;
 
-    future<> modify(stdx::string_view, permission_set, const resource&, stdx::string_view);
+    future<> modify(stdx::string_view, permission_set, const resource&, stdx::string_view) const;
 };
 
 } /* namespace auth */

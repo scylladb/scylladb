@@ -69,7 +69,9 @@ namespace auth {
 class authenticated_user;
 
 ///
-/// Abstract interface for authenticating users.
+/// Abstract client for authenticating role identity.
+///
+/// All state necessary to authorize a role is stored externally to the client instance.
 ///
 class authenticator {
 public:
@@ -120,7 +122,7 @@ public:
     ///
     /// The options provided must be a subset of `supported_options()`.
     ///
-    virtual future<> create(stdx::string_view role_name, const authentication_options& options) = 0;
+    virtual future<> create(stdx::string_view role_name, const authentication_options& options) const = 0;
 
     ///
     /// Alter the authentication record of an existing user.
@@ -129,12 +131,12 @@ public:
     ///
     /// Callers must ensure that the specification of `alterable_options()` is adhered to.
     ///
-    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) = 0;
+    virtual future<> alter(stdx::string_view role_name, const authentication_options& options) const = 0;
 
     ///
     /// Delete the authentication record for a user. This will disallow the user from logging in.
     ///
-    virtual future<> drop(stdx::string_view role_name) = 0;
+    virtual future<> drop(stdx::string_view role_name) const = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

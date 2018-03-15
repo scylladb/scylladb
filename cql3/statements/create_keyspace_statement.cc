@@ -128,6 +128,17 @@ cql3::statements::create_keyspace_statement::prepare(database& db, cql_stats& st
     return std::make_unique<prepared_statement>(make_shared<create_keyspace_statement>(*this));
 }
 
+future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs) {
+    return do_with(auth::make_data_resource(keyspace()), [&cs](const auth::resource& r) {
+        return auth::grant_applicable_permissions(
+                *cs.get_auth_service(),
+                *cs.user(),
+                r).handle_exception_type([](const auth::unsupported_authorization_operation&) {
+            // Nothing.
+        });
+    });
+}
+
 }
 
 }

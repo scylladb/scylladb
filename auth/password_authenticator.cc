@@ -177,7 +177,7 @@ bool password_authenticator::legacy_metadata_exists() const {
     return _qp.db().local().has_schema(meta::AUTH_KS, legacy_table_name);
 }
 
-future<> password_authenticator::migrate_legacy_metadata() {
+future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
     static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
 
@@ -201,7 +201,7 @@ future<> password_authenticator::migrate_legacy_metadata() {
     });
 }
 
-future<> password_authenticator::create_default_if_missing() {
+future<> password_authenticator::create_default_if_missing() const {
     return default_role_row_satisfies(_qp, &has_salted_hash).then([this](bool exists) {
         if (!exists) {
             return _qp.process(
@@ -317,7 +317,7 @@ future<authenticated_user> password_authenticator::authenticate(
     });
 }
 
-future<> password_authenticator::create(stdx::string_view role_name, const authentication_options& options) {
+future<> password_authenticator::create(stdx::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -328,7 +328,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
             {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) {
+future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) const {
     if (!options.password) {
         return make_ready_future<>();
     }
@@ -345,7 +345,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
             {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
-future<> password_authenticator::drop(stdx::string_view name) {
+future<> password_authenticator::drop(stdx::string_view name) const {
     static const sstring query = sprint(
             "DELETE %s FROM %s WHERE %s = ?",
             SALTED_HASH,
