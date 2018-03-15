@@ -40,7 +40,7 @@ private:
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
         if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
-            dst.apply(new_def, atomic_cell_or_collection(cell));
+            dst.apply(new_def, atomic_cell_or_collection(*new_def.type, cell));
         }
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {

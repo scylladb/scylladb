@@ -161,7 +161,7 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
             });
 
     auto cell = result.build(std::max(dst_ac.timestamp(), src_ac.timestamp()));
-    src = std::exchange(dst, atomic_cell_or_collection(cell));
+    src = std::exchange(dst, atomic_cell_or_collection(*counter_type, cell));
 }
 
 stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, atomic_cell_view b)
@@ -171,7 +171,7 @@ stdx::optional<atomic_cell> counter_cell_view::difference(atomic_cell_view a, at
 
     if (!b.is_live() || !a.is_live()) {
         if (b.is_live() || (!a.is_live() && compare_atomic_cell_for_merge(b, a) < 0)) {
-            return atomic_cell(a);
+            return atomic_cell(*counter_type, a);
         }
         return { };
     }

@@ -822,16 +822,16 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
         mutation m(s, k);
 
         auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(4)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(6)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         ck = clustering_key::from_exploded(*s, {int32_type->decompose(3), int32_type->decompose(9)});
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
                 clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
@@ -874,16 +874,16 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         mutation m(s, dk);
 
         auto ck1 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(2)});
-        m.set_clustered_cell(ck1, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck1, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(4)});
-        m.set_clustered_cell(ck2, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck2, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         auto ck3 = clustering_key::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(6)});
-        m.set_clustered_cell(ck3, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck3, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         auto ck4 = clustering_key::from_exploded(*s, {int32_type->decompose(3), int32_type->decompose(9)});
-        m.set_clustered_cell(ck4, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck4, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
                 clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
@@ -936,13 +936,13 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         mutation m(s, dk);
 
         auto ck1 = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
-        m.set_clustered_cell(ck1, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck1, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
-        m.set_clustered_cell(ck2, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck2, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         auto ck3 = clustering_key::from_exploded(*s, {int32_type->decompose(3)});
-        m.set_clustered_cell(ck3, *s->get_column_definition("v"), cell);
+        m.set_clustered_cell(ck3, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
         m.partition().apply_row_tombstone(*s, range_tombstone(
                 clustering_key_prefix::from_exploded(*s, {int32_type->decompose(1)}),
@@ -1005,7 +1005,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                     {1, gc_clock::now()}));
 
             auto ck = clustering_key::from_exploded(*s, {bytes_type->decompose(data_value(to_bytes("ck3")))});
-            m.set_clustered_cell(ck, *s->get_column_definition("v"), cell);
+            m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
 
             auto mt = make_lw_shared<memtable>(s);
             mt->apply(m);
@@ -1090,7 +1090,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         mutation m(s, dk);
         for (auto&& v : { 1, 2, 3, 4 }) {
             auto cell = atomic_cell::make_live(*int32_type, 1, int32_type->decompose(v), { });
-            m.set_clustered_cell(clustering_key_prefix::make_empty(), *s->get_column_definition("v"), cell);
+            m.set_clustered_cell(clustering_key_prefix::make_empty(), *s->get_column_definition("v"), atomic_cell(*int32_type, cell));
         }
         auto mt = make_lw_shared<memtable>(s);
         mt->apply(m);

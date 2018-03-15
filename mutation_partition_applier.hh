@@ -39,7 +39,8 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
-        _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(cell));
+        auto& cdef = _schema.static_column_at(id);
+        _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(*cdef.type, cell));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
@@ -58,7 +59,8 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(cell));
+        auto& cdef = _schema.regular_column_at(id);
+        _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(*cdef.type, cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {

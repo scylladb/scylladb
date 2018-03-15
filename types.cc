@@ -2102,12 +2102,12 @@ collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_f
 }
 
 collection_type_impl::mutation
-collection_type_impl::mutation_view::materialize() const {
+collection_type_impl::mutation_view::materialize(const collection_type_impl& ctype) const {
     collection_type_impl::mutation m;
     m.tomb = tomb;
     m.cells.reserve(cells.size());
     for (auto&& e : cells) {
-        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), e.second);
+        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), atomic_cell(*ctype.value_comparator(), e.second));
     }
     return m;
 }
@@ -2493,7 +2493,8 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm
         auto ksize = read_simple<uint32_t>(in);
         auto key = read_simple_bytes(in, ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        // value_comparator(), ugh
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         ret.cells.emplace_back(key, value);
     }
     assert(in.empty());
@@ -2519,7 +2520,7 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
@@ -2540,7 +2541,7 @@ api::timestamp_type collection_type_impl::last_update(collection_mutation_view c
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         max = std::max(value.timestamp(), max);
     }
     return max;

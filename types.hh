@@ -799,7 +799,7 @@ public:
     struct mutation_view {
         tombstone tomb;
         std::vector<std::pair<bytes_view, atomic_cell_view>> cells;
-        mutation materialize() const;
+        mutation materialize(const collection_type_impl&) const;
     };
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;

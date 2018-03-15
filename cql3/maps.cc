@@ -302,7 +302,8 @@ maps::setter_by_key::execute(mutation& m, const clustering_key_prefix& prefix, c
     }
     auto ctype = static_pointer_cast<const map_type_impl>(column.type);
     auto avalue = value ? params.make_cell(*ctype->get_values_type(), *value) : params.make_dead_cell();
-    map_type_impl::mutation update = { {}, { { std::move(to_bytes(*key)), std::move(avalue) } } };
+    map_type_impl::mutation update;
+    update.cells.emplace_back(std::move(to_bytes(*key)), std::move(avalue));
     // should have been verified as map earlier?
     auto col_mut = ctype->serialize_mutation_form(std::move(update));
     m.set_cell(prefix, column, std::move(col_mut));

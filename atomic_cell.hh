@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <iosfwd>
 #include <seastar/util/gcc6-concepts.hh>
+#include "data/cell.hh"
 
 class abstract_type;
 
@@ -259,7 +260,7 @@ public:
 class atomic_cell_view final : public atomic_cell_base<bytes_view> {
     atomic_cell_view(bytes_view data) : atomic_cell_base(std::move(data)) {}
 public:
-    static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
+    static atomic_cell_view from_bytes(const data::type_info&, bytes_view data) { return atomic_cell_view(data); }
 
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
@@ -268,7 +269,7 @@ public:
 class atomic_cell_mutable_view final : public atomic_cell_base<bytes_mutable_view> {
     atomic_cell_mutable_view(bytes_mutable_view data) : atomic_cell_base(std::move(data)) {}
 public:
-    static atomic_cell_mutable_view from_bytes(bytes_mutable_view data) { return atomic_cell_mutable_view(data); }
+    static atomic_cell_mutable_view from_bytes(const data::type_info&, bytes_mutable_view data) { return atomic_cell_mutable_view(data); }
 
     friend class atomic_cell;
 };
@@ -281,11 +282,11 @@ public:
 class atomic_cell final : public atomic_cell_base<managed_bytes> {
     atomic_cell(managed_bytes b) : atomic_cell_base(std::move(b)) {}
 public:
-    atomic_cell(const atomic_cell&) = default;
+    atomic_cell(const abstract_type&, const atomic_cell& ac) : atomic_cell_base(managed_bytes(ac._data)) { }
     atomic_cell(atomic_cell&&) = default;
-    atomic_cell& operator=(const atomic_cell&) = default;
+    atomic_cell& operator=(const atomic_cell&) = delete;
     atomic_cell& operator=(atomic_cell&&) = default;
-    atomic_cell(atomic_cell_view other) : atomic_cell_base(managed_bytes{other._data}) {}
+    atomic_cell(const abstract_type&, atomic_cell_view other) : atomic_cell_base(managed_bytes{other._data}) {}
     operator atomic_cell_view() const {
         return atomic_cell_view(_data);
     }

@@ -1623,7 +1623,7 @@ bool row::compact_and_expire(
             auto&& cell = c.as_collection_mutation();
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             auto m_view = ctype->deserialize_mutation_form(cell);
-            collection_type_impl::mutation m = m_view.materialize();
+            collection_type_impl::mutation m = m_view.materialize(*ctype);
             any_live |= m.compact_and_expire(tomb, query_time, can_gc, gc_before);
             if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                 erase = true;

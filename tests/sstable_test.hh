@@ -538,7 +538,7 @@ enum class status {
     ttl,
 };
 
-inline bool check_status_and_done(const atomic_cell &c, status expected) {
+inline bool check_status_and_done(atomic_cell_view c, status expected) {
     if (expected == status::dead) {
         BOOST_REQUIRE(c.is_live() == false);
         return true;
@@ -594,7 +594,7 @@ match_collection(const row& row, const schema& s, bytes col, const tombstone& t)
     auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
     auto&& mut = ctype->deserialize_mutation_form(c);
     BOOST_REQUIRE(mut.tomb == t);
-    return mut.materialize();
+    return mut.materialize(*ctype);
 }
 
 template <status Status>

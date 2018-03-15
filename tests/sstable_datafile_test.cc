@@ -791,11 +791,11 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         mutation m(s, key);
 
         tombstone tomb(api::new_timestamp(), gc_clock::now());
-        set_type_impl::mutation set_mut{{ tomb }, {
-            { to_bytes("1"), make_atomic_cell(bytes_type, {}) },
-            { to_bytes("2"), make_atomic_cell(bytes_type, {}) },
-            { to_bytes("3"), make_atomic_cell(bytes_type, {}) }
-        }};
+        set_type_impl::mutation set_mut;
+        set_mut.tomb = tomb;
+        set_mut.cells.emplace_back(to_bytes("1"), make_atomic_cell(bytes_type, {}));
+        set_mut.cells.emplace_back(to_bytes("2"), make_atomic_cell(bytes_type, {}));
+        set_mut.cells.emplace_back(to_bytes("3"), make_atomic_cell(bytes_type, {}));
 
         auto set_type = static_pointer_cast<const set_type_impl>(set_col.type);
         m.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut));
@@ -805,7 +805,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         mutation m2(s, key2);
-        set_type_impl::mutation set_mut_single{{}, {{ to_bytes("4"), make_atomic_cell(bytes_type, {}) }}};
+        set_type_impl::mutation set_mut_single;
+        set_mut_single.cells.emplace_back(to_bytes("4"), make_atomic_cell(bytes_type, {}));
 
         m2.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut_single));
 

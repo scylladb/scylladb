@@ -109,7 +109,9 @@ SEASTAR_TEST_CASE(test_apply) {
         b1.add_shard(counter_shard(id[4], 1, 3));
         auto c1 = atomic_cell_or_collection(b1.build(1));
 
-        auto c2 = counter_cell_builder::from_single_shard(2, counter_shard(id[2], 8, 3));
+        auto c2 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(2, counter_shard(id[2], 8, 3))
+        );
 
         verify_apply(c1, c2, 12);
         verify_apply(c2, c1, 12);
@@ -122,7 +124,9 @@ SEASTAR_TEST_CASE(test_apply) {
         verify_apply(c1, c3, 15);
         verify_apply(c3, c1, 15);
 
-        auto c4 = counter_cell_builder::from_single_shard(0, counter_shard(id[2], 8, 1));
+        auto c4 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(0, counter_shard(id[2], 8, 1))
+        );
 
         verify_apply(c1, c4, 6);
         verify_apply(c4, c1, 6);
@@ -136,7 +140,9 @@ SEASTAR_TEST_CASE(test_apply) {
         verify_apply(c1, c5, 21);
         verify_apply(c5, c1, 21);
 
-        auto c6 = counter_cell_builder::from_single_shard(3, counter_shard(id[2], 8, 1));
+        auto c6 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(3, counter_shard(id[2], 8, 1))
+        );
 
         verify_apply(c1, c6, 6);
         verify_apply(c6, c1, 6);
@@ -340,19 +346,19 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
         auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
         auto s1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 4);
         mutation m1(s, pk);
-        m1.set_clustered_cell(ck, col, c1);
-        m1.set_static_cell(scol, s1);
+        m1.set_clustered_cell(ck, col, std::move(c1));
+        m1.set_static_cell(scol, std::move(s1));
 
         auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
         auto s2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 8);
         mutation m2(s, pk);
-        m2.set_clustered_cell(ck, col, c2);
-        m2.set_static_cell(scol, s2);
+        m2.set_clustered_cell(ck, col, std::move(c2));
+        m2.set_static_cell(scol, std::move(s2));
 
         auto c3 = atomic_cell::make_dead(api::new_timestamp() / 2, gc_clock::now());
         mutation m3(s, pk);
-        m3.set_clustered_cell(ck, col, c3);
-        m3.set_static_cell(scol, c3);
+        m3.set_clustered_cell(ck, col, atomic_cell(*counter_type, c3));
+        m3.set_static_cell(scol, std::move(c3));
 
         auto m12 = m1;
         m12.apply(m2);
@@ -390,19 +396,19 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
         auto s1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 4);
         mutation m1(s, pk);
-        m1.set_clustered_cell(ck, col, c1);
-        m1.set_static_cell(scol, s1);
+        m1.set_clustered_cell(ck, col, std::move(c1));
+        m1.set_static_cell(scol, std::move(s1));
 
         auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
         auto s2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 8);
         mutation m2(s, pk);
-        m2.set_clustered_cell(ck, col, c2);
-        m2.set_static_cell(scol, s2);
+        m2.set_clustered_cell(ck, col, std::move(c2));
+        m2.set_static_cell(scol, std::move(s2));
 
         auto c3 = atomic_cell::make_dead(api::new_timestamp() / 2, gc_clock::now());
         mutation m3(s, pk);
-        m3.set_clustered_cell(ck, col, c3);
-        m3.set_static_cell(scol, c3);
+        m3.set_clustered_cell(ck, col, atomic_cell(*counter_type, c3));
+        m3.set_static_cell(scol, std::move(c3));
 
         auto m0 = m1;
         transform_counter_updates_to_shards(m0, nullptr, 0);
