@@ -198,6 +198,7 @@ public:
     }
     partition_version_ref(partition_version_ref&& other) noexcept
         : _version(other._version)
+        , _unique_owner(other._unique_owner)
     {
         if (_version) {
             _version->_backref = this;
