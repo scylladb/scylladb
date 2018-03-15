@@ -1267,7 +1267,7 @@ future<> storage_service::drain_on_shutdown() {
             }).get();
             slogger.info("Drain on shutdown: shutdown commitlog done");
 
-            // NOTE: We currently don't destory migration_manager nor
+            // NOTE: We currently don't destroy migration_manager nor
             // storage_service in scylla, so when we reach here
             // migration_manager should to be still alive. Be careful, when
             // scylla starts to destroy migration_manager in the shutdown
@@ -1337,11 +1337,7 @@ future<> storage_service::drain_on_shutdown() {
 }
 
 future<> storage_service::init_messaging_service_part() {
-    return seastar::async([this] {
-        get_storage_service().invoke_on_all([] (auto& ss) {
-            ss.init_messaging_service();
-        }).get();
-    });
+    return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
 future<> storage_service::init_server(int delay) {
