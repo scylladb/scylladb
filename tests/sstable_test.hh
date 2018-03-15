@@ -120,6 +120,10 @@ public:
         return _sst->_components->summary;
     }
 
+    summary move_summary() {
+        return std::move(_sst->_components->summary);
+    }
+
     future<> read_toc() {
         return _sst->read_toc();
     }

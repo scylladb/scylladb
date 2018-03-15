@@ -40,7 +40,8 @@ public:
         while (!_r->eof()) {
             auto& e = _r->current_partition_entry();
             auto k = e.get_decorated_key();
-            auto rp = dht::ring_position(k.token(), k.key().to_partition_key(s));
+            auto token = dht::token(k.token());
+            auto rp = dht::ring_position(token, k.key().to_partition_key(s));
 
             if (!rp_cmp(prev, rp)) {
                 BOOST_FAIL(sprint("Partitions have invalid order: %s >= %s", prev, rp));

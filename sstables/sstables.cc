@@ -428,7 +428,9 @@ parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) 
     auto eoarr = [count, len] { return *count == len; };
 
     return do_until(eoarr, [count, &in, &arr] {
-        return parse(in, arr[(*count)++]);
+        arr.emplace_back();
+        (*count)++;
+        return parse(in, arr.back());
     });
 }
 
@@ -443,7 +445,7 @@ parse(random_access_reader& in, Size& len, utils::chunked_vector<Members>& arr) 
 
             auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
             for (size_t i = 0; i < now; ++i) {
-                arr[*done + i] = net::ntoh(nr[i]);
+                arr.push_back(net::ntoh(nr[i]));
             }
             *done += now;
             return make_ready_future<stop_iteration>(*done == len ? stop_iteration::yes : stop_iteration::no);
@@ -458,7 +460,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
     auto len = make_lw_shared<Size>();
     auto f = parse(in, *len);
     return f.then([&in, &arr, len] {
-        arr.elements.resize(*len);
+        arr.elements.reserve(*len);
         return parse(in, *len, arr.elements);
     }).finally([len] {});
 }
@@ -645,51 +647,50 @@ future<> parse(random_access_reader& in, summary& s) {
             auto len = s.header.size * sizeof(pos_type);
             check_buf_size(buf, len);
 
-            s.entries.resize(s.header.size);
-
             // Positions are encoded in little-endian.
             auto b = buf.get();
             s.positions = utils::chunked_vector<pos_type>();
-            for (size_t i = 0; i < s.header.size; ++i) {
+            return do_until([&s] { return s.positions.size() == s.header.size; }, [&s, b] () mutable {
                 s.positions.push_back(seastar::read_le<pos_type>(b));
                 b += sizeof(pos_type);
-            }
-
-            // Since the keys in the index are not sized, we need to calculate
-            // the start position of the index i+1 to determine the boundaries
-            // of index i. The "memory_size" field in the header determines the
-            // total memory used by the map, so if we push it to the vector, we
-            // can guarantee that no conditionals are used, and we can always
-            // query the position of the "next" index.
-            s.positions.push_back(s.header.memory_size);
+                return make_ready_future<>();
+            }).then([&s] {
+                // Since the keys in the index are not sized, we need to calculate
+                // the start position of the index i+1 to determine the boundaries
+                // of index i. The "memory_size" field in the header determines the
+                // total memory used by the map, so if we push it to the vector, we
+                // can guarantee that no conditionals are used, and we can always
+                // query the position of the "next" index.
+                s.positions.push_back(s.header.memory_size);
+                return make_ready_future<>();
+            });
         }).then([&in, &s] {
             in.seek(sizeof(summary::header) + s.header.memory_size);
             return parse(in, s.first_key, s.last_key);
         }).then([&in, &s] {
-
             in.seek(s.positions[0] + sizeof(summary::header));
+            s.entries.reserve(s.header.size);
 
-            assert(s.positions.size() == (s.entries.size() + 1));
+            return do_with(int(0), [&in, &s] (int& idx) mutable {
+                return do_until([&s] { return s.entries.size() == s.header.size; }, [&s, &in, &idx] () mutable {
+                    auto pos = s.positions[idx++];
+                    auto next = s.positions[idx];
 
-            auto idx = make_lw_shared<size_t>(0);
-            return do_for_each(s.entries.begin(), s.entries.end(), [idx, &in, &s] (auto& entry) {
-                auto pos = s.positions[(*idx)++];
-                auto next = s.positions[*idx];
+                    auto entrysize = next - pos;
+                    return in.read_exactly(entrysize).then([&s, entrysize] (auto buf) mutable {
+                        check_buf_size(buf, entrysize);
 
-                auto entrysize = next - pos;
+                        auto keysize = entrysize - 8;
+                        auto key_data = s.add_summary_data(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), keysize));
+                        buf.trim_front(keysize);
 
-                return in.read_exactly(entrysize).then([&entry, entrysize] (auto buf) {
-                    check_buf_size(buf, entrysize);
-
-                    auto keysize = entrysize - 8;
-                    entry.key = bytes(reinterpret_cast<const int8_t*>(buf.get()), keysize);
-                    buf.trim_front(keysize);
-
-                    // position is little-endian encoded
-                    entry.position = seastar::read_le<uint64_t>(buf.get());
-                    entry.token = dht::global_partitioner().get_token(entry.get_key());
-
-                    return make_ready_future<>();
+                        // position is little-endian encoded
+                        auto position = seastar::read_le<uint64_t>(buf.get());
+                        auto token = dht::global_partitioner().get_token(key_view(key_data));
+                        auto token_data = s.add_summary_data(bytes_view(token._data));
+                        s.entries.push_back({ dht::token_view(dht::token::kind::key, token_data), key_data, position });
+                        return make_ready_future<>();
+                    });
                 });
             }).then([&s] {
                 // Delete last element which isn't part of the on-disk format.
@@ -787,20 +788,25 @@ future<> parse(random_access_reader& in, utils::estimated_histogram& eh) {
         if (length == 0) {
             throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
         }
-        eh.bucket_offsets.resize(length - 1);
-        eh.buckets.resize(length);
+        eh.bucket_offsets.reserve(length - 1);
+        eh.buckets.reserve(length);
 
         auto type_size = sizeof(uint64_t) * 2;
         return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto buf) {
             check_buf_size(buf, length * type_size);
 
             auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
-            size_t j = 0;
-            for (size_t i = 0; i < length; ++i) {
-                eh.bucket_offsets[i == 0 ? 0 : i - 1] = net::ntoh(nr[j++]);
-                eh.buckets[i] = net::ntoh(nr[j++]);
-            }
-            return make_ready_future<>();
+            return do_with(size_t(0), [nr, &eh, length] (size_t& j) mutable {
+                return do_until([&eh, length] { return eh.buckets.size() == length; }, [nr, &eh, &j] () mutable {
+                    auto offset = net::ntoh(nr[j++]);
+                    auto bucket = net::ntoh(nr[j++]);
+                    if (eh.buckets.size() > 0) {
+                        eh.bucket_offsets.push_back(offset);
+                    }
+                    eh.buckets.push_back(bucket);
+                    return make_ready_future<>();
+                });
+            });
         });
     });
 }
@@ -815,13 +821,17 @@ inline void write(file_writer& out, const utils::estimated_histogram& eh) {
         uint64_t buckets;
     };
     std::vector<element> elements;
-    elements.resize(eh.buckets.size());
+    elements.reserve(eh.buckets.size());
 
     auto *offsets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.bucket_offsets.data());
     auto *buckets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.buckets.data());
     for (size_t i = 0; i < eh.buckets.size(); i++) {
-        elements[i].offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
-        elements[i].buckets = net::hton(buckets_nr[i]);
+        auto offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
+        auto buckets = net::hton(buckets_nr[i]);
+        elements.emplace_back(element{offsets, buckets});
+        if (need_preempt()) {
+            seastar::thread::yield();
+        }
     }
 
     auto p = reinterpret_cast<const char*>(elements.data());
@@ -1412,12 +1422,12 @@ future<> sstable::read_filter(const io_priority_class& pc) {
         return make_ready_future<>();
     }
 
-    return do_with(sstables::filter(), [this, &pc] (auto& filter) {
-        return this->read_simple<sstable::component_type::Filter>(filter, pc).then([this, &filter] {
-            large_bitset bs(filter.buckets.elements.size() * 64);
-            bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
-            _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
-        });
+    return seastar::async([this, &pc] () mutable {
+        sstables::filter filter;
+        read_simple<sstable::component_type::Filter>(filter, pc).get();
+        large_bitset bs(filter.buckets.elements.size() * 64);
+        bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
+        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
     });
 }
 
@@ -2054,7 +2064,9 @@ void components_writer::maybe_add_summary_entry(summary& s, const dht::token& to
     if (data_offset >= state.next_data_offset_to_write_summary) {
         auto entry_size = 8 + 2 + key.size();  // offset + key_size.size + key.size
         state.next_data_offset_to_write_summary += state.summary_byte_cost * entry_size;
-        s.entries.push_back({ token, bytes(key.data(), key.size()), index_offset });
+        auto token_data = s.add_summary_data(bytes_view(token._data));
+        auto key_data = s.add_summary_data(key);
+        s.entries.push_back({ dht::token_view(dht::token::kind::key, token_data), key_data, index_offset });
     }
 }
 

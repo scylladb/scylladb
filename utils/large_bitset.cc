@@ -22,9 +22,14 @@
 #include "large_bitset.hh"
 #include <algorithm>
 #include <seastar/core/align.hh>
+#include <seastar/core/thread.hh>
 #include "seastarx.hh"
 
+using namespace seastar;
+
 large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
+    assert(thread::running_in_thread());
+
     auto nr_blocks = align_up(nr_bits, bits_per_block()) / bits_per_block();
     _storage.reserve(nr_blocks);
     size_t nr_ints = align_up(nr_bits, bits_per_int()) / bits_per_int();
@@ -33,16 +38,24 @@ large_bitset::large_bitset(size_t nr_bits) : _nr_bits(nr_bits) {
         _storage.push_back(std::make_unique<int_type[]>(now));
         std::fill_n(_storage.back().get(), now, 0);
         nr_ints -= now;
+        if (need_preempt()) {
+            thread::yield();
+        }
     }
 }
 
 void
 large_bitset::clear() {
+    assert(thread::running_in_thread());
+
     size_t nr_ints = align_up(_nr_bits, bits_per_int()) / bits_per_int();
     auto bp = _storage.begin();
     while (nr_ints) {
         auto now = std::min(ints_per_block(), nr_ints);
         std::fill_n(bp++->get(), now, 0);
         nr_ints -= now;
+        if (need_preempt()) {
+            thread::yield();
+        }
     }
 }

@@ -839,7 +839,7 @@ SEASTAR_TEST_CASE(all_in_place) {
 
         int idx = 0;
         for (auto& e: summary.entries) {
-            auto key = sstables::key::from_bytes(e.key);
+            auto key = sstables::key::from_bytes(bytes(e.key));
             BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == idx++);
         }
     });

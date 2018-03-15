@@ -105,7 +105,7 @@ token murmur3_partitioner::get_random_token() {
     return get_token(rand);
 }
 
-inline int64_t long_token(const token& t) {
+inline int64_t long_token(token_view t) {
     if (t.is_minimum() || t.is_maximum()) {
         return std::numeric_limits<long>::min();
     }
@@ -157,7 +157,7 @@ dht::token murmur3_partitioner::from_bytes(bytes_view bytes) const {
     }
 }
 
-int murmur3_partitioner::tri_compare(const token& t1, const token& t2) const {
+int murmur3_partitioner::tri_compare(token_view t1, token_view t2) const {
     auto l1 = long_token(t1);
     auto l2 = long_token(t2);
 
