@@ -1422,12 +1422,12 @@ future<> sstable::read_filter(const io_priority_class& pc) {
         return make_ready_future<>();
     }
 
-    return do_with(sstables::filter(), [this, &pc] (auto& filter) {
-        return this->read_simple<sstable::component_type::Filter>(filter, pc).then([this, &filter] {
-            large_bitset bs(filter.buckets.elements.size() * 64);
-            bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
-            _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
-        });
+    return seastar::async([this, &pc] () mutable {
+        sstables::filter filter;
+        read_simple<sstable::component_type::Filter>(filter, pc).get();
+        large_bitset bs(filter.buckets.elements.size() * 64);
+        bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
+        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
     });
 }
 
