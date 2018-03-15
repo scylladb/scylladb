@@ -214,12 +214,14 @@ private:
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
-        auto& sp = get_local_storage_proxy();
-        return sp.query(_schema, std::move(command), std::move(ranges),
-                _options.get_consistency(), _state.get_trace_state(), sp.default_query_timeout(), std::move(_last_replicas)).then(
-                [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results, paging_state::replicas_per_token_range last_replicas) {
-                    _last_replicas = std::move(last_replicas);
-                    handle_result(builder, std::move(results), page_size, now);
+        return get_local_storage_proxy().query(_schema,
+                std::move(command),
+                std::move(ranges),
+                _options.get_consistency(),
+                {_state.get_trace_state(), {}, std::move(_last_replicas)}).then(
+                [this, &builder, page_size, now](service::storage_proxy::coordinator_query_result qr) {
+                    _last_replicas = std::move(qr.last_replicas);
+                    handle_result(builder, std::move(qr.query_result), page_size, now);
                 });
     }
 
