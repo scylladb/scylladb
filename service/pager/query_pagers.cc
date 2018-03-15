@@ -314,7 +314,7 @@ private:
 
     ::shared_ptr<const service::pager::paging_state> state() const override {
         return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
-                _last_ckey, _max, _cmd->query_uuid, _last_replicas);
+                _last_ckey, _max, _cmd->query_uuid, _last_replicas, std::experimental::nullopt);
     }
 
 private:
