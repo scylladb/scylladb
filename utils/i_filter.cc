@@ -23,11 +23,14 @@
 #include "log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"
+#include <seastar/core/thread.hh>
 
 namespace utils {
 static logging::logger filterlog("bloom_filter");
 
 filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_probability) {
+    assert(seastar::thread::running_in_thread());
+
     if (max_false_pos_probability > 1.0) {
         throw std::invalid_argument(sprint("Invalid probability %f: must be lower than 1.0", max_false_pos_probability));
     }
@@ -42,6 +45,8 @@ filter_ptr i_filter::get_filter(int64_t num_elements, double max_false_pos_proba
 }
 
 filter_ptr i_filter::get_filter(int64_t num_elements, int target_buckets_per_elem) {
+    assert(seastar::thread::running_in_thread());
+
     int max_buckets_per_element = std::max(1, bloom_calculations::max_buckets_per_element(num_elements));
     int buckets_per_element = std::min(target_buckets_per_elem, max_buckets_per_element);
 

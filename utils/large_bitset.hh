@@ -29,6 +29,10 @@
 #include <limits>
 #include <iterator>
 #include <algorithm>
+#include <seastar/core/thread.hh>
+#include <seastar/core/preempt.hh>
+
+using namespace seastar;
 
 class large_bitset {
     static constexpr size_t block_size() { return 128 * 1024; }
@@ -92,6 +96,8 @@ public:
 template <typename IntegerIterator>
 size_t
 large_bitset::load(IntegerIterator start, IntegerIterator finish, size_t position) {
+    assert(thread::running_in_thread());
+
     using input_int_type = typename std::iterator_traits<IntegerIterator>::value_type;
     if (position % bits_per_int() == 0 && sizeof(input_int_type) == sizeof(int_type)) {
         auto idx = position;
@@ -104,6 +110,9 @@ large_bitset::load(IntegerIterator start, IntegerIterator finish, size_t positio
             start += now;
             ++idx1;
             idx2 = 0;
+            if (need_preempt()) {
+                thread::yield();
+            }
         }
     } else {
         while (start != finish) {
@@ -116,6 +125,9 @@ large_bitset::load(IntegerIterator start, IntegerIterator finish, size_t positio
                 }
                 bitmask >>= 1;
                 ++position;
+                if (need_preempt()) {
+                    thread::yield();
+                }
             }
         }
     }
@@ -125,6 +137,7 @@ large_bitset::load(IntegerIterator start, IntegerIterator finish, size_t positio
 template <typename IntegerIterator>
 IntegerIterator
 large_bitset::save(IntegerIterator out, size_t position, size_t n) {
+    assert(thread::running_in_thread());
     n = std::min(n, size() - position);
     using output_int_type = typename std::iterator_traits<IntegerIterator>::value_type;
     if (position % bits_per_int() == 0
@@ -141,6 +154,9 @@ large_bitset::save(IntegerIterator out, size_t position, size_t n) {
             ++idx1;
             idx2 = 0;
             n_ints -= now;
+            if (need_preempt()) {
+                thread::yield();
+            }
         }
     } else {
         output_int_type result = 0;
@@ -155,6 +171,9 @@ large_bitset::save(IntegerIterator out, size_t position, size_t n) {
                 ++out;
                 result = 0;
                 bitpos = 0;
+            }
+            if (need_preempt()) {
+                thread::yield();
             }
         }
         if (bitpos) {
