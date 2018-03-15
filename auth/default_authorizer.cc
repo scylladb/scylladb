@@ -109,7 +109,7 @@ future<bool> default_authorizer::any_granted() const {
     });
 }
 
-future<> default_authorizer::migrate_legacy_metadata() {
+future<> default_authorizer::migrate_legacy_metadata() const {
     alogger.info("Starting migration of legacy permissions metadata.");
     static const sstring query = sprint("SELECT * FROM %s.%s", meta::AUTH_KS, legacy_table_name);
 
@@ -210,7 +210,7 @@ default_authorizer::modify(
         stdx::string_view role_name,
         permission_set set,
         const resource& resource,
-        stdx::string_view op) {
+        stdx::string_view op) const {
     return do_with(
             sprint(
                     "UPDATE %s.%s SET %s = %s %s ? WHERE %s = ? AND %s = ?",
@@ -230,11 +230,11 @@ default_authorizer::modify(
 }
 
 
-future<> default_authorizer::grant(stdx::string_view role_name, permission_set set, const resource& resource) {
+future<> default_authorizer::grant(stdx::string_view role_name, permission_set set, const resource& resource) const {
     return modify(role_name, std::move(set), resource, "+");
 }
 
-future<> default_authorizer::revoke(stdx::string_view role_name, permission_set set, const resource& resource) {
+future<> default_authorizer::revoke(stdx::string_view role_name, permission_set set, const resource& resource) const {
     return modify(role_name, std::move(set), resource, "-");
 }
 
@@ -267,7 +267,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
     });
 }
 
-future<> default_authorizer::revoke_all(stdx::string_view role_name) {
+future<> default_authorizer::revoke_all(stdx::string_view role_name) const {
     static const sstring query = sprint(
             "DELETE FROM %s.%s WHERE %s = ?",
             meta::AUTH_KS,
@@ -286,7 +286,7 @@ future<> default_authorizer::revoke_all(stdx::string_view role_name) {
     });
 }
 
-future<> default_authorizer::revoke_all(const resource& resource) {
+future<> default_authorizer::revoke_all(const resource& resource) const {
     static const sstring query = sprint(
             "SELECT %s FROM %s.%s WHERE %s = ? ALLOW FILTERING",
             ROLE_NAME,

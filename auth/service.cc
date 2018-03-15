@@ -77,11 +77,18 @@ private:
     void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
-        _authorizer.revoke_all(auth::make_data_resource(ks_name));
+        _authorizer.revoke_all(
+                auth::make_data_resource(ks_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }
 
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        _authorizer.revoke_all(auth::make_data_resource(ks_name, cf_name));
+        _authorizer.revoke_all(
+                auth::make_data_resource(
+                        ks_name, cf_name)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }
 
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
@@ -402,7 +409,7 @@ static void validate_authentication_options_are_supported(
 
 
 future<> create_role(
-        service& ser,
+        const service& ser,
         stdx::string_view name,
         const role_config& config,
         const authentication_options& options) {
@@ -415,7 +422,7 @@ future<> create_role(
                 &validate_authentication_options_are_supported,
                 options,
                 ser.underlying_authenticator().supported_options()).then([&ser, name, &options] {
-            return ser.underlying_authenticator().create(sstring(name), options);
+            return ser.underlying_authenticator().create(name, options);
         }).handle_exception([&ser, &name](std::exception_ptr ep) {
             // Roll-back.
             return ser.underlying_role_manager().drop(name).then([ep = std::move(ep)] {
@@ -426,7 +433,7 @@ future<> create_role(
 }
 
 future<> alter_role(
-        service& ser,
+        const service& ser,
         stdx::string_view name,
         const role_config_update& config_update,
         const authentication_options& options) {
@@ -444,10 +451,15 @@ future<> alter_role(
     });
 }
 
-future<> drop_role(service& ser, stdx::string_view name) {
+future<> drop_role(const service& ser, stdx::string_view name) {
     return do_with(make_role_resource(name), [&ser, name](const resource& r) {
         auto& a = ser.underlying_authorizer();
-        return when_all_succeed(a.revoke_all(name), a.revoke_all(r));
+
+        return when_all_succeed(
+                a.revoke_all(name),
+                a.revoke_all(r)).handle_exception_type([](const unsupported_authorization_operation&) {
+            // Nothing.
+        });
     }).then([&ser, name] {
         return ser.underlying_authenticator().drop(name);
     }).then([&ser, name] {
@@ -471,7 +483,7 @@ future<bool> has_role(const service& ser, const authenticated_user& u, stdx::str
 }
 
 future<> grant_permissions(
-        service& ser,
+        const service& ser,
         stdx::string_view role_name,
         permission_set perms,
         const resource& r) {
@@ -480,8 +492,19 @@ future<> grant_permissions(
     });
 }
 
+future<> grant_applicable_permissions(const service& ser, stdx::string_view role_name, const resource& r) {
+    return grant_permissions(ser, role_name, r.applicable_permissions(), r);
+}
+future<> grant_applicable_permissions(const service& ser, const authenticated_user& u, const resource& r) {
+    if (is_anonymous(u)) {
+        return make_ready_future<>();
+    }
+
+    return grant_applicable_permissions(ser, *u.name, r);
+}
+
 future<> revoke_permissions(
-        service& ser,
+        const service& ser,
         stdx::string_view role_name,
         permission_set perms,
         const resource& r) {

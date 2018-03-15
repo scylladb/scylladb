@@ -75,11 +75,13 @@ public:
 };
 
 ///
-/// Central interface into access-control for the system.
+/// Client for access-control in the system.
 ///
-/// Access control encompasses user/role management, authentication, and authorization. This class provides access to
+/// Access control encompasses user/role management, authentication, and authorization. This client provides access to
 /// the dynamically-loaded implementations of these modules (through the `underlying_*` member functions), but also
 /// builds on their functionality with caching and abstractions for common operations.
+///
+/// All state associated with access-control is stored externally to any particular instance of this class.
 ///
 class service final {
     permissions_cache_config _permissions_cache_config;
@@ -149,24 +151,12 @@ public:
 
     future<bool> exists(const resource&) const;
 
-    authenticator& underlying_authenticator() {
-        return *_authenticator;
-    }
-
     const authenticator& underlying_authenticator() const {
         return *_authenticator;
     }
 
-    authorizer& underlying_authorizer() {
-        return *_authorizer;
-    }
-
     const authorizer& underlying_authorizer() const {
         return *_authorizer;
-    }
-
-    role_manager& underlying_role_manager() {
-        return *_role_manager;
     }
 
     const role_manager& underlying_role_manager() const {
@@ -206,7 +196,7 @@ bool is_protected(const service&, const resource&) noexcept;
 /// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
 ///
 future<> create_role(
-        service&,
+        const service&,
         stdx::string_view name,
         const role_config&,
         const authentication_options&);
@@ -219,7 +209,7 @@ future<> create_role(
 /// \returns an exceptional future with \ref unsupported_authentication_option if an unsupported option is included.
 ///
 future<> alter_role(
-        service&,
+        const service&,
         stdx::string_view name,
         const role_config_update&,
         const authentication_options&);
@@ -229,7 +219,7 @@ future<> alter_role(
 ///
 /// \returns an exceptional future with \ref nonexistant_role if the named role does not exist.
 ///
-future<> drop_role(service&, stdx::string_view name);
+future<> drop_role(const service&, stdx::string_view name);
 
 ///
 /// Check if `grantee` has been granted the named role.
@@ -247,17 +237,34 @@ future<bool> has_role(const service&, const authenticated_user&, stdx::string_vi
 ///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
 ///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
+/// supported.
+///
 future<> grant_permissions(
-        service&,
+        const service&,
         stdx::string_view role_name,
         permission_set,
         const resource&);
 
 ///
+/// Like \ref grant_permissions, but grants all applicable permissions on the resource.
+///
 /// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
 ///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if granting permissions is not
+/// supported.
+///
+future<> grant_applicable_permissions(const service&, stdx::string_view role_name, const resource&);
+future<> grant_applicable_permissions(const service&, const authenticated_user&, const resource&);
+
+///
+/// \returns an exceptional future with \ref nonexistent_role if the named role does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if revoking permissions is not
+/// supported.
+///
 future<> revoke_permissions(
-        service&,
+        const service&,
         stdx::string_view role_name,
         permission_set,
         const resource&);
@@ -276,6 +283,9 @@ using recursive_permissions = bool_class<struct recursive_permissions_tag>;
 ///
 /// \returns an exceptional future with \ref nonexistent_role if a role name is included which refers to a role that
 /// does not exist.
+///
+/// \returns an exceptional future with \ref unsupported_authorization_operation if listing permissions is not
+/// supported.
 ///
 future<std::vector<permission_details>> list_filtered_permissions(
         const service&,

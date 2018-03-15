@@ -44,6 +44,7 @@
 #include <experimental/string_view>
 #include <functional>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -79,8 +80,15 @@ inline bool operator<(const permission_details& pd1, const permission_details& p
             < std::forward_as_tuple(pd2.role_name, pd2.resource, pd2.permissions);
 }
 
+class unsupported_authorization_operation : public std::invalid_argument {
+public:
+    using std::invalid_argument::invalid_argument;
+};
+
 ///
-/// Abstract interface for authorizing users to access resources.
+/// Abstract client for authorizing roles to access resources.
+///
+/// All state necessary to authorize a role is stored externally to the client instance.
 ///
 class authorizer {
 public:
@@ -107,27 +115,37 @@ public:
     ///
     /// Grant a set of permissions to a role for a particular \ref resource.
     ///
-    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) = 0;
+    /// \throws \ref unsupported_authorization_operation if granting permissions is not supported.
+    ///
+    virtual future<> grant(stdx::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Revoke a set of permissions from a role for a particular \ref resource.
     ///
-    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) = 0;
+    /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+    ///
+    virtual future<> revoke(stdx::string_view role_name, permission_set, const resource&) const = 0;
 
     ///
     /// Query for all directly granted permissions.
+    ///
+    /// \throws \ref unsupported_authorization_operation if listing permissions is not supported.
     ///
     virtual future<std::vector<permission_details>> list_all() const = 0;
 
     ///
     /// Revoke all permissions granted directly to a particular role.
     ///
-    virtual future<> revoke_all(stdx::string_view role_name) = 0;
+    /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+    ///
+    virtual future<> revoke_all(stdx::string_view role_name) const = 0;
 
     ///
     /// Revoke all permissions granted to any role for a particular resource.
     ///
-    virtual future<> revoke_all(const resource&) = 0;
+    /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.
+    ///
+    virtual future<> revoke_all(const resource&) const = 0;
 
     ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.

@@ -181,12 +181,9 @@ public:
             , _is_thrift(false)
     {}
 
-    // `nullptr` for internal instances.
-    auth::service* get_auth_service() {
-        return _auth_service;
-    }
-
-    // See above.
+    ///
+    /// `nullptr` for internal instances.
+    ///
     const auth::service* get_auth_service() const {
         return _auth_service;
     }

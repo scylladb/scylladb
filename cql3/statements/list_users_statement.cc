@@ -70,7 +70,7 @@ cql3::statements::list_users_statement::execute(distributed<service::storage_pro
                 make_column_spec("name", utf8_type),
                 make_column_spec("super", boolean_type)});
 
-    static const auto make_results = [](auth::service& as, std::unordered_set<sstring>&& roles) {
+    static const auto make_results = [](const auth::service& as, std::unordered_set<sstring>&& roles) {
         using cql_transport::messages::result_message;
 
         auto results = std::make_unique<result_set>(metadata);
@@ -98,8 +98,8 @@ cql3::statements::list_users_statement::execute(distributed<service::storage_pro
         });
     };
 
-    auto& cs = state.get_client_state();
-    auto& as = *cs.get_auth_service();
+    const auto& cs = state.get_client_state();
+    const auto& as = *cs.get_auth_service();
     const auto user = cs.user();
 
     return auth::has_superuser(as, *user).then([&cs, &as, user](bool has_superuser) {

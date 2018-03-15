@@ -59,6 +59,10 @@ schema_altering_statement::schema_altering_statement(::shared_ptr<cf_name> name)
 {
 }
 
+future<> schema_altering_statement::grant_permissions_to_creator(const service::client_state&) {
+    return make_ready_future<>();
+}
+
 bool schema_altering_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
 {
     return cf_statement::uses_function(ks_name, function_name);
@@ -103,7 +107,11 @@ schema_altering_statement::execute0(distributed<service::storage_proxy>& proxy, 
 
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    return execute0(proxy, state, options, false);
+    return execute0(proxy, state, options, false).then([this, &state](::shared_ptr<messages::result_message> result) {
+        return grant_permissions_to_creator(state.get_client_state()).then([result = std::move(result)] {
+           return result;
+        });
+    });
 }
 
 future<::shared_ptr<messages::result_message>>
