@@ -2890,18 +2890,18 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 }
 
 ::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd,
+        schema_ptr schema,
         dht::partition_range pr,
         db::consistency_level cl,
+        db::read_repair_decision repair_decision,
         tracing::trace_state_ptr trace_state,
         const std::vector<gms::inet_address>& preferred_endpoints) {
     const dht::token& token = pr.start()->value().token();
-    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     gms::inet_address extra_replica;
 
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
-    db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, preferred_endpoints, repair_decision,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
@@ -3011,6 +3011,11 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     std::vector<std::pair<::shared_ptr<abstract_read_executor>, nonwrapping_range<dht::token>>> exec;
     exec.reserve(partition_ranges.size());
 
+    schema_ptr schema = local_schema_registry().get(cmd->schema_version);
+
+    db::read_repair_decision repair_decision = query_options.read_repair_decision
+        ? *query_options.read_repair_decision : new_read_repair_decision(*schema);
+
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
             throw std::runtime_error("mixed singular and non singular range are not supported");
@@ -3021,7 +3026,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         const auto replicas = it == query_options.preferred_replicas.end()
             ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
 
-        exec.emplace_back(get_read_executor(cmd, std::move(pr), cl, query_options.trace_state, replicas), std::move(token_range));
+        exec.emplace_back(get_read_executor(cmd, schema, std::move(pr), cl, repair_decision, query_options.trace_state, replicas),
+                std::move(token_range));
     }
 
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);
@@ -3048,14 +3054,15 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
     return f.then_wrapped([exec = std::move(exec),
             p = shared_from_this(),
-            used_replicas] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+            used_replicas,
+            repair_decision] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
         if (f.failed()) {
             auto eptr = f.get_exception();
             // hold onto exec until read is complete
             p->handle_read_error(eptr, false);
             return make_exception_future<storage_proxy::coordinator_query_result>(eptr);
         }
-        return make_ready_future<coordinator_query_result>(coordinator_query_result(std::move(f.get0()), std::move(*used_replicas)));
+        return make_ready_future<coordinator_query_result>(coordinator_query_result(std::move(f.get0()), std::move(*used_replicas), repair_decision));
     });
 }
 

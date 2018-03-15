@@ -81,6 +81,7 @@ private:
             _cmd->query_uuid = state->get_query_uuid();
             _cmd->is_first_page = false;
             _last_replicas = state->get_last_replicas();
+            _query_read_repair_decision = state->get_query_read_repair_decision();
         } else {
             // Reusing readers is currently only supported for singular queries.
             if (_ranges.front().is_singular()) {
@@ -218,9 +219,10 @@ private:
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {_state.get_trace_state(), {}, std::move(_last_replicas)}).then(
+                {_state.get_trace_state(), {}, std::move(_last_replicas), _query_read_repair_decision}).then(
                 [this, &builder, page_size, now](service::storage_proxy::coordinator_query_result qr) {
                     _last_replicas = std::move(qr.last_replicas);
+                    _query_read_repair_decision = qr.read_repair_decision;
                     handle_result(builder, std::move(qr.query_result), page_size, now);
                 });
     }
@@ -316,7 +318,7 @@ private:
 
     ::shared_ptr<const service::pager::paging_state> state() const override {
         return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
-                _last_ckey, _max, _cmd->query_uuid, _last_replicas, std::experimental::nullopt);
+                _last_ckey, _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
     }
 
 private:
@@ -335,6 +337,7 @@ private:
     lw_shared_ptr<query::read_command> _cmd;
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
+    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
 };
 
 bool service::pager::query_pagers::may_need_paging(uint32_t page_size,

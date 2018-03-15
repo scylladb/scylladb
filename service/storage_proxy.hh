@@ -215,13 +215,16 @@ public:
     public:
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
+        stdx::optional<db::read_repair_decision> read_repair_decision;
 
         coordinator_query_options(tracing::trace_state_ptr trace_state = nullptr,
                 std::optional<clock_type::time_point> timeout = std::nullopt,
-                replicas_per_token_range preferred_replicas = { })
+                replicas_per_token_range preferred_replicas = { },
+                stdx::optional<db::read_repair_decision> read_repair_decision = { })
             : _timeout(timeout)
             , trace_state(std::move(trace_state))
-            , preferred_replicas(std::move(preferred_replicas)) {
+            , preferred_replicas(std::move(preferred_replicas))
+            , read_repair_decision(read_repair_decision) {
         }
 
         clock_type::time_point timeout(storage_proxy& sp) const {
@@ -232,11 +235,14 @@ public:
     struct coordinator_query_result {
         foreign_ptr<lw_shared_ptr<query::result>> query_result;
         replicas_per_token_range last_replicas;
+        db::read_repair_decision read_repair_decision;
 
         coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-                replicas_per_token_range last_replicas)
+                replicas_per_token_range last_replicas,
+                db::read_repair_decision read_repair_decision)
             : query_result(std::move(query_result))
-            , last_replicas(std::move(last_replicas)) {
+            , last_replicas(std::move(last_replicas))
+            , read_repair_decision(std::move(read_repair_decision)) {
         }
 
         coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result)
@@ -288,8 +294,10 @@ private:
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd,
+            schema_ptr schema,
             dht::partition_range pr,
             db::consistency_level cl,
+            db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
             const std::vector<gms::inet_address>& preferred_endpoints);
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> query_result_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
