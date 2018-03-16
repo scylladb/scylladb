@@ -21,6 +21,7 @@
 
 #include "sstables.hh"
 #include "consumer.hh"
+#include "data_consume_context.hh"
 
 namespace sstables {
 

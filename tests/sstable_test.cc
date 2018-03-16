@@ -42,6 +42,7 @@
 #include "tests/test_services.hh"
 #include "cell_locking.hh"
 #include "memtable-sstable.hh"
+#include "sstables/data_consume_context.hh"
 
 using namespace sstables;
 

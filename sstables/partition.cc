@@ -34,6 +34,7 @@
 #include "clustering_ranges_walker.hh"
 #include "binary_search.hh"
 #include "../dht/i_partitioner.hh"
+#include "data_consume_context.hh"
 
 namespace sstables {
 
