@@ -737,7 +737,7 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     bool _index_in_current_partition = false; // Whether index lower bound is in current partition
     bool _will_likely_slice = false;
     bool _read_enabled = true;
-    data_consume_context_opt _context;
+    data_consume_context_opt<data_consume_rows_context> _context;
     std::unique_ptr<index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
@@ -756,7 +756,7 @@ public:
         , _sst(std::move(sst))
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
-            _context = data_consume_rows(_sst, _consumer);
+            _context = data_consume_rows<data_consume_rows_context>(_sst, _consumer);
             _monitor.on_read_started(_context->reader_position());
             return make_ready_future<>();
         })
@@ -782,7 +782,7 @@ public:
                 sstable::disk_read_range drr{begin, *end};
                 auto last_end = fwd_mr ? _sst->data_size() : drr.end;
                 _read_enabled = bool(drr);
-                _context = data_consume_rows(_sst, _consumer, std::move(drr), last_end);
+                _context = data_consume_rows<data_consume_rows_context>(_sst, _consumer, std::move(drr), last_end);
                 _monitor.on_read_started(_context->reader_position());
                 _index_in_current_partition = true;
                 _will_likely_slice = will_likely_slice(slice);
@@ -818,7 +818,7 @@ public:
                     auto [start, end] = _index_reader->data_file_positions();
                     assert(end);
                     _read_enabled = (start != *end);
-                    _context = data_consume_single_partition(_sst, _consumer,
+                    _context = data_consume_single_partition<data_consume_rows_context>(_sst, _consumer,
                             { start, *end });
                     _monitor.on_read_started(_context->reader_position());
                     _will_likely_slice = will_likely_slice(slice);

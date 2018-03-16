@@ -72,6 +72,26 @@ class sstable_writer;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
+GCC6_CONCEPT(
+template<typename T>
+concept bool ConsumeRowsContext() {
+    return requires(T c, indexable_element el, size_t s) {
+        { c.consume_input() } -> future<>;
+        { c.reset(el) } -> void;
+        { c.fast_forward_to(s, s) } -> future<>;
+        { c.position() } -> uint64_t;
+        { c.skip_to(s) } -> future<>;
+        { c.reader_position() } -> const sstables::reader_position_tracker&;
+        { c.eof() } -> bool;
+        { c.close() } -> future<>;
+    };
+}
+)
+
+template <typename DataConsumeRowsContext>
+GCC6_CONCEPT(
+    requires ConsumeRowsContext<DataConsumeRowsContext>()
+)
 class data_consume_context;
 
 class index_reader;
@@ -676,9 +696,15 @@ public:
     friend class components_writer;
     friend class sstable_writer;
     friend class index_reader;
-    friend data_consume_context data_consume_rows(shared_sstable, row_consumer&, disk_read_range, uint64_t);
-    friend data_consume_context data_consume_single_partition(shared_sstable, row_consumer&, disk_read_range);
-    friend data_consume_context data_consume_rows(shared_sstable, row_consumer&);
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_rows(shared_sstable, row_consumer&, disk_read_range, uint64_t);
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_single_partition(shared_sstable, row_consumer&, disk_read_range);
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_rows(shared_sstable, row_consumer&);
 };
 
 struct entry_descriptor {
