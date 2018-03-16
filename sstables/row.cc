@@ -428,28 +428,6 @@ const reader_position_tracker& data_consume_context::reader_position() const {
     return _ctx->reader_position();
 }
 
-data_consume_context sstable::data_consume_rows(
-        row_consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
-    // Although we were only asked to read until toread.end, we'll not limit
-    // the underlying file input stream to this end, but rather to last_end.
-    // This potentially enables read-ahead beyond end, until last_end, which
-    // can be beneficial if the user wants to fast_forward_to() on the
-    // returned context, and may make small skips.
-    return { shared_from_this(), consumer, data_stream(toread.start, last_end - toread.start,
-             consumer.io_priority(), consumer.resource_tracker(), _partition_range_history), toread.start, toread.end - toread.start };
-}
-
-data_consume_context sstable::data_consume_single_partition(
-        row_consumer& consumer, sstable::disk_read_range toread) {
-    return { shared_from_this(), consumer, data_stream(toread.start, toread.end - toread.start,
-             consumer.io_priority(), consumer.resource_tracker(), _single_partition_history), toread.start, toread.end - toread.start };
-}
-
-
-data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
-    return data_consume_rows(consumer, {0, data_size()}, data_size());
-}
-
 future<> sstable::data_consume_rows_at_once(row_consumer& consumer,
         uint64_t start, uint64_t end) {
     return data_read(start, end - start, consumer.io_priority()).then([&consumer]
