@@ -197,8 +197,8 @@ struct summary_ka {
     uint64_t memory_footprint() const {
         auto sz = sizeof(summary_entry) * entries.size() + sizeof(uint32_t) * positions.size() + sizeof(*this);
         sz += first_key.value.size() + last_key.value.size();
-        for (auto& e : entries) {
-            sz += e.key.size();
+        for (auto& sd : _summary_data) {
+            sz += sd.size();
         }
         return sz;
     }
@@ -212,18 +212,31 @@ struct summary_ka {
             _buffer_size = std::min(_buffer_size << 1, 128u << 10);
             // Keys are 64kB max, so it might be one key may not fit in a buffer
             _buffer_size = std::max(_buffer_size, unsigned(data.size()));
-            _summary_data.emplace_back(std::make_unique<bytes::value_type[]>(_buffer_size));
+            _summary_data.emplace_back(_buffer_size);
             _summary_index_pos = 0;
         }
 
-        auto addr = _summary_data.back().get() + _summary_index_pos;
+        auto ret = _summary_data.back().store_at(_summary_index_pos, data);
         _summary_index_pos += data.size();
-        std::copy_n(data.data(), data.size(), addr);
-        return bytes_view(addr, data.size());
+        return ret;
     }
 private:
+    class summary_data_memory {
+        unsigned _size;
+        std::unique_ptr<bytes::value_type[]> _data;
+    public:
+        summary_data_memory(unsigned size) : _size(size), _data(std::make_unique<bytes::value_type[]>(size)) {}
+        bytes_view store_at(unsigned pos, bytes_view src) {
+            auto addr = _data.get() + pos;
+            std::copy_n(src.data(), src.size(), addr);
+            return bytes_view(addr, src.size());
+        }
+        unsigned size() const {
+            return _size;
+        }
+    };
     unsigned _buffer_size = 1 << 10;
-    std::vector<std::unique_ptr<bytes::value_type[]>> _summary_data = {};
+    std::vector<summary_data_memory> _summary_data = {};
     unsigned _summary_index_pos = 0;
 };
 using summary = summary_ka;
