@@ -34,17 +34,17 @@ class converting_mutation_partition_applier;
 
 GCC6_CONCEPT(
 template<typename T>
-concept bool MutationViewVisitor = requires (T visitor, tombstone t, atomic_cell_view acv,
+concept bool MutationViewVisitor = requires (T visitor, tombstone t, atomic_cell ac,
                                              collection_mutation_view cmv, range_tombstone rt,
                                              position_in_partition_view pipv, row_tombstone row_tomb,
                                              row_marker rm) {
     visitor.accept_partition_tombstone(t);
-    visitor.accept_static_cell(column_id(), acv);
+    visitor.accept_static_cell(column_id(), std::move(ac));
     visitor.accept_static_cell(column_id(), cmv);
     visitor.accept_row_tombstone(rt);
     visitor.accept_row(pipv, row_tomb, rm,
             is_dummy::no, is_continuous::yes);
-    visitor.accept_row_cell(column_id(), acv);
+    visitor.accept_row_cell(column_id(), std::move(ac));
     visitor.accept_row_cell(column_id(), cmv);
 };
 )

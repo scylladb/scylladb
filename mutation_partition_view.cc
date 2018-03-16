@@ -134,14 +134,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 if (!_col.type()->is_atomic()) {
                     throw std::runtime_error("A collection expected, got an atomic cell");
                 }
-                // FIXME: Pass view to cell to avoid copy
-                auto&& outer = current_allocator();
-                with_allocator(standard_allocator(), [&] {
-                    auto cell = read_atomic_cell(*_col.type(), acv);
-                    with_allocator(outer, [&] {
-                        _visitor.accept_atomic_cell(_id, cell);
-                    });
-                });
+                _visitor.accept_atomic_cell(_id, read_atomic_cell(*_col.type(), acv));
             }
             void operator()(ser::collection_cell_view& ccv) const {
                 if (_col.type()->is_atomic()) {
@@ -200,8 +193,8 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
     struct static_row_cell_visitor {
         Visitor& _visitor;
 
-        void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
-           _visitor.accept_static_cell(id, ac);
+        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+           _visitor.accept_static_cell(id, std::move(ac));
         }
         void accept_collection(column_id id, const collection_mutation& cm) const {
            _visitor.accept_static_cell(id, cm);
@@ -220,8 +213,8 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
         struct cell_visitor {
             Visitor& _visitor;
 
-            void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
-               _visitor.accept_row_cell(id, ac);
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+               _visitor.accept_row_cell(id, std::move(ac));
             }
             void accept_collection(column_id id, const collection_mutation& cm) const {
                _visitor.accept_row_cell(id, cm);
@@ -280,9 +273,8 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
             public:
                 clustering_row_builder(const schema& s, clustering_key key, row_tombstone t, row_marker m)
                     : _s(s), _mf(mutation_fragment::clustering_row_tag_t(), std::move(key), std::move(t), std::move(m), row()) { }
-                void accept_atomic_cell(column_id id, const atomic_cell& ac) {
-                    auto& type = *_s.regular_column_at(id).type;
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
+                void accept_atomic_cell(column_id id, atomic_cell ac) {
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(std::move(ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
                     auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.regular_column_at(id).type);
@@ -303,9 +295,8 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
                 mutation_fragment _mf;
             public:
                 explicit static_row_builder(const schema& s) : _s(s), _mf(static_row()) { }
-                void accept_atomic_cell(column_id id, const atomic_cell& ac) {
-                    auto& type = *_s.static_column_at(id).type;
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
+                void accept_atomic_cell(column_id id, atomic_cell ac) {
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(std::move(ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
                     auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.static_column_at(id).type);
