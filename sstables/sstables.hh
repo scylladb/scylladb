@@ -38,7 +38,6 @@
 #include "clustering_key_filter.hh"
 #include "core/enum.hh"
 #include "compress.hh"
-#include "row.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation.hh"
@@ -63,10 +62,11 @@
 
 class sstable_assertions;
 
+class row_consumer;
+
 namespace sstables {
 
 extern logging::logger sstlog;
-
 class key;
 class sstable_writer;
 struct foreign_sstable_open_info;
