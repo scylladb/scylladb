@@ -3554,10 +3554,12 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
-    return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, fragmented, s = std::move(s)] {
-        auto uuid = m.column_family_id();
-        auto& cf = find_column_family(uuid);
-        cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
+    return with_scheduling_group(_dbcfg.streaming_scheduling_group, [this, s = std::move(s), &m, fragmented, plan_id] () mutable {
+        return _streaming_dirty_memory_manager.region_group().run_when_memory_available([this, &m, plan_id, fragmented, s = std::move(s)] {
+            auto uuid = m.column_family_id();
+            auto& cf = find_column_family(uuid);
+            cf.apply_streaming_mutation(s, plan_id, std::move(m), fragmented);
+        });
     });
 }
 
