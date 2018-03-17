@@ -2137,7 +2137,8 @@ database::database(const db::config& cfg, database_config dbcfg)
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(max_count_streaming_concurrent_reads, max_memory_streaming_concurrent_reads())
     , _system_read_concurrency_sem(max_count_system_concurrent_reads, max_memory_system_concurrent_reads())
-    , _data_query_stage("data_query", _dbcfg.query_scheduling_group, &column_family::query)
+    , _data_query_stage("data_query", _dbcfg.statement_scheduling_group, &column_family::query)
+    , _mutation_query_stage(_dbcfg.statement_scheduling_group)
     , _version(empty_version)
     , _compaction_manager(std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group))
     , _enable_incremental_backups(cfg.incremental_backups())
@@ -2821,8 +2822,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
-    cfg.query_scheduling_group = _config.query_scheduling_group;
-    cfg.commitlog_scheduling_group = _config.commitlog_scheduling_group;
+    cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.large_partition_warning_threshold_bytes = db_config.compaction_large_partition_warning_threshold_mb()*1024*1024;
 
@@ -3129,10 +3129,10 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
     querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
-    return mutation_query(std::move(s),
+    return _mutation_query_stage(std::move(s),
             cf.as_mutation_source(),
-            range,
-            cmd.slice,
+            seastar::cref(range),
+            seastar::cref(cmd.slice),
             cmd.row_limit,
             cmd.partition_limit,
             cmd.timestamp,
@@ -3497,6 +3497,7 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
+  return with_scheduling_group(_dbcfg.statement_scheduling_group, [this, s = std::move(s), &m, timeout] () mutable {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
@@ -3517,6 +3518,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
                 // taken before the read, until the update is done.
                 [lock = std::move(lock)] { });
     });
+  });
 }
 
 struct db_apply_executor {
@@ -3592,8 +3594,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
-    cfg.query_scheduling_group = _dbcfg.query_scheduling_group;
-    cfg.commitlog_scheduling_group = _dbcfg.commitlog_scheduling_group;
+    cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
     return cfg;
 }
