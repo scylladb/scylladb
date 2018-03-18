@@ -330,7 +330,7 @@ future<> gossiper::handle_shutdown_msg(inet_address from) {
     });
 }
 
-void gossiper::init_messaging_service_handler() {
+void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
     if (_ms_registered) {
         return;
     }
@@ -378,7 +378,9 @@ void gossiper::init_messaging_service_handler() {
     });
 
     // Start listening messaging_service after gossip message handlers are registered
-    ms().start_listen();
+    if (do_bind) {
+        ms().start_listen();
+    }
 }
 
 void gossiper::uninit_messaging_service_handler() {
@@ -1557,15 +1559,15 @@ void gossiper::examine_gossiper(std::vector<gossip_digest>& g_digest_list,
     }
 }
 
-future<> gossiper::start_gossiping(int generation_number) {
-    return start_gossiping(generation_number, std::map<application_state, versioned_value>());
+future<> gossiper::start_gossiping(int generation_number, bind_messaging_port do_bind) {
+    return start_gossiping(generation_number, std::map<application_state, versioned_value>(), do_bind);
 }
 
-future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
+future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states, bind_messaging_port do_bind) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
-    return get_gossiper().invoke_on_all([] (gossiper& g) {
-        g.init_messaging_service_handler();
+    return get_gossiper().invoke_on_all([do_bind] (gossiper& g) {
+        g.init_messaging_service_handler(do_bind);
     }).then([this, generation_nbr, preload_local_states] {
         build_seeds_list();
         /* initialize the heartbeat state for this localEndpoint */
