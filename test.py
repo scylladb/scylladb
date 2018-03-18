@@ -191,7 +191,6 @@ if __name__ == "__main__":
         prefix = '[%d/%d]' % (n + 1, n_total)
         # avoid modifying in-place, it will change test_to_run
         exec_args = exec_args + '--collectd 0'.split()
-        signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
             mode = 'release'
             if test[0].startswith(os.path.join('build', 'debug')):
@@ -202,29 +201,33 @@ if __name__ == "__main__":
         print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
         if test[1] == 'boost':
             boost_args += ['--']
-        proc = subprocess.Popen([path] + boost_args + exec_args, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT,
-                                env=env, preexec_fn=os.setsid)
-        out = None
-        def on_timeout():
-            if proc.returncode is None:
-                print_status('TIMED OUT\n')
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                proc.kill()
-        timeout = threading.Timer(args.timeout, on_timeout)
-        timeout.start()
-        out, _ = proc.communicate()
-        timeout.cancel()
-        if proc.returncode:
+        def report_error(out, report_subcause):
             print_status('FAILED: %s\n' % (path))
-            print_status('  with error code {code}\n'.format(code=proc.returncode))
+            report_subcause()
             if out:
                 print('=== stdout START ===')
                 print(str(out, encoding='UTF-8'))
                 print('=== stdout END ===')
             failed_tests.append(path)
-        else:
+        out = None
+        try:
+            out = subprocess.check_output([path] + boost_args + exec_args,
+                                stderr=subprocess.STDOUT,
+                                timeout=args.timeout,
+                                env=env, preexec_fn=os.setsid)
             print_status('%s PASSED %s' % (prefix, path))
+        except subprocess.TimeoutExpired as e:
+            def report_subcause():
+                print('  timed out')
+            report_error(e.output, report_subcause=report_subcause)
+        except subprocess.CalledProcessError as e:
+            def report_subcause():
+                print_status('  with error code {code}\n'.format(code=e.returncode))
+            report_error(e.output, report_subcause=report_subcause)
+        except Exception as e:
+            def report_subcause():
+                print_status('  with error {e}\n'.format(e=e))
+            report_error(e.out, report_subcause=report_subcause)
 
     if not failed_tests:
         print('\nOK.')
