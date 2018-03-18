@@ -45,7 +45,7 @@ using namespace sstables;
 
 
 SEASTAR_TEST_CASE(nonexistent_key) {
-    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([] (auto sstp) {
+    return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "invalid_key"), [sstp] (auto& key) {
             auto s = uncompressed_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
 }
 
 future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&map) {
-    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
+    return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(make_dkey(uncompressed_schema(), std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -307,7 +307,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 }
 
 future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
-    return reusable_sst(uncompressed_schema(), "tests/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
+    return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
@@ -766,6 +766,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
 
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -787,13 +788,14 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
         auto sst = sstables::make_sstable(s,
                                 dir->path,
                                 1 /* generation */,
-                                sstables::sstable::version_types::ka,
+                                version,
                                 sstables::sstable::format_types::big);
         write_memtable_to_sstable(*mt, sst).get();
         sst->load().get();
         auto mr = sst->read_rows_flat(s);
         auto mut = read_mutation_from_flat_mutation_reader(mr).get0();
         BOOST_REQUIRE(bool(mut));
+      }
     });
 }
 
@@ -849,6 +851,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -887,7 +890,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
@@ -904,11 +907,13 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                     .produces(m)
                     .produces_end_of_stream();
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -943,7 +948,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
@@ -960,16 +965,19 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                     .produces(m)
                     .produces_end_of_stream();
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
-            schema_builder builder("ks", sprint("cf%d", id++));
+            const auto generation = id++;
+            schema_builder builder("ks", sprint("cf%d", generation));
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c1", bytes_type, column_kind::clustering_key);
             builder.with_column("v", int32_type);
@@ -994,8 +1002,8 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
             auto sst = sstables::make_sstable(s,
                                               dir->path,
-                                              1 /* generation */,
-                                              sstables::sstable::version_types::ka,
+                                              generation,
+                                              version,
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
@@ -1009,11 +1017,13 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                         .produces_end_of_stream();
             }
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -1038,7 +1048,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
@@ -1050,11 +1060,13 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                     .produces(m)
                     .produces_end_of_stream();
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -1074,7 +1086,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
@@ -1082,11 +1094,13 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
         sst->load().get();
 
         assert_that(sst->get_index_reader(default_priority_class())).is_empty(*s);
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compound) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -1111,7 +1125,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
@@ -1124,11 +1138,13 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                     .produces(m)
                     .produces_end_of_stream();
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         simple_schema ss;
@@ -1161,7 +1177,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto sst = sstables::make_sstable(s,
                                           dir->path,
                                           1 /* generation */,
-                                          sstables::sstable::version_types::ka,
+                                          version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         sst->write_components(make_combined_reader(s,
@@ -1172,5 +1188,6 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         assert_that(sst->as_mutation_source().make_reader(s))
             .produces(m1 + m2)
             .produces_end_of_stream();
+      }
     });
 }

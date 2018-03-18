@@ -61,6 +61,7 @@ static schema_ptr get_schema() {
 }
 
 void run_sstable_resharding_test() {
+  for (const auto version : all_sstable_versions) {
     storage_service_for_tests ssft;
     auto tmp = make_lw_shared<tmpdir>();
     auto s = get_schema();
@@ -86,14 +87,14 @@ void run_sstable_resharding_test() {
             muts.emplace(i, m);
             mt->apply(std::move(m));
         }
-        auto sst = sstables::make_sstable(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+        auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
         write_memtable_to_sstable(*mt, sst).get();
     }
-    auto sst = sstables::make_sstable(s, tmp->path, 0, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+    auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
     sst->load().get();
     sst->set_unshared();
 
-    auto creator = [&cf, tmp] (shard_id shard) mutable {
+    auto creator = [&cf, tmp, version] (shard_id shard) mutable {
         // we need generation calculated by instance of cf at requested shard,
         // or resource usage wouldn't be fairly distributed among shards.
         auto gen = smp::submit_to(shard, [&cf] () {
@@ -101,7 +102,7 @@ void run_sstable_resharding_test() {
         }).get0();
 
         auto sst = sstables::make_sstable(cf->schema(), tmp->path, gen,
-            sstables::sstable::version_types::ka, sstables::sstable::format_types::big,
+            version, sstables::sstable::format_types::big,
             gc_clock::now(), default_io_error_handler_gen());
         return sst;
     };
@@ -110,7 +111,7 @@ void run_sstable_resharding_test() {
 
     for (auto& sstable : new_sstables) {
         auto new_sst = sstables::make_sstable(s, tmp->path, sstable->generation(),
-            sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+            version, sstables::sstable::format_types::big);
         new_sst->load().get();
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
@@ -121,6 +122,7 @@ void run_sstable_resharding_test() {
             .produces(muts.at(shard))
             .produces_end_of_stream();
     }
+  }
 }
 
 SEASTAR_TEST_CASE(sstable_resharding_test) {
