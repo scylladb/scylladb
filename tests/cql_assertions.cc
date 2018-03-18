@@ -55,6 +55,15 @@ rows_assertions::is_empty() {
 }
 
 rows_assertions
+rows_assertions::is_not_empty() {
+    auto row_count = _rows->rs().size();
+    if (row_count == 0) {
+        fail("Expected some rows, but was result was empty");
+    }
+    return {*this};
+}
+
+rows_assertions
 rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
     std::vector<bytes_opt> expected_row(values);
     for (auto&& row : _rows->rs().rows()) {
