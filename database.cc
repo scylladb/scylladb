@@ -940,9 +940,9 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
         return with_gate(smb.flush_in_progress, [this, old, &smb, permit = std::move(permit)] () mutable {
             return with_lock(_sstables_lock.for_read(), [this, old, &smb, permit = std::move(permit)] () mutable {
                 auto newtab = sstables::make_sstable(_schema,
-                                                                _config.datadir, calculate_generation_for_new_table(),
-                                                                sstables::sstable::version_types::ka,
-                                                                sstables::sstable::format_types::big);
+                                                     _config.datadir, calculate_generation_for_new_table(),
+                                                     sstables::sstable::version_types::ka,
+                                                     sstables::sstable::format_types::big);
 
                 newtab->set_unshared();
 
@@ -1111,7 +1111,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
 
         return lister::scan_dir(lister::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
                 [&work] (lister::path parent_dir, directory_entry de) {
-            auto comps = sstables::entry_descriptor::make_descriptor(de.name);
+            auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
@@ -1170,7 +1170,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
 
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
         return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (lister::path parent_dir, directory_entry de) {
-            auto comps = sstables::entry_descriptor::make_descriptor(de.name);
+            auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
@@ -1871,7 +1871,7 @@ future<> distributed_loader::load_new_sstables(distributed<database>& db, sstrin
 future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<database>& db, sstring sstdir, sstring fname) {
     using namespace sstables;
 
-    entry_descriptor comps = entry_descriptor::make_descriptor(fname);
+    entry_descriptor comps = entry_descriptor::make_descriptor(sstdir, fname);
 
     // Every table will have a TOC. Using a specific file as a criteria, as
     // opposed to, say verifying _sstables.count() to be zero is more robust
@@ -3916,14 +3916,14 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
             auto snapshot_name = de.name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
             return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, &all_snapshots, snapshot_name = std::move(snapshot_name)] (lister::path snapshot_dir, directory_entry de) {
-                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
+                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
                     // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                     // For it, we account the total size, but zero it for the true size calculation.
                     //
                     // All the others should just generate an exception: there is something wrong, so don't blindly
                     // add it to the size.
                     if (name != "manifest.json") {
-                        sstables::entry_descriptor::make_descriptor(name);
+                        sstables::entry_descriptor::make_descriptor(snapshot_dir.native(), name);
                         all_snapshots.at(snapshot_name).total += size;
                     } else {
                         size = 0;

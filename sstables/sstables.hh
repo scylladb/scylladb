@@ -781,7 +781,7 @@ struct entry_descriptor {
     sstable::format_types format;
     sstable::component_type component;
 
-    static entry_descriptor make_descriptor(sstring fname);
+    static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
 
     entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
                      int64_t generation, sstable::format_types format,

@@ -2609,9 +2609,11 @@ future<> sstable::set_generation(int64_t new_generation) {
     });
 }
 
-entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
+entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
     static std::regex la("la-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
+
+    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+/?");
 
     std::smatch match;
 
@@ -2623,10 +2625,17 @@ entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
     sstring ks;
     sstring cf;
 
+    sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
     if (std::regex_match(s, match, la)) {
-        sstring ks = "";
-        sstring cf = "";
+        std::string sdir(sstdir);
+        std::smatch dirmatch;
+        if (std::regex_match(sdir, dirmatch, dir)) {
+            ks = dirmatch[1].str();
+            cf = dirmatch[2].str();
+        } else {
+            throw malformed_sstable_exception(seastar::sprint("invalid version for file %s with path %s. Path doesn't match known pattern.", fname, sstdir));
+        }
         version = sstable::version_types::la;
         generation = match[1].str();
         format = sstring(match[2].str());
@@ -2639,7 +2648,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
         generation = match[3].str();
         component = sstring(match[4].str());
     } else {
-        throw malformed_sstable_exception(sprint("invalid version for file %s. Name doesn't match any known version.", fname));
+        throw malformed_sstable_exception(seastar::sprint("invalid version for file %s. Name doesn't match any known version.", fname));
     }
     return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(component));
 }
