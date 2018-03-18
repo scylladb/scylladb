@@ -1617,10 +1617,10 @@ future<> gossiper::do_shadow_round() {
                 });
             }
             sleep(std::chrono::seconds(1)).get();
-            if (clk::now() > t + std::chrono::milliseconds(cfg.shadow_round_ms())) {
-                throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
-            }
             if (this->_in_shadow_round) {
+                if (clk::now() > t + std::chrono::milliseconds(cfg.shadow_round_ms())) {
+                    throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
+                }
                 logger.info("Connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
             }
         }
