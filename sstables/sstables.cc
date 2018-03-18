@@ -2645,11 +2645,19 @@ entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {
-    return reverse_map(s, _version_string);
+    try {
+        return reverse_map(s, _version_string);
+    } catch (std::out_of_range&) {
+        throw std::out_of_range(seastar::sprint("Unknown sstable version: %s", s.c_str()));
+    }
 }
 
 sstable::format_types sstable::format_from_sstring(sstring &s) {
-    return reverse_map(s, _format_string);
+    try {
+        return reverse_map(s, _format_string);
+    } catch (std::out_of_range&) {
+        throw std::out_of_range(seastar::sprint("Unknown sstable format: %s", s.c_str()));
+    }
 }
 
 sstable::component_type sstable::component_from_sstring(sstring &s) {
