@@ -832,6 +832,7 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) {
 
 // Runs inside seastar::async context
 void gossiper::evict_from_membership(inet_address endpoint) {
+    auto permit = lock_endpoint(endpoint).get0();
     _unreachable_endpoints.erase(endpoint);
     container().invoke_on_all([endpoint] (auto& g) {
         g.endpoint_state_map.erase(endpoint);
