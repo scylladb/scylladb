@@ -275,6 +275,7 @@ private:
     gms::feature _schema_tables_v3;
     gms::feature _correct_non_compound_range_tombstones;
     gms::feature _write_failure_reply_feature;
+    gms::feature _la_sstable_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -287,6 +288,7 @@ public:
         _schema_tables_v3.enable();
         _correct_non_compound_range_tombstones.enable();
         _write_failure_reply_feature.enable();
+        _la_sstable_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2258,6 +2260,10 @@ public:
 
     bool cluster_supports_write_failure_reply() const {
         return bool(_write_failure_reply_feature);
+    }
+
+    bool cluster_supports_la_sstable() const {
+        return bool(_la_sstable_feature);
     }
 };
 
