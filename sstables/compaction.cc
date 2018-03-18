@@ -394,7 +394,8 @@ private:
         _info->ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count();
         auto ratio = double(_info->end_size) / double(_info->start_size);
         auto duration = std::chrono::duration<float>(ended_at - started_at);
-        auto throughput = (double(_info->end_size) / (1024*1024)) / duration.count();
+        // Don't report NaN or negative number.
+        auto throughput = duration.count() > 0 ? (double(_info->end_size) / (1024*1024)) / duration.count() : double{};
         sstring new_sstables_msg;
 
         for (auto& newtab : _info->new_sstables) {
