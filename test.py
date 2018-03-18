@@ -26,6 +26,8 @@ import subprocess
 import signal
 import shlex
 import threading
+import concurrent.futures
+import io
 
 boost_tests = [
     'bytes_ostream_test',
@@ -111,11 +113,11 @@ other_tests = [
 last_len = 0
 
 
-def print_status_short(msg):
+def print_status_short(msg, file=sys.stdout):
     global last_len
-    print('\r' + ' ' * last_len, end='')
+    print('\r' + ' ' * last_len, end='', file=file)
     last_len = len(msg)
-    print('\r' + msg, end='')
+    print('\r' + msg, end='', file=file)
 
 print_status_verbose = print
 
@@ -184,50 +186,65 @@ if __name__ == "__main__":
     env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
     env['UBSAN_OPTIONS'] = 'print_stacktrace=1'
     env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
-    for n, test in enumerate(test_to_run):
-        path = test[0]
-        exec_args = test[2] if len(test) >= 3 else []
+    def run_test(path, type, exec_args):
         boost_args = []
         prefix = '[%d/%d]' % (n + 1, n_total)
         # avoid modifying in-place, it will change test_to_run
         exec_args = exec_args + '--collectd 0'.split()
-        if args.jenkins and test[1] == 'boost':
+        file = io.StringIO()
+        if args.jenkins and type == 'boost':
             mode = 'release'
-            if test[0].startswith(os.path.join('build', 'debug')):
+            if path.startswith(os.path.join('build', 'debug')):
                 mode = 'debug'
             xmlout = (args.jenkins + "." + mode + "." +
-                      os.path.basename(test[0].split()[0]) + ".boost.xml")
+                      os.path.basename(path.split()[0]) + ".boost.xml")
             boost_args += ['--output_format=XML', '--log_level=test_suite', '--report_level=no', '--log_sink=' + xmlout]
         print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
-        if test[1] == 'boost':
+        if type == 'boost':
             boost_args += ['--']
         def report_error(out, report_subcause):
-            print_status('FAILED: %s\n' % (path))
+            print_status('FAILED: %s\n' % (path), file=file)
             report_subcause()
             if out:
-                print('=== stdout START ===')
-                print(str(out, encoding='UTF-8'))
-                print('=== stdout END ===')
-            failed_tests.append(path)
+                print('=== stdout START ===', file=file)
+                print(str(out, encoding='UTF-8'), file=file)
+                print('=== stdout END ===', file=file)
         out = None
+        success = False
         try:
             out = subprocess.check_output([path] + boost_args + exec_args,
                                 stderr=subprocess.STDOUT,
                                 timeout=args.timeout,
                                 env=env, preexec_fn=os.setsid)
             print_status('%s PASSED %s' % (prefix, path))
+            success = True
         except subprocess.TimeoutExpired as e:
             def report_subcause():
-                print('  timed out')
+                print('  timed out', file=file)
             report_error(e.output, report_subcause=report_subcause)
         except subprocess.CalledProcessError as e:
             def report_subcause():
-                print_status('  with error code {code}\n'.format(code=e.returncode))
+                print_status('  with error code {code}\n'.format(code=e.returncode), file=file)
             report_error(e.output, report_subcause=report_subcause)
         except Exception as e:
             def report_subcause():
-                print_status('  with error {e}\n'.format(e=e))
+                print_status('  with error {e}\n'.format(e=e), file=file)
             report_error(e.out, report_subcause=report_subcause)
+        return (path, success, file.getvalue())
+    sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    testmem = 2e9
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=((sysmem - 4e9) // testmem))
+    futures = []
+    for n, test in enumerate(test_to_run):
+        path = test[0]
+        type = test[1]
+        exec_args = test[2] if len(test) >= 3 else []
+        futures.append(executor.submit(run_test, path, type, exec_args))
+    for future in futures:
+        path, success, out = future.result()
+        if not success:
+            failed_tests.append(path)
+        print(out)
 
     if not failed_tests:
         print('\nOK.')
