@@ -837,27 +837,6 @@ SEASTAR_TEST_CASE(test_ck_tombstone) {
     });
 }
 
-SEASTAR_TEST_CASE(test_primary_key_is_not_null) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p1 int, p2 int, v int, primary key ((p1, p2)))").get();
-        try {
-            e.execute_cql("create materialized view vcf as select * from cf "
-                          "where p1 is not null and p2 is not null and v is not null").get();
-            BOOST_ASSERT(false);
-        } catch (...) { }
-        assert_that_failed(e.execute_cql(
-                    "create materialized view vcf as select * from cf "
-                    "where p2 is not null and v is not null "
-                    "primary key (v, p1, p2)"));
-        e.execute_cql("drop table cf").get();
-        e.execute_cql("create table cf (p1 int, c int, v int, primary key (p1, c))").get();
-        // Can omit p1 is not null
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where c is not null and v is not null "
-                      "primary key (v, p1, c)").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_static_table) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, sv int static, v int, primary key (p, c))").get();
@@ -3008,4 +2987,115 @@ SEASTAR_TEST_CASE(complex_timestamp_deletion_test_with_flush) {
             e.local_db().flush_all_memtables().get();
         });
     }, cfg);
+}
+
+// Test that we are not allowed to create a view without the "is not null"
+// restrictions on all the view's primary key columns.
+// Actually, although most of Cassandra documentation suggests that IS NOT
+// NULL is needed on all of the view's primary key columns, there's actually
+// one case where this is optional: It optional on a column which is the
+// base's only partition key column, because the partition key (in its
+// entirety) is always guaranteed to be non-null. In all other cases, the
+// IS NOT NULL specification it is mandatory.
+// We want to be sure that in every case, the error is caught when creating
+// the view - not later when adding data to the base table, as we discovered
+// was happening in some cases in issue #2628.
+SEASTAR_TEST_CASE(test_is_not_null) {
+    return do_with_cql_env_thread([] (auto& e) {
+        // Test 1: with one partition column in the base table.
+        // This should work with the "where v is not null" restriction
+        // on the view's new key column, but fail without it.
+        // Adding a "where p is not null" restriction is not necessary for
+        // the base's partition key (because they cannot be null), but
+        // also not harmful.
+        e.execute_cql("create table cf (p int PRIMARY KEY, v int, w int)").get();
+        e.execute_cql("create materialized view vcf1 as select * from cf "
+                      "where v is not null "
+                      "primary key (v, p)").get();
+        e.execute_cql("create materialized view vcf2 as select * from cf "
+                      "where v is not null and p is not null "
+                      "primary key (v, p)").get();
+        try {
+            // should fail, missing restriction on v (p is also missing, but
+            // as can be seen from the success above, not mandatory).
+            e.execute_cql("create materialized view vcf3 as select * from cf "
+                          "primary key (v, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf4 as select * from cf "
+                          "where p is not null "
+                          "primary key (v, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+
+        // Test adding rows to cf and all views on it which we succeeded adding
+        // above. In issue #2628, we saw that the view creation was succeeding
+        // above despite the missing "is not null", and then the updates here
+        // were failing. This was wrong.
+        e.execute_cql("insert into cf (p, v, w) values (1, 2, 3)").get();
+
+        // Test 2: where the base table has a composite partition key.
+        // It appears (see Cassandra's CreateViewStatement.getColumnIdentifier())
+        // that when the partition key is composite (composed of multiple columns)
+        // individual columns may be null, so we must have an IS NOT NULL
+        // restriction on those (p1 and p2 below) too, and it's no longer optional.
+        e.execute_cql("create table cf2 (p1 int, p2 int, v int, primary key ((p1, p2)))").get();
+        e.execute_cql("create materialized view vcf24 as select * from cf2 "
+                      "where p1 is not null and p2 is not null and v is not null "
+                      "primary key (v, p1, p2)").get(); // this should succeed
+        try {
+            // should fail, missing restriction on p1
+            e.execute_cql("create materialized view vcf21 as select * from cf2 "
+                          "where p2 is not null and v is not null "
+                          "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on p2
+            e.execute_cql("create materialized view vcf22 as select * from cf2 "
+                          "where p1 is not null and v is not null "
+                          "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf23 as select * from cf2 "
+                         "where p1 is not null and p2 is not null "
+                         "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        e.execute_cql("insert into cf2 (p1, p2, v) values (1, 2, 3)").get();
+
+        // Test 3: this time the base has a non-composite partition key p1,
+        // but also a clustering key c. The IS NOT NULL can be omitted on p1,
+        // but necessary on c, and on the new view primary key column - v:
+        e.execute_cql("create table cf3 (p1 int, c int, v int, primary key (p1, c))").get();
+        e.execute_cql("create materialized view vcf32 as select * from cf3 "
+                      "where c is not null and v is not null and p1 is not null "
+                      "primary key (v, p1, c)").get();
+        e.execute_cql("create materialized view vcf31 as select * from cf3 "
+                      "where c is not null and v is not null "   // fine to omit p1
+                      "primary key (v, p1, c)").get();
+        try {
+            // should fail, missing restriction on c
+            e.execute_cql("create materialized view vcf33 as select * from cf3 "
+                          "where p1 is not null and v is not null "
+                          "primary key (v, p1, c)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf34 as select * from cf3 "
+                          "where p1 is not null and c is not null "
+                          "primary key (v, p1, c)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        e.execute_cql("insert into cf3 (p1, c, v) values (1, 2, 3)").get();
+
+        // FIXME: we should also test that beyond "IS NOT NULL" being
+        // verified on view creation, it also does its job when adding
+        // rows - that those with NULL values are properly ignored.
+    });
 }
