@@ -144,7 +144,10 @@ public:
 
     future<> stop();
 
-    bool is_ready_for_bootstrap();
+    /**
+     * Known peers in the cluster have the same schema version as us.
+     */
+    bool have_schema_agreement();
 
     void init_messaging_service();
 private:
