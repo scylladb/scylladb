@@ -36,6 +36,8 @@
 
 using namespace std::chrono_literals;
 
+class database;
+
 namespace service {
 class migration_manager;
 }
@@ -76,5 +78,7 @@ future<> create_metadata_table_if_missing(
         cql3::query_processor&,
         const sstring& cql,
         ::service::migration_manager&);
+
+future<> wait_for_schema_agreement(::service::migration_manager&, const database&);
 
 }

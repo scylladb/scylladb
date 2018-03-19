@@ -25,6 +25,7 @@
 
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "database.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 
@@ -83,6 +84,14 @@ future<> create_metadata_table_if_missing(
     b.set_uuid(uuid);
 
     return mm.announce_new_column_family(b.build(), false);
+}
+
+future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db) {
+    static const auto pause = [] { return sleep(std::chrono::milliseconds(500)); };
+
+    return do_until([&db] { return db.get_version() != database::empty_version; }, pause).then([&mm] {
+        return do_until([&mm] { return mm.have_schema_agreement(); }, pause);
+    });
 }
 
 }
