@@ -69,6 +69,9 @@ bool check_compound(sstring comparator);
 void read_collections(schema_builder& builder, sstring comparator);
 }
 
+namespace db {
+class extensions;
+}
 // make sure these match the order we like columns back from schema
 enum class column_kind { partition_key, clustering_key, static_column, regular_column };
 
@@ -515,6 +518,11 @@ private:
     column_mapping _column_mapping;
     shared_ptr<query::partition_slice> _full_slice;
 
+    extensions_map& extensions() {
+        return _raw._extensions;
+    }
+
+    friend class db::extensions;
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;

@@ -53,6 +53,7 @@
 #include "stdx.hh"
 #include "bytes.hh"
 #include "cql3/statements/property_definitions.hh"
+#include "schema.hh"
 
 class schema_extension;
 
@@ -118,6 +119,14 @@ public:
      * Init time method to add sstable extension
      */
     void add_commitlog_file_extension(sstring n, commitlog_file_extension_ptr);
+
+    /**
+     * Allows forcible modification of schema extensions of a schema. This should
+     * not be done lightly however. In fact, it should only be done on startup
+     * at most, and thus this method is non-const, i.e. you can only use it on
+     * config apply.
+     */
+    void add_extension_to_schema(schema_ptr, const sstring&, shared_ptr<schema_extension>);
 private:
     std::map<sstring, schema_ext_create_func> _schema_extensions;
     std::map<sstring, sstable_file_io_extension> _sstable_file_io_extensions;

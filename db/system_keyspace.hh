@@ -124,6 +124,7 @@ struct range_estimates {
 
 extern schema_ptr hints();
 extern schema_ptr batchlog();
+extern schema_ptr paxos();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 namespace legacy {
