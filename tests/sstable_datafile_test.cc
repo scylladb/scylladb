@@ -1044,7 +1044,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_sstable(s, tmp->path, generation, la, big);
+        auto sst = make_sstable(s, tmp->path, column_family_test::calculate_generation_for_new_table(*cf), la, big);
 
         return write_memtable_to_sstable(*mt, sst).then([mt, sst, cf] {
             return sst->load().then([sst, cf] {
@@ -2279,13 +2279,13 @@ SEASTAR_TEST_CASE(check_overlapping) {
 }
 
 SEASTAR_TEST_CASE(check_read_indexes) {
+  return for_each_sstable_version([] (const sstables::sstable::version_types version) {
     auto builder = schema_builder("test", "summary_test")
         .with_column("a", int32_type, column_kind::partition_key);
     builder.set_min_index_interval(256);
     auto s = builder.build();
 
-    auto sst = make_sstable(s, "tests/sstables/summary_test", 1,
-        sstables::sstable::version_types::ka, big);
+    auto sst = make_sstable(s, get_test_dir("summary_test", s), 1, version, big);
 
     auto fut = sst->load();
     return fut.then([sst] {
@@ -2294,6 +2294,7 @@ SEASTAR_TEST_CASE(check_read_indexes) {
             return make_ready_future<>();
         });
     });
+  });
 }
 
 SEASTAR_TEST_CASE(tombstone_purge_test) {
@@ -2513,6 +2514,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        d int,
     //        e blob
     //);
+  return for_each_sstable_version([] (const sstables::sstable::version_types version) {
     auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
     auto builder = schema_builder("test", "test_multi_schema")
         .with_column("a", int32_type, column_kind::partition_key)
@@ -2521,7 +2523,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
         .with_column("e", bytes_type);
     auto s = builder.build();
 
-    auto sst = make_sstable(s, "tests/sstables/multi_schema_test", 1, sstables::sstable::version_types::ka, big);
+    auto sst = make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
     auto f = sst->load();
     return f.then([sst, s] {
         auto reader = make_lw_shared(sstable_reader(sst, s));
@@ -2540,6 +2542,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             BOOST_REQUIRE(!m);
         });
     });
+  });
 }
 
 SEASTAR_TEST_CASE(sstable_rewrite) {
@@ -2660,6 +2663,7 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
     // insert into sliced_mutation_reads_test (pk, ck, v1) values (1, 3, 1);
     // insert into sliced_mutation_reads_test (pk, ck, v1) values (1, 5, 1);
     return seastar::async([] {
+      for (auto version : all_sstable_versions) {
         auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
         auto builder = schema_builder("ks", "sliced_mutation_reads_test")
             .with_column("pk", int32_type, column_kind::partition_key)
@@ -2668,7 +2672,7 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
             .with_column("v2", set_of_ints_type);
         auto s = builder.build();
 
-        auto sst = make_sstable(s, "tests/sstables/sliced_mutation_reads", 1, sstables::sstable::version_types::ka, big);
+        auto sst = make_sstable(s, get_test_dir("sliced_mutation_reads", s), 1, version, big);
         sst->load().get0();
 
         {
@@ -2721,6 +2725,7 @@ SEASTAR_TEST_CASE(test_sliced_mutation_reads) {
                     }),
             });
         }
+      }
     });
 }
 
@@ -2749,6 +2754,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
     // delete from wrong_range_tombstone_order where p = 0 and a = 2 and b = 2;
 
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         auto s = schema_builder("ks", "wrong_range_tombstone_order")
             .with(schema_builder::compact_storage::yes)
             .with_column("p", int32_type, column_kind::partition_key)
@@ -2761,7 +2767,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
 
-        auto sst = make_sstable(s, "tests/sstables/wrong_range_tombstone_order", 1, sstables::sstable::version_types::ka, big);
+        auto sst = make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
         auto reader = sstable_reader(sst, s);
 
@@ -2785,6 +2791,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             .produces(kind::range_tombstone, { 2, 2 })
             .produces_partition_end()
             .produces_end_of_stream();
+      }
     });
 }
 
@@ -2814,6 +2821,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
         //  0 |  0 | 13 | -92
 
         return seastar::async([] {
+          for (const auto version : all_sstable_versions) {
             auto s = schema_builder("ks", "counter_test")
                     .with_column("pk", int32_type, column_kind::partition_key)
                     .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2824,7 +2832,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto node1 = counter_id(utils::UUID("8379ab99-4507-4ab1-805d-ac85a863092b"));
             auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"));
 
-            auto sst = make_sstable(s, "tests/sstables/counter_test", 5, sstables::sstable::version_types::ka, big);
+            auto sst = make_sstable(s, get_test_dir("counter_test", s), 5, version, big);
             sst->load().get();
             auto reader = sstable_reader(sst, s);
 
@@ -2879,6 +2887,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
 
             mfopt = reader().get0();
             BOOST_REQUIRE(!mfopt);
+          }
         });
 }
 
@@ -3011,7 +3020,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
 SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        auto builder = schema_builder("ks", "cf")
+        auto builder = schema_builder("la", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck1", utf8_type, column_kind::clustering_key)
             .with_column("r1", int32_type);
@@ -3304,6 +3313,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
     // ]
 
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         auto s = schema_builder("ks", "promoted_index_read")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck1", int32_type, column_kind::clustering_key)
@@ -3311,7 +3321,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
                 .with_column("v", int32_type)
                 .build();
 
-        auto sst = make_sstable(s, "tests/sstables/promoted_index_read", 1, sstables::sstable::version_types::ka, big);
+        auto sst = make_sstable(s, get_test_dir("promoted_index_read", s), 1, version, big);
         sst->load().get0();
 
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
@@ -3326,6 +3336,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
                 .produces(kind::clustering_row, { 0, 1 })
                 .produces_partition_end()
                 .produces_end_of_stream();
+      }
     });
 }
 
@@ -3572,12 +3583,13 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
 
 SEASTAR_TEST_CASE(test_partition_skipping) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         auto s = schema_builder("ks", "test_skipping_partitions")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v", int32_type)
                 .build();
 
-        auto sst = make_sstable(s, "tests/sstables/partition_skipping", 1, sstables::sstable::version_types::ka, big);
+        auto sst = make_sstable(s, get_test_dir("partition_skipping",s), 1, version, big);
         sst->load().get0();
 
         std::vector<dht::decorated_key> keys;
@@ -3628,14 +3640,15 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make({ dht::ring_position(keys[8]), false }, { dht::ring_position(keys[9]), false }))
             .produces_end_of_stream();
+      }
     });
 }
 
 // Must be run in a seastar thread
 static
-shared_sstable make_sstable(sstring path, flat_mutation_reader rd, sstable_writer_config cfg) {
+shared_sstable make_sstable_easy(sstring path, flat_mutation_reader rd, sstable_writer_config cfg, const sstables::sstable::version_types version) {
     auto s = rd.schema();
-    auto sst = make_sstable(s, path, 1, sstables::sstable::version_types::ka, big);
+    auto sst = make_sstable(s, path, 1, version, big);
     sst->write_components(std::move(rd), 1, s, cfg).get();
     sst->load().get();
     return sst;
@@ -3643,6 +3656,7 @@ shared_sstable make_sstable(sstring path, flat_mutation_reader rd, sstable_write
 
 SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         simple_schema table;
 
@@ -3679,7 +3693,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
         for (auto&& mf : fragments) {
             mut.apply(mf);
         }
-        auto sst = make_sstable(dir.path,  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg);
+        auto sst = make_sstable_easy(dir.path,  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, version);
         auto ms = as_mutation_source(sst);
 
         for (uint32_t i = 3; i < seq; i++) {
@@ -3695,11 +3709,13 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
             flat_mutation_reader rd = ms.make_reader(table.schema(), query::full_partition_range, slice);
             assert_that(std::move(rd)).has_monotonic_positions();
         }
+      }
     });
 }
 
 SEASTAR_TEST_CASE(test_skipping_using_index) {
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         simple_schema table;
 
@@ -3727,7 +3743,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         tmpdir dir;
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
-        auto sst = make_sstable(dir.path, flat_mutation_reader_from_mutations(partitions), cfg);
+        auto sst = make_sstable_easy(dir.path, flat_mutation_reader_from_mutations(partitions), cfg, version);
 
         auto ms = as_mutation_source(sst);
         auto rd = ms.make_reader(table.schema(),
@@ -3810,6 +3826,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
                 .produces_row_with_key(table.make_ckey(base + rows_per_part - 1))
                 .produces_end_of_stream();
         }
+      }
     });
 }
 
@@ -3931,9 +3948,10 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
     // TODO: move it to sstable_resharding_test.cc. Unable to do so now because of linking issues
     // when using sstables::stats_metadata at sstable_resharding_test.cc.
 
+  for (const auto version : all_sstable_versions) {
     auto s = make_lw_shared(schema({}, "ks", "cf", {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     auto get_sstable = [&] (int64_t gen, sstring first_key, sstring last_key) mutable {
-        auto sst = make_sstable(s, "", gen, sstables::sstable::version_types::ka, sstables::sstable::format_types::big);
+        auto sst = make_sstable(s, "", gen, version, sstables::sstable::format_types::big);
         stats_metadata stats = {};
         stats.sstable_level = 1;
         sstables::test(sst).set_values(std::move(first_key), std::move(last_key), std::move(stats));
@@ -3963,8 +3981,9 @@ SEASTAR_TEST_CASE(sstable_resharding_strategy_tests) {
         auto expected_jobs = ssts.size()/smp::count + ssts.size()%smp::count;
         BOOST_REQUIRE(descriptors.size() == expected_jobs);
     }
+  }
 
-    return make_ready_future<>();
+  return make_ready_future<>();
 }
 
 SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
@@ -4264,6 +4283,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
         //      -replication-factor 3 -partition-count 2 -clustering-row-count 4
         // on a three-node Scylla 1.7.4 cluster.
         return seastar::async([] {
+          for (const auto version : all_sstable_versions) {
             auto s = schema_builder("scylla_bench", "test_counters")
                     .with_column("pk", long_type, column_kind::partition_key)
                     .with_column("ck", long_type, column_kind::clustering_key)
@@ -4274,7 +4294,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                     .with_column("c5", counter_type)
                     .build();
 
-            auto sst = make_lw_shared<sstable>(s, "tests/sstables/wrong_counter_shard_order", 2, sstables::sstable::version_types::ka, big);
+            auto sst = make_lw_shared<sstable>(s, get_test_dir("wrong_counter_shard_order", s), 2, version, big);
             sst->load().get0();
             auto reader = sstable_reader(sst, s);
 
@@ -4322,7 +4342,8 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
             }
 
             BOOST_REQUIRE(!reader().get0());
-        });
+        }
+      });
 }
 
 SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
@@ -4455,19 +4476,21 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
     // insert into ks.test (pk, ck, v) values (1, 3, 1);
     // delete from ks.test where pk = 1 and ck = 2;
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         auto s = schema_builder("ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
                 .build(schema_builder::compact_storage::yes);
 
-        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
         sst->load().get0();
 
         {
             shared_index_lists sil;
             assert_that(get_index_reader(sst, sil)).is_empty(*s);
         }
+      }
     });
 }
 
@@ -4481,13 +4504,14 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
     // insert into ks.test (pk, ck, v) values (1, 3, 1);
     // delete from ks.test where pk = 1 and ck = 2;
     return seastar::async([] {
+      for (const auto version : all_sstable_versions) {
         auto s = schema_builder("ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
                 .with_column("v", int32_type)
                 .build(schema_builder::compact_storage::yes);
 
-        auto sst = sstables::make_sstable(s, "tests/sstables/broken_non_compound_pi_and_range_tombstone", 1, sstables::sstable::version_types::ka, big);
+        auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
         sst->load().get0();
 
         auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
@@ -4503,6 +4527,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
                     .produces(m)
                     .produces_end_of_stream();
         }
+      }
     });
 }
 

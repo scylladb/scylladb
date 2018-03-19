@@ -280,6 +280,7 @@ private:
     gms::feature _write_failure_reply_feature;
     gms::feature _xxhash_feature;
     gms::feature _roles_feature;
+    gms::feature _la_sstable_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -294,6 +295,7 @@ public:
         _write_failure_reply_feature.enable();
         _xxhash_feature.enable();
         _roles_feature.enable();
+        _la_sstable_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2298,6 +2300,10 @@ public:
 
     bool cluster_supports_roles() const {
         return bool(_roles_feature);
+    }
+
+    bool cluster_supports_la_sstable() const {
+        return bool(_la_sstable_feature);
     }
 };
 

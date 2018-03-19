@@ -207,6 +207,28 @@ public:
     }
 };
 
+inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)
+{
+    return seastar::sprint("tests/sstables/%s/%s/%s-1c6ace40fad111e7b9cf000000000002", name, ks, cf);
+}
+
+inline sstring get_test_dir(const sstring& name, const schema_ptr s)
+{
+    return seastar::sprint("tests/sstables/%s/%s/%s-1c6ace40fad111e7b9cf000000000002", name, s->ks_name(), s->cf_name());
+}
+
+inline sstables::sstable::version_types all_sstable_versions[] = {
+    sstables::sstable::version_types::ka,
+    sstables::sstable::version_types::la,
+};
+
+template<typename AsyncAction>
+GCC6_CONCEPT( requires requires (AsyncAction aa) { { aa(*c.begin()) } -> future<> } )
+inline
+future<> for_each_sstable_version(AsyncAction action) {
+    return seastar::do_for_each(all_sstable_versions, std::move(action));
+}
+
 inline future<sstable_ptr> reusable_sst(schema_ptr schema, sstring dir, unsigned long generation) {
     auto sst = sstables::make_sstable(std::move(schema), dir, generation, la, big);
     auto fut = sst->load();
@@ -335,6 +357,14 @@ inline schema_ptr uncompressed_schema(int32_t min_index_interval = 0) {
        return builder.build(schema_builder::compact_storage::no);
     }();
     return uncompressed;
+}
+
+inline sstring uncompressed_dir() {
+    return get_test_dir("uncompressed", uncompressed_schema());
+}
+
+inline sstring generation_dir() {
+    return get_test_dir("generation", uncompressed_schema());
 }
 
 inline schema_ptr complex_schema() {
@@ -644,9 +674,10 @@ public:
     static future<> do_with_test_directory(std::function<future<> ()>&& fut, sstring p = path()) {
         return seastar::async([p, fut = std::move(fut)] {
             storage_service_for_tests ssft;
-            test_setup::create_empty_test_dir(p).get();
+            boost::filesystem::create_directories(std::string(p));
             fut().get();
             test_setup::empty_test_dir(p).get();
+            // FIXME: this removes only the last component in the path that often contains: `test-name/ks/cf-uuid'
             engine().remove_file(p).get();
         });
     }
