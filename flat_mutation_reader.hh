@@ -30,6 +30,7 @@
 #include "tracing/trace_state.hh"
 
 #include <seastar/util/gcc6-concepts.hh>
+#include <seastar/core/thread.hh>
 #include "db/timeout_clock.hh"
 
 using seastar::future;
@@ -173,6 +174,9 @@ public:
         // entirely and never reach the consumer.
         void consume_pausable_in_thread(Consumer consumer, Filter filter, db::timeout_clock::time_point timeout) {
             while (true) {
+                if (need_preempt()) {
+                    seastar::thread::yield();
+                }
                 if (is_buffer_empty()) {
                     if (is_end_of_stream()) {
                         return;
