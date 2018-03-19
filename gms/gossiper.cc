@@ -1826,9 +1826,7 @@ void gossiper::goto_shadow_round() {
 }
 
 void gossiper::finish_shadow_round() {
-    if (_in_shadow_round) {
-        _in_shadow_round = false;
-    }
+    _in_shadow_round = false;
 }
 
 bool gossiper::is_in_shadow_round() const {
