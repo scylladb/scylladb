@@ -271,20 +271,22 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
                         gossiper.do_shadow_round().get();
                         ok = true;
                     } catch (...) {
+                        slogger.info("Shadow round failed with {}", std::current_exception());
                         gossiper.finish_shadow_round();
                         ok = false;
                     }
 
                     if (ok) {
                         gossiper.check_knows_remote_features(local_features);
-                        gossiper.reset_endpoint_state_map();
-                        for (auto ep : loaded_endpoints) {
-                            gossiper.add_saved_endpoint(ep);
-                        }
                     } else {
                         // Check features with system table
                         slogger.info("Checking remote features with gossip failed, fallback to check with system table");
                         gossiper.check_knows_remote_features(local_features, peer_features);
+                    }
+
+                    gossiper.reset_endpoint_state_map();
+                    for (auto ep : loaded_endpoints) {
+                        gossiper.add_saved_endpoint(ep);
                     }
                 }
             }
