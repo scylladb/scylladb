@@ -5,7 +5,7 @@ Section: database
 Priority: optional
 X-Python3-Version: >= 3.4
 Standards-Version: 3.9.5
-Build-Depends: python3-setuptools, python3-all, python3-all-dev, debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, thrift-compiler, ragel, ninja-build, git, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, pciutils, libprotobuf-dev, protobuf-compiler, systemtap-sdt-dev, cmake, libssl-dev, @@BUILD_DEPENDS@@
+Build-Depends: python3-setuptools, python3-all, python3-all-dev, debhelper (>= 9), liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, thrift-compiler, ragel, ninja-build, git, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, pciutils, libprotobuf-dev, protobuf-compiler, systemtap-sdt-dev, cmake, libssl-dev, @@BUILD_DEPENDS@@
 
 Package: scylla-conf
 Architecture: any
