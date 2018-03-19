@@ -83,6 +83,9 @@ int get_generation_number();
 
 enum class disk_error { regular, commit };
 
+struct bind_messaging_port_tag {};
+using bind_messaging_port = bool_class<bind_messaging_port_tag>;
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -316,7 +319,7 @@ public:
     future<> stop_gossiping();
 
     // should only be called via JMX
-    future<> start_gossiping();
+    future<> start_gossiping(bind_messaging_port do_bind = bind_messaging_port::yes);
 
     // should only be called via JMX
     future<bool> is_gossip_running();
@@ -425,11 +428,11 @@ public:
      * completed
      * \see init_messaging_service_part
      */
-    future<> init_server_without_the_messaging_service_part() {
-        return init_server(get_ring_delay().count());
+    future<> init_server_without_the_messaging_service_part(bind_messaging_port do_bind = bind_messaging_port::yes) {
+        return init_server(get_ring_delay().count(), do_bind);
     }
 
-    future<> init_server(int delay);
+    future<> init_server(int delay, bind_messaging_port do_bind = bind_messaging_port::yes);
 
     future<> drain_on_shutdown();
 
@@ -448,7 +451,7 @@ public:
 #endif
 private:
     bool should_bootstrap();
-    void prepare_to_join(std::vector<inet_address> loaded_endpoints);
+    void prepare_to_join(std::vector<inet_address> loaded_endpoints, bind_messaging_port do_bind = bind_messaging_port::yes);
     void register_features();
     void join_token_ring(int delay);
 public:

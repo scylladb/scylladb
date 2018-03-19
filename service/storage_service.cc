@@ -206,7 +206,7 @@ bool storage_service::should_bootstrap() {
 }
 
 // Runs inside seastar::async context
-void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints) {
+void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints, bind_messaging_port do_bind) {
     if (_joined) {
         return;
     }
@@ -326,7 +326,7 @@ void storage_service::prepare_to_join(std::vector<inet_address> loaded_endpoints
     auto& gossiper = gms::get_local_gossiper();
     gossiper.register_(this->shared_from_this());
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
-    gossiper.start_gossiping(generation_number, app_states).get();
+    gossiper.start_gossiping(generation_number, app_states, gms::bind_messaging_port(bool(do_bind))).get();
 
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
@@ -1340,8 +1340,8 @@ future<> storage_service::init_messaging_service_part() {
     return get_storage_service().invoke_on_all(&service::storage_service::init_messaging_service);
 }
 
-future<> storage_service::init_server(int delay) {
-    return seastar::async([this, delay] {
+future<> storage_service::init_server(int delay, bind_messaging_port do_bind) {
+    return seastar::async([this, delay, do_bind] {
         auto& gossiper = gms::get_local_gossiper();
 #if 0
         slogger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
@@ -1398,7 +1398,7 @@ future<> storage_service::init_server(int delay) {
             }
         }
 
-        prepare_to_join(std::move(loaded_endpoints));
+        prepare_to_join(std::move(loaded_endpoints), do_bind);
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -1760,14 +1760,14 @@ future<bool> storage_service::is_gossip_running() {
     });
 }
 
-future<> storage_service::start_gossiping() {
-    return run_with_api_lock(sstring("start_gossiping"), [] (storage_service& ss) {
-        return seastar::async([&ss] {
+future<> storage_service::start_gossiping(bind_messaging_port do_bind) {
+    return run_with_api_lock(sstring("start_gossiping"), [do_bind] (storage_service& ss) {
+        return seastar::async([&ss, do_bind] {
             if (!ss._initialized) {
                 slogger.warn("Starting gossip by operator request");
                 ss.set_gossip_tokens(ss.get_local_tokens().get0());
                 gms::get_local_gossiper().force_newer_generation();
-                gms::get_local_gossiper().start_gossiping(get_generation_number()).then([&ss] {
+                gms::get_local_gossiper().start_gossiping(get_generation_number(), gms::bind_messaging_port(bool(do_bind))).then([&ss] {
                     ss._initialized = true;
                 }).get();
             }

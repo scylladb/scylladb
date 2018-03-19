@@ -70,6 +70,9 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
 
+struct bind_messaging_port_tag {};
+using bind_messaging_port = bool_class<bind_messaging_port_tag>;
+
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -92,7 +95,7 @@ private:
     netw::messaging_service& ms() {
         return netw::get_local_messaging_service();
     }
-    void init_messaging_service_handler();
+    void init_messaging_service_handler(bind_messaging_port do_bind = bind_messaging_port::yes);
     void uninit_messaging_service_handler();
     future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
@@ -481,12 +484,14 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    future<> start_gossiping(int generation_number);
+    future<> start_gossiping(int generation_number,
+            bind_messaging_port do_bind = bind_messaging_port::yes);
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      */
-    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
+    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states,
+            bind_messaging_port do_bind = bind_messaging_port::yes);
 
 public:
     /**

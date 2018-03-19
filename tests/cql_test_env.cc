@@ -303,7 +303,8 @@ public:
 
             const gms::inet_address listen("127.0.0.1");
             auto& ms = netw::get_messaging_service();
-            ms.start(listen, std::move(7000)).get();
+            // don't start listening so tests can be run in parallel
+            ms.start(listen, std::move(7000), false).get();
             auto stop_ms = defer([&ms] { ms.stop().get(); });
 
             auto auth_service = ::make_shared<sharded<auth::service>>();
@@ -362,7 +363,7 @@ public:
             auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             service::get_local_storage_service().init_messaging_service_part().get();
-            service::get_local_storage_service().init_server_without_the_messaging_service_part().get();
+            service::get_local_storage_service().init_server_without_the_messaging_service_part(service::bind_messaging_port(false)).get();
             auto deinit_storage_service_server = defer([auth_service] {
                 gms::stop_gossiping().get();
                 auth_service->stop().get();
@@ -426,7 +427,7 @@ public:
     impl() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
-        netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false).get();
         service::get_storage_service().start(std::ref(_db), std::ref(_auth_service)).get();
         service::get_storage_service().invoke_on_all([] (auto& ss) {
             ss.enable_all_features();
