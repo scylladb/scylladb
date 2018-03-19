@@ -3099,3 +3099,17 @@ SEASTAR_TEST_CASE(test_is_not_null) {
         // rows - that those with NULL values are properly ignored.
     });
 }
+
+// Test that it is forbidden to add more than one new column to the
+// view's primary key beyond what was in the base's primary key.
+SEASTAR_TEST_CASE(test_only_one_allowed) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int PRIMARY KEY, v int, w int)").get();
+        try {
+            e.execute_cql("create materialized view vcf as select * from cf "
+                          "where v is not null and w is not null "
+                          "primary key (v, w, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+    });
+}
