@@ -30,6 +30,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/scheduling.hh>
 #include "allocation_strategy.hh"
 #include <boost/heap/binomial_heap.hpp>
 #include "seastarx.hh"
@@ -195,14 +196,17 @@ class region_group {
         using futurator = futurize<std::result_of_t<Func()>>;
         typename futurator::promise_type pr;
         Func func;
+        seastar::scheduling_group sg;
     public:
         void allocate() override {
-            futurator::apply(func).forward_to(std::move(pr));
+            with_scheduling_group(sg, [this] {
+                futurator::apply(func).forward_to(std::move(pr));
+            });
         }
         void fail(std::exception_ptr e) override {
             pr.set_exception(e);
         }
-        concrete_allocating_function(Func&& func) : func(std::forward<Func>(func)) {}
+        concrete_allocating_function(Func&& func) : func(std::forward<Func>(func)), sg(seastar::current_scheduling_group()) {}
         typename futurator::type get_future() {
             return pr.get_future();
         }
