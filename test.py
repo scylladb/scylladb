@@ -198,7 +198,7 @@ if __name__ == "__main__":
                 mode = 'debug'
             xmlout = (args.jenkins + "." + mode + "." +
                       os.path.basename(path.split()[0]) + ".boost.xml")
-            boost_args += ['--output_format=XML', '--log_level=test_suite', '--report_level=no', '--log_sink=' + xmlout]
+            boost_args += ['--report_level=no', '--logger=XML,test_suite,' + xmlout]
         print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
         if type == 'boost':
             boost_args += ['--']
