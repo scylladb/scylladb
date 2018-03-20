@@ -250,13 +250,6 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
             boost::range::join(schema->partition_key_columns(), schema->clustering_key_columns())
             | boost::adaptors::transformed([](auto&& def) { return &def; }));
 
-    if (_partition_keys.empty()) {
-        throw exceptions::invalid_request_exception(sprint("Must select at least a column for a Materialized View"));
-    }
-    if (_clustering_keys.empty()) {
-        throw exceptions::invalid_request_exception(sprint("No columns are defined for Materialized View other than primary key"));
-    }
-
     // Validate the primary key clause, ensuring only one non-PK base column is used in the view's PK.
     bool has_non_pk_column = false;
     std::unordered_set<const column_definition*> target_primary_keys;
@@ -309,6 +302,13 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         throw exceptions::invalid_request_exception(sprint(
                         "Cannot create Materialized View %s without primary key columns from base %s (%s)",
                         column_family(), _base_name->get_column_family(), column_names));
+    }
+
+    if (_partition_keys.empty()) {
+        throw exceptions::invalid_request_exception(sprint("Must select at least a column for a Materialized View"));
+    }
+    if (_clustering_keys.empty()) {
+        throw exceptions::invalid_request_exception(sprint("No columns are defined for Materialized View other than primary key"));
     }
 
     schema_builder builder{keyspace(), column_family()};
