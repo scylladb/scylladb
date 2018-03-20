@@ -47,6 +47,7 @@
 #include "keys.hh"
 #include "utils/UUID.hh"
 #include "dht/i_partitioner.hh"
+#include "db/read_repair_decision.hh"
 
 namespace service {
 
@@ -62,13 +63,15 @@ private:
     uint32_t _remaining;
     utils::UUID _query_uuid;
     replicas_per_token_range _last_replicas;
+    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
 
 public:
     paging_state(partition_key pk,
             std::experimental::optional<clustering_key> ck,
             uint32_t rem,
             utils::UUID reader_recall_uuid,
-            replicas_per_token_range last_replicas);
+            replicas_per_token_range last_replicas,
+            std::experimental::optional<db::read_repair_decision> query_read_repair_decision);
 
     /**
      * Last processed key, i.e. where to start from in next paging round
@@ -119,6 +122,20 @@ public:
      */
     replicas_per_token_range get_last_replicas() const {
         return _last_replicas;
+    }
+
+    /**
+     * The read-repair decision made for this query.
+     *
+     * The read-repair decision is made on the first page and is applied to
+     * all subsequent pages. This way we can ensure that we consistently use
+     * the same replicas on each page throughout the query. This helps
+     * reader-reuse on the replicas as readers can only be reused if they're
+     * used for all pages, if the replica is skipped for one or more pages the
+     * saved reader has to be dropped.
+     */
+    std::experimental::optional<db::read_repair_decision> get_query_read_repair_decision() const {
+        return _query_read_repair_decision;
     }
 
     static ::shared_ptr<paging_state> deserialize(bytes_opt bytes);

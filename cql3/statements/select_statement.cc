@@ -330,17 +330,17 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        state.get_trace_state()).then([] (foreign_ptr<lw_shared_ptr<query::result>>&& result, service::replicas_per_token_range) {
-                    return std::move(result);
+                        {state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                    return std::move(qr.query_result);
                 });
             }, std::move(merger));
         }).then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), state.get_trace_state())
-            .then([this, &options, now, cmd] (auto result, service::replicas_per_token_range) {
-                return this->process_results(std::move(result), cmd, options, now);
+        return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {state.get_trace_state()})
+            .then([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
+                return this->process_results(std::move(qr.query_result), cmd, options, now);
             });
     }
 }
@@ -371,18 +371,18 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, state.get_trace_state(),
-                        db::no_timeout, {}).then([] (foreign_ptr<lw_shared_ptr<query::result>> result, service::replicas_per_token_range) {
-                    return std::move(result);
+                return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {state.get_trace_state(),
+                        db::no_timeout}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                    return std::move(qr.query_result);
                 });
             }, std::move(merger));
         }).then([command, this, &options, now] (auto result) {
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] { });
     } else {
-        auto query = proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, state.get_trace_state(), db::no_timeout);
-        return query.then([command, this, &options, now] (auto result, service::replicas_per_token_range) {
-            return this->process_results(std::move(result), command, options, now);
+        auto query = proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {state.get_trace_state(), db::no_timeout});
+        return query.then([command, this, &options, now] (service::storage_proxy::coordinator_query_result qr) {
+            return this->process_results(std::move(qr.query_result), command, options, now);
         }).finally([command] {});
     }
 }
@@ -551,15 +551,15 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
             cmd,
             std::move(partition_ranges),
             options.get_consistency(),
-            state.get_trace_state()).then([cmd, this, &options, now, &view] (foreign_ptr<lw_shared_ptr<query::result>> result,
-                service::replicas_per_token_range) {
+            {state.get_trace_state()}).then(
+                    [cmd, this, &options, now, &view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
             columns.emplace_back(view.schema()->get_column_definition(cdef.name()));
         }
         auto selection = selection::selection::for_columns(view.schema(), columns);
         cql3::selection::result_set_builder builder(*selection, now, options.get_cql_serialization_format());
-        query::result_view::consume(*result,
+        query::result_view::consume(*qr.query_result,
                                     cmd->slice,
                                     cql3::selection::result_set_builder::visitor(builder, *view.schema(), *selection));
         auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));

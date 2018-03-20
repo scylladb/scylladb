@@ -265,13 +265,9 @@ public:
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
-                return service::get_local_storage_proxy().query(
-                        schema,
-                        cmd,
-                        std::move(pranges),
-                        cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto result, service::replicas_per_token_range) {
-                    return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
+                return service::get_local_storage_proxy().query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level)).then(
+                        [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
+                    return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         if (schema->is_counter()) {
                             counter_column_aggregator aggregator(*schema, cmd->slice, cell_limit, std::move(keys));
                             v.consume(cmd->slice, aggregator);
@@ -296,13 +292,9 @@ public:
             auto pranges = make_partition_ranges(*schema, keys);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([schema, cmd, pranges = std::move(pranges), cell_limit, consistency_level, keys]() mutable {
-                return service::get_local_storage_proxy().query(
-                        schema,
-                        cmd,
-                        std::move(pranges),
-                        cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd, cell_limit, keys = std::move(keys)](auto&& result, service::replicas_per_token_range) {
-                    return query::result_view::do_with(*result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
+                return service::get_local_storage_proxy().query(schema, cmd, std::move(pranges), cl_from_thrift(consistency_level)).then(
+                        [schema, cmd, cell_limit, keys = std::move(keys)](service::storage_proxy::coordinator_query_result qr) {
+                    return query::result_view::do_with(*qr.query_result, [schema, cmd, cell_limit, keys = std::move(keys)](query::result_view v) mutable {
                         column_counter counter(*schema, cmd->slice, cell_limit, std::move(keys));
                         v.consume(cmd->slice, counter);
                         return counter.release();
@@ -336,13 +328,9 @@ public:
             }
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([schema, cmd, prange = std::move(prange), consistency_level] () mutable {
-                return service::get_local_storage_proxy().query(
-                        schema,
-                        cmd,
-                        std::move(prange),
-                        cl_from_thrift(consistency_level),
-                        nullptr).then([schema, cmd](auto result, service::replicas_per_token_range) {
-                    return query::result_view::do_with(*result, [schema, cmd](query::result_view v) {
+                return service::get_local_storage_proxy().query(schema, cmd, std::move(prange), cl_from_thrift(consistency_level)).then(
+                        [schema, cmd](service::storage_proxy::coordinator_query_result qr) {
+                    return query::result_view::do_with(*qr.query_result, [schema, cmd](query::result_view v) {
                         return to_key_slices(*schema, cmd->slice, v, std::numeric_limits<uint32_t>::max());
                     });
                 });
@@ -402,9 +390,9 @@ public:
             range = {dht::partition_range::make_singular(std::move(range[0].start()->value()))};
         }
         auto range1 = range; // query() below accepts an rvalue, so need a copy to reuse later
-        return service::get_local_storage_proxy().query(schema, cmd, std::move(range),
-                consistency_level, nullptr).then([schema, cmd, column_limit](auto result, service::replicas_per_token_range) {
-            return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
+        return service::get_local_storage_proxy().query(schema, cmd, std::move(range), consistency_level).then(
+                [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
+            return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
                 return to_key_slices(*schema, cmd->slice, v, column_limit);
             });
         }).then([schema, cmd, column_limit, range = std::move(range1), consistency_level, start_key = std::move(start_key), end = std::move(end), &output](auto&& slices) mutable {
@@ -646,13 +634,9 @@ public:
             auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), row_limit);
             auto f = _query_state.get_client_state().has_schema_access(*schema, auth::permission::SELECT);
             return f.then([dk = std::move(dk), cmd, schema, column_limit = request.count, cl = request.consistency_level] {
-                return service::get_local_storage_proxy().query(
-                        schema,
-                        cmd,
-                        {dht::partition_range::make_singular(dk)},
-                        cl_from_thrift(cl),
-                        nullptr).then([schema, cmd, column_limit](auto result, service::replicas_per_token_range) {
-                    return query::result_view::do_with(*result, [schema, cmd, column_limit](query::result_view v) {
+                return service::get_local_storage_proxy().query(schema, cmd, {dht::partition_range::make_singular(dk)}, cl_from_thrift(cl)).then(
+                        [schema, cmd, column_limit](service::storage_proxy::coordinator_query_result qr) {
+                    return query::result_view::do_with(*qr.query_result, [schema, cmd, column_limit](query::result_view v) {
                         column_aggregator<query_order::no> aggregator(*schema, cmd->slice, column_limit, { });
                         v.consume(cmd->slice, aggregator);
                         auto cols = aggregator.release();

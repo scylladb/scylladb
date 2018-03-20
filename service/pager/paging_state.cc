@@ -56,13 +56,18 @@
 #include "idl/range.dist.impl.hh"
 #include "message/messaging_service.hh"
 
-service::pager::paging_state::paging_state(partition_key pk, std::experimental::optional<clustering_key> ck,
-        uint32_t rem, utils::UUID query_uuid, replicas_per_token_range last_replicas)
+service::pager::paging_state::paging_state(partition_key pk,
+        std::experimental::optional<clustering_key> ck,
+        uint32_t rem,
+        utils::UUID query_uuid,
+        replicas_per_token_range last_replicas,
+        std::experimental::optional<db::read_repair_decision> query_read_repair_decision)
     : _partition_key(std::move(pk))
     , _clustering_key(std::move(ck))
     , _remaining(rem)
     , _query_uuid(query_uuid)
-    , _last_replicas(std::move(last_replicas)) {
+    , _last_replicas(std::move(last_replicas))
+    , _query_read_repair_decision(query_read_repair_decision) {
 }
 
 ::shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
