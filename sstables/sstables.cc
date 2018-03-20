@@ -3171,6 +3171,26 @@ bool supports_correct_non_compound_range_tombstones() {
 
 }
 
+std::ostream& operator<<(std::ostream& out, const sstables::component_type& comp_type) {
+    using ct = sstables::component_type;
+    switch (comp_type) {
+    case ct::Index: out << "Index"; break;
+    case ct::CompressionInfo: out << "CompressionInfo"; break;
+    case ct::Data: out << "Data"; break;
+    case ct::TOC: out << "TOC"; break;
+    case ct::Summary: out << "Summary"; break;
+    case ct::Digest: out << "Digest"; break;
+    case ct::CRC: out << "CRC"; break;
+    case ct::Filter: out << "Filter"; break;
+    case ct::Statistics: out << "Statistics"; break;
+    case ct::TemporaryTOC: out << "TemporaryTOC"; break;
+    case ct::TemporaryStatistics: out << "TemporaryStatistics"; break;
+    case ct::Scylla: out << "Scylla"; break;
+    case ct::Unknown: out << "Unknown"; break;
+    }
+    return out;
+}
+
 namespace seastar {
 
 void
