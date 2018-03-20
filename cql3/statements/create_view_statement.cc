@@ -298,13 +298,14 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), &def) != target_primary_keys.end();
         if (included_def && !def_in_target_pk) {
             target_non_pk_columns.push_back(&def);
-        } else if (def.is_primary_key() && !def_in_target_pk) {
+        }
+        if (def.is_primary_key() && !def_in_target_pk) {
             missing_pk_columns.push_back(&def);
         }
     }
 
     if (!missing_pk_columns.empty()) {
-        auto column_names = ::join(", ", missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name)));
+        auto column_names = ::join(", ", missing_pk_columns | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_text)));
         throw exceptions::invalid_request_exception(sprint(
                         "Cannot create Materialized View %s without primary key columns from base %s (%s)",
                         column_family(), _base_name->get_column_family(), column_names));
