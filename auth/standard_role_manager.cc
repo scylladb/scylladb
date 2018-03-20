@@ -118,6 +118,10 @@ static future<record> require_record(cql3::query_processor& qp, stdx::string_vie
    });
 }
 
+static bool has_can_login(const cql3::untyped_result_set_row& row) {
+    return row.has("can_login") && !(boolean_type->deserialize(row.get_blob("can_login")).is_null());
+}
+
 stdx::string_view standard_role_manager_name() noexcept {
     static const sstring instance = meta::AUTH_PACKAGE_NAME + "CassandraRoleManager";
     return instance;
@@ -136,17 +140,6 @@ const resource_set& standard_role_manager::protected_resources() const {
 }
 
 future<> standard_role_manager::create_metadata_tables_if_missing() const {
-    static const sstring create_roles_query = sprint(
-            "CREATE TABLE %s ("
-            "  %s text PRIMARY KEY,"
-            "  can_login boolean,"
-            "  is_superuser boolean,"
-            "  member_of set<text>,"
-            "  salted_hash text"
-            ")",
-            meta::roles_table::qualified_name(),
-            meta::roles_table::role_col_name);
-
     static const sstring create_role_members_query = sprint(
             "CREATE TABLE %s ("
             "  role text,"
@@ -158,19 +151,19 @@ future<> standard_role_manager::create_metadata_tables_if_missing() const {
 
     return when_all_succeed(
             create_metadata_table_if_missing(
-                    sstring(meta::roles_table::name),
+                    meta::roles_table::name,
                     _qp,
-                    create_roles_query,
+                    meta::roles_table::creation_query(),
                     _migration_manager),
             create_metadata_table_if_missing(
-                    sstring(meta::role_members_table::name),
+                    meta::role_members_table::name,
                     _qp,
                     create_role_members_query,
                     _migration_manager));
 }
 
 future<> standard_role_manager::create_default_role_if_missing() const {
-    return default_role_row_satisfies(_qp, [](auto&&) { return true; }).then([this](bool exists) {
+    return default_role_row_satisfies(_qp, &has_can_login).then([this](bool exists) {
         if (!exists) {
             static const sstring query = sprint(
                     "INSERT INTO %s (%s, is_superuser, can_login) VALUES (?, true, true)",
@@ -233,7 +226,7 @@ future<> standard_role_manager::start() {
                 return seastar::async([this] {
                     wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
 
-                    if (any_nondefault_role_row_satisfies(_qp, [](auto&&) { return true; }).get0()) {
+                    if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get0()) {
                         if (this->legacy_metadata_exists()) {
                             log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                         }

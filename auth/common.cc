@@ -59,13 +59,13 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
 }
 
 future<> create_metadata_table_if_missing(
-        const sstring& table_name,
+        stdx::string_view table_name,
         cql3::query_processor& qp,
-        const sstring& cql,
+        stdx::string_view cql,
         ::service::migration_manager& mm) {
     auto& db = qp.db().local();
 
-    if (db.has_schema(meta::AUTH_KS, table_name)) {
+    if (db.has_schema(meta::AUTH_KS, sstring(table_name))) {
         return make_ready_future<>();
     }
 

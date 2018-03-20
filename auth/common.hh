@@ -22,6 +22,7 @@
 #pragma once
 
 #include <chrono>
+#include <experimental/string_view>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/abort_source.hh>
@@ -74,9 +75,9 @@ inline future<> delay_until_system_ready(seastar::abort_source& as) {
 future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_function<future<>()> func);
 
 future<> create_metadata_table_if_missing(
-        const sstring& table_name,
+        stdx::string_view table_name,
         cql3::query_processor&,
-        const sstring& cql,
+        stdx::string_view cql,
         ::service::migration_manager&);
 
 future<> wait_for_schema_agreement(::service::migration_manager&, const database&);
