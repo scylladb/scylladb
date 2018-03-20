@@ -61,6 +61,8 @@
 
 #include <seastar/util/optimized_optional.hh>
 
+class sstable_assertions;
+
 namespace sstables {
 
 extern logging::logger sstlog;
@@ -138,6 +140,7 @@ shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, 
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
 
 class sstable : public enable_lw_shared_from_this<sstable> {
+    friend ::sstable_assertions;
 public:
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
