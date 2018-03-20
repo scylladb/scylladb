@@ -235,6 +235,7 @@ scylla_tests = [
     'tests/row_cache_test',
     'tests/test-serialization',
     'tests/sstable_test',
+    'tests/sstable_3_x_test',
     'tests/sstable_mutation_test',
     'tests/sstable_resharding_test',
     'tests/memtable_test',
