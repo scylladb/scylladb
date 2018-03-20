@@ -3113,3 +3113,34 @@ SEASTAR_TEST_CASE(test_only_one_allowed) {
         } catch (exceptions::invalid_request_exception&) { }
     });
 }
+
+// Test that a view cannot be created without its primary key containing all
+// columns of the base's primary key. This reproduces issue #2720.
+SEASTAR_TEST_CASE(test_view_key_must_include_base_key) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a))").get();
+        // Adding a column (b) to cf's primary key (a) is fine:
+        e.execute_cql("create materialized view vcf1 as select * from cf "
+                      "where a is not null and b is not null "
+                      "primary key (b, a)").get();
+        // But missing any of cf's primary columns in the view, is not.
+        // Even before the fix to #2720 this case generated an error - but not
+        // the expected error because of test order.
+        try {
+            e.execute_cql("create materialized view vcf2 as select * from cf "
+                          "where b is not null "
+                          "primary key (b)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+
+        // A slightly more elaborate case, which actually reproduces the
+        // problem we had issue #2720 - in this case we didn't detect the
+        // error of the missing key column.
+        e.execute_cql("create table cf2 (a int, b int, c int, primary key (a, b))").get();
+        try {
+            e.execute_cql("create materialized view vcf21 as select * from cf2 "
+                          "where c is not null and b is not null "
+                          "primary key (c, b)").get();  // error: "a" is missing in this key.
+        } catch (exceptions::invalid_request_exception&) { }
+    });
+}
