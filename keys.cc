@@ -24,6 +24,8 @@
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "clustering_bounds_comparator.hh"
+#include <boost/algorithm/string.hpp>
+#include <boost/any.hpp>
 
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
@@ -55,6 +57,22 @@ partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k
         return t1 < t2 ? -1 : 1;
     }
     return legacy_tri_compare(s, k2);
+}
+
+partition_key partition_key::from_nodetool_style_string(const schema_ptr s, const sstring& key) {
+    std::vector<sstring> vec;
+    boost::split(vec, key, boost::is_any_of(":"));
+
+    auto it = std::begin(vec);
+    if (vec.size() != s->partition_key_type()->types().size()) {
+        throw std::invalid_argument("partition key '" + key + "' has mismatch number of components");
+    }
+    std::vector<bytes> r;
+    r.reserve(vec.size());
+    for (auto t : s->partition_key_type()->types()) {
+        r.emplace_back(t->from_string(*it++));
+    }
+    return partition_key::from_range(std::move(r));
 }
 
 std::ostream& operator<<(std::ostream& out, const bound_kind k) {
