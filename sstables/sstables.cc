@@ -190,7 +190,8 @@ make_sstable(schema_ptr schema, sstring dir, int64_t generation, sstable_version
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
-    { sstable::version_types::la , "la" }
+    { sstable::version_types::la , "la" },
+    { sstable::version_types::mc , "mc" },
 };
 
 std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_types>> sstable::_format_string = {
@@ -2577,7 +2578,10 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
         },
         { sstable::version_types::la, [] (entry_descriptor d) {
             return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
-        }
+        },
+        { sstable::version_types::mc, [] (entry_descriptor d) {
+                return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
+        },
     };
 
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));

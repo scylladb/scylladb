@@ -23,7 +23,7 @@
 
 namespace sstables {
 
-enum class sstable_version_types { ka, la };
+enum class sstable_version_types { ka, la, mc };
 enum class sstable_format_types { big };
 
 }
