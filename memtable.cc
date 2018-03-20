@@ -25,6 +25,7 @@
 #include "stdx.hh"
 #include "partition_snapshot_reader.hh"
 #include "schema_upgrader.hh"
+#include "partition_builder.hh"
 
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
         : logalloc::region(dmm.region_group())
@@ -635,7 +636,10 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, db::rp_han
         _allocating_section(*this, [&, this] {
           with_linearized_managed_bytes([&] {
             auto& p = find_or_create_partition_slow(m.key(*_schema));
-            p.apply(*_schema, m.partition(), *m_schema);
+            mutation_partition mp(m_schema);
+            partition_builder pb(*m_schema, mp);
+            m.partition().accept(*m_schema, pb);
+            p.apply(*_schema, std::move(mp), *m_schema);
           });
         });
     });
