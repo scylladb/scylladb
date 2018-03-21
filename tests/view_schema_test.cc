@@ -1639,7 +1639,7 @@ SEASTAR_TEST_CASE(test_create_and_alter_mv_with_ttl) {
 
 SEASTAR_TEST_CASE(test_create_with_select_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d, e))").get();
+        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d))").get();
         assert_that_failed(e.execute_cql(
                 "create materialized view mv as select * from cf where b is not null and c is not null and d is not null primary key ((a, b), c, d)"));
         assert_that_failed(e.execute_cql(
