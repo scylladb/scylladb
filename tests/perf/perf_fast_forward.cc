@@ -202,7 +202,7 @@ std::string get_run_date_time() {
     using namespace boost::posix_time;
     const ptime current_time = second_clock::local_time();
     auto facet = std::make_unique<time_facet>();
-    facet->format("%Y-%M-%d %H:%M:%S");
+    facet->format("%Y-%m-%d %H:%M:%S");
     std::stringstream stream;
     stream.imbue(std::locale(std::locale::classic(), facet.release()));
     stream << current_time;
