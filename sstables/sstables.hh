@@ -57,6 +57,7 @@
 #include "flat_mutation_reader.hh"
 #include "utils/phased_barrier.hh"
 #include "component_type.hh"
+#include "sstable_version.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -225,7 +226,7 @@ public:
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
-    static component_type component_from_sstring(sstring& s);
+    static component_type component_from_sstring(version_types v, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
@@ -449,7 +450,6 @@ private:
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
-    static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;

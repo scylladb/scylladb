@@ -198,25 +198,6 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
     { sstable::format_types::big , "big" }
 };
 
-static const sstring TOC_SUFFIX = "TOC.txt";
-static const sstring TEMPORARY_TOC_SUFFIX = "TOC.txt.tmp";
-
-// FIXME: this should be version-dependent
-std::unordered_map<component_type, sstring, enum_hash<component_type>> sstable::_component_map = {
-    { component_type::Index, "Index.db"},
-    { component_type::CompressionInfo, "CompressionInfo.db" },
-    { component_type::Data, "Data.db" },
-    { component_type::TOC, TOC_SUFFIX },
-    { component_type::Summary, "Summary.db" },
-    { component_type::Digest, "Digest.sha1" },
-    { component_type::CRC, "CRC.db" },
-    { component_type::Filter, "Filter.db" },
-    { component_type::Statistics, "Statistics.db" },
-    { component_type::Scylla, "Scylla.db" },
-    { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
-    { component_type::TemporaryStatistics, "Statistics.db.tmp" },
-};
-
 // This assumes that the mappings are small enough, and called unfrequent
 // enough.  If that changes, it would be adviseable to create a full static
 // reverse mapping, even if it is done at runtime.
@@ -984,7 +965,7 @@ future<> sstable::read_toc() {
                     continue;
                 }
                 try {
-                    _recognized_components.insert(reverse_map(c, _component_map));
+                    _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
                     sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, file_path);
@@ -1054,7 +1035,7 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     for (auto&& key : _recognized_components) {
             // new line character is appended to the end of each component name.
-        auto value = _component_map[key] + "\n";
+        auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
         bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
         write(w, b);
     }
@@ -1129,7 +1110,7 @@ template <component_type Type, typename T>
 future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
-    sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
+    sstlog.debug(("Reading " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
     return open_file_dma(file_path, open_flags::ro).then([this, &component] (file fi) {
         auto fut = fi.size();
         return fut.then([this, &component, fi = std::move(fi)] (uint64_t size) {
@@ -1155,7 +1136,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
-    sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
+    sstlog.debug(("Writing " + sstable_version_constants::get_component_map(_version).at(Type) + " file {} ").c_str(), file_path);
     file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
@@ -2557,7 +2538,7 @@ const sstring sstable::filename(component_type f) const {
 
 std::vector<sstring> sstable::component_filenames() const {
     std::vector<sstring> res;
-    for (auto c : _component_map | boost::adaptors::map_keys) {
+    for (auto c : sstable_version_constants::get_component_map(_version) | boost::adaptors::map_keys) {
         if (has_component(c)) {
             res.emplace_back(filename(c));
         }
@@ -2574,13 +2555,16 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
-            return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _component_map.at(d.component); }
+            return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-"
+                   + sstable_version_constants::get_component_map(d.version).at(d.component); }
         },
         { sstable::version_types::la, [] (entry_descriptor d) {
-            return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
+            return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-"
+                   + sstable_version_constants::get_component_map(d.version).at(d.component); }
         },
         { sstable::version_types::mc, [] (entry_descriptor d) {
-                return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
+                return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-"
+                       + sstable_version_constants::get_component_map(d.version).at(d.component); }
         },
     };
 
@@ -2601,7 +2585,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
     std::vector<std::pair<component_type, sstring>> all;
     all.reserve(_recognized_components.size() + _unrecognized_components.size());
     for (auto& c : _recognized_components) {
-        all.push_back(std::make_pair(c, _component_map.at(c)));
+        all.push_back(std::make_pair(c, sstable_version_constants::get_component_map(_version).at(c)));
     }
     for (auto& c : _unrecognized_components) {
         all.push_back(std::make_pair(component_type::Unknown, c));
@@ -2697,7 +2681,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     } else {
         throw malformed_sstable_exception(seastar::sprint("invalid version for file %s. Name doesn't match any known version.", fname));
     }
-    return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(component));
+    return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(version, component));
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {
@@ -2716,9 +2700,9 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     }
 }
 
-component_type sstable::component_from_sstring(sstring &s) {
+component_type sstable::component_from_sstring(version_types v, sstring &s) {
     try {
-        return reverse_map(s, _component_map);
+        return reverse_map(s, sstable_version_constants::get_component_map(v));
     } catch (std::out_of_range&) {
         return component_type::Unknown;
     }
@@ -2919,8 +2903,8 @@ fsync_directory(const io_error_handler& error_handler, sstring fname) {
 future<>
 remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handler) {
     return seastar::async([sstable_toc_name, &error_handler] () mutable {
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
-        auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - sstable_version_constants::TOC_SUFFIX.size());
+        auto new_toc_name = prefix + sstable_version_constants::TEMPORARY_TOC_SUFFIX;
         sstring dir;
 
         if (sstable_io_check(error_handler, file_exists, sstable_toc_name).get0()) {
@@ -2947,7 +2931,7 @@ remove_by_toc_name(sstring sstable_toc_name, const io_error_handler& error_handl
                 // eof
                 return make_ready_future<>();
             }
-            if (component == TOC_SUFFIX) {
+            if (component == sstable_version_constants::TOC_SUFFIX) {
                 // already deleted
                 return make_ready_future<>();
             }
@@ -2985,7 +2969,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
 
-        for (auto& entry : sstable::_component_map) {
+        for (auto& entry : sstable_version_constants::get_component_map(v)) {
             // Skipping TemporaryTOC because it must be the last component to
             // be deleted, and unordered map doesn't guarantee ordering.
             // This is needed because we may end up with a partial delete in
