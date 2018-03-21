@@ -202,7 +202,7 @@ static const sstring TOC_SUFFIX = "TOC.txt";
 static const sstring TEMPORARY_TOC_SUFFIX = "TOC.txt.tmp";
 
 // FIXME: this should be version-dependent
-std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
+std::unordered_map<component_type, sstring, enum_hash<component_type>> sstable::_component_map = {
     { component_type::Index, "Index.db"},
     { component_type::CompressionInfo, "CompressionInfo.db" },
     { component_type::Data, "Data.db" },
@@ -956,7 +956,7 @@ future<> sstable::read_toc() {
         return make_ready_future<>();
     }
 
-    auto file_path = filename(sstable::component_type::TOC);
+    auto file_path = filename(component_type::TOC);
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
@@ -1028,7 +1028,7 @@ void sstable::generate_toc(compressor_ptr c, double filter_fp_chance) {
 }
 
 void sstable::write_toc(const io_priority_class& pc) {
-    auto file_path = filename(sstable::component_type::TemporaryTOC);
+    auto file_path = filename(component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
@@ -1038,7 +1038,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     // sstable being created in parallel with the same generation.
     file f = new_sstable_component_file(_write_error_handler, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
-    bool toc_exists = file_exists(filename(sstable::component_type::TOC)).get0();
+    bool toc_exists = file_exists(filename(component_type::TOC)).get0();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
@@ -1078,7 +1078,7 @@ future<> sstable::seal_sstable() {
         return sstable_write_io_check([&] { return dir_f.flush(); }).then([this] {
             // Rename TOC because it's no longer temporary.
             return sstable_write_io_check([&] {
-                return engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC));
+                return engine().rename_file(filename(component_type::TemporaryTOC), filename(component_type::TOC));
             });
         }).then([this, dir_f] () mutable {
             // Guarantee that the changes above reached the disk.
@@ -1125,7 +1125,7 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
 
-template <sstable::component_type Type, typename T>
+template <component_type Type, typename T>
 future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
@@ -1152,7 +1152,7 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
     });
 }
 
-template <sstable::component_type Type, typename T>
+template <component_type Type, typename T>
 void sstable::write_simple(const T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
@@ -1167,12 +1167,12 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     w.close().get();
 }
 
-template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
-template void sstable::write_simple<sstable::component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
+template future<> sstable::read_simple<component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
+template void sstable::write_simple<component_type::Filter>(const sstables::filter& f, const io_priority_class& pc);
 
 future<> sstable::read_compression(const io_priority_class& pc) {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
-    if (!has_component(sstable::component_type::CompressionInfo)) {
+    if (!has_component(component_type::CompressionInfo)) {
         return make_ready_future<>();
     }
 
@@ -1180,7 +1180,7 @@ future<> sstable::read_compression(const io_priority_class& pc) {
 }
 
 void sstable::write_compression(const io_priority_class& pc) {
-    if (!has_component(sstable::component_type::CompressionInfo)) {
+    if (!has_component(component_type::CompressionInfo)) {
         return;
     }
 
@@ -1315,7 +1315,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     return read_toc().then([this, &pc] {
         // We'll try to keep the main code path exception free, but if an exception does happen
         // we can try to regenerate the Summary.
-        if (has_component(sstable::component_type::Summary)) {
+        if (has_component(component_type::Summary)) {
             return read_simple<component_type::Summary>(_components->summary, pc).handle_exception([this, &pc] (auto ep) {
                 sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
                 return this->generate_summary(pc);
@@ -1368,7 +1368,7 @@ future<> sstable::open_data() {
 
 future<> sstable::update_info_for_opened_data() {
     return _data_file.stat().then([this] (struct stat st) {
-        if (this->has_component(sstable::component_type::CompressionInfo)) {
+        if (this->has_component(component_type::CompressionInfo)) {
             _components->compression.update(st.st_size);
         }
         _data_file_size = st.st_size;
@@ -1378,9 +1378,9 @@ future<> sstable::update_info_for_opened_data() {
             _index_file_size = size;
         });
     }).then([this] {
-        if (this->has_component(sstable::component_type::Filter)) {
+        if (this->has_component(component_type::Filter)) {
             return io_check([&] {
-                return engine().file_size(this->filename(sstable::component_type::Filter));
+                return engine().file_size(this->filename(component_type::Filter));
             }).then([this] (auto size) {
                 _filter_file_size = size;
             });
@@ -1426,14 +1426,14 @@ future<> sstable::create_data() {
 }
 
 future<> sstable::read_filter(const io_priority_class& pc) {
-    if (!has_component(sstable::component_type::Filter)) {
+    if (!has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();
         return make_ready_future<>();
     }
 
     return seastar::async([this, &pc] () mutable {
         sstables::filter filter;
-        read_simple<sstable::component_type::Filter>(filter, pc).get();
+        read_simple<component_type::Filter>(filter, pc).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
@@ -1441,7 +1441,7 @@ future<> sstable::read_filter(const io_priority_class& pc) {
 }
 
 void sstable::write_filter(const io_priority_class& pc) {
-    if (!has_component(sstable::component_type::Filter)) {
+    if (!has_component(component_type::Filter)) {
         return;
     }
 
@@ -1449,7 +1449,7 @@ void sstable::write_filter(const io_priority_class& pc) {
 
     auto&& bs = f->bits();
     auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
-    write_simple<sstable::component_type::Filter>(filter_ref, pc);
+    write_simple<component_type::Filter>(filter_ref, pc);
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.
@@ -2084,7 +2084,7 @@ void components_writer::maybe_add_summary_entry(const dht::token& token, bytes_v
 
 // Returns offset into data component.
 uint64_t components_writer::get_offset() const {
-    if (_sst.has_component(sstable::component_type::CompressionInfo)) {
+    if (_sst.has_component(component_type::CompressionInfo)) {
         // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
         return _sst._components->compression.compressed_file_length();
     } else {
@@ -2292,7 +2292,7 @@ void components_writer::consume_end_of_stream() {
     _index_needs_close = false;
     _index.close().get();
 
-    if (_sst.has_component(sstable::component_type::CompressionInfo)) {
+    if (_sst.has_component(component_type::CompressionInfo)) {
         _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
@@ -2368,10 +2368,10 @@ void sstable_writer::finish_file_writer()
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
-        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst._write_error_handler, _sst.filename(sstable::component_type::CRC), chksum_wr->finalize_checksum());
+        write_digest(_sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst._write_error_handler, _sst.filename(sstable::component_type::Digest), _sst._components->compression.full_checksum());
+        write_digest(_sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
     }
 }
 
@@ -2399,7 +2399,7 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
     _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
     _sst.write_toc(_pc);
     _sst.create_data().get();
-    _compression_enabled = !_sst.has_component(sstable::component_type::CRC);
+    _compression_enabled = !_sst.has_component(component_type::CRC);
     prepare_file_writer();
 
     _monitor->on_write_started(_writer->offset_tracker());
@@ -2474,7 +2474,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
         return make_ready_future<>();
     }
 
-    sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
+    sstlog.info("Summary file {} not found. Generating Summary...", filename(component_type::Summary));
     class summary_generator {
         summary& _summary;
         index_sampling_state _state;
@@ -2532,7 +2532,7 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
 }
 
 uint64_t sstable::data_size() const {
-    if (has_component(sstable::component_type::CompressionInfo)) {
+    if (has_component(component_type::CompressionInfo)) {
         return _components->compression.uncompressed_file_length();
     }
     return _data_file_size;
@@ -2597,7 +2597,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + seastar::format(fmtmap[version], ks, cf, _version_string.at(version), to_sstring(generation), _format_string.at(format), component);
 }
 
-std::vector<std::pair<sstable::component_type, sstring>> sstable::all_components() const {
+std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
     std::vector<std::pair<component_type, sstring>> all;
     all.reserve(_recognized_components.size() + _unrecognized_components.size());
     for (auto& c : _recognized_components) {
@@ -2716,7 +2716,7 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     }
 }
 
-sstable::component_type sstable::component_from_sstring(sstring &s) {
+component_type sstable::component_from_sstring(sstring &s) {
     try {
         return reverse_map(s, _component_map);
     } catch (std::out_of_range&) {
@@ -2793,7 +2793,7 @@ int sstable::compare_by_first_key(const sstable& other) const {
 }
 
 double sstable::get_compression_ratio() const {
-    if (this->has_component(sstable::component_type::CompressionInfo)) {
+    if (this->has_component(component_type::CompressionInfo)) {
         return double(_components->compression.compressed_file_length()) / _components->compression.uncompressed_file_length();
     } else {
         return metadata_collector::NO_COMPRESSION_RATIO;
