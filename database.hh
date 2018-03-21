@@ -85,6 +85,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "db/timeout_clock.hh"
 #include "querier.hh"
+#include "mutation_query.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -305,8 +306,7 @@ public:
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group compaction_scheduling_group;
-        seastar::scheduling_group commitlog_scheduling_group;
-        seastar::scheduling_group query_scheduling_group;
+        seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
@@ -985,8 +985,7 @@ public:
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group compaction_scheduling_group;
-        seastar::scheduling_group commitlog_scheduling_group;
-        seastar::scheduling_group query_scheduling_group;
+        seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
     };
@@ -1065,8 +1064,7 @@ struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
     seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
     seastar::scheduling_group compaction_scheduling_group;
-    seastar::scheduling_group commitlog_scheduling_group;
-    seastar::scheduling_group query_scheduling_group;
+    seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
 };
 
@@ -1130,6 +1128,8 @@ private:
         uint64_t,
         db::timeout_clock::time_point,
         querier_cache_context> _data_query_stage;
+
+    mutation_query_stage _mutation_query_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;

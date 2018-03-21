@@ -2041,7 +2041,9 @@ static do_mutation_query(schema_ptr s,
     });
 }
 
-static thread_local auto mutation_query_stage = seastar::make_execution_stage("mutation_query", do_mutation_query);
+mutation_query_stage::mutation_query_stage(seastar::scheduling_group sg)
+    : _execution_stage("mutation_query", sg, do_mutation_query)
+{}
 
 future<reconcilable_result>
 mutation_query(schema_ptr s,
@@ -2056,7 +2058,7 @@ mutation_query(schema_ptr s,
                db::timeout_clock::time_point timeout,
                querier_cache_context cache_ctx)
 {
-    return mutation_query_stage(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
+    return do_mutation_query(std::move(s), std::move(source), seastar::cref(range), seastar::cref(slice),
             row_limit, partition_limit, query_time, std::move(accounter), std::move(trace_ptr), timeout, std::move(cache_ctx));
 }
 
