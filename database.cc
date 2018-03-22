@@ -423,12 +423,7 @@ filter_sstable_for_reader(std::vector<sstables::shared_sstable>&& sstables, colu
 class incremental_reader_selector : public reader_selector {
     const dht::partition_range* _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
-    const io_priority_class& _pc;
-    const query::partition_slice& _slice;
-    reader_resource_tracker _resource_tracker;
     tracing::trace_state_ptr _trace_state;
-    streamed_mutation::forwarding _fwd;
-    mutation_reader::forwarding _fwd_mr;
     sstables::sstable_set::incremental_selector _selector;
     std::unordered_set<sstables::shared_sstable> _read_sstables;
     sstable_reader_factory_type _fn;
@@ -442,22 +437,12 @@ public:
     explicit incremental_reader_selector(schema_ptr s,
             lw_shared_ptr<sstables::sstable_set> sstables,
             const dht::partition_range& pr,
-            const query::partition_slice& slice,
-            const io_priority_class& pc,
-            reader_resource_tracker resource_tracker,
             tracing::trace_state_ptr trace_state,
-            streamed_mutation::forwarding fwd,
-            mutation_reader::forwarding fwd_mr,
             sstable_reader_factory_type fn)
         : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position::min())
         , _pr(&pr)
         , _sstables(std::move(sstables))
-        , _pc(pc)
-        , _slice(slice)
-        , _resource_tracker(std::move(resource_tracker))
         , _trace_state(std::move(trace_state))
-        , _fwd(fwd)
-        , _fwd_mr(fwd_mr)
         , _selector(_sstables->make_incremental_selector())
         , _fn(std::move(fn)) {
 
@@ -4534,12 +4519,7 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
     return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
                     pr,
-                    slice,
-                    pc,
-                    std::move(resource_tracker),
                     std::move(trace_state),
-                    fwd,
-                    fwd_mr,
                     std::move(reader_factory_fn)),
             fwd,
             fwd_mr);
@@ -4562,12 +4542,7 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
     return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
                     std::move(sstables),
                     pr,
-                    slice,
-                    pc,
-                    std::move(resource_tracker),
                     std::move(trace_state),
-                    fwd,
-                    fwd_mr,
                     std::move(reader_factory_fn)),
             fwd,
             fwd_mr);
