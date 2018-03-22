@@ -33,24 +33,6 @@
 
 using namespace std::literals::chrono_literals;
 
-template<typename EventuallySucceedingFunction>
-static void eventually(EventuallySucceedingFunction&& f) {
-    constexpr unsigned max_attempts = 10;
-    unsigned attempts = 0;
-    while (true) {
-        try {
-            f();
-            break;
-        } catch (...) {
-            if (++attempts < max_attempts) {
-                sleep(std::chrono::milliseconds(1 << attempts)).get0();
-            } else {
-                throw;
-            }
-        }
-    }
-}
-
 SEASTAR_TEST_CASE(test_case_sensitivity) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (theKey int, theClustering int, theValue int, primary key (theKey, theClustering));").get();
