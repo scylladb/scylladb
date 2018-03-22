@@ -70,7 +70,7 @@ public:
     {
         if (!with_static_row) {
             if (_current == _end) {
-                _current_start = _current_end = position_in_partition_view::after_all_clustered_rows();
+                _current_start = position_in_partition_view::before_all_clustered_rows();
             } else {
                 _current_start = position_in_partition_view::for_range_start(*_current);
                 _current_end = position_in_partition_view::for_range_end(*_current);
