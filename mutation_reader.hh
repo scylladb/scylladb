@@ -384,3 +384,32 @@ stable_flattened_mutations_consumer<FlattenedConsumer> make_stable_flattened_mut
 flat_mutation_reader make_foreign_reader(schema_ptr schema,
         foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
+
+using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(unsigned,
+        const dht::partition_range&,
+        streamed_mutation::forwarding,
+        mutation_reader::forwarding)>;
+
+/// Make a multishard_combining_reader.
+///
+/// multishard_combining_reader takes care of reading a range from all shards
+/// that own a subrange in the range. Readers are created on-demand with the
+/// supplied reader_factory. This factory function is expected to create an
+/// appropriate reader on the specified shard and return a foreign_ptr to it.
+///
+/// The read starts with a concurrency of one, that is the reader reads from a
+/// single shard at a time. The concurrency is exponentially increased (to a
+/// maximum of the number of shards) when a reader's buffer is empty after
+/// moving the next shard. This condition is important as we only wan't to
+/// increase concurrency for sparse tables that have little data and the reader
+/// has to move between shards often. When concurrency is > 1, the reader
+/// issues background read-aheads to the next shards so that by the time it
+/// needs to move to them they have the data ready.
+/// For dense tables (where we rarely cross shards) we rely on the
+/// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
+flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
+        const dht::partition_range& pr,
+        const dht::i_partitioner& partitioner,
+        remote_reader_factory reader_factory,
+        streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
