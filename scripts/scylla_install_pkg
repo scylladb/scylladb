@@ -55,7 +55,7 @@ if [ -f /etc/debian_version ]; then
     cp /etc/hosts /etc/hosts.orig
     echo 127.0.0.1 `hostname` >> /etc/hosts
     if [ "$REPO_FOR_INSTALL" != "" ]; then
-        curl -o /etc/apt/sources.list.d/scylla_install.list $REPO_FOR_INSTALL
+        curl -L -o /etc/apt/sources.list.d/scylla_install.list $REPO_FOR_INSTALL
     fi
     apt-get -o Acquire::AllowInsecureRepositories=true \
             -o Acquire::AllowDowngradeToInsecureRepositories=true update
@@ -78,13 +78,13 @@ if [ -f /etc/debian_version ]; then
     rm /usr/sbin/policy-rc.d
     rm /etc/apt/sources.list.d/scylla_install.list
     if [ "$REPO_FOR_UPDATE" != "" ]; then
-        curl -o /etc/apt/sources.list.d/scylla.list $REPO_FOR_UPDATE
+        curl -L -o /etc/apt/sources.list.d/scylla.list $REPO_FOR_UPDATE
     fi
     apt-get -o Acquire::AllowInsecureRepositories=true \
             -o Acquire::AllowDowngradeToInsecureRepositories=true update
 else
     if [ "$REPO_FOR_INSTALL" != "" ]; then
-        curl -o /etc/yum.repos.d/scylla_install.repo $REPO_FOR_INSTALL
+        curl -L -o /etc/yum.repos.d/scylla_install.repo $REPO_FOR_INSTALL
     fi
 
     if [ "$ID" = "centos" ]; then
@@ -104,6 +104,6 @@ else
 
     rm /etc/yum.repos.d/scylla_install.repo
     if [ "$REPO_FOR_UPDATE" != "" ]; then
-        curl -o /etc/yum.repos.d/scylla.repo $REPO_FOR_UPDATE
+        curl -L -o /etc/yum.repos.d/scylla.repo $REPO_FOR_UPDATE
     fi
 fi
