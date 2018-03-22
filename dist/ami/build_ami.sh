@@ -154,6 +154,7 @@ cd dist/ami
 
 if [ ! -f variables.json ]; then
     echo "create variables.json before start building AMI"
+    echo "see wiki page: https://github.com/scylladb/scylla/wiki/Building-CentOS-AMI"
     exit 1
 fi
 
