@@ -60,7 +60,8 @@ struct service_config final {
 };
 
 class service final {
-    permissions_cache_config _cache_config;
+    permissions_cache_config _permissions_cache_config;
+    std::unique_ptr<permissions_cache> _permissions_cache;
 
     cql3::query_processor& _qp;
 
