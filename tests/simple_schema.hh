@@ -47,11 +47,12 @@ public:
         return {new_timestamp(), gc_clock::now()};
     }
 public:
-    simple_schema()
+    using with_static = bool_class<class static_tag>;
+    simple_schema(with_static ws = with_static::yes)
         : _s(schema_builder("ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", utf8_type, column_kind::clustering_key)
-            .with_column("s1", utf8_type, column_kind::static_column)
+            .with_column("s1", utf8_type, ws ? column_kind::static_column : column_kind::regular_column)
             .with_column("v", utf8_type)
             .build())
         , _v_def(*_s->get_column_definition(to_bytes("v")))
