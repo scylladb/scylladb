@@ -176,11 +176,20 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
-    ms().register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
+    ms().register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id, rpc::optional<bool> failed) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        // Be compatible with old version. Do nothing but return a ready future.
-        sslog.debug("[Stream #{}] COMPLETE_MESSAGE from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
-        return make_ready_future<>();
+        if (failed && *failed) {
+            return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () {
+                auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
+                sslog.warn("[Stream #{}] COMPLETE_MESSAGE with error flag from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
+                session->on_error();
+                return make_ready_future<>();
+            });
+        } else {
+            // Be compatible with old version. Do nothing but return a ready future.
+            sslog.debug("[Stream #{}] COMPLETE_MESSAGE from {} dst_cpu_id={}", plan_id, from, dst_cpu_id);
+            return make_ready_future<>();
+        }
     });
 }
 
@@ -309,10 +318,6 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::session_failed() {
-    close_session(stream_session_state::FAILED);
-}
-
 session_info stream_session::make_session_info() {
     std::vector<stream_summary> receiving_summaries;
     for (auto& receiver : _receivers) {
@@ -339,7 +344,14 @@ void stream_session::transfer_task_completed(UUID cf_id) {
     maybe_completed();
 }
 
-void stream_session::send_complete_message() {
+void stream_session::transfer_task_completed_all() {
+    _transfers.clear();
+    sslog.debug("[Stream #{}] transfer task_completed: all done, stream_receive_task.size={} stream_transfer_task.size={}",
+        plan_id(), _receivers.size(), _transfers.size());
+    maybe_completed();
+}
+
+void stream_session::send_failed_complete_message() {
     if (!_complete_sent) {
         _complete_sent = true;
     } else {
@@ -349,18 +361,17 @@ void stream_session::send_complete_message() {
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
     auto session = shared_from_this();
-    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session, id, plan_id] {
+    bool failed = true;
+    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id, failed).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
     }).handle_exception([session, id, plan_id] (auto ep) {
         sslog.warn("[Stream #{}] COMPLETE_MESSAGE for {} has failed: {}", plan_id, id.addr, ep);
-        session->on_error();
     });
 }
 
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
-        send_complete_message();
         sslog.debug("[Stream #{}] maybe_completed: {} -> COMPLETE: session={}, peer={}", plan_id(), _state, this, peer);
         close_session(stream_session_state::COMPLETE);
     }
@@ -379,11 +390,15 @@ void stream_session::start_streaming_files() {
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
     }
-    for (auto it = _transfers.begin(); it != _transfers.end();) {
-        stream_transfer_task& task = it->second;
-        it++;
-        task.start();
-    }
+    do_for_each(_transfers.begin(), _transfers.end(), [this] (auto& item) {
+        sslog.debug("[Stream #{}] Start to send cf_id={}", plan_id(), item.first);
+        return item.second.execute();
+    }).then([this] {
+        this->transfer_task_completed_all();
+    }).handle_exception([this] (auto ep) {
+        sslog.warn("[Stream #{}] Failed to send: {}", plan_id(), ep);
+        this->on_error();
+    });
 }
 
 std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
@@ -460,6 +475,7 @@ void stream_session::close_session(stream_session_state final_state) {
                 receiving_failed(x.first);
                 task.abort();
             }
+            send_failed_complete_message();
         }
 
         // Note that we shouldn't block on this close because this method is called on the handler
@@ -480,9 +496,9 @@ void stream_session::start() {
     }
     auto connecting = netw::get_local_messaging_service().get_preferred_ip(peer);
     if (peer == connecting) {
-        sslog.info("[Stream #{}] Starting streaming to {}", plan_id(), peer);
+        sslog.debug("[Stream #{}] Starting streaming to {}", plan_id(), peer);
     } else {
-        sslog.info("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
+        sslog.debug("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
     }
     on_initialization_complete().handle_exception([this] (auto ep) {
         this->on_error();

@@ -175,10 +175,10 @@ private:
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
 
-    // If the session is idle for 300 minutes, close the session
-    std::chrono::seconds _keep_alive_timeout{60 * 300};
-    // Check every 10 minutes
-    std::chrono::seconds _keep_alive_interval{60 * 10};
+    // If the session is idle for 10 minutes, close the session
+    std::chrono::seconds _keep_alive_timeout{60 * 10};
+    // Check every 1 minutes
+    std::chrono::seconds _keep_alive_interval{60};
     timer<lowres_clock> _keep_alive;
     stream_bytes _last_stream_bytes;
     lowres_clock::time_point _last_stream_progress;
@@ -312,11 +312,6 @@ public:
     void complete();
 
     /**
-     * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
-     */
-    void session_failed();
-
-    /**
      * @return Current snapshot of this session info.
      */
     session_info make_session_info();
@@ -333,8 +328,9 @@ public:
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);
+    void transfer_task_completed_all();
 private:
-    void send_complete_message();
+    void send_failed_complete_message();
     bool maybe_completed();
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();

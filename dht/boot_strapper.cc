@@ -59,14 +59,11 @@ future<> boot_strapper::bootstrap() {
         streamer->add_ranges(keyspace_name, ranges);
     }
 
-    return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
-        try {
-            auto state = f.get0();
-        } catch (...) {
-            throw std::runtime_error(sprint("Error during boostrap: %s", std::current_exception()));
-        }
+    return streamer->stream_async().then([streamer] () {
         service::get_local_storage_service().finish_bootstrapping();
-        return make_ready_future<>();
+    }).handle_exception([streamer] (std::exception_ptr eptr) {
+        blogger.warn("Eror during bootstrap: {}", eptr);
+        return make_exception_future<>(std::move(eptr));
     });
 }
 
