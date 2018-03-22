@@ -3357,11 +3357,9 @@ future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
 }
 
 future<> dirty_memory_manager::flush_one(memtable_list& mtlist, flush_permit&& permit) {
-    return mtlist.seal_active_memtable_immediate(std::move(permit)).then_wrapped([this, schema = mtlist.back()->schema()] (auto f) {
-        if (f.failed()) {
-            dblog.error("Failed to flush memtable, {}:{}", schema->ks_name(), schema->cf_name());
-        }
-        return std::move(f);
+    return mtlist.seal_active_memtable_immediate(std::move(permit)).handle_exception([this, schema = mtlist.back()->schema()] (std::exception_ptr ep) {
+        dblog.error("Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
+        return make_exception_future<>(ep);
     });
 }
 
