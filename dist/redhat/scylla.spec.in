@@ -64,10 +64,14 @@ Conflicts:      abrt
 %description server
 This package contains ScyllaDB server.
 
+%if 0%{?fedora} >= 27
+# Does not able to build with redifning __debug_install_post, disable it
+%else
 %define __debug_install_post   \
     %{_rpmconfigdir}/find-debuginfo.sh %{?_missing_build_ids_terminate_build:--strict-build-id} %{?_find_debuginfo_opts} "%{_builddir}/%{?buildsubdir}";\
     cp scylla-gdb.py ${RPM_BUILD_ROOT}/usr/src/debug/%{name}-%{version}/;\
     %{nil}
+%endif
 
 %build
 
@@ -162,6 +166,9 @@ cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
 cp -r scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scylla-housekeeping
 cp -P dist/common/sbin/*  $RPM_BUILD_ROOT%{_sbindir}/
+%if 0%{?fedora} >= 27
+install -m755 scylla-gdb.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+%endif
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -243,6 +250,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_config_get.py
 %{_prefix}/lib/scylla/scylla_lib.sh
 %{_prefix}/lib/scylla/scylla_util.py
+%if 0%{?fedora} >= 27
+%{_prefix}/lib/scylla/scylla-gdb.py
+%endif
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
