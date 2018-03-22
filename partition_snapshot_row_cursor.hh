@@ -387,7 +387,7 @@ public:
     size_t memory_usage() const {
         size_t result = 0;
         for (const position_in_version& v : _current_row) {
-            result += v.it->memory_usage();
+            result += v.it->memory_usage(_schema);
         }
         return result;
     }

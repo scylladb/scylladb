@@ -335,7 +335,7 @@ public:
 
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
-    size_t external_memory_usage() const;
+    size_t external_memory_usage(const schema&, column_kind) const;
 
     cell_hash_opt cell_hash_for(column_id id) const;
 
@@ -842,7 +842,7 @@ public:
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
-    size_t memory_usage() const;
+    size_t memory_usage(const schema&) const;
     void on_evicted(cache_tracker&) noexcept;
 };
 
@@ -1108,7 +1108,7 @@ public:
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
-    size_t external_memory_usage() const;
+    size_t external_memory_usage(const schema&) const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;

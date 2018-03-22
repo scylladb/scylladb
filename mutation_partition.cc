@@ -1162,41 +1162,43 @@ row::find_cell(column_id id) const {
     return c_a_h ? &c_a_h->cell : nullptr;
 }
 
-size_t row::external_memory_usage() const {
+size_t row::external_memory_usage(const schema& s, column_kind kind) const {
     size_t mem = 0;
     if (_type == storage_type::vector) {
         mem += _storage.vector.v.external_memory_usage();
+        column_id id = 0;
         for (auto&& c_a_h : _storage.vector.v) {
-            mem += c_a_h.cell.external_memory_usage();
+            auto& cdef = s.column_at(kind, id++);
+            mem += c_a_h.cell.external_memory_usage(*cdef.type);
         }
     } else {
         for (auto&& ce : _storage.set) {
-            mem += sizeof(cell_entry) + ce.cell().external_memory_usage();
+            auto& cdef = s.column_at(kind, ce.id());
+            mem += sizeof(cell_entry) + ce.cell().external_memory_usage(*cdef.type);
         }
     }
     return mem;
 }
 
-size_t rows_entry::memory_usage() const {
+size_t rows_entry::memory_usage(const schema& s) const {
     size_t size = 0;
     if (!dummy()) {
         size += key().external_memory_usage();
     }
     return size +
-           row().cells().external_memory_usage() +
+           row().cells().external_memory_usage(s, column_kind::regular_column) +
            sizeof(rows_entry);
 }
 
-size_t mutation_partition::external_memory_usage() const {
+size_t mutation_partition::external_memory_usage(const schema& s) const {
     size_t sum = 0;
-    auto& s = static_row();
-    sum += s.external_memory_usage();
+    sum += static_row().external_memory_usage(s, column_kind::static_column);
     for (auto& clr : clustered_rows()) {
-        sum += clr.memory_usage();
+        sum += clr.memory_usage(s);
     }
 
     for (auto& rtb : row_tombstones()) {
-        sum += rtb.memory_usage();
+        sum += rtb.memory_usage(s);
     }
 
     return sum;
@@ -2017,12 +2019,12 @@ public:
     }
     stop_iteration consume(static_row&& sr, tombstone, bool is_alive) {
         _static_row_is_alive = is_alive;
-        _memory_accounter.update(sr.memory_usage());
+        _memory_accounter.update(sr.memory_usage(_schema));
         return _mutation_consumer->consume(std::move(sr));
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_alive) {
         _live_rows += is_alive;
-        auto stop = _memory_accounter.update_and_check(cr.memory_usage());
+        auto stop = _memory_accounter.update_and_check(cr.memory_usage(_schema));
         if (is_alive) {
             // We are considering finishing current read only after consuming a
             // live clustering row. While sending a single live row is enough to
@@ -2034,7 +2036,7 @@ public:
         return _mutation_consumer->consume(std::move(cr)) || _stop;
     }
     stop_iteration consume(range_tombstone&& rt) {
-        _memory_accounter.update(rt.memory_usage());
+        _memory_accounter.update(rt.memory_usage(_schema));
         return _mutation_consumer->consume(std::move(rt));
     }
 

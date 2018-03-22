@@ -174,7 +174,7 @@ public:
     bool is_referenced_from_entry() const;
     partition_version_ref& back_reference() { return *_backref; }
 
-    size_t size_in_allocator(allocation_strategy& allocator) const;
+    size_t size_in_allocator(const schema& s, allocation_strategy& allocator) const;
 };
 
 using partition_version_range = anchorless_list_base_hook<partition_version>::range;

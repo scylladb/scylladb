@@ -27,12 +27,22 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <seastar/util/defer.hh>
 
+static size_t compute_buffer_size(const schema& s, circular_buffer<mutation_fragment>& buffer)
+{
+    return boost::accumulate(
+        buffer
+        | boost::adaptors::transformed([&s] (const mutation_fragment& mf) {
+            return mf.memory_usage(s);
+        }), size_t(0)
+    );
+}
+
 void flat_mutation_reader::impl::forward_buffer_to(const position_in_partition& pos) {
     _buffer.erase(std::remove_if(_buffer.begin(), _buffer.end(), [this, &pos] (mutation_fragment& f) {
         return !f.relevant_for_range_assuming_after(*_schema, pos);
     }), _buffer.end());
 
-    _buffer_size = boost::accumulate(_buffer | boost::adaptors::transformed(std::mem_fn(&mutation_fragment::memory_usage)), size_t(0));
+    _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
 void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
@@ -41,7 +51,7 @@ void flat_mutation_reader::impl::clear_buffer_to_next_partition() {
     });
     _buffer.erase(_buffer.begin(), next_partition_start);
 
-    _buffer_size = boost::accumulate(_buffer | boost::adaptors::transformed(std::mem_fn(&mutation_fragment::memory_usage)), size_t(0));
+    _buffer_size = compute_buffer_size(*_schema, _buffer);
 }
 
 flat_mutation_reader flat_mutation_reader::impl::reverse_partitions(flat_mutation_reader::impl& original) {

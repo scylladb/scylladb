@@ -428,9 +428,11 @@ public:
 };
 
 class partition_snapshot_accounter {
+    const schema& _schema;
     flush_memory_accounter& _accounter;
 public:
-    partition_snapshot_accounter(flush_memory_accounter& acct): _accounter(acct) {}
+    partition_snapshot_accounter(const schema& s, flush_memory_accounter& acct)
+        : _schema(s), _accounter(acct) {}
 
     // We will be passed mutation fragments here, and they are allocated using the standard
     // allocator. So we can't compute the size in memtable precisely. However, precise accounting is
@@ -439,11 +441,11 @@ public:
     // allocation. As long as our size read here is lesser or equal to the size in the memtables, we
     // are safe, and worst case we will allow a bit fewer requests in.
     void operator()(const range_tombstone& rt) {
-        _accounter.update_bytes_read(rt.memory_usage());
+        _accounter.update_bytes_read(rt.memory_usage(_schema));
     }
 
     void operator()(const static_row& sr) {
-        _accounter.update_bytes_read(sr.external_memory_usage());
+        _accounter.update_bytes_read(sr.external_memory_usage(_schema));
     }
 
     void operator()(const partition_start& ph) {}
@@ -457,7 +459,7 @@ public:
         // and we don't know which one(s) contributed to the generation of this mutation fragment.
         //
         // We will add the size of the struct here, and that should be good enough.
-        _accounter.update_bytes_read(sizeof(rows_entry) + cr.external_memory_usage());
+        _accounter.update_bytes_read(sizeof(rows_entry) + cr.external_memory_usage(_schema));
     }
 };
 
@@ -500,7 +502,7 @@ private:
             auto cr = query::clustering_key_filter_ranges::get_ranges(*schema(), schema()->full_slice(), key_and_snp->first.key());
             auto snp_schema = key_and_snp->second->schema();
             auto mpsr = make_partition_snapshot_flat_reader<partition_snapshot_accounter>(snp_schema, std::move(key_and_snp->first), std::move(cr),
-                            std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, _flushed_memory);
+                            std::move(key_and_snp->second), false, region(), read_section(), mtbl(), streamed_mutation::forwarding::no, *snp_schema, _flushed_memory);
             if (snp_schema->version() != schema()->version()) {
                 _partition_reader = transform(std::move(mpsr), schema_upgrader(schema()));
             } else {

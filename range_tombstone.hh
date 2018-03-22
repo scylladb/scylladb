@@ -157,12 +157,12 @@ public:
         return true;
     }
 
-    size_t external_memory_usage() const {
+    size_t external_memory_usage(const schema&) const {
         return start.external_memory_usage() + end.external_memory_usage();
     }
 
-    size_t memory_usage() const {
-        return sizeof(range_tombstone) + external_memory_usage();
+    size_t memory_usage(const schema& s) const {
+        return sizeof(range_tombstone) + external_memory_usage(s);
     }
 private:
     void move_assign(range_tombstone&& rt) {

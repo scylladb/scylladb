@@ -65,7 +65,7 @@ public:
     bool operator==(const atomic_cell_or_collection& other) const {
         return _data == other._data;
     }
-    size_t external_memory_usage() const {
+    size_t external_memory_usage(const abstract_type&) const {
         return _data.external_memory_usage();
     }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);

@@ -113,12 +113,12 @@ public:
 
     position_in_partition_view position() const;
 
-    size_t external_memory_usage() const {
-        return _ck.external_memory_usage() + _cells.external_memory_usage();
+    size_t external_memory_usage(const schema& s) const {
+        return _ck.external_memory_usage() + _cells.external_memory_usage(s, column_kind::regular_column);
     }
 
-    size_t memory_usage() const {
-        return sizeof(clustering_row) + external_memory_usage();
+    size_t memory_usage(const schema& s) const {
+        return sizeof(clustering_row) + external_memory_usage(s);
     }
 
     bool equal(const schema& s, const clustering_row& other) const {
@@ -162,12 +162,12 @@ public:
 
     position_in_partition_view position() const;
 
-    size_t external_memory_usage() const {
-        return _cells.external_memory_usage();
+    size_t external_memory_usage(const schema& s) const {
+        return _cells.external_memory_usage(s, column_kind::static_column);
     }
 
-    size_t memory_usage() const {
-        return sizeof(static_row) + external_memory_usage();
+    size_t memory_usage(const schema& s) const {
+        return sizeof(static_row) + external_memory_usage(s);
     }
 
     bool equal(const schema& s, const static_row& other) const {
@@ -193,12 +193,12 @@ public:
 
     position_in_partition_view position() const;
 
-    size_t external_memory_usage() const {
+    size_t external_memory_usage(const schema&) const {
         return _key.external_memory_usage();
     }
 
-    size_t memory_usage() const {
-        return sizeof(partition_start) + external_memory_usage();
+    size_t memory_usage(const schema& s) const {
+        return sizeof(partition_start) + external_memory_usage(s);
     }
 
     bool equal(const schema& s, const partition_start& other) const {
@@ -212,12 +212,12 @@ class partition_end final {
 public:
     position_in_partition_view position() const;
 
-    size_t external_memory_usage() const {
+    size_t external_memory_usage(const schema&) const {
         return 0;
     }
 
-    size_t memory_usage() const {
-        return sizeof(partition_end) + external_memory_usage();
+    size_t memory_usage(const schema& s) const {
+        return sizeof(partition_end) + external_memory_usage(s);
     }
 
     bool equal(const schema& s, const partition_end& other) const {
@@ -466,9 +466,9 @@ public:
         abort();
     }
 
-    size_t memory_usage() const {
+    size_t memory_usage(const schema& s) const {
         if (!_data->_size_in_bytes) {
-            _data->_size_in_bytes = sizeof(data) + visit([] (auto& mf) -> size_t { return mf.external_memory_usage(); });
+            _data->_size_in_bytes = sizeof(data) + visit([&s] (auto& mf) -> size_t { return mf.external_memory_usage(s); });
         }
         return *_data->_size_in_bytes;
     }

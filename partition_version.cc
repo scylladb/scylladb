@@ -77,9 +77,9 @@ stop_iteration partition_version::clear_gently(cache_tracker* tracker) noexcept 
     return _partition.clear_gently(tracker);
 }
 
-size_t partition_version::size_in_allocator(allocation_strategy& allocator) const {
+size_t partition_version::size_in_allocator(const schema& s, allocation_strategy& allocator) const {
     return allocator.object_memory_size_in_allocator(this) +
-           partition().external_memory_usage();
+           partition().external_memory_usage(s);
 }
 
 namespace {
@@ -489,7 +489,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                     auto current = &*src_snp->version();
                     while (current) {
                         dirty_size += allocator.object_memory_size_in_allocator(current)
-                            + current->partition().static_row().external_memory_usage();
+                            + current->partition().static_row().external_memory_usage(s, column_kind::static_column);
                         dst.partition().apply(current->partition().partition_tombstone());
                         if (static_row_continuous) {
                             row& static_row = dst.partition().static_row();
@@ -500,7 +500,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                                 static_row.apply(s, column_kind::static_column, current->partition().static_row());
                             }
                         }
-                        dirty_size += current->partition().row_tombstones().external_memory_usage();
+                        dirty_size += current->partition().row_tombstones().external_memory_usage(s);
                         range_tombstone_list& tombstones = dst.partition().row_tombstones();
                         // FIXME: defer while applying range tombstones
                         if (can_move) {
