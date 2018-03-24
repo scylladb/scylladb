@@ -379,7 +379,6 @@ scylla_core = (['database.cc',
                  'frozen_mutation.cc',
                  'memtable.cc',
                  'schema_mutations.cc',
-                 'release.cc',
                  'supervisor.cc',
                  'utils/logalloc.cc',
                  'utils/large_bitset.cc',
@@ -668,7 +667,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/cache_temperature.idl.hh',
         ]
 
-scylla_tests_dependencies = scylla_core + api + idls + [
+scylla_tests_dependencies = scylla_core + idls + [
     'tests/cql_test_env.cc',
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
@@ -681,7 +680,7 @@ scylla_tests_seastar_deps = [
 ]
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api,
+    'scylla': idls + ['main.cc', 'release.cc'] + scylla_core + api,
 }
 
 pure_boost_tests = set([
@@ -740,7 +739,7 @@ for t in scylla_tests:
         deps[t] += scylla_tests_dependencies 
         deps[t] += scylla_tests_seastar_deps
     else:
-        deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
+        deps[t] += scylla_core + idls + ['tests/cql_test_env.cc']
 
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
@@ -759,6 +758,7 @@ deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/mur
 deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc']
 deps['tests/log_heap_test'] = ['tests/log_heap_test.cc']
 deps['tests/anchorless_list_test'] = ['tests/anchorless_list_test.cc']
+deps['tests/perf/perf_fast_forward'] += ['release.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
