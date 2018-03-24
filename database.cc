@@ -1076,7 +1076,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
                 // If we failed this write we will try the write again and that will create a new flush reader
                 // that will decrease dirty memory again. So we need to reset the accounting.
                 old->revert_flushed_memory();
-                return stop_iteration::no;
+                return stop_iteration(_async_gate.is_closed());
             });
         });
     });
