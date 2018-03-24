@@ -178,6 +178,7 @@ SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
                     muts.push_back(mutation(m.decorated_key(), m.schema()));
                 }
                 fragment_scatterer c{muts};
+                c.consume(m.partition().partition_tombstone());
                 auto sm = streamed_mutation_from_mutation(m);
                 do_consume_streamed_mutation_flattened(sm, c).get();
                 for (int i = 0; i < n; ++i) {
