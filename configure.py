@@ -668,7 +668,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/cache_temperature.idl.hh',
         ]
 
-scylla_tests_dependencies = scylla_core + api + idls + [
+scylla_tests_dependencies = scylla_core + idls + [
     'tests/cql_test_env.cc',
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
@@ -740,7 +740,7 @@ for t in scylla_tests:
         deps[t] += scylla_tests_dependencies 
         deps[t] += scylla_tests_seastar_deps
     else:
-        deps[t] += scylla_core + api + idls + ['tests/cql_test_env.cc']
+        deps[t] += scylla_core + idls + ['tests/cql_test_env.cc']
 
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
