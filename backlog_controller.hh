@@ -47,6 +47,7 @@
 class backlog_controller {
 public:
     future<> shutdown() {
+        _update_timer.cancel();
         return std::move(_inflight_update);
     }
 protected:
