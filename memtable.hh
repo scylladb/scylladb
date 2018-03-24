@@ -27,9 +27,11 @@
 #include "database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
+#include "encoding_stats.hh"
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/rp_set.hh"
+#include "utils/extremum_tracking.hh"
 #include "utils/logalloc.hh"
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
@@ -135,6 +137,95 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
+
+    class encoding_stats_collector {
+    private:
+        min_tracker<api::timestamp_type> min_timestamp;
+        min_tracker<uint32_t> min_local_deletion_time;
+        min_tracker<uint32_t> min_ttl;
+
+        void update_timestamp(api::timestamp_type ts) {
+            if (ts != api::missing_timestamp) {
+                min_timestamp.update(ts);
+            }
+        }
+
+    public:
+        encoding_stats_collector()
+            : min_timestamp(encoding_stats::timestamp_epoch)
+            , min_local_deletion_time(encoding_stats::deletion_time_epoch)
+            , min_ttl(encoding_stats::ttl_epoch)
+        {}
+
+        void update(atomic_cell_view cell) {
+            update_timestamp(cell.timestamp());
+            if (cell.is_live_and_has_ttl()) {
+                min_ttl.update(cell.ttl().count());
+                min_local_deletion_time.update(cell.expiry().time_since_epoch().count());
+            } else if (!cell.is_live()) {
+                min_local_deletion_time.update(cell.deletion_time().time_since_epoch().count());
+            }
+        }
+
+        void update(tombstone tomb) {
+            if (tomb) {
+                update_timestamp(tomb.timestamp);
+                min_local_deletion_time.update(tomb.deletion_time.time_since_epoch().count());
+            }
+        }
+
+        void update(const schema& s, const row& r, column_kind kind) {
+            r.for_each_cell([this, &s, kind](column_id id, const atomic_cell_or_collection& item) {
+                auto& col = s.column_at(kind, id);
+                if (col.is_atomic()) {
+                    update(item.as_atomic_cell());
+                } else {
+                    auto mview = collection_type_impl::deserialize_mutation_form(item.as_collection_mutation());
+                    update(mview.tomb);
+                    for (auto& entry : mview.cells) {
+                        update(entry.second);
+                    }
+                }
+            });
+        }
+
+        void update(const range_tombstone& rt) {
+            update(rt.tomb);
+        }
+
+        void update(const row_marker& marker) {
+            update_timestamp(marker.timestamp());
+            if (!marker.is_missing()) {
+                if (!marker.is_live()) {
+                    min_local_deletion_time.update(marker.deletion_time().time_since_epoch().count());
+                } else if (marker.is_expiring()) {
+                    min_ttl.update(marker.ttl().count());
+                    min_local_deletion_time.update(marker.expiry().time_since_epoch().count());
+                }
+            }
+        }
+
+        void update(const schema& s, const deletable_row& dr) {
+            update(dr.marker());
+            update(dr.deleted_at().tomb());
+            update(s, dr.cells(), column_kind::regular_column);
+        }
+
+        void update(const schema& s, const mutation_partition& mp) {
+            update(s, mp.static_row(), column_kind::static_column);
+            for (auto&& row_entry : mp.clustered_rows()) {
+                update(s, row_entry.row());
+            }
+            for (auto&& rt : mp.row_tombstones()) {
+                update(rt);
+            }
+        }
+
+        encoding_stats get() const {
+            return { min_timestamp.get(), min_local_deletion_time.get(), min_ttl.get() };
+        }
+    } _stats_collector;
+
     void update(db::rp_handle&&);
     friend class row_cache;
     friend class memtable_entry;
@@ -180,6 +271,9 @@ public:
 
     logalloc::region_group* region_group() {
         return group();
+    }
+    encoding_stats get_stats() const {
+        return _stats_collector.get();
     }
 public:
     memtable_list* get_memtable_list() {

@@ -380,7 +380,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
             mt->apply(m);
         }
 
-        sst->write_components(mt->make_flat_reader(s), partitions.size(), s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), partitions.size(), s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         return as_mutation_source(sst);
@@ -848,7 +848,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
                                 sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
         assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
     });
@@ -899,7 +899,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         {
@@ -957,7 +957,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         {
@@ -1012,7 +1012,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
                                               sstables::sstable::format_types::big);
             sstable_writer_config cfg;
             cfg.promoted_index_block_size = 1;
-            sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+            sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
             sst->load().get();
 
             {
@@ -1056,7 +1056,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
                                           version,
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         {
@@ -1095,7 +1095,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.promoted_index_block_size = 1;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         assert_that(get_index_reader(sst)).is_empty(*s);
@@ -1134,7 +1134,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
                                           sstables::sstable::format_types::big);
         sstable_writer_config cfg;
         cfg.correctly_serialize_non_compound_range_tombstones = false;
-        sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+        sst->write_components(mt->make_flat_reader(s), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         {
@@ -1187,7 +1187,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         sstable_writer_config cfg;
         sst->write_components(make_combined_reader(s,
             mt1->make_flat_reader(s),
-            mt2->make_flat_reader(s)), 1, s, cfg).get();
+            mt2->make_flat_reader(s)), 1, s, cfg, encoding_stats{}).get();
         sst->load().get();
 
         assert_that(sst->as_mutation_source().make_reader(s))

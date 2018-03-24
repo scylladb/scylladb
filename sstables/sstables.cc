@@ -2462,6 +2462,7 @@ future<> sstable::write_components(
         uint64_t estimated_partitions,
         schema_ptr schema,
         const sstable_writer_config& cfg,
+        encoding_stats stats,
         const io_priority_class& pc) {
     if (cfg.replay_position) {
         _collector.set_replay_position(cfg.replay_position.value());
