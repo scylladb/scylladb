@@ -845,7 +845,7 @@ void mutate_MV(const dht::token& base_token,
                 // FIXME: Temporary hack: send the write directly to paired_endpoint,
                 // without a batchlog, and without checking for success
                 // Note we don't wait for the asynchronous operation to complete
-                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
+                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, { }, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
                     vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
                 });;
             }
@@ -855,7 +855,7 @@ void mutate_MV(const dht::token& base_token,
             // the base replicas, but this is probably excessive - see
             // See https://issues.apache.org/jira/browse/CASSANDRA-14262
             for (auto&& pending : pending_endpoints) {
-                service::get_local_storage_proxy().send_to_endpoint(mut, pending, db::write_type::VIEW).handle_exception([pending] (auto ep) {
+                service::get_local_storage_proxy().send_to_endpoint(mut, pending, { }, db::write_type::VIEW).handle_exception([pending] (auto ep) {
                     vlogger.error("Error applying view update to pending endpoint {}: {}", pending, ep);
                 });;
             }

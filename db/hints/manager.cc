@@ -335,7 +335,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_to_endpoint(std::move(m), end_point_key(), write_type::SIMPLE);
+            return _proxy.send_to_endpoint(std::move(m), end_point_key(), { }, write_type::SIMPLE);
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             return _proxy.mutate({std::move(m)}, consistency_level::ALL, nullptr);
