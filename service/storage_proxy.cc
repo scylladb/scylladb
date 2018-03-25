@@ -1563,14 +1563,31 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
     return hints_enabled() && _hints_manager->too_many_in_flight_hints_for(target);
 }
 
-future<> storage_proxy::send_to_endpoint(mutation m, gms::inet_address target, db::write_type type) {
+future<> storage_proxy::send_to_endpoint(
+        mutation m,
+        gms::inet_address target,
+        std::vector<gms::inet_address> pending_endpoints,
+        db::write_type type) {
     utils::latency_counter lc;
     lc.start();
 
+    std::unordered_set<gms::inet_address> targets(pending_endpoints.begin(), pending_endpoints.end());
+    targets.insert(std::move(target));
     return mutate_prepare(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, type,
-        [this, target] (const mutation& m, db::consistency_level cl, db::write_type type) {
+        [this, targets = std::move(targets), pending_endpoints = std::move(pending_endpoints)] (
+                const mutation& m,
+                db::consistency_level cl,
+                db::write_type type) mutable {
             auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-            return create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), {target}, {}, {}, nullptr);
+            return create_write_response_handler(
+                    ks,
+                    cl,
+                    type,
+                    std::make_unique<shared_mutation>(m),
+                    std::move(targets),
+                    pending_endpoints,
+                    { },
+                    nullptr);
         }).then([this] (std::vector<unique_response_handler> ids) {
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
         }).then_wrapped([p = shared_from_this(), lc] (future<>&& f) {
