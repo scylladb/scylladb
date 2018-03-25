@@ -31,6 +31,7 @@
 #include "core/thread.hh"
 #include "sstables/index_reader.hh"
 #include "tests/test_services.hh"
+#include <array>
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -217,7 +218,7 @@ inline sstring get_test_dir(const sstring& name, const schema_ptr s)
     return seastar::sprint("tests/sstables/%s/%s/%s-1c6ace40fad111e7b9cf000000000002", name, s->ks_name(), s->cf_name());
 }
 
-inline sstables::sstable::version_types all_sstable_versions[] = {
+inline std::array<sstables::sstable::version_types, 2> all_sstable_versions = {
     sstables::sstable::version_types::ka,
     sstables::sstable::version_types::la,
 };
