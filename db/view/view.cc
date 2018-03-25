@@ -830,33 +830,30 @@ void mutate_MV(const dht::token& base_token,
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
         if (paired_endpoint) {
             // When paired endpoint is the local node, we can just apply
-            // the mutation locally.
+            // the mutation locally, unless there are pending endpoints, in
+            // which case we want to do an ordinary write so the view mutation
+            // is sent to them as well.
             auto my_address = utils::fb_utilities::get_broadcast_address();
-            if (*paired_endpoint == my_address &&
-                service::get_local_storage_service().is_joined()) {
-                    // Note that we start here an asynchronous apply operation, and
-                    // do not wait for it to complete.
-                    // Note also that mutate_locally(mut) copies mut (in
-                    // frozen form) so don't need to increase its lifetime.
-                    service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
-                        vlogger.error("Error applying local view update: {}", ep);
-                    });
+            if (*paired_endpoint == my_address && service::get_local_storage_service().is_joined()
+                    && pending_endpoints.empty()) {
+                // Note that we start here an asynchronous apply operation, and
+                // do not wait for it to complete.
+                // Note also that mutate_locally(mut) copies mut (in
+                // frozen form) so don't need to increase its lifetime.
+                service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
+                    vlogger.error("Error applying local view update: {}", ep);
+                });
             } else {
-                // FIXME: Temporary hack: send the write directly to paired_endpoint,
-                // without a batchlog, and without checking for success
+                vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
                 // Note we don't wait for the asynchronous operation to complete
-                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, { }, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
+                // without a batchlog, and without checking for success.
+                // When the ownership of the view partition is being moved to a
+                // new node (or nodes), listed in pending_enpoints, we also need
+                // to send the update there. Currently, we do this from *each* of
+                // the base replicas, but this is probably excessive - see
+                // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
+                service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
                     vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
-                });;
-            }
-            // When the ownership of the view partition is being moved to a
-            // new node (or nodes), listed in pending_enpoints, we also need
-            // to send the update there. Currently, we do this from *each* of
-            // the base replicas, but this is probably excessive - see
-            // See https://issues.apache.org/jira/browse/CASSANDRA-14262
-            for (auto&& pending : pending_endpoints) {
-                service::get_local_storage_proxy().send_to_endpoint(mut, pending, { }, db::write_type::VIEW).handle_exception([pending] (auto ep) {
-                    vlogger.error("Error applying view update to pending endpoint {}: {}", pending, ep);
                 });;
             }
         } else {
