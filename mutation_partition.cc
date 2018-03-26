@@ -710,6 +710,12 @@ void row::prepare_hash(const schema& s, column_kind kind) const {
     });
 }
 
+void row::clear_hash() const {
+    for_each_cell([] (column_id, const cell_and_hash& c_a_h) {
+        c_a_h.hash = { };
+    });
+}
+
 template<typename RowWriter>
 static void get_compacted_row_slice(const schema& s,
     const query::partition_slice& slice,
