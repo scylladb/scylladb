@@ -59,6 +59,8 @@ namespace db {
 class config;
 class rp_set;
 class rp_handle;
+class commitlog_file_extension;
+class extensions;
 
 /*
  * Commit Log tracks every write operation into the system. The aim of
@@ -126,6 +128,8 @@ public:
 
         sync_mode mode = sync_mode::PERIODIC;
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
+
+        const db::extensions * extensions = nullptr;
     };
 
     struct descriptor {
@@ -268,7 +272,13 @@ public:
      *
      * The list will be empty when called for the second time.
      */
-    std::vector<sstring> get_segments_to_replay();
+    std::vector<sstring> get_segments_to_replay() const;
+
+    /**
+     * Delete aforementioned segments, and possible metadata
+     * associated with them
+     */
+    future<> delete_segments(std::vector<sstring>) const;
 
     uint64_t get_total_size() const;
     uint64_t get_completed_tasks() const;
@@ -345,9 +355,8 @@ public:
         uint64_t _bytes;
     };
 
-    static subscription<temporary_buffer<char>, replay_position> read_log_file(file, commit_load_reader_func, position_type = 0);
     static future<std::unique_ptr<subscription<temporary_buffer<char>, replay_position>>> read_log_file(
-            const sstring&, commit_load_reader_func, position_type = 0);
+            const sstring&, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
 private:
     commitlog(config);
 

@@ -44,6 +44,7 @@
 #include <malloc.h>
 #include <regex>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <exception>
@@ -67,12 +68,14 @@
 #include "commitlog.hh"
 #include "rp_set.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "utils/data_input.hh"
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
 #include "log.hh"
 #include "commitlog_entry.hh"
+#include "commitlog_extensions.hh"
 #include "service/priority_manager.hh"
 
 #include <boost/range/numeric.hpp>
@@ -119,6 +122,7 @@ db::commitlog::config::config(const db::config& cfg)
     , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
     , commitlog_sync_period_in_ms(cfg.commitlog_sync_period_in_ms())
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
+    , extensions(&cfg.extensions())
 {}
 
 db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v)
@@ -198,6 +202,7 @@ public:
     request_controller_type _request_controller;
 
     stdx::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
+    std::unordered_map<sstring, descriptor> _files_to_delete;
 
     void account_memory_usage(size_t size) {
         _request_controller.consume(size);
@@ -275,6 +280,11 @@ public:
     void create_counters(const sstring& metrics_category_name);
 
     future<> orphan_all();
+
+    void add_file_to_delete(sstring, descriptor);
+    future<> do_pending_deletes();
+
+    future<> delete_segments(std::vector<sstring>);
 
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type&);
@@ -443,16 +453,11 @@ public:
     }
     ~segment() {
         if (is_clean()) {
-            clogger.debug("Segment {} is no longer active and will be deleted now", *this);
+            clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
-            try {
-                commit_io_check([] (const char* fname) { ::unlink(fname); },
-                        _file_name.c_str());
-            } catch (...) {
-                clogger.error("Could not delete segment {}: {}", *this, std::current_exception());
-            }
+            _segment_manager->add_file_to_delete(_file_name, _desc);
         } else {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
         }
@@ -1173,12 +1178,39 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
+    static const auto flags = open_flags::wo | open_flags::create;
+
     descriptor d(next_id(), cfg.fname_prefix);
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
-    return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
+    auto filename = cfg.commit_log_location + "/" + d.filename();
+    auto fut = do_io_check(commit_error_handler, [&] {
+        auto fut = open_file_dma(filename, flags, opt);
+        if (cfg.extensions && !cfg.extensions->commitlog_file_extensions().empty()) {
+            fut = fut.then([this, filename](file f) {
+                return do_with(std::move(f), [this, filename](file& f) {
+                    auto ext_range = cfg.extensions->commitlog_file_extensions();
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                        // note: we're potentially wrapping more than once. extension mechanism
+                        // is responsible for order being sane.
+                        return ext->wrap_file(filename, f, flags).then([&f](file of) {
+                            if (of) {
+                                f = std::move(of);
+                            }
+                        });
+                    }).then([&f] {
+                        return f;
+                    });
+                });
+            });
+        }
+        return fut;
+    });
+
+    return fut.then([this, d, active, filename](file f) {
+        f = make_checked_file(commit_error_handler, f);
         // xfs doesn't like files extended betond eof, so enlarge the file
-        return f.truncate(max_size).then([this, d, active, f] () mutable {
+        return f.truncate(max_size).then([this, d, active, f, filename] () mutable {
             auto s = make_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
         });
@@ -1292,15 +1324,23 @@ void db::commitlog::segment_manager::discard_unused_segments() {
     if (i != _segments.end()) {
         _segments.erase(i, _segments.end());
     }
+
+    // launch in background, but guard with gate so this deletion is
+    // sure to finish in shutdown, because at least through this path,
+    // segments on deletion queue could be non-empty, and we don't want
+    // those accidentally left around for replay.
+    if (!_shutdown) {
+        with_gate(_gate, [this] {
+            return do_pending_deletes();
+        });
+    }
 }
 
-// FIXME: pop() will call unlink -> sleeping in reactor thread.
-// Not urgent since mostly called during shutdown, but have to fix.
 future<> db::commitlog::segment_manager::clear_reserve_segments() {
     while (!_reserve_segments.empty()) {
         _reserve_segments.pop();
     }
-    return make_ready_future<>();
+    return do_pending_deletes();
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments(bool shutdown) {
@@ -1343,6 +1383,36 @@ future<> db::commitlog::segment_manager::shutdown() {
         });
     }
     return _shutdown_promise->get_shared_future();
+}
+
+void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descriptor d) {
+    assert(!_files_to_delete.count(filename));
+    _files_to_delete.emplace(std::move(filename), std::move(d));
+}
+
+future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
+    auto i = files.begin();
+    auto e = files.end();
+
+    return parallel_for_each(i, e, [this](auto& filename) {
+        auto f = make_ready_future();
+        auto exts = cfg.extensions;
+        if (exts && !exts->commitlog_file_extensions().empty()) {
+            f = parallel_for_each(exts->commitlog_file_extensions(), [&](auto& ext) {
+                return ext->before_delete(filename);
+            });
+        }
+        return f.finally([&] {
+            clogger.debug("Deleting segment file {}", filename);
+            return commit_io_check(&seastar::remove_file, filename);
+        }).handle_exception([&filename](auto ep) {
+            clogger.error("Could not delete segment {}: {}", filename, ep);
+        });
+    }).finally([files = std::move(files)] {});
+}
+
+future<> db::commitlog::segment_manager::do_pending_deletes() {
+    return delete_segments(boost::copy_range<std::vector<sstring>>(std::exchange(_files_to_delete, {}) | boost::adaptors::map_keys));
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
@@ -1393,7 +1463,7 @@ void db::commitlog::segment_manager::on_timer() {
                 flush_segments();
             }
         }
-        return make_ready_future<>();
+        return do_pending_deletes();
     });
     arm();
 }
@@ -1606,17 +1676,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 // No commit_io_check needed in the log reader since the database will fail
 // on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
-db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
-    return open_checked_file_dma(commit_error_handler, filename, open_flags::ro).then([next = std::move(next), off](file f) {
-       return std::make_unique<subscription<temporary_buffer<char>, replay_position>>(
-           read_log_file(std::move(f), std::move(next), off));
-    });
-}
-
-// No commit_io_check needed in the log reader since the database will fail
-// on error at startup if required
-subscription<temporary_buffer<char>, db::replay_position>
-db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type off) {
+db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off, const db::extensions* exts) {
     struct work {
     private:
         file_input_stream_options make_file_input_stream_options() {
@@ -1838,18 +1898,44 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
     };
 
-    auto w = make_lw_shared<work>(std::move(f), off);
-    auto ret = w->s.listen(std::move(next));
-
-    w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
-        if (!w->failed) {
-            w->s.close();
+    auto fut = do_io_check(commit_error_handler, [&] {
+        auto fut = open_file_dma(filename, open_flags::ro);
+        if (exts && !exts->commitlog_file_extensions().empty()) {
+            fut = fut.then([filename, exts](file f) {
+                return do_with(std::move(f), [filename, exts](file& f) {
+                    auto ext_range = exts->commitlog_file_extensions() | boost::adaptors::reversed;
+                    return do_for_each(ext_range.begin(), ext_range.end(), [&f, filename](auto& ext) {
+                        // note: we're potentially wrapping more than once. extension mechanism
+                        // is responsible for order being sane.
+                        return ext->wrap_file(filename, f, open_flags::ro).then([&f](file of) {
+                            if (of) {
+                                f = std::move(of);
+                            }
+                        });
+                    }).then([&f] {
+                        return make_ready_future<file>(f);
+                    });
+                });
+            });
         }
-    }).handle_exception([w](auto ep) {
-        w->s.set_exception(ep);
+        return fut;
     });
 
-    return ret;
+    return fut.then([off, next](file f) {
+        f = make_checked_file(commit_error_handler, std::move(f));
+        auto w = make_lw_shared<work>(std::move(f), off);
+        auto ret = w->s.listen(next);
+
+        w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
+            if (!w->failed) {
+                w->s.close();
+            }
+        }).handle_exception([w](auto ep) {
+            w->s.set_exception(ep);
+        });
+
+        return std::make_unique<subscription<temporary_buffer<char>, db::replay_position>>(std::move(ret));
+    });
 }
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
@@ -1922,8 +2008,12 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
     });
 }
 
-std::vector<sstring> db::commitlog::get_segments_to_replay() {
+std::vector<sstring> db::commitlog::get_segments_to_replay() const {
     return std::move(_segment_manager->_segments_to_replay);
+}
+
+future<> db::commitlog::delete_segments(std::vector<sstring> files) const {
+    return _segment_manager->delete_segments(std::move(files));
 }
 
 db::rp_handle::rp_handle() noexcept

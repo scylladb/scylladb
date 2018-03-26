@@ -136,6 +136,7 @@ public:
 
     void add(cfg_ref);
     void add(std::initializer_list<cfg_ref>);
+    void add(const std::vector<cfg_ref> &);
 
     boost::program_options::options_description get_options_description();
     boost::program_options::options_description get_options_description(boost::program_options::options_description);
@@ -167,6 +168,9 @@ public:
 
     configs set_values() const;
     configs unset_values() const;
+    const configs& values() const {
+        return _cfgs;
+    }
 private:
     configs
         _cfgs;

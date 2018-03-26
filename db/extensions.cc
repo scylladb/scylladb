@@ -22,6 +22,8 @@
 
 #include "extensions.hh"
 #include "sstables/sstables.hh"
+#include "commitlog/commitlog_extensions.hh"
+#include "schema.hh"
 
 db::extensions::extensions()
 {}
@@ -30,4 +32,12 @@ db::extensions::~extensions()
 
 void db::extensions::add_sstable_file_io_extension(sstring n, sstable_file_io_extension f) {
     _sstable_file_io_extensions[n] = std::move(f);
+}
+
+void db::extensions::add_commitlog_file_extension(sstring n, commitlog_file_extension_ptr f) {
+    _commitlog_file_extensions[n] = std::move(f);
+}
+
+void db::extensions::add_extension_to_schema(schema_ptr s, const sstring& name, shared_ptr<schema_extension> ext) {
+    const_cast<schema *>(s.get())->extensions()[name] = std::move(ext);
 }

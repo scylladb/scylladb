@@ -217,6 +217,10 @@ void utils::config_file::add(std::initializer_list<cfg_ref> cfgs) {
     _cfgs.insert(_cfgs.end(), cfgs.begin(), cfgs.end());
 }
 
+void utils::config_file::add(const std::vector<cfg_ref> & cfgs) {
+    _cfgs.insert(_cfgs.end(), cfgs.begin(), cfgs.end());
+}
+
 bpo::options_description utils::config_file::get_options_description() {
     bpo::options_description opts("");
     return get_options_description(opts);

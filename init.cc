@@ -163,9 +163,9 @@ void configurable::register_configurable(configurable & c) {
     configurables().emplace_back(std::ref(c));
 }
 
-void configurable::append_all(boost::program_options::options_description_easy_init& init) {
+void configurable::append_all(db::config& cfg, boost::program_options::options_description_easy_init& init) {
     for (configurable& c : configurables()) {
-        c.append_options(init);
+        c.append_options(cfg, init);
     }
 }
 
