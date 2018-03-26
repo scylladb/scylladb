@@ -40,6 +40,8 @@ namespace meta {
 
 namespace roles_table {
 
+stdx::string_view creation_query();
+
 constexpr stdx::string_view name{"roles", 5};
 
 stdx::string_view qualified_name() noexcept;

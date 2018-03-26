@@ -132,10 +132,15 @@ future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoi
     return make_ready_future<>();
 }
 
-bool migration_manager::is_ready_for_bootstrap() {
+bool migration_manager::have_schema_agreement() {
+    const auto known_endpoints = gms::get_local_gossiper().endpoint_state_map;
+    if (known_endpoints.size() == 1) {
+        // Us.
+        return true;
+    }
     auto our_version = get_local_storage_proxy().get_db().local().get_version();
     bool match = false;
-    for (auto& x : gms::get_local_gossiper().endpoint_state_map) {
+    for (auto& x : known_endpoints) {
         auto& endpoint = x.first;
         auto& eps = x.second;
         if (endpoint == utils::fb_utilities::get_broadcast_address() || !eps.is_alive()) {
