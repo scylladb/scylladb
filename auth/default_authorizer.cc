@@ -157,18 +157,18 @@ future<> default_authorizer::start() {
                 create_table,
                 _migration_manager).then([this] {
             _finished = do_after_system_ready(_as, [this] {
-                if (legacy_metadata_exists()) {
-                   return any_granted().then([this](bool any) {
-                       if (!any) {
-                           return migrate_legacy_metadata();
-                       }
+                return async([this] {
+                    wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
 
-                       alogger.warn("Ignoring legacy permissions metadata since role permissions exist.");
-                       return make_ready_future<>();
-                   });
-               }
+                    if (legacy_metadata_exists()) {
+                        if (!any_granted().get0()) {
+                            migrate_legacy_metadata().get0();
+                            return;
+                        }
 
-               return make_ready_future<>();
+                        alogger.warn("Ignoring legacy permissions metadata since role permissions exist.");
+                    }
+                });
             });
         });
     });

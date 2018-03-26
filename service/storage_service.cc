@@ -413,7 +413,7 @@ void storage_service::join_token_ring(int delay) {
         }
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        while (!get_local_migration_manager().is_ready_for_bootstrap()) {
+        while (!get_local_migration_manager().have_schema_agreement()) {
             set_mode(mode::JOINING, "waiting for schema information to complete", true);
             sleep(std::chrono::seconds(1)).get();
         }
@@ -442,7 +442,7 @@ void storage_service::join_token_ring(int delay) {
             }
 
             // Check the schema and pending range again
-            while (!get_local_migration_manager().is_ready_for_bootstrap()) {
+            while (!get_local_migration_manager().have_schema_agreement()) {
                 set_mode(mode::JOINING, "waiting for schema information to complete", true);
                 sleep(std::chrono::seconds(1)).get();
             }

@@ -220,8 +220,16 @@ future<> password_authenticator::start() {
      return once_among_shards([this] {
          gensalt(); // do this once to determine usable hashing
 
+         auto f = create_metadata_table_if_missing(
+                 meta::roles_table::name,
+                 _qp,
+                 meta::roles_table::creation_query(),
+                 _migration_manager);
+
          _stopped = do_after_system_ready(_as, [this] {
              return async([this] {
+                 wait_for_schema_agreement(_migration_manager, _qp.db().local()).get0();
+
                  if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash).get0()) {
                      if (legacy_metadata_exists()) {
                          plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
@@ -239,7 +247,7 @@ future<> password_authenticator::start() {
              });
          });
 
-         return make_ready_future<>();
+         return f;
      });
  }
 

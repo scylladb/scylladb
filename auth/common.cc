@@ -25,6 +25,7 @@
 
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "database.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
 
@@ -48,7 +49,7 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
         return exponential_backoff_retry::do_until_value(1s, 1min, as, [func = std::move(func)] {
             return func().then_wrapped([] (auto&& f) -> stdx::optional<empty_state> {
                 if (f.failed()) {
-                    auth_log.warn("Auth task failed with error, rescheduling: {}", f.get_exception());
+                    auth_log.info("Auth task failed with error, rescheduling: {}", f.get_exception());
                     return { };
                 }
                 return { empty_state() };
@@ -58,13 +59,13 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
 }
 
 future<> create_metadata_table_if_missing(
-        const sstring& table_name,
+        stdx::string_view table_name,
         cql3::query_processor& qp,
-        const sstring& cql,
+        stdx::string_view cql,
         ::service::migration_manager& mm) {
     auto& db = qp.db().local();
 
-    if (db.has_schema(meta::AUTH_KS, table_name)) {
+    if (db.has_schema(meta::AUTH_KS, sstring(table_name))) {
         return make_ready_future<>();
     }
 
@@ -83,6 +84,14 @@ future<> create_metadata_table_if_missing(
     b.set_uuid(uuid);
 
     return mm.announce_new_column_family(b.build(), false);
+}
+
+future<> wait_for_schema_agreement(::service::migration_manager& mm, const database& db) {
+    static const auto pause = [] { return sleep(std::chrono::milliseconds(500)); };
+
+    return do_until([&db] { return db.get_version() != database::empty_version; }, pause).then([&mm] {
+        return do_until([&mm] { return mm.have_schema_agreement(); }, pause);
+    });
 }
 
 }

@@ -184,9 +184,7 @@ future<> service::start() {
     return once_among_shards([this] {
         return create_keyspace_if_missing();
     }).then([this] {
-        return _role_manager->start();
-    }).then([this] {
-        return when_all_succeed(_authorizer->start(), _authenticator->start());
+        return when_all_succeed(_role_manager->start(), _authorizer->start(), _authenticator->start());
     }).then([this] {
         _permissions_cache = std::make_unique<permissions_cache>(_permissions_cache_config, *this, log);
     }).then([this] {
