@@ -110,16 +110,42 @@ other_tests = [
     'querier_cache_resource_based_eviction',
 ]
 
-last_len = 0
+
+def print_progress_succint(test_path, test_args, success, cookie):
+    if type(cookie) is int:
+        cookie = (0, 1, cookie)
+
+    last_len, n, n_total = cookie
+    if success:
+        status = "PASSED"
+    else:
+        status = "FAILED"
+
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status, test_path, ' '.join(test_args))
+    if sys.stdout.isatty():
+        print('\r' + ' ' * last_len, end='')
+        last_len = len(msg)
+        print('\r' + msg, end='')
+    else:
+        print(msg)
+
+    return (last_len, n + 1, n_total)
 
 
-def print_status_short(msg, file=sys.stdout):
-    global last_len
-    print('\r' + ' ' * last_len, end='', file=file)
-    last_len = len(msg)
-    print('\r' + msg, end='', file=file)
+def print_status_verbose(test_path, test_args, success, cookie):
+    if type(cookie) is int:
+        cookie = (1, cookie)
 
-print_status_verbose = print
+    n, n_total = cookie
+    if success:
+        status = "PASSED"
+    else:
+        status = "FAILED"
+
+    msg = "[{}/{}] {} {} {}".format(n, n_total, status, test_path, ' '.join(test_args))
+    print(msg)
+
+    return (n + 1, n_total)
 
 
 class Alarm(Exception):
@@ -147,7 +173,7 @@ if __name__ == "__main__":
                         help='Verbose reporting')
     args = parser.parse_args()
 
-    print_status = print_status_verbose if args.verbose else print_status_short
+    print_progress = print_status_verbose if args.verbose else print_progress_succint
 
     test_to_run = []
     modes_to_run = all_modes if not args.mode else [args.mode]
@@ -188,7 +214,6 @@ if __name__ == "__main__":
     env['BOOST_TEST_CATCH_SYSTEM_ERRORS'] = 'no'
     def run_test(path, type, exec_args):
         boost_args = []
-        prefix = '[%d/%d]' % (n + 1, n_total)
         # avoid modifying in-place, it will change test_to_run
         exec_args = exec_args + '--collectd 0'.split()
         file = io.StringIO()
@@ -199,15 +224,13 @@ if __name__ == "__main__":
             xmlout = (args.jenkins + "." + mode + "." +
                       os.path.basename(path.split()[0]) + ".boost.xml")
             boost_args += ['--report_level=no', '--logger=XML,test_suite,' + xmlout]
-        print_status('%s RUNNING %s %s' % (prefix, path, ' '.join(boost_args + exec_args)))
         if type == 'boost':
             boost_args += ['--']
         def report_error(out, report_subcause):
-            print_status('FAILED: %s\n' % (path), file=file)
             report_subcause()
             if out:
                 print('=== stdout START ===', file=file)
-                print(str(out, encoding='UTF-8'), file=file)
+                print(out, file=file)
                 print('=== stdout END ===', file=file)
         out = None
         success = False
@@ -216,41 +239,45 @@ if __name__ == "__main__":
                                 stderr=subprocess.STDOUT,
                                 timeout=args.timeout,
                                 env=env, preexec_fn=os.setsid)
-            print_status('%s PASSED %s' % (prefix, path))
             success = True
         except subprocess.TimeoutExpired as e:
             def report_subcause():
                 print('  timed out', file=file)
-            report_error(e.output, report_subcause=report_subcause)
+            report_error(e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
         except subprocess.CalledProcessError as e:
             def report_subcause():
-                print_status('  with error code {code}\n'.format(code=e.returncode), file=file)
-            report_error(e.output, report_subcause=report_subcause)
+                print('  with error code {code}\n'.format(code=e.returncode), file=file)
+            report_error(e.output.decode(encoding='UTF-8'), report_subcause=report_subcause)
         except Exception as e:
             def report_subcause():
-                print_status('  with error {e}\n'.format(e=e), file=file)
-            report_error(e.out, report_subcause=report_subcause)
-        return (path, success, file.getvalue())
+                print('  with error {e}\n'.format(e=e), file=file)
+            report_error(e, report_subcause=report_subcause)
+        return (path, boost_args + exec_args, success, file.getvalue())
     sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     testmem = 2e9
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=((sysmem - 4e9) // testmem))
     futures = []
     for n, test in enumerate(test_to_run):
         path = test[0]
-        type = test[1]
+        test_type = test[1]
         exec_args = test[2] if len(test) >= 3 else []
-        futures.append(executor.submit(run_test, path, type, exec_args))
+        futures.append(executor.submit(run_test, path, test_type, exec_args))
+
+    cookie = n_total
     for future in futures:
-        path, success, out = future.result()
+        test_path, test_args, success, out = future.result()
+        cookie = print_progress(test_path, test_args, success, cookie)
         if not success:
-            failed_tests.append(path)
-        print(out)
+            failed_tests.append((test_path, out))
 
     if not failed_tests:
         print('\nOK.')
     else:
+        print('\n\nOutput of the failed tests:')
+        for test, out in failed_tests:
+            print("Test {} failed:\n{}".format(test, out))
         print('\n\nThe following test(s) have failed:')
-        for test in failed_tests:
+        for test, out in failed_tests:
             print('  {}'.format(test))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(test_to_run)))
         sys.exit(1)
