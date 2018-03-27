@@ -234,6 +234,13 @@ public:
 
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
+
+    void release() {
+        if (_version) {
+            _version->_backref = nullptr;
+        }
+        _version = nullptr;
+    }
 };
 
 inline
