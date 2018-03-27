@@ -680,7 +680,7 @@ memtable_entry::memtable_entry(memtable_entry&& o) noexcept
 }
 
 stop_iteration memtable_entry::clear_gently() noexcept {
-    return _pe.clear_gently();
+    return _pe.clear_gently(no_cache_tracker);
 }
 
 void memtable::mark_flushed(mutation_source underlying) noexcept {

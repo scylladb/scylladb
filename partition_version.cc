@@ -30,11 +30,6 @@ static void remove_or_mark_as_unique_owner(partition_version* current, cache_tra
 {
     while (current && !current->is_referenced()) {
         auto next = current->next();
-        if (tracker) {
-            for (rows_entry& row : current->partition().clustered_rows()) {
-                tracker->on_remove(row);
-            }
-        }
         current->erase();
         if (tracker) {
             tracker->cleaner().destroy_later(*current);
@@ -75,8 +70,8 @@ partition_version::~partition_version()
     }
 }
 
-stop_iteration partition_version::clear_gently() noexcept {
-    return _partition.clear_gently();
+stop_iteration partition_version::clear_gently(cache_tracker* tracker) noexcept {
+    return _partition.clear_gently(tracker);
 }
 
 size_t partition_version::size_in_allocator(allocation_strategy& allocator) const {
@@ -242,7 +237,7 @@ partition_entry::~partition_entry() {
     }
 }
 
-stop_iteration partition_entry::clear_gently() noexcept {
+stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
     if (!_version) {
         return stop_iteration::yes;
     }
@@ -262,7 +257,7 @@ stop_iteration partition_entry::clear_gently() noexcept {
             break;
         }
         auto next = v->next();
-        if (v->clear_gently() == stop_iteration::no) {
+        if (v->clear_gently(tracker) == stop_iteration::no) {
             _version = partition_version_ref(*v);
             return stop_iteration::no;
         }

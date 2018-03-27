@@ -162,7 +162,7 @@ public:
     ~partition_version();
     // Frees elements of this version in batches.
     // Returns stop_iteration::yes iff there are no more elements to free.
-    stop_iteration clear_gently() noexcept;
+    stop_iteration clear_gently(cache_tracker* tracker) noexcept;
 
     mutation_partition& partition() { return _partition; }
     const mutation_partition& partition() const { return _partition; }
@@ -401,7 +401,7 @@ public:
     // Frees elements of this entry in batches.
     // Active snapshots are detached, data referenced by them is not cleared.
     // Returns stop_iteration::yes iff there are no more elements to free.
-    stop_iteration clear_gently() noexcept;
+    stop_iteration clear_gently(cache_tracker*) noexcept;
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
     static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
 

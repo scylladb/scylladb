@@ -947,7 +947,7 @@ public:
     // Frees elements of the partition in batches.
     // Returns stop_iteration::yes iff there are no more elements to free.
     // Continuity is unspecified after this.
-    stop_iteration clear_gently() noexcept;
+    stop_iteration clear_gently(cache_tracker*) noexcept;
     // Applies mutation_fragment.
     // The fragment must be goverened by the same schema as this object.
     void apply(const schema& s, const mutation_fragment&);
