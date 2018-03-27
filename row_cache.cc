@@ -143,24 +143,6 @@ void cache_tracker::touch(rows_entry& e) {
     _lru.push_front(e);
 }
 
-void cache_tracker::insert(rows_entry& entry) noexcept {
-    ++_stats.row_insertions;
-    ++_stats.rows;
-    _lru.push_front(entry);
-}
-
-void cache_tracker::insert(partition_version& pv) noexcept {
-    for (rows_entry& row : pv.partition().clustered_rows()) {
-        insert(row);
-    }
-}
-
-void cache_tracker::insert(partition_entry& pe) noexcept {
-    for (partition_version& pv : pe.versions_from_oldest()) {
-        insert(pv);
-    }
-}
-
 void cache_tracker::insert(cache_entry& entry) {
     insert(entry.partition());
     ++_stats.partition_insertions;
@@ -173,11 +155,6 @@ void cache_tracker::on_partition_erase() {
     --_stats.partitions;
     ++_stats.partition_removals;
     allocator().invalidate_references();
-}
-
-void cache_tracker::on_remove(rows_entry& row) noexcept {
-    --_stats.rows;
-    ++_stats.row_removals;
 }
 
 void cache_tracker::unlink(rows_entry& row) noexcept {

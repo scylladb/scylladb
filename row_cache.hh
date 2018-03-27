@@ -265,6 +265,33 @@ public:
     const stats& get_stats() const { return _stats; }
 };
 
+inline
+void cache_tracker::on_remove(rows_entry& row) noexcept {
+    --_stats.rows;
+    ++_stats.row_removals;
+}
+
+inline
+void cache_tracker::insert(rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    ++_stats.rows;
+    _lru.push_front(entry);
+}
+
+inline
+void cache_tracker::insert(partition_version& pv) noexcept {
+    for (rows_entry& row : pv.partition().clustered_rows()) {
+        insert(row);
+    }
+}
+
+inline
+void cache_tracker::insert(partition_entry& pe) noexcept {
+    for (partition_version& pv : pe.versions_from_oldest()) {
+        insert(pv);
+    }
+}
+
 // Returns a reference to shard-wide cache_tracker.
 cache_tracker& global_cache_tracker();
 
