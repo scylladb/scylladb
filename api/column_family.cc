@@ -905,5 +905,20 @@ void set_column_family(http_context& ctx, routes& r) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
+
+    cf::get_sstables_for_key.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto key = req->get_query_param("key");
+        auto uuid = get_uuid(req->param["name"], ctx.db.local());
+
+        return ctx.db.map_reduce0([key, uuid] (database& db) {
+            return db.find_column_family(uuid).get_sstables_by_partition_key(key);
+        }, std::unordered_set<sstring>(),
+            [](std::unordered_set<sstring> a, std::unordered_set<sstring>&& b) mutable {
+            a.insert(b.begin(),b.end());
+            return a;
+        }).then([](const std::unordered_set<sstring>& res) {
+            return make_ready_future<json::json_return_type>(container_to_vec(res));
+        });
+    });
 }
 }
