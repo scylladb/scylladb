@@ -36,9 +36,9 @@ public:
         auto pos_cmp = position_in_partition::composite_less_compare(s);
         auto rp_cmp = dht::ring_position_comparator(s);
         auto prev = dht::ring_position::min();
-        _r->read_partition_data().get();
+        _r->read_lower_partition_data().get();
         while (!_r->eof()) {
-            auto& e = _r->current_partition_entry();
+            auto& e = _r->current_lower_partition_entry();
             auto k = e.get_decorated_key();
             auto token = dht::token(k.token());
             auto rp = dht::ring_position(token, k.key().to_partition_key(s));
@@ -69,16 +69,16 @@ public:
                     cur = prev;
                 }
             }
-            _r->advance_to_next_partition().get();
+            _r->advance_lower_to_next_partition().get();
         }
         return *this;
     }
 
     index_reader_assertions& is_empty(const schema& s) {
-        _r->read_partition_data().get();
+        _r->read_lower_partition_data().get();
         while (!_r->eof()) {
-            BOOST_REQUIRE(_r->current_partition_entry().get_total_pi_blocks_count() == 0);
-            _r->advance_to_next_partition().get();
+            BOOST_REQUIRE(_r->current_lower_partition_entry().get_total_pi_blocks_count() == 0);
+            _r->advance_lower_to_next_partition().get();
         }
         return *this;
     }
