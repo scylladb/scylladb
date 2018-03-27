@@ -29,7 +29,6 @@
 #include "types.hh"
 #include "core/print.hh"
 #include "net/ip.hh"
-#include "database.hh"
 #include "utils/serialization.hh"
 #include "vint-serialization.hh"
 #include "combine.hh"

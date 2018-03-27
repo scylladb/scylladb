@@ -47,7 +47,6 @@
 #include "utils/UUID_gen.hh"
 #include "core/distributed.hh"
 #include "dht/i_partitioner.hh"
-#include "dht/boot_strapper.hh"
 #include "dht/token_range_endpoints.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
@@ -66,6 +65,10 @@ namespace cql_transport {
     class cql_server;
 }
 class thrift_server;
+
+namespace dht {
+class boot_strapper;
+}
 
 namespace service {
 

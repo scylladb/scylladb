@@ -42,7 +42,7 @@
 #include "alter_keyspace_statement.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
-#include "database.hh"
+#include "db/system_keyspace.hh"
 
 bool is_system_keyspace(const sstring& keyspace);
 

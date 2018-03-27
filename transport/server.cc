@@ -31,12 +31,11 @@
 #include "cql3/statements/batch_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
-#include "db/consistency_level.hh"
+#include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include "core/future-util.hh"
 #include "core/reactor.hh"
 #include "utils/UUID.hh"
-#include "database.hh"
 #include "net/byteorder.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>

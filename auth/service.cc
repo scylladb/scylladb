@@ -37,7 +37,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
-#include "db/consistency_level.hh"
+#include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "log.hh"
 #include "service/migration_listener.hh"

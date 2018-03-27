@@ -46,7 +46,7 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/cf_name.hh"
 
-#include "database.hh"
+#include "database_fwd.hh"
 
 namespace cql3 {
 
