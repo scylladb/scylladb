@@ -235,6 +235,18 @@ private:
         versions["scylla-server"] = scylla_server;
         return versions;
     }
+
+    std::string sanitize_filename(std::string filename) {
+        boost::algorithm::replace_all(filename, "[", "begin_incl_");
+        boost::algorithm::replace_all(filename, "]", "_end_incl");
+        boost::algorithm::replace_all(filename, "(", "begin_excl_");
+        boost::algorithm::replace_all(filename, ")", "_end_excl");
+        boost::algorithm::erase_all(filename, " ");
+        boost::algorithm::erase_all(filename, "{");
+        boost::algorithm::erase_all(filename, "}");
+        return filename;
+    }
+
 public:
     json_output_writer() {
         fs::create_directory(output_dir);
@@ -335,6 +347,8 @@ public:
 
         std::string filename = boost::algorithm::replace_all_copy(all_params_values, ",", "-") +
                 "." + std::to_string(test_run_count) + ".json";
+
+        filename = sanitize_filename(filename);
         std::ofstream result_file{(_current_dir + filename).c_str()};
         result_file << root;
     }
