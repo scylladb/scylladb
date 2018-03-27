@@ -461,6 +461,11 @@ private:
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
     std::chrono::milliseconds _percentile_cache_value;
+
+    // Phaser used to synchronize with in-progress writes. This is useful for code that,
+    // after some modification, needs to ensure that news writes will see it before
+    // it can proceed, such as the view building code.
+    utils::phased_barrier _pending_writes_phaser;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -784,6 +789,14 @@ public:
 
     future<> run_with_compaction_disabled(std::function<future<> ()> func);
 
+    utils::phased_barrier::operation write_in_progress() {
+        return _pending_writes_phaser.start();
+    }
+
+    future<> await_pending_writes() {
+        return _pending_writes_phaser.advance_and_await();
+    }
+
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
@@ -798,6 +811,12 @@ public:
     uint64_t large_partition_warning_threshold_bytes() const {
         return _config.large_partition_warning_threshold_bytes;
     }
+
+    future<> populate_views(
+            std::vector<view_ptr>,
+            dht::token base_token,
+            flat_mutation_reader&&);
+
 private:
     std::vector<view_ptr> affected_views(const schema_ptr& base, const mutation& update) const;
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
@@ -1272,6 +1291,8 @@ public:
     }
 
     std::vector<lw_shared_ptr<column_family>> get_non_system_column_families() const;
+
+    std::vector<view_ptr> get_views() const;
 
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
     get_column_families_mapping() const {
