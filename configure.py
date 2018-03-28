@@ -641,7 +641,9 @@ api = ['api/api.cc',
        'api/api-doc/stream_manager.json',
        'api/stream_manager.cc',
        'api/api-doc/system.json',
-       'api/system.cc'
+       'api/system.cc',
+       'api/config.cc',
+       'api/api-doc/config.json',
        ]
 
 idls = ['idl/gossip_digest.idl.hh',

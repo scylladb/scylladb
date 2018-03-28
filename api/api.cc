@@ -39,6 +39,7 @@
 #include "http/exception.hh"
 #include "stream_manager.hh"
 #include "system.hh"
+#include "api/config.hh"
 
 namespace api {
 
@@ -65,6 +66,7 @@ future<> set_server_init(http_context& ctx) {
         rb->set_api_doc(r);
         rb02->set_api_doc(r);
         rb02->register_api_file(r, "swagger20_header");
+        set_config(rb02, ctx, r);
         rb->register_function(r, "system",
                 "The system related API");
         set_system(ctx, r);
