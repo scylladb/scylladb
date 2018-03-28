@@ -2965,14 +2965,15 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
     return seastar::async([ks, cf, dir, generation, v, f] {
         const io_error_handler& error_handler = sstable_write_error_handler;
         auto toc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+
+        sstlog.warn("Deleting components of sstable from {}.{} of generation {} that has a temporary TOC", ks, cf, generation);
+
         // assert that toc doesn't exist for sstable with temporary toc.
         assert(toc == false);
 
         auto tmptoc = sstable_io_check(error_handler, file_exists, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
-
-        sstlog.warn("Deleting components of sstable from {}.{} of generation {} that has a temporary TOC", ks, cf, generation);
 
         for (auto& entry : sstable::_component_map) {
             // Skipping TemporaryTOC because it must be the last component to
