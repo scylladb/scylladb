@@ -30,6 +30,8 @@
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
+        , _memtable_cleaner(*this, no_cache_tracker)
+        , _cleaner(&_memtable_cleaner)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
@@ -53,7 +55,11 @@ uint64_t memtable::dirty_size() const {
 void memtable::clear() noexcept {
     auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
-        partitions.clear_and_dispose(current_deleter<memtable_entry>());
+        partitions.clear_and_dispose([this] (memtable_entry* e) {
+            e->partition().evict(_memtable_cleaner);
+            current_deleter<memtable_entry>()(e);
+        });
+        _memtable_cleaner.clear();
     });
     remove_flushed_memory(dirty_before - dirty_size());
 }
@@ -543,7 +549,7 @@ public:
 };
 
 lw_shared_ptr<partition_snapshot> memtable_entry::snapshot(memtable& mtbl) {
-    return _pe.read(mtbl.region(), _schema, no_cache_tracker);
+    return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
 flat_mutation_reader
@@ -699,7 +705,7 @@ void memtable::upgrade_entry(memtable_entry& e) {
         assert(!reclaiming_enabled());
         with_allocator(allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e.partition().upgrade(e._schema, _schema, no_cache_tracker);
+            e.partition().upgrade(e._schema, _schema, cleaner(), no_cache_tracker);
             e._schema = _schema;
           });
         });

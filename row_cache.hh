@@ -233,6 +233,7 @@ private:
     logalloc::region _region;
     lru_type _lru;
     mutation_cleaner _garbage;
+    mutation_cleaner _memtable_cleaner;
 private:
     void setup_metrics();
 public:
@@ -265,6 +266,7 @@ public:
     logalloc::region& region();
     const logalloc::region& region() const;
     mutation_cleaner& cleaner() { return _garbage; }
+    mutation_cleaner& memtable_cleaner() { return _memtable_cleaner; }
     uint64_t partitions() const { return _stats.partitions; }
     const stats& get_stats() const { return _stats; }
 };

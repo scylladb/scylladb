@@ -26,13 +26,13 @@
 #include "row_cache.hh"
 #include "partition_snapshot_row_cursor.hh"
 
-static void remove_or_mark_as_unique_owner(partition_version* current, cache_tracker* tracker)
+static void remove_or_mark_as_unique_owner(partition_version* current, mutation_cleaner* cleaner)
 {
     while (current && !current->is_referenced()) {
         auto next = current->next();
         current->erase();
-        if (tracker) {
-            tracker->cleaner().destroy_later(*current);
+        if (cleaner) {
+            cleaner->destroy_gently(*current);
         } else {
             current_allocator().destroy(current);
         }
@@ -160,7 +160,7 @@ partition_snapshot::~partition_snapshot() {
         if (_version && _version.is_unique_owner()) {
             auto v = &*_version;
             _version = {};
-            remove_or_mark_as_unique_owner(v, _tracker);
+            remove_or_mark_as_unique_owner(v, &_cleaner);
         } else if (_entry) {
             _entry->_snapshot = nullptr;
         }
@@ -233,7 +233,7 @@ partition_entry::~partition_entry() {
     } else {
         auto v = &*_version;
         _version = { };
-        remove_or_mark_as_unique_owner(v, no_cache_tracker);
+        remove_or_mark_as_unique_owner(v, no_cleaner);
     }
 }
 
@@ -458,7 +458,7 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe,
 void partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
         logalloc::region& reg, cache_tracker& tracker) {
     partition_version& dst = open_version(s, &tracker);
-    auto snp = read(reg, s.shared_from_this(), &tracker);
+    auto snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker);
     bool can_move = true;
     auto current = version;
     bool static_row_continuous = snp->static_row_continuous();
@@ -525,7 +525,7 @@ mutation_partition partition_entry::squashed(const schema& s)
     return squashed(s.shared_from_this(), s.shared_from_this());
 }
 
-void partition_entry::upgrade(schema_ptr from, schema_ptr to, cache_tracker* tracker)
+void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
     auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
     auto old_version = &*_version;
@@ -533,11 +533,11 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to, cache_tracker* tra
     if (tracker) {
         tracker->insert(*new_version);
     }
-    remove_or_mark_as_unique_owner(old_version, tracker);
+    remove_or_mark_as_unique_owner(old_version, &cleaner);
 }
 
 lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
-    schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
+    mutation_cleaner& cleaner, schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
 {
     with_allocator(r.allocator(), [&] {
         open_version(*entry_schema, tracker, phase);
@@ -545,7 +545,7 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
     if (_snapshot) {
         return _snapshot->shared_from_this();
     } else {
-        auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, this, tracker, phase);
+        auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, cleaner, this, tracker, phase);
         _snapshot = snp.get();
         return snp;
     }
@@ -598,7 +598,7 @@ std::ostream& operator<<(std::ostream& out, const partition_entry& e) {
     return out;
 }
 
-void partition_entry::evict(cache_tracker& tracker) noexcept {
+void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
     if (!_version) {
         return;
     }
@@ -609,6 +609,6 @@ void partition_entry::evict(cache_tracker& tracker) noexcept {
     } else {
         auto v = &*_version;
         _version = { };
-        remove_or_mark_as_unique_owner(v, &tracker);
+        remove_or_mark_as_unique_owner(v, &cleaner);
     }
 }

@@ -250,8 +250,10 @@ bool partition_version::is_referenced_from_entry() const {
 
 class partition_entry;
 class cache_tracker;
+class mutation_cleaner;
 
 static constexpr cache_tracker* no_cache_tracker = nullptr;
+static constexpr mutation_cleaner* no_cleaner = nullptr;
 
 class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot> {
 public:
@@ -292,16 +294,18 @@ private:
     partition_entry* _entry;
     phase_type _phase;
     logalloc::region& _region;
+    mutation_cleaner& _cleaner;
     cache_tracker* _tracker;
 
     friend class partition_entry;
 public:
     explicit partition_snapshot(schema_ptr s,
                                 logalloc::region& region,
+                                mutation_cleaner& cleaner,
                                 partition_entry* entry,
                                 cache_tracker* tracker, // non-null for evictable snapshots
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _tracker(tracker) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _cleaner(cleaner), _tracker(tracker) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
@@ -424,7 +428,7 @@ public:
     // Removes data contained by this entry, but not owned by snapshots.
     // Snapshots will be unlinked and evicted independently by reclaimer.
     // This entry is invalid after this and can only be destroyed.
-    void evict(cache_tracker&) noexcept;
+    void evict(mutation_cleaner&) noexcept;
 
     partition_version_ref& version() {
         return _version;
@@ -481,10 +485,13 @@ public:
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
-    void upgrade(schema_ptr from, schema_ptr to, cache_tracker*);
+    void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema, cache_tracker*,
+    lw_shared_ptr<partition_snapshot> read(logalloc::region& region,
+        mutation_cleaner&,
+        schema_ptr entry_schema,
+        cache_tracker*,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_entry& e);

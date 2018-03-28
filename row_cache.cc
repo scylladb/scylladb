@@ -58,6 +58,7 @@ cache_tracker& global_cache_tracker() {
 
 cache_tracker::cache_tracker()
     : _garbage(_region, this)
+    , _memtable_cleaner(_region, nullptr)
 {
     setup_metrics();
 
@@ -69,6 +70,10 @@ cache_tracker::cache_tracker()
            try {
             if (!_garbage.empty()) {
                 _garbage.clear_some();
+                return memory::reclaiming_result::reclaimed_something;
+            }
+            if (!_memtable_cleaner.empty()) {
+                _memtable_cleaner.clear_some();
                 return memory::reclaiming_result::reclaimed_something;
             }
             if (_lru.empty()) {
@@ -136,6 +141,7 @@ void cache_tracker::clear() {
     // mutation_partition::clear_gently() destroys intrusive tree invariants.
     with_allocator(_region.allocator(), [this] {
         _garbage.clear();
+        _memtable_cleaner.clear();
         while (!_lru.empty()) {
             _lru.back().on_evicted(*this);
         }
@@ -905,6 +911,7 @@ void row_cache::invalidate_sync(memtable& m) noexcept {
                 } catch (...) {
                     blow_cache = true;
                 }
+                entry->partition().evict(_tracker.memtable_cleaner());
                 deleter(entry);
             });
         });
@@ -965,6 +972,8 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
+    _tracker.memtable_cleaner().merge(m._memtable_cleaner);
+    m._cleaner = &_tracker.memtable_cleaner();
     STAP_PROBE(scylla, row_cache_update_start);
     auto cleanup = defer([&m, this] {
         invalidate_sync(m);
@@ -1002,6 +1011,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             updater(cache_i, mem_e, is_present);
                             real_dirty_acc.unpin_memory(size_entry);
                             i = m.partitions.erase(i);
+                            mem_e.partition().evict(_tracker.memtable_cleaner());
                             current_allocator().destroy(&mem_e);
                             ++partition_count;
                            }
@@ -1187,7 +1197,7 @@ cache_entry::~cache_entry() {
 }
 
 void cache_entry::evict(cache_tracker& tracker) noexcept {
-    _pe.evict(tracker);
+    _pe.evict(tracker.cleaner());
 }
 
 void row_cache::set_schema(schema_ptr new_schema) noexcept {
@@ -1241,7 +1251,7 @@ flat_mutation_reader cache_entry::read(row_cache& rc, read_context& reader, row_
 
 // Assumes reader is in the corresponding partition
 flat_mutation_reader cache_entry::do_read(row_cache& rc, read_context& reader) {
-    auto snp = _pe.read(rc._tracker.region(), _schema, &rc._tracker, reader.phase());
+    auto snp = _pe.read(rc._tracker.region(), rc._tracker.cleaner(), _schema, &rc._tracker, reader.phase());
     auto ckr = query::clustering_key_filter_ranges::get_ranges(*_schema, reader.slice(), _key.key());
     auto r = make_cache_flat_mutation_reader(_schema, _key, std::move(ckr), rc, reader.shared_from_this(), std::move(snp));
     if (reader.schema()->version() != _schema->version()) {
@@ -1263,7 +1273,7 @@ void row_cache::upgrade_entry(cache_entry& e) {
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
           with_linearized_managed_bytes([&] {
-            e.partition().upgrade(e._schema, _schema, &_tracker);
+            e.partition().upgrade(e._schema, _schema, _tracker.cleaner(), &_tracker);
             e._schema = _schema;
           });
         });

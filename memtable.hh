@@ -35,6 +35,7 @@
 #include "utils/logalloc.hh"
 #include "partition_version.hh"
 #include "flat_mutation_reader.hh"
+#include "mutation_cleaner.hh"
 
 class frozen_mutation;
 
@@ -124,6 +125,8 @@ public:
         bi::compare<memtable_entry::compare>>;
 private:
     dirty_memory_manager& _dirty_mgr;
+    mutation_cleaner _memtable_cleaner;
+    mutation_cleaner* _cleaner; // will switch to cache's cleaner after memtable is moved to cache.
     memtable_list *_memtable_list;
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
@@ -286,6 +289,10 @@ public:
 
     api::timestamp_type get_max_timestamp() const {
         return _stats_collector.max_timestamp();
+    }
+
+    mutation_cleaner& cleaner() {
+        return *_cleaner;
     }
 public:
     memtable_list* get_memtable_list() {
