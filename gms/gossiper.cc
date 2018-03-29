@@ -461,7 +461,8 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                     int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
                     int remote_generation = remote_state.get_heart_beat_state().get_generation();
                     logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
-                    if (local_generation != 0 && remote_generation > local_generation + MAX_GENERATION_DIFFERENCE) {
+                    // A node was removed with nodetool removenode can have a generation of 2
+                    if (local_generation > 2 && remote_generation > local_generation + MAX_GENERATION_DIFFERENCE) {
                         // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
                         logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
                             ep, local_generation, remote_generation);
