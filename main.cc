@@ -305,6 +305,12 @@ int main(int ac, char** av) {
         return 0;
     }
 
+    bpo::options_description deprecated("Deprecated options - ignored");
+    deprecated.add_options()
+        ("background-writer-scheduling-quota", bpo::value<float>())
+        ("auto-adjust-flush-quota", bpo::value<bool>());
+    app.get_options_description().add(deprecated);
+
     // TODO : default, always read?
     init("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)");
     cfg->add_options(init);
@@ -330,6 +336,13 @@ int main(int ac, char** av) {
         app_metrics.add_group("scylladb", {
             sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label("") }, [] { return 0; })
         });
+
+        const std::unordered_set<sstring> ignored_options = { "auto-adjust-flush-quota", "background-writer-scheduling-quota" };
+        for (auto& opt: ignored_options) {
+            if (opts.count(opt)) {
+                print("%s option ignored (deprecated)\n", opt);
+            }
+        }
 
         // Check developer mode before even reading the config file, because we may not be
         // able to read it if we need to disable strict dma mode.
