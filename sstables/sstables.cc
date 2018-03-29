@@ -63,6 +63,7 @@
 #include "integrity_checked_file_impl.hh"
 #include "service/storage_service.hh"
 #include "db/extensions.hh"
+#include "unimplemented.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -750,6 +751,15 @@ future<> parse(sstable_version_types v, random_access_reader& in, statistics& s)
                     return parse<compaction_metadata>(v, in, s.contents[val.first]);
                 case metadata_type::Stats:
                     return parse<stats_metadata>(v, in, s.contents[val.first]);
+                case metadata_type::Serialization:
+                    if (v != sstable_version_types::mc) {
+                        throw std::runtime_error(
+                            "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
+                    } else {
+                        // Ignore
+                        warn(unimplemented::cause::SSTABLE_FORMAT_M);
+                    }
+                    return make_ready_future<>();
                 default:
                     sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
                     return make_ready_future<>();

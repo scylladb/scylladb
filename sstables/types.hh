@@ -388,6 +388,7 @@ enum class metadata_type : uint32_t {
     Validation = 0,
     Compaction = 1,
     Stats = 2,
+    Serialization = 3,
 };
 
 enum class scylla_metadata_type : uint32_t {
