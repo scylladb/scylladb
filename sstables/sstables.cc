@@ -255,7 +255,7 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
 
 template <typename T>
 inline typename std::enable_if_t<std::is_integral<T>::value, void>
-write(file_writer& out, T i) {
+write(sstable_version_types v, file_writer& out, T i) {
     auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
     i = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&i);
@@ -270,16 +270,16 @@ parse(sstable_version_types v, random_access_reader& in, T& i) {
 
 template <typename T>
 inline typename std::enable_if_t<std::is_enum<T>::value, void>
-write(file_writer& out, T i) {
-    write(out, static_cast<typename std::underlying_type<T>::type>(i));
+write(sstable_version_types v, file_writer& out, T i) {
+    write(v, out, static_cast<typename std::underlying_type<T>::type>(i));
 }
 
 future<> parse(sstable_version_types v, random_access_reader& in, bool& i) {
     return parse(v, in, reinterpret_cast<uint8_t&>(i));
 }
 
-inline void write(file_writer& out, bool i) {
-    write(out, static_cast<uint8_t>(i));
+inline void write(sstable_version_types v, file_writer& out, bool i) {
+    write(v, out, static_cast<uint8_t>(i));
 }
 
 template <typename To, typename From>
@@ -304,7 +304,7 @@ future<> parse(sstable_version_types, random_access_reader& in, double& d) {
     });
 }
 
-inline void write(file_writer& out, double d) {
+inline void write(sstable_version_types v, file_writer& out, double d) {
     auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
     auto tmp = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&tmp);
@@ -320,17 +320,17 @@ future<> parse(sstable_version_types, random_access_reader& in, T& len, bytes& s
     });
 }
 
-inline void write(file_writer& out, const bytes& s) {
+inline void write(sstable_version_types v, file_writer& out, const bytes& s) {
     out.write(s).get();
 }
 
-inline void write(file_writer& out, bytes_view s) {
+inline void write(sstable_version_types v, file_writer& out, bytes_view s) {
     out.write(reinterpret_cast<const char*>(s.data()), s.size()).get();
 }
 
-inline void write(file_writer& out, bytes_ostream s) {
+inline void write(sstable_version_types v, file_writer& out, bytes_ostream s) {
     for (bytes_view fragment : s) {
-        write(out, fragment);
+        write(v, out, fragment);
     }
 }
 
@@ -343,9 +343,9 @@ future<> parse(sstable_version_types v, random_access_reader& in, First& first, 
 }
 
 template<typename First, typename... Rest>
-inline void write(file_writer& out, const First& first, Rest&&... rest) {
-    write(out, first);
-    write(out, std::forward<Rest>(rest)...);
+inline void write(sstable_version_types v, file_writer& out, const First& first, Rest&&... rest) {
+    write(v, out, first);
+    write(v, out, std::forward<Rest>(rest)...);
 }
 
 // Intended to be used for a type that describes itself through describe_type().
@@ -359,10 +359,10 @@ parse(sstable_version_types v, random_access_reader& in, T& t) {
 
 template <class T>
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(file_writer& out, const T& t) {
+write(sstable_version_types v, file_writer& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
-    const_cast<T&>(t).describe_type([&out] (auto&&... what) -> void {
-        write(out, std::forward<decltype(what)>(what)...);
+    const_cast<T&>(t).describe_type([v, &out] (auto&&... what) -> void {
+        write(v, out, std::forward<decltype(what)>(what)...);
     });
 }
 
@@ -381,18 +381,18 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_string<Si
 }
 
 template <typename Size>
-inline void write(file_writer& out, const disk_string<Size>& s) {
+inline void write(sstable_version_types v, file_writer& out, const disk_string<Size>& s) {
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
-    write(out, len);
-    write(out, s.value);
+    write(v, out, len);
+    write(v, out, s.value);
 }
 
 template <typename Size>
-inline void write(file_writer& out, const disk_string_view<Size>& s) {
+inline void write(sstable_version_types v, file_writer& out, const disk_string_view<Size>& s) {
     Size len;
     check_truncate_and_assign(len, s.value.size());
-    write(out, len, s.value);
+    write(v, out, len, s.value);
 }
 
 // We cannot simply read the whole array at once, because we don't know its
@@ -450,15 +450,15 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_array<Siz
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, const utils::chunked_vector<Members>& arr) {
+write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     for (auto& a : arr) {
-        write(out, a);
+        write(v, out, a);
     }
 }
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, const utils::chunked_vector<Members>& arr) {
+write(sstable_version_types v, file_writer& out, const utils::chunked_vector<Members>& arr) {
     std::vector<Members> tmp;
     size_t per_loop = 100000 / sizeof(Members);
     tmp.resize(per_loop);
@@ -478,19 +478,19 @@ write(file_writer& out, const utils::chunked_vector<Members>& arr) {
 }
 
 template <typename Size, typename Members>
-inline void write(file_writer& out, const disk_array<Size, Members>& arr) {
+inline void write(sstable_version_types v, file_writer& out, const disk_array<Size, Members>& arr) {
     Size len = 0;
     check_truncate_and_assign(len, arr.elements.size());
-    write(out, len);
-    write(out, arr.elements);
+    write(v, out, len);
+    write(v, out, arr.elements);
 }
 
 template <typename Size, typename Members>
-inline void write(file_writer& out, const disk_array_ref<Size, Members>& arr) {
+inline void write(sstable_version_types v, file_writer& out, const disk_array_ref<Size, Members>& arr) {
     Size len = 0;
     check_truncate_and_assign(len, arr.elements.size());
-    write(out, len);
-    write(out, arr.elements);
+    write(v, out, len);
+    write(v, out, arr.elements);
 }
 
 template <typename Size, typename Key, typename Value>
@@ -522,18 +522,18 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_hash<Size
 }
 
 template <typename Key, typename Value>
-inline void write(file_writer& out, const std::unordered_map<Key, Value>& map) {
+inline void write(sstable_version_types v, file_writer& out, const std::unordered_map<Key, Value>& map) {
     for (auto& val: map) {
-        write(out, val.first, val.second);
+        write(v, out, val.first, val.second);
     };
 }
 
 template <typename Size, typename Key, typename Value>
-inline void write(file_writer& out, const disk_hash<Size, Key, Value>& h) {
+inline void write(sstable_version_types v, file_writer& out, const disk_hash<Size, Key, Value>& h) {
     Size len = 0;
     check_truncate_and_assign(len, h.map.size());
-    write(out, len);
-    write(out, h.map);
+    write(v, out, len);
+    write(v, out, h.map);
 }
 
 // Abstract parser/sizer/writer for a single tagged member of a tagged union
@@ -542,8 +542,8 @@ struct single_tagged_union_member_serdes {
     using value_type = typename DiskSetOfTaggedUnion::value_type;
     virtual ~single_tagged_union_member_serdes() {}
     virtual future<> do_parse(sstable_version_types version, random_access_reader& in, value_type& v) const = 0;
-    virtual uint32_t do_size(const value_type& v) const = 0;
-    virtual void do_write(file_writer& out, const value_type& v) const = 0;
+    virtual uint32_t do_size(sstable_version_types version, const value_type& v) const = 0;
+    virtual void do_write(sstable_version_types version, file_writer& out, const value_type& v) const = 0;
 };
 
 // Concrete parser for a single member of a tagged union; parses type "Member"
@@ -555,11 +555,11 @@ struct single_tagged_union_member_serdes_for final : single_tagged_union_member_
         v = Member();
         return parse(version, in, boost::get<Member>(v).value);
     }
-    virtual uint32_t do_size(const value_type& v) const override {
-        return serialized_size(boost::get<Member>(v).value);
+    virtual uint32_t do_size(sstable_version_types version, const value_type& v) const override {
+        return serialized_size(version, boost::get<Member>(v).value);
     }
-    virtual void do_write(file_writer& out, const value_type& v) const override {
-        write(out, boost::get<Member>(v).value);
+    virtual void do_write(sstable_version_types version, file_writer& out, const value_type& v) const override {
+        write(version, out, boost::get<Member>(v).value);
     }
 };
 
@@ -582,11 +582,11 @@ struct disk_set_of_tagged_union<TagType, Members...>::serdes {
             });
         }
     }
-    uint32_t lookup_and_size(TagType tag, const value_type& value) const {
-        return map.at(tag)->do_size(value);
+    uint32_t lookup_and_size(sstable_version_types v, TagType tag, const value_type& value) const {
+        return map.at(tag)->do_size(v, value);
     }
-    void lookup_and_write(file_writer& out, TagType tag, const value_type& value) const {
-        return map.at(tag)->do_write(out, value);
+    void lookup_and_write(sstable_version_types v, file_writer& out, TagType tag, const value_type& value) const {
+        return map.at(tag)->do_write(v, out, value);
     }
 };
 
@@ -614,15 +614,15 @@ parse(sstable_version_types v, random_access_reader& in, disk_set_of_tagged_unio
 }
 
 template <typename TagType, typename... Members>
-void write(file_writer& out, const disk_set_of_tagged_union<TagType, Members...>& s) {
+void write(sstable_version_types v, file_writer& out, const disk_set_of_tagged_union<TagType, Members...>& s) {
     using disk_set = disk_set_of_tagged_union<TagType, Members...>;
-    write(out, uint32_t(s.data.size()));
+    write(v, out, uint32_t(s.data.size()));
     for (auto&& kv : s.data) {
         auto&& tag = kv.first;
         auto&& value = kv.second;
-        write(out, tag);
-        write(out, uint32_t(disk_set::s_serdes.lookup_and_size(tag, value)));
-        disk_set::s_serdes.lookup_and_write(out, tag, value);
+        write(v, out, tag);
+        write(v, out, uint32_t(disk_set::s_serdes.lookup_and_size(v, tag, value)));
+        disk_set::s_serdes.lookup_and_write(v, out, tag, value);
     }
 }
 
@@ -691,18 +691,18 @@ future<> parse(sstable_version_types v, random_access_reader& in, summary& s) {
     });
 }
 
-inline void write(file_writer& out, const summary_entry& entry) {
+inline void write(sstable_version_types v, file_writer& out, const summary_entry& entry) {
     // FIXME: summary entry is supposedly written in memory order, but that
     // would prevent portability of summary file between machines of different
     // endianness. We can treat it as little endian to preserve portability.
-    write(out, entry.key);
+    write(v, out, entry.key);
     auto p = seastar::cpu_to_le<uint64_t>(entry.position);
     out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
 }
 
-inline void write(file_writer& out, const summary& s) {
+inline void write(sstable_version_types v, file_writer& out, const summary& s) {
     // NOTE: positions and entries must be stored in LITTLE-ENDIAN.
-    write(out, s.header.min_index_interval,
+    write(v, out, s.header.min_index_interval,
                   s.header.size,
                   s.header.memory_size,
                   s.header.sampling_level,
@@ -711,8 +711,8 @@ inline void write(file_writer& out, const summary& s) {
         auto p = seastar::cpu_to_le(e);
         out.write(reinterpret_cast<const char*>(&p), sizeof(p)).get();
     }
-    write(out, s.entries);
-    write(out, s.first_key, s.last_key);
+    write(v, out, s.entries);
+    write(v, out, s.first_key, s.last_key);
 }
 
 future<summary_entry&> sstable::read_summary_entry(size_t i) {
@@ -735,8 +735,8 @@ future<> parse(sstable_version_types v, random_access_reader& in, std::unique_pt
 }
 
 template <typename Child>
-inline void write(file_writer& out, const std::unique_ptr<metadata>& p) {
-    write(out, *static_cast<Child *>(p.get()));
+inline void write(sstable_version_types v, file_writer& out, const std::unique_ptr<metadata>& p) {
+    write(v, out, *static_cast<Child *>(p.get()));
 }
 
 future<> parse(sstable_version_types v, random_access_reader& in, statistics& s) {
@@ -768,13 +768,13 @@ future<> parse(sstable_version_types v, random_access_reader& in, statistics& s)
     });
 }
 
-inline void write(file_writer& out, const statistics& s) {
-    write(out, s.hash);
+inline void write(sstable_version_types v, file_writer& out, const statistics& s) {
+    write(v, out, s.hash);
     auto types = boost::copy_range<std::vector<metadata_type>>(s.hash.map | boost::adaptors::map_keys);
     // use same sort order as seal_statistics
     boost::sort(types);
     for (auto t : types) {
-        s.contents.at(t)->write(out);
+        s.contents.at(t)->write(v, out);
     }
 }
 
@@ -811,11 +811,11 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::estimat
     });
 }
 
-inline void write(file_writer& out, const utils::estimated_histogram& eh) {
+inline void write(sstable_version_types v, file_writer& out, const utils::estimated_histogram& eh) {
     uint32_t len = 0;
     check_truncate_and_assign(len, eh.buckets.size());
 
-    write(out, len);
+    write(v, out, len);
     struct element {
         uint64_t offsets;
         uint64_t buckets;
@@ -879,7 +879,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::streami
     });
 }
 
-inline void write(file_writer& out, const utils::streaming_histogram& sh) {
+inline void write(sstable_version_types v, file_writer& out, const utils::streaming_histogram& sh) {
     uint32_t max_bin_size;
     check_truncate_and_assign(max_bin_size, sh.max_bin_size);
 
@@ -887,7 +887,7 @@ inline void write(file_writer& out, const utils::streaming_histogram& sh) {
     a.elements = boost::copy_range<utils::chunked_vector<streaming_histogram_element>>(sh.bin
         | boost::adaptors::transformed([&] (auto& kv) { return streaming_histogram_element{kv.first, kv.second}; }));
 
-    write(out, max_bin_size, a);
+    write(v, out, max_bin_size, a);
 }
 
 future<> parse(sstable_version_types v, random_access_reader& in, compression& c) {
@@ -917,10 +917,10 @@ future<> parse(sstable_version_types v, random_access_reader& in, compression& c
     });
 }
 
-void write(file_writer& out, const compression& c) {
-    write(out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
+void write(sstable_version_types v, file_writer& out, const compression& c) {
+    write(v, out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
 
-    write(out, static_cast<uint32_t>(c.offsets.size()));
+    write(v, out, static_cast<uint32_t>(c.offsets.size()));
 
     std::vector<uint64_t> tmp;
     const size_t per_loop = 100000 / sizeof(uint64_t);
@@ -1047,7 +1047,7 @@ void sstable::write_toc(const io_priority_class& pc) {
             // new line character is appended to the end of each component name.
         auto value = sstable_version_constants::get_component_map(_version).at(key) + "\n";
         bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
-        write(w, b);
+        write(_version, w, b);
     }
     w.flush().get();
     w.close().get();
@@ -1083,7 +1083,7 @@ future<> sstable::seal_sstable() {
     });
 }
 
-void write_crc(io_error_handler& error_handler, const sstring file_path, const checksum& c) {
+void write_crc(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, const checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
@@ -1092,12 +1092,12 @@ void write_crc(io_error_handler& error_handler, const sstring file_path, const c
     file_output_stream_options options;
     options.buffer_size = 4096;
     auto w = file_writer(std::move(f), std::move(options));
-    write(w, c);
+    write(v, w, c);
     w.close().get();
 }
 
 // Digest file stores the full checksum of data file converted into a string.
-void write_digest(io_error_handler& error_handler, const sstring file_path, uint32_t full_checksum) {
+void write_digest(sstable_version_types v, io_error_handler& error_handler, const sstring file_path, uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
@@ -1108,7 +1108,7 @@ void write_digest(io_error_handler& error_handler, const sstring file_path, uint
     auto w = file_writer(std::move(f), std::move(options));
 
     auto digest = to_sstring<bytes>(full_checksum);
-    write(w, digest);
+    write(v, w, digest);
     w.close().get();
 }
 
@@ -1153,7 +1153,7 @@ void sstable::write_simple(const T& component, const io_priority_class& pc) {
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
-    write(w, component);
+    write(_version, w, component);
     w.flush().get();
     w.close().get();
 }
@@ -1291,7 +1291,7 @@ void sstable::rewrite_statistics(const io_priority_class& pc) {
     options.buffer_size = sstable_buffer_size;
     options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
-    write(w, _components->statistics);
+    write(_version, w, _components->statistics);
     w.flush().get();
     w.close().get();
     // rename() guarantees atomicity when renaming a file into place.
@@ -1525,22 +1525,23 @@ public:
 };
 
 class file_writer_for_column_name {
+    sstable_version_types _v;
     file_writer& _fw;
 public:
-    file_writer_for_column_name(file_writer& fw) : _fw(fw) { }
+    file_writer_for_column_name(sstable_version_types v, file_writer& fw) : _v(v), _fw(fw) { }
 
     void prepare(uint16_t size) {
-        sstables::write(_fw, size);
+        sstables::write(_v, _fw, size);
     }
 
     template<typename... Args>
     void write(Args&&... args) {
-        sstables::write(_fw, std::forward<Args>(args)...);
+        sstables::write(_v, _fw, std::forward<Args>(args)...);
     }
 };
 
 template<typename Writer>
-static void write_compound_non_dense_column_name(Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+static void write_compound_non_dense_column_name(sstable_version_types v, Writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
     // was defined in the schema, for example.
     auto c = composite::from_exploded(column_names, true, marker);
     auto ck_bview = bytes_view(clustering_key);
@@ -1561,13 +1562,13 @@ static void write_compound_non_dense_column_name(Writer& out, const composite& c
     out.write(ck_bview, c);
 }
 
-static void write_compound_non_dense_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
-    auto w = file_writer_for_column_name(out);
-    write_compound_non_dense_column_name(w, clustering_key, column_names, marker);
+static void write_compound_non_dense_column_name(sstable_version_types v, file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+    auto w = file_writer_for_column_name(v, out);
+    write_compound_non_dense_column_name(v, w, clustering_key, column_names, marker);
 }
 
 template<typename Writer>
-static void write_column_name(Writer& out, bytes_view column_names) {
+static void write_column_name(sstable_version_types v, Writer& out, bytes_view column_names) {
     size_t sz = column_names.size();
     if (sz > std::numeric_limits<uint16_t>::max()) {
         throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
@@ -1576,19 +1577,19 @@ static void write_column_name(Writer& out, bytes_view column_names) {
     out.write(column_names);
 }
 
-static void write_column_name(file_writer& out, bytes_view column_names) {
-    auto w = file_writer_for_column_name(out);
-    write_column_name(w, column_names);
+static void write_column_name(sstable_version_types v, file_writer& out, bytes_view column_names) {
+    auto w = file_writer_for_column_name(v, out);
+    write_column_name(v, w, column_names);
 }
 
 template<typename Writer>
-static void write_column_name(Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
+static void write_column_name(sstable_version_types v, Writer& out, const schema& s, const composite& clustering_element, const std::vector<bytes_view>& column_names, composite::eoc marker = composite::eoc::none) {
     if (s.is_dense()) {
-        write_column_name(out, bytes_view(clustering_element));
+        write_column_name(v, out, bytes_view(clustering_element));
     } else if (s.is_compound()) {
-        write_compound_non_dense_column_name(out, clustering_element, column_names, marker);
+        write_compound_non_dense_column_name(v, out, clustering_element, column_names, marker);
     } else {
-        write_column_name(out, column_names[0]);
+        write_column_name(v, out, column_names[0]);
     }
 }
 
@@ -1599,9 +1600,9 @@ void sstable::write_range_tombstone_bound(file_writer& out,
         composite::eoc marker) {
     if (!_correctly_serialize_non_compound_range_tombstones && !clustering_element.is_compound()) {
         auto vals = clustering_element.values();
-        write_compound_non_dense_column_name(out, composite::serialize_value(vals, true), column_names, marker);
+        write_compound_non_dense_column_name(_version, out, composite::serialize_value(vals, true), column_names, marker);
     } else {
-        write_column_name(out, s, clustering_element, column_names, marker);
+        write_column_name(_version, out, s, clustering_element, column_names, marker);
     }
 }
 
@@ -1644,7 +1645,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         return;
     }
     bytes_writer_for_column_name w;
-    write_column_name(w, *_schema, clustering_key, column_names, marker);
+    write_column_name(_version, w, *_schema, clustering_key, column_names, marker);
     maybe_flush_pi_block(out, clustering_key, std::move(w).release());
 }
 
@@ -1718,13 +1719,13 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         _c_stats.update_max_local_deletion_time(deletion_time);
         _c_stats.tombstone_histogram.update(deletion_time);
 
-        write(out, mask, timestamp, deletion_time_size, deletion_time);
+        write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
     } else if (cdef.is_counter()) {
         // counter cell
         assert(!cell.is_counter_update());
 
         column_mask mask = column_mask::counter;
-        write(out, mask, int64_t(0), timestamp);
+        write(_version, out, mask, int64_t(0), timestamp);
 
         counter_cell_view ccv(cell);
         auto shard_count = ccv.shard_count();
@@ -1733,13 +1734,13 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
         auto total_size = sizeof(int16_t) + shard_count * (header_entry_size + counter_shard_size);
 
-        write(out, int32_t(total_size), int16_t(shard_count));
+        write(_version, out, int32_t(total_size), int16_t(shard_count));
         for (auto i = 0u; i < shard_count; i++) {
-            write<int16_t>(out, std::numeric_limits<int16_t>::min() + i);
+            write<int16_t>(_version, out, std::numeric_limits<int16_t>::min() + i);
         }
         auto write_shard = [&] (auto&& s) {
             auto uuid = s.id().to_uuid();
-            write(out, int64_t(uuid.get_most_significant_bits()),
+            write(_version, out, int64_t(uuid.get_most_significant_bits()),
                   int64_t(uuid.get_least_significant_bits()),
                   int64_t(s.logical_clock()), int64_t(s.value()));
         };
@@ -1768,7 +1769,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         // when actually nothing is expired.
         _c_stats.tombstone_histogram.update(expiration);
 
-        write(out, mask, ttl, expiration, timestamp, cell_value);
+        write(_version, out, mask, ttl, expiration, timestamp, cell_value);
     } else {
         // regular cell
 
@@ -1777,7 +1778,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
 
         _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());
 
-        write(out, mask, timestamp, cell_value);
+        write(_version, out, mask, timestamp, cell_value);
     }
 }
 
@@ -1799,15 +1800,15 @@ void sstable::maybe_write_row_marker(file_writer& out, const schema& schema, con
 
         _c_stats.tombstone_histogram.update(deletion_time);
 
-        write(out, mask, timestamp, deletion_time_size, deletion_time);
+        write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
     } else if (marker.is_expiring()) {
         column_mask mask = column_mask::expiration;
         uint32_t ttl = marker.ttl().count();
         uint32_t expiration = marker.expiry().time_since_epoch().count();
-        write(out, mask, ttl, expiration, timestamp, value_length);
+        write(_version, out, mask, ttl, expiration, timestamp, value_length);
     } else {
         column_mask mask = column_mask::none;
-        write(out, mask, timestamp, value_length);
+        write(_version, out, mask, timestamp, value_length);
     }
 }
 
@@ -1819,7 +1820,7 @@ void sstable::write_deletion_time(file_writer& out, const tombstone t) {
     _c_stats.update_max_local_deletion_time(deletion_time);
     _c_stats.tombstone_histogram.update(deletion_time);
 
-    write(out, deletion_time, timestamp);
+    write(_version, out, deletion_time, timestamp);
 }
 
 void sstable::index_tombstone(file_writer& out, const composite& key, range_tombstone&& rt, composite::eoc marker) {
@@ -1856,7 +1857,7 @@ void sstable::write_range_tombstone(file_writer& out,
         throw std::logic_error(sprint("Cannot represent marker type in range tombstone for non-compound schemas"));
     }
     write_range_tombstone_bound(out, *_schema, start, suffix, start_marker);
-    write(out, mask);
+    write(_version, out, mask);
     write_range_tombstone_bound(out, *_schema, end, suffix, end_marker);
     write_deletion_time(out, t);
 }
@@ -1928,27 +1929,27 @@ void sstable::index_and_write_column_name(file_writer& out,
          composite::eoc marker) {
     if (_schema->clustering_key_size()) {
         bytes_writer_for_column_name w;
-        write_column_name(w, *_schema, clustering_element, column_names, marker);
+        write_column_name(_version, w, *_schema, clustering_element, column_names, marker);
         auto&& colname = std::move(w).release();
         maybe_flush_pi_block(out, clustering_element, colname);
-        write_column_name(out, colname);
+        write_column_name(_version, out, colname);
     } else {
-        write_column_name(out, *_schema, clustering_element, column_names, marker);
+        write_column_name(_version, out, *_schema, clustering_element, column_names, marker);
     }
 }
 
-static void write_index_header(file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
-    write(out, key, pos);
+static void write_index_header(sstable_version_types v, file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
+    write(v, out, key, pos);
 }
 
-static void write_index_promoted(file_writer& out, bytes_ostream& promoted_index,
+static void write_index_promoted(sstable_version_types v, file_writer& out, bytes_ostream& promoted_index,
         deletion_time deltime, uint32_t numblocks) {
     uint32_t promoted_index_size = promoted_index.size();
     if (promoted_index_size) {
         promoted_index_size += 16 /* deltime + numblocks */;
-        write(out, promoted_index_size, deltime, numblocks, promoted_index);
+        write(v, out, promoted_index_size, deltime, numblocks, promoted_index);
     } else {
-        write(out, promoted_index_size);
+        write(v, out, promoted_index_size);
     }
 }
 
@@ -1993,7 +1994,7 @@ static void seal_summary(summary& s,
 
 static
 void
-populate_statistics_offsets(statistics& s) {
+populate_statistics_offsets(sstable_version_types v, statistics& s) {
     // copy into a sorted vector to guarantee consistent order
     auto types = boost::copy_range<std::vector<metadata_type>>(s.contents | boost::adaptors::map_keys);
     boost::sort(types);
@@ -2003,10 +2004,10 @@ populate_statistics_offsets(statistics& s) {
         s.hash.map[t] = -1;
     }
 
-    auto offset = serialized_size(s.hash);
+    auto offset = serialized_size(v, s.hash);
     for (auto t : types) {
         s.hash.map[t] = offset;
-        offset += s.contents[t]->serialized_size();
+        offset += s.contents[t]->serialized_size(v);
     }
 }
 
@@ -2035,7 +2036,7 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
 
 // In the beginning of the statistics file, there is a disk_hash used to
 // map each metadata type to its correspondent position in the file.
-static void seal_statistics(statistics& s, metadata_collector& collector,
+static void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
         const dht::decorated_key& first_key, const dht::decorated_key& last_key) {
     validation_metadata validation;
@@ -2052,7 +2053,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     collector.construct_stats(stats);
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
 
-    populate_statistics_offsets(s);
+    populate_statistics_offsets(v, s);
 }
 
 void components_writer::maybe_add_summary_entry(summary& s, const dht::token& token, bytes_view key, uint64_t data_offset,
@@ -2151,7 +2152,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
     // Write an index entry minus the "promoted index" (sample of columns)
     // part. We can only write that after processing the entire partition
     // and collecting the sample of columns.
-    write_index_header(_index, p_key, _out.offset());
+    write_index_header(_sst._version, _index, p_key, _out.offset());
     _sst._pi_write.data = {};
     _sst._pi_write.numblocks = 0;
     _sst._pi_write.deltime.local_deletion_time = std::numeric_limits<int32_t>::max();
@@ -2161,7 +2162,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
     _sst._pi_write.schemap = &_schema; // sadly we need this
 
     // Write partition key into data file.
-    write(_out, p_key);
+    write(_sst._version, _out, p_key);
 
     _tombstone_written = false;
 }
@@ -2182,7 +2183,7 @@ void components_writer::consume(tombstone t) {
         d.local_deletion_time = std::numeric_limits<int32_t>::max();
         d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
     }
-    write(_out, d);
+    write(_sst._version, _out, d);
     _tombstone_written = true;
     // TODO: need to verify we don't do this twice?
     _sst._pi_write.deltime = d;
@@ -2251,13 +2252,13 @@ stop_iteration components_writer::consume_end_of_partition() {
             _out.offset() - _sst._pi_write.block_start_offset);
         _sst._pi_write.numblocks++;
     }
-    write_index_promoted(_index, _sst._pi_write.data, _sst._pi_write.deltime,
+    write_index_promoted(_sst._version, _index, _sst._pi_write.data, _sst._pi_write.deltime,
             _sst._pi_write.numblocks);
     _sst._pi_write.data = {};
     _sst._pi_write.block_first_colname = {};
 
     int16_t end_of_row = 0;
-    write(_out, end_of_row);
+    write(_sst._version, _out, end_of_row);
 
     // compute size of the current row.
     _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
@@ -2288,7 +2289,7 @@ void components_writer::consume_end_of_stream() {
     }
 
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst._components->statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
+    seal_statistics(_sst._version, _sst._components->statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
@@ -2359,10 +2360,10 @@ void sstable_writer::finish_file_writer()
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
-        write_digest(_sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        write_digest(_sst._version, _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst._version, _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
+        write_digest(_sst._version, _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
     }
 }
 
