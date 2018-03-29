@@ -31,6 +31,7 @@ class real_dirty_memory_accounter {
     cache_tracker& _tracker;
     uint64_t _bytes;
 public:
+    real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size);
     real_dirty_memory_accounter(memtable& m, cache_tracker& tracker);
     ~real_dirty_memory_accounter();
     real_dirty_memory_accounter(real_dirty_memory_accounter&& c);
@@ -39,12 +40,17 @@ public:
 };
 
 inline
-real_dirty_memory_accounter::real_dirty_memory_accounter(memtable& m, cache_tracker& tracker)
-    : _mgr(m.get_dirty_memory_manager())
+real_dirty_memory_accounter::real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size)
+    : _mgr(mgr)
     , _tracker(tracker)
-    , _bytes(m.occupancy().used_space()) {
+    , _bytes(size) {
     _mgr.pin_real_dirty_memory(_bytes);
 }
+
+inline
+real_dirty_memory_accounter::real_dirty_memory_accounter(memtable& m, cache_tracker& tracker)
+    : real_dirty_memory_accounter(m.get_dirty_memory_manager(), tracker, m.occupancy().used_space())
+{ }
 
 inline
 real_dirty_memory_accounter::~real_dirty_memory_accounter() {
