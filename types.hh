@@ -499,6 +499,7 @@ public:
     virtual bool references_duration() const {
         return false;
     }
+    virtual bool is_fixed_length() const = 0;
 protected:
     virtual bool equals(const abstract_type& other) const {
         return this == &other;
@@ -845,6 +846,7 @@ public:
         return deserialize(v, sf);
     }
     bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
+    virtual bool is_fixed_length() const override { return false; }
 };
 
 using collection_type = shared_ptr<const collection_type_impl>;
@@ -1008,6 +1010,10 @@ public:
 
     static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
         return intern::get_instance(std::move(type));
+    }
+
+    virtual bool is_fixed_length() const override {
+        return _underlying_type->is_fixed_length();
     }
 protected:
     virtual size_t native_value_size() const override;
@@ -1640,6 +1646,7 @@ public:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
     virtual bool references_duration() const override;
+    virtual bool is_fixed_length() const override { return false; }
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);
