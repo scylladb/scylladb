@@ -35,6 +35,7 @@
 #include "schema_upgrader.hh"
 #include "dirty_memory_manager.hh"
 #include "cache_flat_mutation_reader.hh"
+#include "real_dirty_memory_accounter.hh"
 
 namespace cache {
 
@@ -930,41 +931,6 @@ row_cache::phase_type row_cache::phase_of(dht::ring_position_view pos) {
     }
     return _underlying_phase - 1;
 }
-
-// makes sure that cache updates handles real dirty memory correctly.
-class real_dirty_memory_accounter {
-  dirty_memory_manager& _mgr;
-  cache_tracker& _tracker;
-  uint64_t _bytes;
-public:
-  real_dirty_memory_accounter(memtable& m, cache_tracker& tracker)
-    : _mgr(m.get_dirty_memory_manager())
-    , _tracker(tracker)
-    , _bytes(m.occupancy().used_space()) {
-    _mgr.pin_real_dirty_memory(_bytes);
-  }
-
-  ~real_dirty_memory_accounter() {
-    _mgr.unpin_real_dirty_memory(_bytes);
-  }
-
-  real_dirty_memory_accounter(real_dirty_memory_accounter&& c) : _mgr(c._mgr), _tracker(c._tracker), _bytes(c._bytes) {
-    c._bytes = 0;
-  }
-  real_dirty_memory_accounter(const real_dirty_memory_accounter& c) = delete;
-
-  void unpin_memory(uint64_t bytes) {
-    // this should never happen - if it does it is a bug. But we'll try to recover and log
-    // instead of asserting. Once it happens, though, it can keep happening until the update is
-    // done. So using metrics is better-suited than printing to the logs
-    if (bytes > _bytes) {
-        _tracker.pinned_dirty_memory_overload(bytes - _bytes);
-    }
-    auto delta = std::min(bytes, _bytes);
-    _bytes -= delta;
-    _mgr.unpin_real_dirty_memory(delta);
-  }
-};
 
 template <typename Updater>
 future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater) {
