@@ -54,6 +54,9 @@ public:
     void read_statistics() {
         _sst->read_statistics(default_priority_class()).get();
     }
+    void load() {
+        _sst->load().get();
+    }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
             if(_sst->_recognized_components.count(expected) == 0) {
@@ -133,5 +136,12 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_read_statistics) {
         sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
         sst.read_toc();
         sst.read_statistics();
+    });
+}
+
+SEASTAR_TEST_CASE(test_uncompressed_simple_load) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
+        sst.load();
     });
 }
