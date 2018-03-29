@@ -35,6 +35,7 @@
 #include <iterator>
 
 #include "types.hh"
+#include "v3_write_helpers.hh"
 #include "sstables.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
@@ -1705,6 +1706,17 @@ void sstable::maybe_flush_pi_block(file_writer& out,
         // Keep track of the last column in the partition - we'll need it to close
         // the last block in the promoted index, unfortunately.
         _pi_write.block_last_colname = std::move(colname);
+    }
+}
+
+void write_cell_value(file_writer& out, const data_type& type, bytes_view value) {
+    if (!value.empty()) {
+        if (type->is_fixed_length()) {
+            write(out, value);
+        } else {
+            write_vint(out, value.size());
+            write(out, value);
+        }
     }
 }
 

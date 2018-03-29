@@ -31,6 +31,8 @@
 
 using vint_size_type = bytes::size_type;
 
+static constexpr size_t max_vint_length = 9;
+
 struct unsigned_vint final {
     using value_type = uint64_t;
 
