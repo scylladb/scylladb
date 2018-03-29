@@ -352,7 +352,7 @@ inline void write(sstable_version_types v, file_writer& out, const First& first,
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
 parse(sstable_version_types v, random_access_reader& in, T& t) {
-    return t.describe_type([v, &in] (auto&&... what) -> future<> {
+    return t.describe_type(v, [v, &in] (auto&&... what) -> future<> {
         return parse(v, in, what...);
     });
 }
@@ -361,7 +361,7 @@ template <class T>
 inline typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
 write(sstable_version_types v, file_writer& out, const T& t) {
     // describe_type() is not const correct, so cheat here:
-    const_cast<T&>(t).describe_type([v, &out] (auto&&... what) -> void {
+    const_cast<T&>(t).describe_type(v, [v, &out] (auto&&... what) -> void {
         write(v, out, std::forward<decltype(what)>(what)...);
     });
 }
@@ -846,7 +846,7 @@ struct streaming_histogram_element {
     value_type value;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(key, value); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(key, value); }
 };
 
 future<> parse(sstable_version_types v, random_access_reader& in, utils::streaming_histogram& sh) {

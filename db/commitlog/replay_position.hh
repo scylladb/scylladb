@@ -43,6 +43,7 @@
 #include <stdint.h>
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
+#include "sstables/version.hh"
 
 
 namespace db {
@@ -95,7 +96,7 @@ struct replay_position {
     }
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(id, pos); }
+    auto describe_type(sstables::sstable_version_types v, Describer f) { return f(id, pos); }
 };
 
 class commitlog;

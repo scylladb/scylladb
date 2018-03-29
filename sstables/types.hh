@@ -31,6 +31,7 @@
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
 #include "db/commitlog/replay_position.hh"
+#include "version.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -50,7 +51,7 @@ struct deletion_time {
     int64_t marked_for_delete_at;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(local_deletion_time, marked_for_delete_at); }
 
     bool live() const {
         return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
@@ -74,7 +75,7 @@ struct option {
     disk_string<uint16_t> value;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(key, value); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(key, value); }
 };
 
 struct filter {
@@ -82,7 +83,7 @@ struct filter {
     disk_array<uint32_t, uint64_t> buckets;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(hashes, buckets); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(hashes, buckets); }
 
     // Create an always positive filter if nothing else is specified.
     filter() : hashes(0), buckets({}) {}
@@ -95,7 +96,7 @@ struct filter_ref {
     disk_array_ref<uint32_t, uint64_t> buckets;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(hashes, buckets); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(hashes, buckets); }
     explicit filter_ref(int hashes, const utils::chunked_vector<uint64_t>& buckets) : hashes(hashes), buckets(buckets) {}
 };
 
@@ -284,7 +285,7 @@ struct validation_metadata : public metadata_base<validation_metadata> {
     double filter_chance;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(partitioner, filter_chance); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(partitioner, filter_chance); }
 };
 
 struct compaction_metadata : public metadata_base<compaction_metadata> {
@@ -292,7 +293,7 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
     disk_array<uint32_t, uint8_t> cardinality;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(ancestors, cardinality); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(ancestors, cardinality); }
 };
 
 struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
@@ -311,7 +312,7 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
     bool has_legacy_counter_shards;
 
     template <typename Describer>
-    auto describe_type(Describer f) {
+    auto describe_type(sstable_version_types v, Describer f) {
         return f(
             estimated_row_size,
             estimated_column_count,
@@ -329,6 +330,7 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
         );
     }
 };
+
 using stats_metadata = ka_stats_metadata;
 
 struct disk_token_bound {
@@ -336,7 +338,7 @@ struct disk_token_bound {
     disk_string<uint16_t> token;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(exclusive, token); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(exclusive, token); }
 };
 
 struct disk_token_range {
@@ -344,7 +346,7 @@ struct disk_token_range {
     disk_token_bound right;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(left, right); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(left, right); }
 };
 
 // Scylla-specific sharding information.  This is a set of token
@@ -355,7 +357,7 @@ struct sharding_metadata {
     disk_array<uint32_t, disk_token_range> token_ranges;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(token_ranges); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(token_ranges); }
 };
 
 // Scylla-specific list of features an sstable supports.
@@ -378,7 +380,7 @@ struct sstable_enabled_features {
     }
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(enabled_features); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(enabled_features); }
 };
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
@@ -424,7 +426,7 @@ struct scylla_metadata {
     }
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(data); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(data); }
 };
 
 static constexpr int DEFAULT_CHUNK_SIZE = 65536;
@@ -435,7 +437,7 @@ struct checksum {
     utils::chunked_vector<uint32_t> checksums;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(chunk_size, checksums); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(chunk_size, checksums); }
 };
 
 }
