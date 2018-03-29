@@ -341,6 +341,16 @@ public:
         }
     }
 
+    // Returns memory footprint of row entries under the cursor.
+    // Can be called only when cursor is valid and pointing at a row.
+    size_t memory_usage() const {
+        size_t result = 0;
+        for (const position_in_version& v : _current_row) {
+            result += v.it->memory_usage();
+        }
+        return result;
+    }
+
     struct ensure_result {
         rows_entry& row;
         bool inserted = false;

@@ -36,6 +36,7 @@
 #include "tests/mutation_source_test.hh"
 #include "tests/failure_injecting_allocation_strategy.hh"
 #include "tests/range_tombstone_list_assertions.hh"
+#include "real_dirty_memory_accounter.hh"
 
 using namespace std::chrono_literals;
 
@@ -154,6 +155,8 @@ class mvcc_container {
     cache_tracker _tracker;
     schema_ptr _schema;
     partition_snapshot::phase_type _phase = partition_snapshot::min_phase;
+    dirty_memory_manager _mgr;
+    real_dirty_memory_accounter _acc{_mgr, _tracker, 0};
 public:
     mvcc_container(schema_ptr s) : _schema(s) {}
     mvcc_container(mvcc_container&&) = delete;
@@ -164,6 +167,7 @@ public:
     mutation_cleaner& cleaner() { return _tracker.cleaner(); }
     partition_snapshot::phase_type next_phase() { return ++_phase; }
     partition_snapshot::phase_type phase() const { return _phase; }
+    real_dirty_memory_accounter& accounter() { return _acc; }
 
     mutation_partition squashed(lw_shared_ptr<partition_snapshot>& snp) {
         logalloc::allocating_section as;
@@ -235,7 +239,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
         logalloc::allocating_section as;
         auto c = as(region(), [&] {
             return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, as, region(),
-                _container.tracker(), _container.next_phase());
+                _container.tracker(), _container.next_phase(), _container.accounter());
         });
         repeat([&] {
             return c.run();

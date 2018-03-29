@@ -25,7 +25,9 @@
 #include "partition_version.hh"
 #include "row_cache.hh"
 #include "partition_snapshot_row_cursor.hh"
+#include "partition_snapshot_reader.hh"
 #include "utils/coroutine.hh"
+#include "real_dirty_memory_accounter.hh"
 
 static void remove_or_mark_as_unique_owner(partition_version* current, mutation_cleaner* cleaner)
 {
@@ -418,7 +420,8 @@ public:
 };
 
 coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
-    logalloc::allocating_section& alloc, logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase)
+    logalloc::allocating_section& alloc, logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase,
+    real_dirty_memory_accounter& acc)
 {
     // This flag controls whether this operation may defer. It is more
     // expensive to apply with deferring due to construction of snapshots and
@@ -466,11 +469,15 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
         auto&& allocator = reg.allocator();
         return alloc(reg, [&] {
             return with_linearized_managed_bytes([&] {
+                size_t dirty_size = 0;
+
                 if (!static_done) {
                     partition_version& dst = *dst_snp->version();
                     bool static_row_continuous = dst_snp->static_row_continuous();
                     auto current = &*src_snp->version();
                     while (current) {
+                        dirty_size += allocator.object_memory_size_in_allocator(current)
+                            + current->partition().static_row().external_memory_usage();
                         dst.partition().apply(current->partition().partition_tombstone());
                         if (static_row_continuous) {
                             row& static_row = dst.partition().static_row();
@@ -481,6 +488,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                                 static_row.apply(s, column_kind::static_column, current->partition().static_row());
                             }
                         }
+                        dirty_size += current->partition().row_tombstones().external_memory_usage();
                         range_tombstone_list& tombstones = dst.partition().row_tombstones();
                         // FIXME: defer while applying range tombstones
                         if (can_move) {
@@ -491,6 +499,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                         current = current->next();
                         can_move &= current && !current->is_referenced();
                     }
+                    acc.unpin_memory(dirty_size);
                     static_done = true;
                 }
 
@@ -499,6 +508,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                 }
 
                 do {
+                    auto size = src_cur.memory_usage();
                     if (!src_cur.dummy()) {
                         tracker.on_row_processed_from_memtable();
                         auto ropt = cur.ensure_entry_if_complete(src_cur.position());
@@ -514,7 +524,9 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                             tracker.on_row_dropped_from_memtable();
                         }
                     }
-                    if (!src_cur.next()) {
+                    auto has_next = src_cur.next();
+                    acc.unpin_memory(size);
+                    if (!has_next) {
                         return stop_iteration::yes;
                     }
                 } while (!preemptible || !need_preempt());
