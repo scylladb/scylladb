@@ -890,6 +890,17 @@ inline void write(sstable_version_types v, file_writer& out, const utils::stream
     write(v, out, max_bin_size, a);
 }
 
+future<> parse(sstable_version_types v, random_access_reader& in, commitlog_interval& ci) {
+    return parse(v, in, ci.start).then([&ci, v, &in] {
+        return parse(v, in, ci.end);
+    });
+}
+
+inline void write(sstable_version_types v, file_writer& out, const commitlog_interval& ci) {
+    write(v, out, ci.start);
+    write(v, out, ci.end);
+}
+
 future<> parse(sstable_version_types v, random_access_reader& in, compression& c) {
     auto data_len_ptr = make_lw_shared<uint64_t>(0);
     auto chunk_len_ptr = make_lw_shared<uint32_t>(0);

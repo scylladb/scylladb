@@ -46,6 +46,11 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+struct commitlog_interval {
+    db::replay_position start;
+    db::replay_position end;
+};
+
 struct deletion_time {
     int32_t local_deletion_time;
     int64_t marked_for_delete_at;
@@ -296,13 +301,16 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
     auto describe_type(sstable_version_types v, Describer f) { return f(ancestors, cardinality); }
 };
 
-struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
+struct stats_metadata : public metadata_base<stats_metadata> {
     utils::estimated_histogram estimated_row_size;
     utils::estimated_histogram estimated_column_count;
     db::replay_position position;
     int64_t min_timestamp;
     int64_t max_timestamp;
+    int32_t min_local_deletion_time; // 3_x only
     int32_t max_local_deletion_time;
+    int32_t min_ttl; // 3_x only
+    int32_t max_ttl; // 3_x only
     double compression_ratio;
     utils::streaming_histogram estimated_tombstone_drop_time;
     uint32_t sstable_level;
@@ -310,28 +318,59 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
     disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     bool has_legacy_counter_shards;
+    int64_t columns_count; // 3_x only
+    int64_t rows_count; // 3_x only
+    db::replay_position commitlog_lower_bound; // 3_x only
+    disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
 
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
-        return f(
-            estimated_row_size,
-            estimated_column_count,
-            position,
-            min_timestamp,
-            max_timestamp,
-            max_local_deletion_time,
-            compression_ratio,
-            estimated_tombstone_drop_time,
-            sstable_level,
-            repaired_at,
-            min_column_names,
-            max_column_names,
-            has_legacy_counter_shards
-        );
+        switch (v) {
+        case sstable_version_types::mc:
+            return f(
+                estimated_row_size,
+                estimated_column_count,
+                position,
+                min_timestamp,
+                max_timestamp,
+                min_ttl,
+                max_ttl,
+                min_local_deletion_time,
+                max_local_deletion_time,
+                compression_ratio,
+                estimated_tombstone_drop_time,
+                sstable_level,
+                repaired_at,
+                min_column_names,
+                max_column_names,
+                has_legacy_counter_shards,
+                columns_count,
+                rows_count,
+                commitlog_lower_bound,
+                commitlog_intervals
+            );
+        case sstable_version_types::ka:
+        case sstable_version_types::la:
+            return f(
+                estimated_row_size,
+                estimated_column_count,
+                position,
+                min_timestamp,
+                max_timestamp,
+                max_local_deletion_time,
+                compression_ratio,
+                estimated_tombstone_drop_time,
+                sstable_level,
+                repaired_at,
+                min_column_names,
+                max_column_names,
+                has_legacy_counter_shards
+            );
+        }
+        // Should never reach here - compiler will complain if switch above does not cover all sstable versions
+        abort();
     }
 };
-
-using stats_metadata = ka_stats_metadata;
 
 struct disk_token_bound {
     uint8_t exclusive; // really a boolean
