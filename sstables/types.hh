@@ -34,6 +34,7 @@
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
+#include "version.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -255,26 +256,26 @@ class file_writer;
 
 struct metadata {
     virtual ~metadata() {}
-    virtual uint64_t serialized_size() const = 0;
-    virtual void write(file_writer& write) const = 0;
+    virtual uint64_t serialized_size(sstable_version_types v) const = 0;
+    virtual void write(sstable_version_types v, file_writer& write) const = 0;
 };
 
 template <typename T>
-uint64_t serialized_size(const T& object);
+uint64_t serialized_size(sstable_version_types v, const T& object);
 
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(file_writer& out, const T& t);
+write(sstable_version_types v, file_writer& out, const T& t);
 
 // serialized_size() implementation for metadata class
 template <typename Component>
 class metadata_base : public metadata {
 public:
-    virtual uint64_t serialized_size() const override {
-        return sstables::serialized_size(static_cast<const Component&>(*this));
+    virtual uint64_t serialized_size(sstable_version_types v) const override {
+        return sstables::serialized_size(v, static_cast<const Component&>(*this));
     }
-    virtual void write(file_writer& writer) const override {
-        return sstables::write(writer, static_cast<const Component&>(*this));
+    virtual void write(sstable_version_types v, file_writer& writer) const override {
+        return sstables::write(v, writer, static_cast<const Component&>(*this));
     }
 };
 

@@ -27,6 +27,7 @@
 #include "compress.hh"
 #include "progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
+#include "version.hh"
 
 namespace sstables {
 
@@ -105,10 +106,10 @@ make_sizing_output_stream(uint64_t& dest) {
 // Must be called from a thread
 template <typename T>
 uint64_t
-serialized_size(const T& object) {
+serialized_size(sstable_version_types v, const T& object) {
     uint64_t size = 0;
     auto writer = file_writer(make_sizing_output_stream(size));
-    write(writer, object);
+    write(v, writer, object);
     writer.flush().get();
     writer.close().get();
     return size;
