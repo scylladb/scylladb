@@ -53,7 +53,7 @@ class ScyllaSetup:
             args += [ "--memory %s" % self._memory ]
         if self._smp is not None:
             args += [ "--smp %s" % self._smp ]
-        if self._overprovisioned == "1":
+        if self._overprovisioned == "1" or (self._overprovisioned is None and self._cpuset is None):
             args += [ "--overprovisioned" ]
 
         if self._listenAddress is None:

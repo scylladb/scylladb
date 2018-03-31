@@ -77,10 +77,9 @@ $ docker run --name some-scylla --volume /var/lib/scylla:/var/lib/scylla -d scyl
 
 ## Configuring resource limits
 
-Scylla utilizes all CPUs and all memory by default.
-To configure resource limits for your Docker container, you can use the `--smp`, `--memory`, and `--cpuset` command line options documented in the section "Command-line options".
-
-If you run multiple Scylla instances on the same machine, it is highly recommended that you enable the `--overprovisioned` command line option, which enables certain optimizations for Scylla to run efficiently in an overprovisioned environment.
+The Scylla docker image defaults to running on overprovisioned mode and won't apply any CPU pinning optimizations, which it normally does in non-containerized environments.
+For better performance, it is recommended to configure resource limits for your Docker container using the `--smp`, `--memory`, and `--cpuset` command line options, as well as 
+disabling the overprovisioned flag as documented in the section "Command-line options".
 
 ## Restart Scylla
 
@@ -163,12 +162,13 @@ $ docker run --name some-scylla -d scylladb/scylla --memory 4G
 ### `--overprovisioned ENABLE`
 
 The `--overprovisioned` command line option enables or disables optimizations for running Scylla in an overprovisioned environment.
-If no `--overprovisioned` option is specified, Scylla defaults to running with optimizations *disabled*.
+If no `--overprovisioned` option is specified, Scylla defaults to running with optimizations *enabled*. If `--overprovisioned` is
+not specified and is left at its default, specifying `--cpuset` will automatically disable `--overprovisioned`
 
-For example, to enable optimizations for running in an overprovisioned environment:
+For example, to enable optimizations for running in an statically partitioned environment:
 
 ```console
-$ docker run --name some-scylla -d scylladb/scylla --overprovisioned 1
+$ docker run --name some-scylla -d scylladb/scylla --overprovisioned 0
 ```
 
 ### `--cpuset CPUSET`
