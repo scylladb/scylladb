@@ -372,8 +372,13 @@ SEASTAR_TEST_CASE(test_large_allocation) {
 
         static constexpr unsigned element_size = 16 * 1024;
 
-        std::deque<managed_bytes> evictable;
-        std::deque<managed_bytes> non_evictable;
+        std::vector<managed_bytes> evictable;
+        std::vector<managed_bytes> non_evictable;
+
+        auto nr_elements = seastar::memory::stats().total_memory() / element_size;
+        evictable.reserve(nr_elements / 2);
+        non_evictable.reserve(nr_elements / 2);
+
         try {
             while (true) {
                 with_allocator(r_evictable.allocator(), [&] {
@@ -394,7 +399,7 @@ SEASTAR_TEST_CASE(test_large_allocation) {
                 if (evictable.empty()) {
                     return memory::reclaiming_result::reclaimed_nothing;
                 }
-                evictable.pop_front();
+                evictable.pop_back();
                 return memory::reclaiming_result::reclaimed_something;
             });
         });
@@ -409,7 +414,14 @@ SEASTAR_TEST_CASE(test_large_allocation) {
         };
 
         try {
-            auto ptr = std::make_unique<char[]>(evictable.size() * element_size / 4 * 3);
+            std::vector<std::unique_ptr<char[]>> ptrs;
+            auto to_alloc = evictable.size() * element_size / 4 * 3;
+            auto unit = seastar::memory::stats().total_memory() / 32;
+            size_t allocated = 0;
+            while (allocated < to_alloc) {
+                ptrs.push_back(std::make_unique<char[]>(unit));
+                allocated += unit;
+            }
         } catch (const std::bad_alloc&) {
             // This shouldn't have happened, but clear remaining lsa data
             // properly so that humans see bad_alloc instead of some confusing
