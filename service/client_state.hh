@@ -179,6 +179,7 @@ public:
             , _cpu_of_origin(engine().cpu_id())
             , _is_internal(true)
             , _is_thrift(false)
+            , _remote_address(ipv4_addr())
     {}
 
     ///
