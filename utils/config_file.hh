@@ -176,5 +176,7 @@ private:
         _cfgs;
 };
 
+extern template struct config_file::named_value<seastar::log_level, config_file::value_status::Used>;
+
 }
 

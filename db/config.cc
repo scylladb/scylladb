@@ -197,3 +197,5 @@ logging::settings db::config::logging_settings(const bpo::variables_map& map) co
 const db::extensions& db::config::extensions() const {
     return *_extensions;
 }
+
+template struct utils::config_file::named_value<seastar::log_level, utils::config_file::value_status::Used>;
