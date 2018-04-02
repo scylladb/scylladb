@@ -426,6 +426,7 @@ private:
     }
 public:
     segment_pool();
+    void prime();
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
@@ -658,6 +659,10 @@ segment_pool::segment_pool()
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
+    prime();
+}
+
+void segment_pool::prime() {
     auto old_emergency_reserve = std::exchange(_emergency_reserve_max, std::numeric_limits<size_t>::max());
     try {
         // Allocate all of memory so that we occupy the top part. Afterwards, we'll start
@@ -688,6 +693,7 @@ class segment_pool {
     size_t _segments_in_use{};
     size_t _non_lsa_memory_in_use = 0;
 public:
+    void prime() {}
     segment* new_segment(region::impl* r) {
         if (_free_segments.empty()) {
             std::unique_ptr<segment, free_deleter> seg{new (with_alignment(segment::size)) segment};
@@ -2112,6 +2118,10 @@ void allocating_section::set_std_reserve(size_t reserve) {
 
 void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_function>& func) noexcept {
     func->fail(std::make_exception_ptr(timed_out_error()));
+}
+
+void prime_segment_pool() {
+    shard_segment_pool.prime();
 }
 
 }
