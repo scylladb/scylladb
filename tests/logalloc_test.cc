@@ -1240,3 +1240,75 @@ SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
         });
     });
 }
+
+// No point in testing contiguous memory allocation in debug mode
+#ifndef DEFAULT_ALLOCATOR
+SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocations) {
+    prime_segment_pool();  // if previous test cases muddied the pool
+
+    region evictable;
+    region non_evictable;
+    std::vector<managed_bytes> evictable_allocs;
+    std::vector<managed_bytes> non_evictable_allocs;
+    std::vector<std::unique_ptr<char[]>> std_allocs;
+
+    std::random_device rnd_dev;
+    std::default_random_engine rnd(rnd_dev());
+
+    auto clean_up = defer([&] {
+        with_allocator(evictable.allocator(), [&] {
+            evictable_allocs.clear();
+        });
+        with_allocator(non_evictable.allocator(), [&] {
+            non_evictable_allocs.clear();
+        });
+    });
+
+
+    // Fill up memory with allocations, try to intersperse lsa and std allocations
+    size_t lsa_alloc_size = 20000;
+    size_t std_alloc_size = 128*1024;
+    size_t throw_wrench_every = 4*1024*1024;
+    size_t ctr = 0;
+    while (true) {
+        try {
+            with_allocator(evictable.allocator(), [&] {
+                evictable_allocs.push_back(managed_bytes(managed_bytes::initialized_later(), lsa_alloc_size));
+            });
+            with_allocator(non_evictable.allocator(), [&] {
+                non_evictable_allocs.push_back(managed_bytes(managed_bytes::initialized_later(), lsa_alloc_size));
+            });
+            if (++ctr % (throw_wrench_every / (2*lsa_alloc_size)) == 0) {
+                // large std allocation to make it harder to allocate contiguous memory
+                std_allocs.push_back(std::make_unique<char[]>(std_alloc_size));
+            }
+        } catch (std::bad_alloc&) {
+            break;
+        }
+    }
+
+    // make the reclaimer work harder
+    std::shuffle(evictable_allocs.begin(), evictable_allocs.end(), rnd);
+
+    evictable.make_evictable([&] () -> memory::reclaiming_result {
+       if (evictable_allocs.empty()) {
+           return memory::reclaiming_result::reclaimed_nothing;
+       }
+       with_allocator(evictable.allocator(), [&] {
+           evictable_allocs.pop_back();
+       });
+       return memory::reclaiming_result::reclaimed_something;
+    });
+
+    // try to allocate 25% of memory using large-ish blocks
+    size_t large_alloc_size = 20*1024*1024;
+    size_t nr_large_allocs = memory::stats().total_memory() / 4 / large_alloc_size;
+    std::vector<std::unique_ptr<char[]>> large_allocs;
+    for (size_t i = 0; i < nr_large_allocs; ++i) {
+        auto p = new (std::nothrow) char[large_alloc_size];
+        BOOST_REQUIRE_NE(p, nullptr);
+        auto up = std::unique_ptr<char[]>(p);
+        large_allocs.push_back(std::move(up));
+    }
+}
+#endif
