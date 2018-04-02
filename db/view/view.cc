@@ -1303,7 +1303,6 @@ public:
 
         ~built_views() {
             for (auto&& status : views) {
-                std::cout << "putting " << status.view->cf_name() << " back\n";
                 // Use step.current_token(), which may have wrapped around and become < first_token.
                 step.build_status.emplace_back(view_build_status{std::move(status.view), step.current_token(), step.current_token()});
             }
