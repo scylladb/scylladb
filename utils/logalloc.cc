@@ -374,16 +374,6 @@ using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_
 
 #ifndef DEFAULT_ALLOCATOR
 
-static inline bool can_allocate_more_memory(size_t size)
-{
-    // We want to leave more free memory than just min_free_memory() in order to reduce
-    // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
-    static constexpr size_t min_gap = 1 * 1024 * 1024;
-    static constexpr size_t max_gap = 64 * 1024 * 1024;
-    static const size_t gap = std::min(max_gap, std::max(memory::stats().total_memory() / 16, min_gap));
-    return memory::stats().free_memory() > memory::min_free_memory() + size + gap;
-}
-
 // Segment pool implementation for the seastar allocator.
 // Stores segment descriptors in a vector which is indexed using most significant
 // bits of segment address.
@@ -402,6 +392,7 @@ class segment_pool {
     size_t _emergency_reserve_max = 30;
     bool _allocation_failure_flag = false;
     size_t _non_lsa_memory_in_use = 0;
+    size_t _non_lsa_reserve = 0;
     // Invariants - a segment is in one of the following states:
     //   In use by some region
     //     - set in _lsa_owned_segments_bitmap
@@ -429,6 +420,9 @@ private:
     }
     size_t max_segments() const {
         return (_layout.end - _segments_base) / segment::size;
+    }
+    bool can_allocate_more_memory(size_t size) {
+        return memory::stats().free_memory() >= _non_lsa_reserve + size;
     }
 public:
     segment_pool();
@@ -647,7 +641,23 @@ segment_pool::segment_pool()
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
-    refill_emergency_reserve();
+    auto old_emergency_reserve = std::exchange(_emergency_reserve_max, std::numeric_limits<size_t>::max());
+    try {
+        // Allocate all of memory so that we occupy the top part. Afterwards, we'll start
+        // freeing from the bottom.
+        _non_lsa_reserve = 0;
+        refill_emergency_reserve();
+    } catch (std::bad_alloc&) {
+        _emergency_reserve_max = old_emergency_reserve;
+    }
+    // We want to leave more free memory than just min_free_memory() in order to reduce
+    // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
+    size_t min_gap = 1 * 1024 * 1024;
+    size_t max_gap = 64 * 1024 * 1024;
+    size_t gap = std::min(max_gap, std::max(memory::stats().total_memory() / 16, min_gap));
+    _non_lsa_reserve = memory::min_free_memory() + gap;
+    // Since the reclaimer is not yet in place, free some low memory for general use
+    reclaim_segments(_non_lsa_reserve / segment::size);
 }
 
 #else
