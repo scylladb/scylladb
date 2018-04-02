@@ -486,6 +486,20 @@ size_t segment_pool::reclaim_segments(size_t target) {
     // Reclamation. Migrate segments to higher addresses and shrink segment pool.
     size_t reclaimed_segments = 0;
 
+    // We may fail to reclaim because a region has reclaim disabled (usually because
+    // it is in an allocating_section. Failed reclaims can cause high CPU usage
+    // if all of the lower addresses happen to be in a reclaim-disabled region (this
+    // is somewhat mitigated by the fact that checking for reclaim disabled is very
+    // cheap), but worse, failing a segment reclaim can lead to reclaimed memory
+    // being fragmented.  This results in the original allocation continuing to fail.
+    //
+    // To combat that, we limit the number of failed reclaims. If we reach the limit,
+    // we fail the reclaim.  The surrounding allocating_section will release the
+    // reclaim_lock, and increase reserves, which will result in reclaim being
+    // retried with all regions being reclaimable, and succeed in allocating
+    // contiguous memory.
+    size_t failed_reclaims_allowance = 10;
+
     for (size_t src_idx = _lsa_owned_segments_bitmap.find_first_set();
             reclaimed_segments != target && src_idx != utils::dynamic_bitset::npos
                     && _free_segments > _current_emergency_reserve_goal;
@@ -499,6 +513,9 @@ size_t segment_pool::reclaim_segments(size_t target) {
             assert(_lsa_owned_segments_bitmap.test(dst_idx));
             auto could_migrate = migrate_segment(src, segment_from_idx(dst_idx));
             if (!could_migrate) {
+                if (--failed_reclaims_allowance == 0) {
+                    break;
+                }
                 continue;
             }
         }
