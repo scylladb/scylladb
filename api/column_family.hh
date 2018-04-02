@@ -24,6 +24,7 @@
 #include "api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "database.hh"
+#include <any>
 
 namespace api {
 
@@ -37,9 +38,15 @@ template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer) {
     auto uuid = get_uuid(name, ctx.db.local());
-    return ctx.db.map_reduce0([mapper, uuid](database& db) {
-        return mapper(db.find_column_family(uuid));
-    }, init, reducer);
+    using mapper_type = std::function<std::any (database&)>;
+    using reducer_type = std::function<std::any (std::any, std::any)>;
+    return ctx.db.map_reduce0(mapper_type([mapper, uuid](database& db) {
+        return I(mapper(db.find_column_family(uuid)));
+    }), std::any(std::move(init)), reducer_type([reducer = std::move(reducer)] (std::any a, std::any b) mutable {
+        return I(reducer(std::any_cast<I>(std::move(a)), std::any_cast<I>(std::move(b))));
+    })).then([] (std::any r) {
+        return std::any_cast<I>(std::move(r));
+    });
 }
 
 
