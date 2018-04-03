@@ -926,6 +926,10 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
 
 future<> view_builder::start() {
     return seastar::async([this] {
+        // Wait for schema agreement even if we're a seed node.
+        while (!_mm.have_schema_agreement()) {
+            seastar::sleep(500ms).get();
+        }
         auto built = system_keyspace::load_built_views().get0();
         auto in_progress = system_keyspace::load_view_build_progress().get0();
         calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
