@@ -364,13 +364,9 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
                 }
             });
             return stop_iteration::no;
-        }).then_wrapped([this, which, keepalive, server_addr] (future<stop_iteration> f) {
-            try {
-                return std::get<0>(f.get());
-            } catch (...) {
-                clogger.debug("accept failed: {}", std::current_exception());
-                return stop_iteration::no;
-            }
+        }).handle_exception([] (auto ep) {
+            clogger.debug("accept failed: {}", ep);
+            return stop_iteration::no;
         });
     });
 }
