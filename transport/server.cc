@@ -338,39 +338,40 @@ cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_bui
 
 future<>
 cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
-    ++_connections_being_accepted;
-    return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
-        --_connections_being_accepted;
-        if (_stopping) {
-            f_cs_sa.ignore_ready_future();
-            maybe_idle();
-            return make_ready_future<>();
-        }
-        auto cs_sa = f_cs_sa.get();
-        auto fd = std::get<0>(std::move(cs_sa));
-        auto addr = std::get<1>(std::move(cs_sa));
-        fd.set_nodelay(true);
-        fd.set_keepalive(keepalive);
-        auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
-        ++_connects;
-        ++_connections;
-        conn->process().then_wrapped([this, conn] (future<> f) {
-            --_connections;
+    return repeat([this, which, keepalive, server_addr] {
+        ++_connections_being_accepted;
+        return _listeners[which].accept().then_wrapped([this, which, keepalive, server_addr] (future<connected_socket, socket_address> f_cs_sa) mutable {
+            --_connections_being_accepted;
+            if (_stopping) {
+                f_cs_sa.ignore_ready_future();
+                maybe_idle();
+                return stop_iteration::yes;
+            }
+            auto cs_sa = f_cs_sa.get();
+            auto fd = std::get<0>(std::move(cs_sa));
+            auto addr = std::get<1>(std::move(cs_sa));
+            fd.set_nodelay(true);
+            fd.set_keepalive(keepalive);
+            auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+            ++_connects;
+            ++_connections;
+            conn->process().then_wrapped([this, conn] (future<> f) {
+                --_connections;
+                try {
+                    f.get();
+                } catch (...) {
+                    clogger.debug("connection error: {}", std::current_exception());
+                }
+            });
+            return stop_iteration::no;
+        }).then_wrapped([this, which, keepalive, server_addr] (future<stop_iteration> f) {
             try {
-                f.get();
+                return std::get<0>(f.get());
             } catch (...) {
-                clogger.debug("connection error: {}", std::current_exception());
+                clogger.debug("accept failed: {}", std::current_exception());
+                return stop_iteration::no;
             }
         });
-        return do_accepts(which, keepalive, server_addr);
-    }).then_wrapped([this, which, keepalive, server_addr] (future<> f) {
-        try {
-            f.get();
-        } catch (...) {
-            clogger.debug("accept failed: {}", std::current_exception());
-            return do_accepts(which, keepalive, server_addr);
-        }
-        return make_ready_future<>();
     });
 }
 
