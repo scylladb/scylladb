@@ -708,9 +708,11 @@ int main(int ac, char** av) {
             }
 
             static sharded<db::view::view_builder> view_builder;
-            supervisor::notify("starting the view builder");
-            view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
-            view_builder.invoke_on_all(&db::view::view_builder::start).get();
+            if (cfg->view_building()) {
+                supervisor::notify("starting the view builder");
+                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
+                view_builder.invoke_on_all(&db::view::view_builder::start).get();
+            }
 
             supervisor::notify("starting native transport");
             service::get_local_storage_service().start_native_transport().get();
