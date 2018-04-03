@@ -1582,7 +1582,8 @@ static void maybe_add_virtual_reader(schema_ptr s, database& db) {
 }
 
 static bool maybe_write_in_user_memory(schema_ptr s, database& db) {
-    return (s.get() == batchlog().get());
+    return (s.get() == batchlog().get())
+            || s == v3::scylla_views_builds_in_progress();
 }
 
 void make(database& db, bool durable, bool volatile_testing_only) {
