@@ -67,16 +67,33 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, const sstring& n
     });
 }
 
-template<class Mapper, class I, class Reducer>
-future<I> map_reduce_cf_raw(http_context& ctx, I init,
-        Mapper mapper, Reducer reducer) {
-    return ctx.db.map_reduce0([mapper, init, reducer](database& db) {
+struct map_reduce_column_families_locally {
+    std::any init;
+    std::function<std::any (column_family&)> mapper;
+    std::function<std::any (std::any, std::any)> reducer;
+    std::any operator()(database& db) const {
         auto res = init;
         for (auto i : db.get_column_families()) {
             res = reducer(res, mapper(*i.second.get()));
         }
         return res;
-    }, init, reducer);
+    }
+};
+
+template<class Mapper, class I, class Reducer>
+future<I> map_reduce_cf_raw(http_context& ctx, I init,
+        Mapper mapper, Reducer reducer) {
+    using mapper_type = std::function<std::any (column_family&)>;
+    using reducer_type = std::function<std::any (std::any, std::any)>;
+    auto wrapped_mapper = mapper_type([mapper = std::move(mapper)] (column_family& cf) mutable {
+        return I(mapper(cf));
+    });
+    auto wrapped_reducer = reducer_type([reducer = std::move(reducer)] (std::any a, std::any b) mutable {
+        return I(reducer(std::any_cast<I>(std::move(a)), std::any_cast<I>(std::move(b))));
+    });
+    return ctx.db.map_reduce0(map_reduce_column_families_locally{init, std::move(wrapped_mapper), wrapped_reducer}, std::any(init), wrapped_reducer).then([] (std::any res) {
+        return std::any_cast<I>(std::move(res));
+    });
 }
 
 
