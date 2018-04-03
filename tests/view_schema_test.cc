@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "database.hh"
+#include "db/view/view_builder.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
@@ -3124,5 +3125,102 @@ SEASTAR_TEST_CASE(test_view_key_must_include_base_key) {
                           "where c is not null and b is not null "
                           "primary key (c, b)").get();  // error: "a" is missing in this key.
         } catch (exceptions::invalid_request_exception&) { }
+    });
+}
+
+SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p1 int, p2 text, c text, v text, primary key ((p1, p2), c))").get();
+        e.execute_cql("insert into cf (p1, p2, c, v) values (1, '', '', '')").get();
+
+        size_t id = 0;
+        auto make_view_name = [&id] { return sprint("vcf_%d", id++); };
+
+        auto views_matching = {
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key (p1, v, c, p2)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((p2, v), c, p1)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((v, p2), c, p1)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((c, v), p1, p2)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((v, c), p1, p2)"
+        };
+        for (auto&& view : views_matching) {
+            auto name = make_view_name();
+            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            e.execute_cql(sprint(view, name)).get();
+            f.get();
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                            {int32_type->decompose(1)},
+                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose(data_value(bytes()))},
+                    });
+        }
+
+        auto views_not_matching = {
+                "create materialized view %s as select * from cf "
+                "where p1 is not null and p2 is not null and c is not null and v is not null "
+                "primary key (c, p1, p2, v)",
+
+                "create materialized view %s as select * from cf "
+                "where p1 is not null and p2 is not null and c is not null and v is not null "
+                "primary key (p2, p1, c, v)"
+        };
+        for (auto&& view : views_not_matching) {
+            auto name = make_view_name();
+            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            e.execute_cql(sprint(view, name)).get();
+            f.get();
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        auto name = make_view_name();
+        auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+        e.execute_cql(sprint("create materialized view %s as select * from cf "
+                             "where p1 is not null and p2 is not null and c is not null and v is not null "
+                             "primary key (v, p1, p2, c)", name)).get();
+        f.get();
+        auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+        assert_that(msg).is_rows().is_empty();
+
+        e.local_db().flush_all_memtables().get();
+        e.execute_cql("update cf set v = 'a' where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                            {int32_type->decompose(1)},
+                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose("a")},
+                    });
+        });
+        e.execute_cql("update cf set v = '' where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+        e.execute_cql("delete v from cf where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        });
     });
 }
