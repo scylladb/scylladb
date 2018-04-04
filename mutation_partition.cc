@@ -1039,7 +1039,8 @@ apply_monotonically(const column_definition& def, cell_and_hash& dst,
             counter_cell_view::apply(dst.cell, src); // FIXME: Optimize
             dst.hash = { };
         } else if (compare_atomic_cell_for_merge(dst.cell.as_atomic_cell(), src.as_atomic_cell()) < 0) {
-            std::swap(dst.cell, src);
+            using std::swap;
+            swap(dst.cell, src);
             dst.hash = std::move(src_hash);
         }
     } else {
