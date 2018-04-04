@@ -214,12 +214,16 @@ The `--disable-version-check` disable the version validation check.
 
 **Since: 2.2**
 
+## Related Links
+
+* [Best practices for running Scylla on docker](http://docs.scylladb.com/procedures/best_practices_scylla_on_docker/)
+
 # User Feedback
 
 ## Issues
 
 For bug reports, please use Scylla's [issue tracker](https://github.com/scylladb/scylla/issues) on GitHub.
-Please read the [How to report a Scylla problem](https://github.com/scylladb/scylla/wiki/How-to-report-a-Scylla-problem) page before you report bugs.
+Please read the [How to report a Scylla problem](http://docs.scylladb.com/operating-scylla/troubleshooting/report_scylla_problem/) page before you report bugs.
 
 For general help, see Scylla's [documentation](http://www.scylladb.com/doc/).
 For questions and comments, use Scylla's [mailing lists](http://www.scylladb.com/community/).
