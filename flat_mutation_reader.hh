@@ -490,7 +490,7 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
         virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
             clear_buffer();
             _end_of_stream = false;
-            return _reader.fast_forward_to(pr);
+            return _reader.fast_forward_to(pr, timeout);
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
             throw std::bad_function_call();
