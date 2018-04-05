@@ -413,6 +413,9 @@ public:
             return peek();
         });
     }
+    // A peek at the next fragment in the buffer.
+    // Cannot be called if is_buffer_empty() returns true.
+    const mutation_fragment& peek_buffer() const { return _impl->_buffer.front(); }
     // The actual buffer size of the reader.
     // Altough we consistently refer to this as buffer size throught the code
     // we really use "buffer size" as the size of the collective memory
