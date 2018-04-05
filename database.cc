@@ -1612,7 +1612,7 @@ inline bool column_family::manifest_json_filter(const lister::path&, const direc
 
 // TODO: possibly move it to seastar
 template <typename Service, typename PtrType, typename Func>
-static future<> invoke_shards_with_ptr(std::vector<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
+static future<> invoke_shards_with_ptr(std::unordered_set<shard_id> shards, distributed<Service>& s, PtrType ptr, Func&& func) {
     return parallel_for_each(std::move(shards), [&s, &func, ptr] (shard_id id) {
         return s.invoke_on(id, [func, foreign = make_foreign(ptr)] (Service& s) mutable {
             return func(s, std::move(foreign));
@@ -1639,7 +1639,14 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
             return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
                 // shared components loaded, now opening sstable in all shards that own it with shared components
                 return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
-                    return invoke_shards_with_ptr(info.owners, db, std::move(info.components),
+                    // All shards that own the sstable is interested in it in addition to shard that
+                    // is responsible for its generation. We may need to add manually this shard
+                    // because sstable may not contain data that belong to it.
+                    auto shards_interested_in_this_sstable = boost::copy_range<std::unordered_set<shard_id>>(info.owners);
+                    shard_id shard_responsible_for_generation = column_family::calculate_shard_from_sstable_generation(comps.generation);
+                    shards_interested_in_this_sstable.insert(shard_responsible_for_generation);
+
+                    return invoke_shards_with_ptr(std::move(shards_interested_in_this_sstable), db, std::move(info.components),
                             [owners = info.owners, data = info.data.dup(), index = info.index.dup(), comps, func] (database& db, auto components) {
                         auto& cf = db.find_column_family(comps.ks, comps.cf);
                         return func(cf, sstables::foreign_sstable_open_info{std::move(components), owners, data, index});
