@@ -160,6 +160,11 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy, dis
                                             "batches.")),
 
                     sm::make_derive(
+                            "rows_read",
+                            _cql_stats.rows_read,
+                            sm::description("Counts a total number of rows read during CQL requests.")),
+
+                    sm::make_derive(
                             "prepared_cache_evictions",
                             [] { return prepared_statements_cache::shard_stats().prepared_cache_evictions; },
                             sm::description("Counts a number of prepared statements cache entries evictions.")),
