@@ -35,6 +35,7 @@
 #include "tests/simple_schema.hh"
 #include "tests/test_services.hh"
 #include "tests/mutation_source_test.hh"
+#include "tests/cql_test_env.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
@@ -42,6 +43,7 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "partition_slice_builder.hh"
+#include "schema_registry.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1379,4 +1381,57 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
         run_mutation_source_tests(make_combined_populator(2));
         run_mutation_source_tests(make_combined_populator(3));
     });
+}
+
+// Best run with SMP >= 2
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
+            const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
+            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &mutations] {
+                auto mt = make_lw_shared<memtable>(s.get());
+
+                for (auto& mut : mutations) {
+                    mt->apply(mut);
+                }
+
+                return make_foreign(mt);
+            }).get0();
+
+            auto reader_factory = [remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) {
+                auto remote_reader = smp::submit_to(remote_shard,
+                        [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] {
+                    return make_foreign(std::make_unique<flat_mutation_reader>(remote_mt->make_flat_reader(s.get(),
+                            range,
+                            slice,
+                            pc,
+                            trace_state.get(),
+                            fwd_sm,
+                            fwd_mr)));
+                }).get0();
+                return make_foreign_reader(s, std::move(remote_reader), fwd_sm);
+            };
+
+            auto reader_factory_ptr = make_lw_shared<decltype(reader_factory)>(std::move(reader_factory));
+
+            return mutation_source([reader_factory_ptr] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) {
+                return (*reader_factory_ptr)(std::move(s), range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr);
+            });
+        };
+
+        run_mutation_source_tests(populate);
+        return make_ready_future<>();
+    }).get();
 }
