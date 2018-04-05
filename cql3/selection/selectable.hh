@@ -46,6 +46,7 @@
 #include "core/shared_ptr.hh"
 #include "cql3/selection/selector.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/functions/function.hh"
 #include "cql3/functions/function_name.hh"
 
 namespace cql3 {
@@ -82,6 +83,7 @@ public:
     class writetime_or_ttl;
 
     class with_function;
+    class with_anonymous_function;
 
     class with_field_selection;
 
@@ -114,6 +116,28 @@ public:
     };
 };
 
+class selectable::with_anonymous_function : public selectable {
+    shared_ptr<functions::function> _function;
+    std::vector<shared_ptr<selectable>> _args;
+public:
+    with_anonymous_function(::shared_ptr<functions::function> f, std::vector<shared_ptr<selectable>> args)
+        : _function(f), _args(std::move(args)) {
+    }
+
+    virtual sstring to_string() const override;
+
+    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
+    class raw : public selectable::raw {
+        shared_ptr<functions::function> _function;
+        std::vector<shared_ptr<selectable::raw>> _args;
+    public:
+        raw(shared_ptr<functions::function> f, std::vector<shared_ptr<selectable::raw>> args)
+                : _function(f), _args(std::move(args)) {
+        }
+        virtual shared_ptr<selectable> prepare(schema_ptr s) override;
+        virtual bool processes_selection() const override;
+    };
+};
 
 class selectable::with_cast : public selectable {
     ::shared_ptr<selectable> _arg;

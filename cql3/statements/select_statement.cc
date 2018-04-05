@@ -57,6 +57,102 @@
 
 namespace cql3 {
 
+namespace functions {
+
+/*
+ * This function is used for handling 'SELECT JSON' statement.
+ * 'SELECT JSON' is supposed to return a single column named '[json]'
+ * with JSON representation of the query result as its value.
+ * In order to achieve it, selectors from 'SELECT' are wrapped with
+ * 'as_json' function, which also keeps information about underlying
+ * selector names and types. This function is not registered in functions.cc,
+ * because it should not be invoked directly from CQL.
+ */
+class as_json_function : public scalar_function {
+    std::vector<sstring> _selector_names;
+    std::vector<data_type> _selector_types;
+public:
+    as_json_function(std::vector<sstring>&& selector_names, std::vector<data_type> selector_types)
+        : _selector_names(std::move(selector_names)), _selector_types(std::move(selector_types)) {
+    }
+
+    virtual bytes_opt execute(cql_serialization_format sf, const std::vector<bytes_opt>& parameters) override {
+        bytes_ostream encoded_row;
+        encoded_row.write("{", 1);
+        for (size_t i = 0; i < _selector_names.size(); ++i) {
+            if (i > 0) {
+                encoded_row.write(", ", 2);
+            }
+            encoded_row.write("\"", 1);
+            encoded_row.write(_selector_names[i].c_str(), _selector_names[i].size());
+            encoded_row.write("\": ", 3);
+            if (parameters[i]) {
+                sstring row_sstring = _selector_types[i]->to_json_string(parameters[i].value());
+                encoded_row.write(row_sstring.c_str(), row_sstring.size());
+            } else {
+                encoded_row.write("null", 4);
+            }
+        }
+        encoded_row.write("}", 1);
+        return encoded_row.linearize().to_string();
+    }
+
+    virtual const function_name& name() const override {
+        static const function_name f_name = function_name::native_function("as_json");
+        return f_name;
+    }
+
+    virtual const std::vector<data_type>& arg_types() const override {
+        return _selector_types;
+    }
+
+    virtual data_type return_type() const override {
+        return utf8_type;
+    }
+
+    virtual bool is_pure() override {
+        return true;
+    }
+
+    virtual bool is_native() override {
+        return true;
+    }
+
+    virtual bool is_aggregate() override {
+        // Aggregates of aggregates are currently not supported, but JSON handles them
+        return false;
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << "as_json(";
+        bool first = true;
+        for (const sstring&  selector_name: _selector_names) {
+            if (first) {
+                first = false;
+            } else {
+                os << ", ";
+            }
+            os << selector_name;
+        }
+        os << ") -> " << utf8_type->as_cql3_type()->to_string();
+    }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return false;
+    }
+
+    virtual bool has_reference_to(function& f) override {
+        return false;
+    }
+
+    virtual sstring column_name(const std::vector<sstring>& column_names) override {
+        return "[json]";
+    }
+
+};
+
+}
+
 namespace statements {
 
 thread_local const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
@@ -64,6 +160,7 @@ thread_local const shared_ptr<select_statement::parameters> select_statement::_d
 select_statement::parameters::parameters()
     : _is_distinct{false}
     , _allow_filtering{false}
+    , _is_json{false}
 { }
 
 select_statement::parameters::parameters(orderings_type orderings,
@@ -72,17 +169,32 @@ select_statement::parameters::parameters(orderings_type orderings,
     : _orderings{std::move(orderings)}
     , _is_distinct{is_distinct}
     , _allow_filtering{allow_filtering}
+    , _is_json{false}
 { }
 
-bool select_statement::parameters::is_distinct() {
+select_statement::parameters::parameters(orderings_type orderings,
+                                         bool is_distinct,
+                                         bool allow_filtering,
+                                         bool is_json)
+    : _orderings{std::move(orderings)}
+    , _is_distinct{is_distinct}
+    , _allow_filtering{allow_filtering}
+    , _is_json{is_json}
+{ }
+
+bool select_statement::parameters::is_distinct() const {
     return _is_distinct;
 }
 
-bool select_statement::parameters::allow_filtering() {
+bool select_statement::parameters::is_json() const {
+   return _is_json;
+}
+
+bool select_statement::parameters::allow_filtering() const {
     return _allow_filtering;
 }
 
-select_statement::parameters::orderings_type const& select_statement::parameters::orderings() {
+select_statement::parameters::orderings_type const& select_statement::parameters::orderings() const {
     return _orderings;
 }
 
@@ -592,9 +704,49 @@ select_statement::select_statement(::shared_ptr<cf_name> cf_name,
     , _limit(std::move(limit))
 { }
 
+void select_statement::maybe_jsonize_select_clause(database& db, schema_ptr schema) {
+    // Fill wildcard clause with explicit column identifiers for as_json function
+    if (_parameters->is_json()) {
+        if (_select_clause.empty()) {
+            _select_clause.reserve(schema->all_columns().size());
+            for (const column_definition& column_def : schema->all_columns_in_select_order()) {
+                _select_clause.push_back(make_shared<selection::raw_selector>(
+                        make_shared<column_identifier::raw>(column_def.name_as_text(), true), nullptr));
+            }
+        }
+
+        // Prepare selector names + types for as_json function
+        std::vector<sstring> selector_names;
+        std::vector<data_type> selector_types;
+        std::vector<const column_definition*> defs;
+        selector_names.reserve(_select_clause.size());
+        auto selectables = selection::raw_selector::to_selectables(_select_clause, schema);
+        selection::selector_factories factories(selection::raw_selector::to_selectables(_select_clause, schema), db, schema, defs);
+        auto selectors = factories.new_instances();
+        for (size_t i = 0; i < selectors.size(); ++i) {
+            selector_names.push_back(selectables[i]->to_string());
+            selector_types.push_back(selectors[i]->get_type());
+        }
+
+        // Prepare args for as_json_function
+        std::vector<::shared_ptr<selection::selectable::raw>> raw_selectables;
+        raw_selectables.reserve(_select_clause.size());
+        for (const auto& raw_selector : _select_clause) {
+            raw_selectables.push_back(raw_selector->selectable_);
+        }
+        auto as_json = ::make_shared<functions::as_json_function>(std::move(selector_names), std::move(selector_types));
+        auto as_json_selector = ::make_shared<selection::raw_selector>(
+                ::make_shared<selection::selectable::with_anonymous_function::raw>(as_json, std::move(raw_selectables)), nullptr);
+        _select_clause.clear();
+        _select_clause.push_back(as_json_selector);
+    }
+}
+
 std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_stats& stats, bool for_view) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
+
+    maybe_jsonize_select_clause(db, schema);
 
     auto selection = _select_clause.empty()
                      ? selection::selection::wildcard(schema)
