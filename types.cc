@@ -48,6 +48,7 @@
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
 #include "mutation_partition.hh"
+#include "json.hh"
 
 template<typename T>
 sstring time_point_to_string(const T& tp)
@@ -228,6 +229,12 @@ struct integer_type_impl : simple_type_impl<T> {
         }
         return to_sstring(compose_value(b));
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        if (b.empty()) {
+            return "null";
+        }
+        return to_sstring(compose_value(b));
+    }
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
@@ -333,6 +340,9 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual sstring to_string(const bytes& b) const override {
         return sstring(reinterpret_cast<const char*>(b.begin()), b.size());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
+    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -392,6 +402,9 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     }
     virtual sstring to_string(const bytes& b) const override {
         return to_hex(b);
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::blob;
@@ -465,6 +478,12 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return boolean_to_string(*b.begin());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        if (b.empty()) {
+            return "null";
+        }
+        return to_string(b);
+    }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
     }
@@ -515,6 +534,9 @@ public:
             return "";
         }
         return time_point_to_string(from_value(v).get());
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
@@ -620,6 +642,9 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
             return "";
         }
         return from_value(v).get().to_sstring();
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
@@ -783,6 +808,9 @@ public:
         }
         return time_point_to_string(from_value(v).get());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
+    }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
     }
@@ -887,6 +915,9 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
         }
         return simple_date_to_string(from_value(v).get());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
+    }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::date;
     }
@@ -982,6 +1013,9 @@ struct time_type_impl : public simple_type_impl<int64_t> {
         }
         return time_to_string(from_value(v).get());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return to_string(b);
+    }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::time;
     }
@@ -1064,6 +1098,9 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         }
         return from_value(v).get().to_sstring();
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
+    }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::uuid;
     }
@@ -1142,9 +1179,12 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
     virtual sstring to_string(const bytes& b) const override {
         auto v = deserialize(b);
         if (v.is_null()) {
-            return  "";
+            return "";
         }
         return inet_to_string(from_value(v).get());
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return quote_json_string(to_string(b));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
@@ -1276,6 +1316,17 @@ struct floating_type_impl : public simple_type_impl<T> {
         }
         return to_sstring(this->from_value(v));
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "null";
+        }
+        T d = this->from_value(v);
+        if (std::isnan(d) || std::isinf(d)) {
+            return "null";
+        }
+        return to_sstring(this->from_value(v));
+    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -1381,6 +1432,14 @@ public:
         }
         return from_value(v).get().str();
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "null";
+        }
+        return from_value(v).get().str();
+        return to_string(b);
+    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -1478,6 +1537,13 @@ public:
         }
         return from_value(v).get().to_string();
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "null";
+        }
+        return from_value(v).get().to_string();
+    }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
@@ -1520,6 +1586,10 @@ public:
     }
     virtual sstring to_string(const bytes& b) const override {
         fail(unimplemented::cause::COUNTERS);
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        // It will be called only from cql3 layer while processing query results.
+        return counter_cell_view::total_value_type()->to_json_string(b);
     }
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
@@ -1677,6 +1747,13 @@ public:
 
         return ::to_string(from_value(v).get());
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "null";
+        }
+        return quote_json_string(to_string(b));
+    }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
@@ -1730,6 +1807,9 @@ struct empty_type_impl : abstract_type {
     }
     virtual sstring to_string(const bytes& b) const override {
         return "";
+    }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return "null";
     }
     virtual bytes from_string(sstring_view text) const override {
         return {};
@@ -1953,6 +2033,10 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
+sstring abstract_type::quote_json_string(const sstring& s) {
+    return Json::valueToQuotedString(s.c_str());
+}
+
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
     size_t val_len = type->serialized_size(type->get_value_ptr(value));
 
@@ -2132,6 +2216,39 @@ map_type_impl::to_string(const bytes& b) const {
         out << ")";
     }
 
+    return out.str();
+}
+
+sstring
+map_type_impl::to_json_string(const bytes& b) const {
+    std::ostringstream out;
+    auto v = bytes_view(b);
+    auto sf = cql_serialization_format::internal();
+
+    out << '{';
+    auto size = read_collection_size(v, sf);
+    for (int i = 0; i < size; ++i) {
+        auto kb = read_collection_value(v, sf);
+        auto vb = read_collection_value(v, sf);
+
+        if (i > 0) {
+            out << ", ";
+        }
+
+        // Valid keys in JSON map must be quoted strings
+        sstring  string_key = _keys->to_json_string(bytes(kb.begin(), kb.end()));
+        bool is_unquoted = string_key.empty() || string_key[0] != '"';
+        if (is_unquoted) {
+            out << '"';
+        }
+        out << string_key;
+        if (is_unquoted) {
+            out << '"';
+        }
+        out << ": ";
+        out << _values->to_json_string(bytes(vb.begin(), vb.end()));
+    }
+    out << '}';
     return out.str();
 }
 
@@ -2623,6 +2740,26 @@ set_type_impl::to_string(const bytes& b) const {
     return out.str();
 }
 
+sstring
+set_type_impl::to_json_string(const bytes& b) const {
+    using llpdi = listlike_partial_deserializing_iterator;
+    std::ostringstream out;
+    bool first = true;
+    auto v = bytes_view(b);
+    auto sf = cql_serialization_format::internal();
+    out << '[';
+    std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
+        if (first) {
+            first = false;
+        } else {
+            out << ", ";
+        }
+        out << _elements->to_json_string(bytes(e.begin(), e.end()));
+    });
+    out << ']';
+    return out.str();
+}
+
 size_t
 set_type_impl::hash(bytes_view v) const {
     return std::hash<bytes_view>()(v);
@@ -2812,6 +2949,26 @@ list_type_impl::to_string(const bytes& b) const {
         }
         out << _elements->to_string(bytes(e.begin(), e.end()));
     });
+    return out.str();
+}
+
+sstring
+list_type_impl::to_json_string(const bytes& b) const {
+    using llpdi = listlike_partial_deserializing_iterator;
+    std::ostringstream out;
+    bool first = true;
+    auto v = bytes_view(b);
+    auto sf = cql_serialization_format::internal();
+    out << '[';
+    std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
+        if (first) {
+            first = false;
+        } else {
+            out << ", ";
+        }
+        out << _elements->to_json_string(bytes(e.begin(), e.end()));
+    });
+    out << ']';
     return out.str();
 }
 
@@ -3047,6 +3204,10 @@ tuple_type_impl::from_string(sstring_view s) const {
 
 sstring
 tuple_type_impl::to_string(const bytes& b) const {
+    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+}
+
+sstring tuple_type_impl::to_json_string(const bytes &b) const {
     throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 }
 

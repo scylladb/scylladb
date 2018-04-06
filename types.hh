@@ -538,6 +538,7 @@ public:
     }
     virtual sstring to_string(const bytes& b) const = 0;
     virtual bytes from_string(sstring_view text) const = 0;
+    virtual sstring to_json_string(const bytes& b) const = 0;
     virtual bool is_counter() const { return false; }
     virtual bool is_collection() const { return false; }
     virtual bool is_multi_cell() const { return false; }
@@ -570,6 +571,7 @@ protected:
     template <typename T> friend const T& value_cast(const data_value& value);
     template <typename T> friend T&& value_cast(data_value&& value);
     friend bool operator==(const abstract_type& x, const abstract_type& y);
+    static sstring quote_json_string(const sstring& s);
 };
 
 inline bool operator==(const abstract_type& x, const abstract_type& y)
@@ -975,6 +977,9 @@ public:
     virtual sstring to_string(const bytes& b) const override {
         return _underlying_type->to_string(b);
     }
+    virtual sstring to_json_string(const bytes& b) const override {
+        return _underlying_type->to_json_string(b);
+    }
     virtual bytes from_string(sstring_view s) const override {
         return _underlying_type->from_string(s);
     }
@@ -1039,6 +1044,7 @@ public:
     virtual data_value deserialize(bytes_view v) const override;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
+    virtual sstring to_json_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
@@ -1079,6 +1085,7 @@ public:
     virtual data_value deserialize(bytes_view v) const override;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
+    virtual sstring to_json_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
@@ -1119,6 +1126,7 @@ public:
     virtual data_value deserialize(bytes_view v) const override;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
+    virtual sstring to_json_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
@@ -1609,6 +1617,7 @@ public:
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_string(const bytes& b) const override;
+    virtual sstring to_json_string(const bytes& b) const override;
     virtual bool equals(const abstract_type& other) const override;
     virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
