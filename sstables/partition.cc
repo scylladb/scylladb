@@ -28,6 +28,7 @@
 #include "unimplemented.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/byteorder.hh>
+#include <seastar/util/gcc6-concepts.hh>
 #include "index_reader.hh"
 #include "counters.hh"
 #include "utils/data_input.hh"
@@ -731,10 +732,31 @@ future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::
     }
 }
 
-template <typename DataConsumeRowsContext = data_consume_rows_context>
+GCC6_CONCEPT(
+template<typename T>
+concept bool RowConsumer() {
+    return requires(T t,
+                    const partition_key& pk,
+                    position_range cr,
+                    db::timeout_clock::time_point timeout) {
+        { t.io_priority() } -> const io_priority_class&;
+        { t.is_mutation_end() } -> bool;
+        { t.setup_for_partition(pk) } -> void;
+        { t.get_mutation() } -> stdx::optional<mp_row_consumer::new_mutation>;
+        { t.push_ready_fragments() } -> row_consumer::proceed;
+        { t.maybe_skip() } -> stdx::optional<position_in_partition_view>;
+        { t.fast_forward_to(std::move(cr), timeout) } -> stdx::optional<position_in_partition_view>;
+    };
+}
+)
+
+template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer>
+GCC6_CONCEPT(
+    requires RowConsumer<Consumer>()
+)
 class sstable_mutation_reader : public mp_row_consumer_reader {
     shared_sstable _sst;
-    mp_row_consumer _consumer;
+    Consumer _consumer;
     bool _index_in_current_partition = false; // Whether index lower bound is in current partition
     bool _will_likely_slice = false;
     bool _read_enabled = true;
