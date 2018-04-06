@@ -75,6 +75,7 @@ public:
                 || (_state == state::ATOM_MASK_2)
                 || (_state == state::STOP_THEN_ATOM_START)
                 || (_state == state::COUNTER_CELL_2)
+                || (_state == state::RANGE_TOMBSTONE_5)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
