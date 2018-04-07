@@ -687,16 +687,33 @@ void segment_pool::prime() {
 // Segment pool version for the standard allocator. Slightly less efficient
 // than the version for seastar's allocator.
 class segment_pool {
+    class segment_deleter {
+        segment_pool* _pool;
+    public:
+        explicit segment_deleter(segment_pool* pool) : _pool(pool) {}
+        void operator()(segment* seg) const noexcept {
+            if (seg) {
+                ::free(seg);
+                _pool->_std_memory_available += segment::size;
+            }
+        }
+    };
     std::unordered_map<const segment*, segment_descriptor> _segments;
     std::unordered_map<const segment_descriptor*, segment*> _segment_descs;
-    std::stack<std::unique_ptr<segment, free_deleter>> _free_segments;
+    std::stack<std::unique_ptr<segment, segment_deleter>> _free_segments;
     size_t _segments_in_use{};
     size_t _non_lsa_memory_in_use = 0;
+    size_t _std_memory_available = size_t(1) << 30; // emulate 1GB per shard
+    friend segment_deleter;
 public:
     void prime() {}
     segment* new_segment(region::impl* r) {
         if (_free_segments.empty()) {
-            std::unique_ptr<segment, free_deleter> seg{new (with_alignment(segment::size)) segment};
+            if (_std_memory_available < segment::size) {
+                throw std::bad_alloc();
+            }
+            std::unique_ptr<segment, segment_deleter> seg{new (with_alignment(segment::size)) segment, segment_deleter(this)};
+            _std_memory_available -= segment::size;
             _free_segments.push(std::move(seg));
         }
         ++_segments_in_use;
@@ -734,7 +751,7 @@ public:
         assert(i != _segments.end());
         _segment_descs.erase(&i->second);
         _segments.erase(i);
-        std::unique_ptr<segment, free_deleter> useg{seg};
+        std::unique_ptr<segment, segment_deleter> useg{seg, segment_deleter(this)};
         _free_segments.push(std::move(useg));
     }
     segment* containing_segment(const void* obj) const {
