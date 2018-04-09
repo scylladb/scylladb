@@ -29,6 +29,7 @@
 #include "compress.hh"
 #include "schema_builder.hh"
 #include "tests/test-utils.hh"
+#include "sstable_test.hh"
 
 using namespace sstables;
 
@@ -56,6 +57,10 @@ public:
     }
     void load() {
         _sst->load().get();
+    }
+    future<index_list> read_index() {
+        load();
+        return sstables::test(_sst).read_indexes();
     }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
@@ -143,5 +148,13 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_load) {
     return seastar::async([] {
         sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
         sst.load();
+    });
+}
+
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
+        auto vec = sst.read_index().get0();
+        BOOST_REQUIRE_EQUAL(1, vec.size());
     });
 }
