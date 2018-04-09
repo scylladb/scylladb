@@ -292,6 +292,11 @@ public:
         virtual size_t buffer_size() const {
             return _buffer_size;
         }
+
+        circular_buffer<mutation_fragment> detach_buffer() {
+            _buffer_size = 0;
+            return std::exchange(_buffer, {});
+        }
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -414,6 +419,14 @@ public:
     // used by all the mutation fragments stored in the buffer of the reader.
     size_t buffer_size() const {
         return _impl->buffer_size();
+    }
+    // Detach the internal buffer of the reader.
+    // Roughly equivalent to depleting it by calling pop_mutation_fragment()
+    // until is_buffer_empty() returns true.
+    // The reader will need to allocate a new buffer on the next fill_buffer()
+    // call.
+    circular_buffer<mutation_fragment> detach_buffer() {
+        return _impl->detach_buffer();
     }
 };
 
