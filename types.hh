@@ -223,14 +223,6 @@ public:
     virtual const char* what() const noexcept override { return _why.c_str(); }
 };
 
-inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
-    auto n = memcmp(v1.begin(), v2.begin(), std::min(v1.size(), v2.size()));
-    if (n) {
-        return n;
-    }
-    return (int32_t) (v1.size() - v2.size());
-}
-
 struct empty_t {};
 
 class empty_value_exception : public std::exception {
