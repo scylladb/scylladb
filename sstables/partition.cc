@@ -59,7 +59,6 @@ private:
     stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
     stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
 
-    bool _skip_partition = false;
     // When set, the fragment pending in _in_progress should not be emitted.
     bool _skip_in_progress = false;
 
@@ -337,7 +336,6 @@ public:
 
     void setup_for_partition(const partition_key& pk) {
         _is_mutation_end = false;
-        _skip_partition = false;
         _skip_in_progress = false;
         set_up_ck_ranges(pk);
     }
@@ -456,10 +454,6 @@ public:
     //    { create_cell(col) } -> void;
     //}
     proceed do_consume_cell(bytes_view col_name, int64_t timestamp, int32_t ttl, int32_t expiration, CreateCell&& create_cell) {
-        if (_skip_partition) {
-            return proceed::yes;
-        }
-
         struct column col(*_schema, col_name, timestamp);
 
         auto ret = flush_if_needed(col.is_static, col.clustering);
@@ -524,10 +518,6 @@ public:
     }
 
     virtual proceed consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
-        if (_skip_partition) {
-            return proceed::yes;
-        }
-
         auto timestamp = deltime.marked_for_delete_at;
         struct column col(*_schema, col_name, timestamp);
         gc_clock::duration secs(deltime.local_deletion_time);
@@ -576,9 +566,6 @@ public:
     }
 
     virtual proceed consume_shadowable_row_tombstone(bytes_view col_name, sstables::deletion_time deltime) override {
-        if (_skip_partition) {
-            return proceed::yes;
-        }
         auto key = composite_view(column::fix_static_name(*_schema, col_name)).explode();
         auto ck = clustering_key_prefix::from_exploded_view(key);
         auto ret = flush_if_needed(std::move(ck));
@@ -623,11 +610,6 @@ public:
     virtual proceed consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-
-        if (_skip_partition) {
-            return proceed::yes;
-        }
-
         auto compound = _schema->is_compound() || _treat_non_compound_rt_as_compound;
         auto start = composite_view(column::fix_static_name(*_schema, start_col), compound).explode();
 
@@ -698,14 +680,6 @@ public:
     // Returns information whether the parser should continue to parse more
     // input and produce more fragments or we have collected enough and should yield.
     proceed push_ready_fragments();
-
-    void skip_partition() {
-        _pending_collection = { };
-        _in_progress = { };
-        _ready = { };
-
-        _skip_partition = true;
-    }
 
     virtual void reset(indexable_element el) override {
         sstlog.trace("mp_row_consumer {}: reset({})", this, static_cast<int>(el));
