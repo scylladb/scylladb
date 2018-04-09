@@ -82,6 +82,34 @@ public:
     }
 };
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_only
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk) VALUES(1);
+// INSERT INTO test_ks.test_table(pk) VALUES(2);
+// INSERT INTO test_ks.test_table(pk) VALUES(3);
+// INSERT INTO test_ks.test_table(pk) VALUES(4);
+// INSERT INTO test_ks.test_table(pk) VALUES(5);
+
+static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_ONLY_PATH =
+    "tests/sstables/3.x/uncompressed/partition_key_only";
+static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_load) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
+        sst.load();
+    });
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
