@@ -22,12 +22,15 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/irange.hpp>
+#include <vector>
+#include <random>
 
 #include "utils/dynamic_bitset.hh"
 
 BOOST_AUTO_TEST_CASE(test_set_clear_test) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -58,8 +61,7 @@ BOOST_AUTO_TEST_CASE(test_set_clear_test) {
 }
 
 BOOST_AUTO_TEST_CASE(test_find_first_next) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -78,15 +80,6 @@ BOOST_AUTO_TEST_CASE(test_find_first_next) {
     } while (i < 176);
     BOOST_REQUIRE_EQUAL(bits.find_next_set(i), utils::dynamic_bitset::npos);
 
-    i = bits.find_first_clear();
-    BOOST_REQUIRE_EQUAL(i, 1);
-    do {
-        auto j = bits.find_next_clear(i);
-        BOOST_REQUIRE_EQUAL(i + 2, j);
-        i = j;
-    } while (i < 177);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(i), utils::dynamic_bitset::npos);
-
     for (size_t i = 0; i < 178; i += 4) {
         bits.clear(i);
     }
@@ -100,34 +93,10 @@ BOOST_AUTO_TEST_CASE(test_find_first_next) {
     } while (i < 174);
     BOOST_REQUIRE_EQUAL(bits.find_next_set(i), utils::dynamic_bitset::npos);
 
-    i = bits.find_first_clear();
-    BOOST_REQUIRE_EQUAL(i, 0);
-    do {
-        auto j = bits.find_next_clear(i);
-        if (i % 4 == 1) {
-            BOOST_REQUIRE_EQUAL(i + 2, j);
-        } else {
-            BOOST_REQUIRE_EQUAL(i + 1, j);
-        }
-        i = j;
-    } while (i < 177);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(i), utils::dynamic_bitset::npos);
-
-    bits.resize(0);
-    bits.resize(222);
-    bits.set(4);
-    bits.set(201);
-
-    BOOST_REQUIRE_EQUAL(bits.find_first_set(), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(3), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(4), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(200), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_next_set(201), utils::dynamic_bitset::npos);
 }
 
 BOOST_AUTO_TEST_CASE(test_find_last_prev) {
-    utils::dynamic_bitset bits;
-    bits.resize(178);
+    utils::dynamic_bitset bits(178);
     for (size_t i = 0; i < 178; i++) {
         BOOST_REQUIRE(!bits.test(i));
     }
@@ -139,21 +108,6 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     size_t i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 176);
-    do {
-        auto j = bits.find_previous_set(i);
-        BOOST_REQUIRE_EQUAL(i - 2, j);
-        i = j;
-    } while (i > 0);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(i), utils::dynamic_bitset::npos);
-
-    i = bits.find_last_clear();
-    BOOST_REQUIRE_EQUAL(i, 177);
-    do {
-        auto j = bits.find_previous_clear(i);
-        BOOST_REQUIRE_EQUAL(i - 2, j);
-        i = j;
-    } while (i > 1);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_clear(i), utils::dynamic_bitset::npos);
 
     for (size_t i = 0; i < 178; i += 4) {
         bits.clear(i);
@@ -161,60 +115,110 @@ BOOST_AUTO_TEST_CASE(test_find_last_prev) {
 
     i = bits.find_last_set();
     BOOST_REQUIRE_EQUAL(i, 174);
-    do {
-        auto j = bits.find_previous_set(i);
-        BOOST_REQUIRE_EQUAL(i - 4, j);
-        i = j;
-    } while (i > 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(i), utils::dynamic_bitset::npos);
-
-    i = bits.find_last_clear();
-    BOOST_REQUIRE_EQUAL(i, 177);
-    do {
-        auto j = bits.find_previous_clear(i);
-        if (i % 4 == 3) {
-            BOOST_REQUIRE_EQUAL(i - 2, j);
-        } else {
-            BOOST_REQUIRE_EQUAL(i - 1, j);
-        }
-        i = j;
-    } while (i > 0);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_clear(i), utils::dynamic_bitset::npos);
-
-    bits.resize(0);
-    bits.resize(222);
-    bits.set(4);
-    bits.set(201);
-
-    BOOST_REQUIRE_EQUAL(bits.find_last_set(), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(202), 201);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(201), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(5), 4);
-    BOOST_REQUIRE_EQUAL(bits.find_previous_set(4), utils::dynamic_bitset::npos);
 }
 
-BOOST_AUTO_TEST_CASE(test_resize_grow) {
-    utils::dynamic_bitset bits;
+static void test_random_ops(size_t size, std::random_device& rd ) {
+    // BOOST_REQUIRE and friends are very slow, just use regular throws instead.
+    auto require = [] (bool b) {
+        if (!b) {
+            throw 0;
+        }
+    };
+    auto require_equal = [&] (const auto& a, const auto& b) {
+        require(a == b);
+    };
 
-    bits.resize(1);
-    BOOST_REQUIRE(!bits.test(0));
+    utils::dynamic_bitset db{size};
+    std::vector<bool> bv(size, false);
+    std::uniform_int_distribution<size_t> global_op_dist(0, size-1);
+    std::uniform_int_distribution<size_t> bit_dist(0, size-1);
+    std::uniform_int_distribution<int> global_op_selection_dist(0, 1);
+    std::uniform_int_distribution<int> single_op_selection_dist(0, 5);
+    auto is_set = [&] (size_t i) -> bool {
+        return bv[i];
+    };
+    size_t limit = size * 100;
+#ifdef DEBUG
+    limit = std::min<size_t>(limit, 20000);
+#endif
+    for (size_t i = 0; i != limit; ++i) {
+        if (global_op_dist(rd) == 0) {
+            // perform a global operation
+            switch (global_op_selection_dist(rd)) {
+            case 0:
+                for (size_t j = 0; j != size; ++j) {
+                    db.clear(j);
+                    bv[j] = false;
+                }
+                break;
+            case 1:
+                for (size_t j = 0; j != size; ++j) {
+                    db.set(j);
+                    bv[j] = true;
+                }
+                break;
+            }
+        } else {
+            // perform a single-bit operation
+            switch (single_op_selection_dist(rd)) {
+            case 0: {
+                auto bit = bit_dist(rd);
+                db.set(bit);
+                bv[bit] = true;
+                break;
+            }
+            case 1: {
+                auto bit = bit_dist(rd);
+                db.clear(bit);
+                bv[bit] = false;
+                break;
+            }
+            case 2: {
+                auto bit = bit_dist(rd);
+                bool dbb = db.test(bit);
+                bool bvb = bv[bit];
+                require_equal(dbb, bvb);
+                break;
+            }
+            case 3: {
+                auto bit = bit_dist(rd);
+                auto next = db.find_next_set(bit);
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(bit+1, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(bit+1, next), is_set));
+                    require(is_set(next));
+                }
+                break;            }
+            case 4: {
+                auto next = db.find_first_set();
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, next), is_set));
+                    require(is_set(next));
+                }
+                break;
+            }
+            case 5: {
+                auto next = db.find_last_set();
+                if (next == db.npos) {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(0, size), is_set));
+                } else {
+                    require(!boost::algorithm::any_of(boost::irange<size_t>(next + 1, size), is_set));
+                    require(is_set(next));
+                }
+                break;
+            }
+            }
+        }
+    }
+}
 
-    bits.resize(2, true);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
 
-    bits.resize(3);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
-    BOOST_REQUIRE(!bits.test(2));
-
-    bits.resize(4, true);
-    BOOST_REQUIRE(!bits.test(0));
-    BOOST_REQUIRE(bits.test(1));
-    BOOST_REQUIRE(!bits.test(2));
-    BOOST_REQUIRE(bits.test(3));
-
-    bits.resize(124, true);
-    BOOST_REQUIRE_EQUAL(bits.find_next_clear(3), utils::dynamic_bitset::npos);
-    BOOST_REQUIRE_EQUAL(bits.find_last_set(), 123);
+BOOST_AUTO_TEST_CASE(test_random_operations) {
+    std::random_device rd;
+    for (auto size : { 1, 63, 64, 65, 2000, 4096-65, 4096-64, 4096-63, 4096-1, 4096, 4096+1, 262144-1, 262144, 262144+1}) {
+        BOOST_CHECK_NO_THROW(test_random_ops(size, rd));
+    }
 }

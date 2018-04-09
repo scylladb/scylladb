@@ -42,7 +42,7 @@ class region;
 class region_impl;
 class allocating_section;
 
-constexpr int segment_size_shift = 18; // 256K; see #151, #152
+constexpr int segment_size_shift = 17; // 128K; see #151, #152
 constexpr size_t segment_size = 1 << segment_size_shift;
 constexpr size_t max_zone_segments = 256;
 
@@ -729,5 +729,9 @@ public:
         });
     }
 };
+
+// for tests, make sure a new test is started with a primed segment pool (all segments
+// allocated so segregated allocation can work)
+void prime_segment_pool();
 
 }

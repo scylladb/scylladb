@@ -20,147 +20,123 @@
  */
 
 #include <seastar/core/bitops.hh>
+#include <seastar/core/align.hh>
+#include <boost/range/adaptor/reversed.hpp>
+#include <boost/range/irange.hpp>
 
 #include "utils/dynamic_bitset.hh"
 #include "seastarx.hh"
 
 namespace utils {
 
-template<typename Transform>
-size_t dynamic_bitset::do_find_first(Transform&& transform) const
-{
-    size_t pos = 0;
-    for (auto v : _bits) {
-        v = transform(v);
-        if (v) {
-            pos += count_trailing_zeros(v);
+void dynamic_bitset::set(size_t n) {
+    for (auto& level : _bits) {
+        auto idx = n / bits_per_int;
+        auto old = level[idx];
+        level[idx] |= int_type(1u) << (n % bits_per_int);
+        if (old) {
             break;
         }
-        pos += bits_per_int;
+        n = idx; // prepare for next level
     }
-    return pos < _bits_count ? pos : npos;
 }
 
-template<typename Transform>
-size_t dynamic_bitset::do_find_next(size_t n, Transform&& transform) const
-{
-    size_t pos = align_down(++n, bits_per_int);
-    auto it = _bits.begin() + n / bits_per_int;
-    auto v = transform(*it);
-    v &= ~mask_lower_bits(n % bits_per_int);
-    if (v) {
-        pos += count_trailing_zeros(v);
-        return pos < _bits_count ? pos : npos;
-    }
-    pos += bits_per_int;
-    for (++it; it != _bits.end(); ++it) {
-        auto v = transform(*it);
-        if (v) {
-            pos += count_trailing_zeros(v);
-            return pos < _bits_count ? pos : npos;
+void dynamic_bitset::clear(size_t n) {
+    for (auto& level : _bits) {
+        auto idx = n / bits_per_int;
+        auto old = level[idx];
+        level[idx] &= ~(int_type(1u) << (n % bits_per_int));
+        if (!old || level[idx]) {
+            break;
         }
-        pos += bits_per_int;
+        n = idx; // prepare for next level
     }
-    return npos;
-}
-
-template<typename Transform>
-size_t dynamic_bitset::do_find_last(Transform&& transform) const
-{
-    auto it = _bits.rbegin();
-    auto v = transform(*it);
-    auto d = align_up(_bits_count, bits_per_int) - _bits_count;
-    v &= ~mask_higher_bits(d);
-    auto pos = (_bits.size() - 1) * bits_per_int;
-    if (v) {
-        return pos + bits_per_int - count_leading_zeros(v) - 1;
-    }
-    for (++it; it != _bits.rend(); ++it) {
-        pos -= bits_per_int;
-        v = transform(*it);
-        if (v) {
-            return pos + bits_per_int - count_leading_zeros(v) - 1;
-        }
-    }
-    return npos;
-}
-
-template<typename Transform>
-size_t dynamic_bitset::do_find_previous(size_t n, Transform&& transform) const
-{
-    if (!n) {
-        return npos;
-    }
-    auto it = _bits.begin() + n / bits_per_int;
-    auto v = transform(*it);
-    v &= mask_lower_bits(n % bits_per_int);
-    auto pos = (std::distance(_bits.begin(), it)) * bits_per_int;
-    if (v) {
-        return pos + bits_per_int - count_leading_zeros(v) - 1;
-    }
-    while (it != _bits.begin()) {
-        --it;
-        pos -= bits_per_int;
-        v = transform(*it);
-        if (v) {
-            return pos + bits_per_int - count_leading_zeros(v) - 1;
-        }
-    }
-    return npos;
 }
 
 size_t dynamic_bitset::find_first_set() const
 {
-    return do_find_first([] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_first_clear() const
-{
-    return do_find_first([] (auto x) { return ~x; });
+    size_t pos = 0;
+    for (auto& vv : _bits | boost::adaptors::reversed) {
+        auto v = vv[pos];
+        pos *= bits_per_int;
+        if (v) {
+            pos += count_trailing_zeros(v);
+        } else {
+            return npos;
+        }
+    }
+    return pos;
 }
 
 size_t dynamic_bitset::find_next_set(size_t n) const
 {
-    return do_find_next(n, [] (auto x) { return x; });
-}
+    ++n;
 
-size_t dynamic_bitset::find_next_clear(size_t n) const
-{
-    return do_find_next(n, [] (auto x) { return ~x; });
+    unsigned level = 0;
+    unsigned nlevels = _bits.size();
+
+    // Climb levels until we find a set bit in the right place
+    while (level != nlevels) {
+        if (n >= _bits_count) {
+            return npos;
+        }
+        auto v = _bits[level][level_idx(level, n)];
+        v &= ~mask_lower_bits(level_remainder(level, n));
+        if (v) {
+            break;
+        }
+        ++level;
+        n = align_up(n, size_t(1) << (level_shift * level));
+    }
+
+    if (level == nlevels) {
+        return npos;
+    }
+
+    // Descend levels until we reach level 0
+    do {
+        auto v = _bits[level][level_idx(level, n)];
+        v &= ~mask_lower_bits(level_remainder(level, n));
+        n = align_down(n, size_t(1) << (level_shift * (level + 1)));
+        n += count_trailing_zeros(v) << (level_shift * level);
+    } while (level-- != 0);
+
+    return n;
 }
 
 size_t dynamic_bitset::find_last_set() const
 {
-    return do_find_last([] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_previous_set(size_t n) const
-{
-    return do_find_previous(n, [] (auto x) { return x; });
-}
-
-size_t dynamic_bitset::find_last_clear() const
-{
-    return do_find_last([] (auto x) { return ~x; });
-}
-
-size_t dynamic_bitset::find_previous_clear(size_t n) const
-{
-    return do_find_previous(n, [] (auto x) { return ~x; });
-}
-
-void dynamic_bitset::resize(size_t n, bool set)
-{
-    if (_bits_count && _bits_count < n) {
-        auto d = align_up(_bits_count, bits_per_int) - _bits_count;
-        if (set) {
-            _bits.back() |= mask_higher_bits(d);
+    size_t pos = 0;
+    for (auto& vv : _bits | boost::adaptors::reversed) {
+        auto v = vv[pos];
+        pos *= bits_per_int;
+        if (v) {
+            pos += bits_per_int - 1 - count_leading_zeros(v);
         } else {
-            _bits.back() &= ~mask_higher_bits(d);
+            return npos;
         }
     }
-    _bits.resize(align_up(n, bits_per_int) / bits_per_int, set ? all_set : 0);
-    _bits_count = n;
+    return pos;
+}
+
+dynamic_bitset::dynamic_bitset(size_t nr_bits)
+    : _bits_count(nr_bits)
+{
+    auto div_ceil = [] (size_t num, size_t den) {
+        return (num + den - 1) / den;
+    };
+    // 1-64: 1 level
+    // 65-4096: 2 levels
+    // 4097-262144: 3 levels
+    // etc.
+    unsigned nr_levels = div_ceil(log2ceil(align_up(nr_bits, size_t(bits_per_int))), level_shift);
+    _bits.resize(nr_levels);
+    size_t level_bits = nr_bits;
+    for (unsigned level = 0; level != nr_levels; ++level) {
+        auto level_words = align_up(level_bits, bits_per_int) / bits_per_int;
+        _bits[level].resize(level_words);
+        level_bits = level_words; // for next iteration
+    }
 }
 
 }
