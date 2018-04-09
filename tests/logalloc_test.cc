@@ -1306,7 +1306,7 @@ SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocatio
     std::vector<std::unique_ptr<char[]>> large_allocs;
     for (size_t i = 0; i < nr_large_allocs; ++i) {
         auto p = new (std::nothrow) char[large_alloc_size];
-        BOOST_REQUIRE_NE(p, nullptr);
+        BOOST_REQUIRE(p);
         auto up = std::unique_ptr<char[]>(p);
         large_allocs.push_back(std::move(up));
     }
