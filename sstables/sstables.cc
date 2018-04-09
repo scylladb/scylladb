@@ -502,6 +502,14 @@ inline void write(file_writer& out, const disk_array<Size, Members>& arr) {
     write(out, arr.elements);
 }
 
+template <typename Size, typename Members>
+inline void write(file_writer& out, const disk_array_ref<Size, Members>& arr) {
+    Size len = 0;
+    check_truncate_and_assign(len, arr.elements.size());
+    write(out, len);
+    write(out, arr.elements);
+}
+
 template <typename Size, typename Key, typename Value>
 future<> parse(random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
     return do_with(Size(), [&in, len, &map] (Size& count) {
@@ -1425,8 +1433,7 @@ future<> sstable::read_filter(const io_priority_class& pc) {
     return seastar::async([this, &pc] () mutable {
         sstables::filter filter;
         read_simple<sstable::component_type::Filter>(filter, pc).get();
-        large_bitset bs(filter.buckets.elements.size() * 64);
-        bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
+        large_bitset bs(filter.buckets.elements.size() * sizeof(decltype(filter.buckets.elements)::value_type), std::move(filter.buckets.elements));
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
     });
 }
@@ -1439,10 +1446,8 @@ void sstable::write_filter(const io_priority_class& pc) {
     auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_components->filter.get());
 
     auto&& bs = f->bits();
-    utils::chunked_vector<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
-    bs.save(v.begin());
-    auto filter = sstables::filter(f->num_hashes(), std::move(v));
-    write_simple<sstable::component_type::Filter>(filter, pc);
+    auto filter_ref = sstables::filter_ref(f->num_hashes(), bs.get_storage());
+    write_simple<sstable::component_type::Filter>(filter_ref, pc);
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.

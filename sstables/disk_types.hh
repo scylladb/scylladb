@@ -63,6 +63,13 @@ struct disk_array {
     utils::chunked_vector<Members> elements;
 };
 
+template <typename Size, typename Members>
+struct disk_array_ref {
+    static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
+    const utils::chunked_vector<Members>& elements;
+    disk_array_ref(const utils::chunked_vector<Members>& elements) : elements(elements) {}
+};
+
 template <typename Size, typename Key, typename Value>
 struct disk_hash {
     std::unordered_map<Key, Value, std::hash<Key>> map;

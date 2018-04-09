@@ -88,6 +88,16 @@ struct filter {
     explicit filter(int hashes, utils::chunked_vector<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
+// Do this so we don't have to copy on write time. We can just keep a reference.
+struct filter_ref {
+    uint32_t hashes;
+    disk_array_ref<uint32_t, uint64_t> buckets;
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(hashes, buckets); }
+    explicit filter_ref(int hashes, const utils::chunked_vector<uint64_t>& buckets) : hashes(hashes), buckets(buckets) {}
+};
+
 enum class indexable_element {
     partition,
     cell
