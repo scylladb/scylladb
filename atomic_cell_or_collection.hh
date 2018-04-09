@@ -62,7 +62,7 @@ public:
     bytes_view serialize() const {
         return _data;
     }
-    bool operator==(const atomic_cell_or_collection& other) const {
+    bool equals(const abstract_type& type, const atomic_cell_or_collection& other) const {
         return _data == other._data;
     }
     size_t external_memory_usage(const abstract_type&) const {
