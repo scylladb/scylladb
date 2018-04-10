@@ -2592,7 +2592,7 @@ do_serialize_mutation_form(
 
         writeb(v.serialize());
     }
-    return collection_mutation(std::move(ret));
+    return collection_mutation(ctype, ret);
 }
 
 bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb, gc_clock::time_point query_time,

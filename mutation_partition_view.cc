@@ -253,7 +253,8 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
                     _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.regular_column_at(id).type);
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
@@ -275,7 +276,8 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
                     _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.static_column_at(id).type);
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
