@@ -27,6 +27,7 @@
 #include "sstables/progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
 #include <seastar/util/variant_utils.hh>
+#include <seastar/net/byteorder.hh>
 
 template<typename T>
 static inline T consume_be(temporary_buffer<char>& p) {
