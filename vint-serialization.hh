@@ -23,6 +23,8 @@
 // For reference, see https://developers.google.com/protocol-buffers/docs/encoding#varints
 //
 
+#pragma once
+
 #include "bytes.hh"
 
 #include <cstdint>
