@@ -1967,31 +1967,31 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
     // case is still an invalid case, but it is way easier for us to treat it
     // by waiting for all files to be loaded, and then checking if we saw a
     // file during scan_dir, without its corresponding TOC.
-    enum class status {
+    enum class component_status {
         has_some_file,
         has_toc_file,
         has_temporary_toc_file,
     };
 
     struct sstable_descriptor {
-        std::experimental::optional<sstables::sstable::version_types> version;
-        std::experimental::optional<sstables::sstable::format_types> format;
+        component_status status;
+        sstables::sstable::version_types version;
+        sstables::sstable::format_types format;
     };
 
-    auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
-    auto descriptor = make_lw_shared<sstable_descriptor>();
+    auto verifier = make_lw_shared<std::unordered_map<unsigned long, sstable_descriptor>>();
 
-    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, descriptor, ks, cf] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, descriptor, &futures] (lister::path sstdir, directory_entry de) {
+    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, ks, cf] (std::vector<future<>>& futures) {
+        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (lister::path sstdir, directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
+            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
                 if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
                         entry.format, sstables::sstable::component_type::TemporaryStatistics));
                 }
 
                 if (verifier->count(entry.generation)) {
-                    if (verifier->at(entry.generation) == status::has_toc_file) {
+                    if (verifier->at(entry.generation).status == component_status::has_toc_file) {
                         lister::path file_path(sstdir / de.name.c_str());
                         if (entry.component == sstables::sstable::component_type::TOC) {
                             throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
@@ -1999,26 +1999,18 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                             throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", file_path.native());
                         }
                     } else if (entry.component == sstables::sstable::component_type::TOC) {
-                        verifier->at(entry.generation) = status::has_toc_file;
+                        verifier->at(entry.generation).status = component_status::has_toc_file;
                     } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                        verifier->at(entry.generation) = status::has_temporary_toc_file;
+                        verifier->at(entry.generation).status = component_status::has_temporary_toc_file;
                     }
                 } else {
                     if (entry.component == sstables::sstable::component_type::TOC) {
-                        verifier->emplace(entry.generation, status::has_toc_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_toc_file, entry.version, entry.format});
                     } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                        verifier->emplace(entry.generation, status::has_temporary_toc_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_temporary_toc_file, entry.version, entry.format});
                     } else {
-                        verifier->emplace(entry.generation, status::has_some_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_some_file, entry.version, entry.format});
                     }
-                }
-
-                // Retrieve both version and format used for this column family.
-                if (!descriptor->version) {
-                    descriptor->version = entry.version;
-                }
-                if (!descriptor->format) {
-                    descriptor->format = entry.format;
                 }
                 return make_ready_future<>();
             });
@@ -2050,14 +2042,12 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 }
                 return make_ready_future<>();
             });
-        }).then([verifier, sstdir, descriptor, ks = std::move(ks), cf = std::move(cf)] {
-            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), descriptor, verifier] (auto v) {
-                if (v.second == status::has_temporary_toc_file) {
+        }).then([verifier, sstdir, ks = std::move(ks), cf = std::move(cf)] {
+            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), verifier] (auto v) {
+                if (v.second.status == component_status::has_temporary_toc_file) {
                     unsigned long gen = v.first;
-                    assert(descriptor->version);
-                    sstables::sstable::version_types version = descriptor->version.value();
-                    assert(descriptor->format);
-                    sstables::sstable::format_types format = descriptor->format.value();
+                    sstables::sstable::version_types version = v.second.version;
+                    sstables::sstable::format_types format = v.second.format;
 
                     if (engine().cpu_id() != 0) {
                         dblog.debug("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
@@ -2065,7 +2055,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                     }
                     // shard 0 is the responsible for removing a partial sstable.
                     return sstables::sstable::remove_sstable_with_temp_toc(ks, cf, sstdir, gen, version, format);
-                } else if (v.second != status::has_toc_file) {
+                } else if (v.second.status != component_status::has_toc_file) {
                     throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
                 }
                 return make_ready_future<>();
