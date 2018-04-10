@@ -373,7 +373,7 @@ useStatement returns [::shared_ptr<raw::use_statement> stmt]
     ;
 
 /**
- * SELECT <expression>
+ * SELECT [JSON] <expression>
  * FROM <CF>
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
  * LIMIT <NUMBER>;
@@ -384,9 +384,12 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
         ::shared_ptr<cql3::term::raw> limit;
         raw::select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
+        bool is_json = false;
     }
-    : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
-                 sclause=selectClause
+    : K_SELECT (
+                ( K_JSON { is_json = true; } )?
+                ( K_DISTINCT { is_distinct = true; } )?
+                sclause=selectClause
                )
       K_FROM cf=columnFamilyName
       ( K_WHERE wclause=whereClause )?
@@ -394,7 +397,7 @@ selectStatement returns [shared_ptr<raw::select_statement> expr]
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       {
-          auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, false);
+          auto params = ::make_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, is_json);
           $expr = ::make_shared<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit));
       }
@@ -1650,6 +1653,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_LANGUAGE
         | K_NON
         | K_DETERMINISTIC
+        | K_JSON
         ) { $str = $k.text; }
     ;
 
@@ -1786,6 +1790,7 @@ K_NON:         N O N;
 K_OR:          O R;
 K_REPLACE:     R E P L A C E;
 K_DETERMINISTIC: D E T E R M I N I S T I C;
+K_JSON:        J S O N;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 
