@@ -1229,7 +1229,7 @@ make_map_mutation(const Map& map,
 
         for (auto&& entry : map) {
             auto te = f(entry);
-            mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second))));
+            mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes));
         }
 
         auto col_mut = column_type->serialize_mutation_form(std::move(mut));
@@ -1398,7 +1398,7 @@ make_list_mutation(const std::vector<T, Args...>& values,
             auto uuid = utils::UUID_gen::get_time_UUID_bytes();
             m.cells.emplace_back(
                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
-                atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(std::move(dv))));
+                atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(std::move(dv)), atomic_cell::collection_member::yes));
         }
 
         auto list_mut = column_type->serialize_mutation_form(std::move(m));

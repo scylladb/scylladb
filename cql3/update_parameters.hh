@@ -142,7 +142,7 @@ public:
         return atomic_cell::make_dead(_timestamp, _local_deletion_time);
     }
 
-    atomic_cell make_cell(const abstract_type& type, bytes_view value) const {
+    atomic_cell make_cell(const abstract_type& type, bytes_view value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
@@ -150,9 +150,9 @@ public:
         }
 
         if (ttl.count() > 0) {
-            return atomic_cell::make_live(type, _timestamp, value, _local_deletion_time + ttl, ttl);
+            return atomic_cell::make_live(type, _timestamp, value, _local_deletion_time + ttl, ttl, cm);
         } else {
-            return atomic_cell::make_live(type, _timestamp, value);
+            return atomic_cell::make_live(type, _timestamp, value, cm);
         }
     };
 

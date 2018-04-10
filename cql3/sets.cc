@@ -269,7 +269,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         }
 
         for (auto&& e : set_value->_elements) {
-            mut.cells.emplace_back(e, params.make_cell(*set_type->value_comparator(), {}));
+            mut.cells.emplace_back(e, params.make_cell(*set_type->value_comparator(), {}, atomic_cell::collection_member::yes));
         }
         auto smut = set_type->serialize_mutation_form(mut);
 

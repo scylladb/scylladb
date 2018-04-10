@@ -53,11 +53,12 @@ inline atomic_cell make_atomic_cell(const abstract_type& type,
                                     api::timestamp_type timestamp,
                                     bytes_view value,
                                     gc_clock::duration ttl,
-                                    gc_clock::time_point expiration) {
+                                    gc_clock::time_point expiration,
+                                    atomic_cell::collection_member cm) {
     if (ttl != gc_clock::duration::zero()) {
-        return atomic_cell::make_live(type, timestamp, value, expiration, ttl);
+        return atomic_cell::make_live(type, timestamp, value, expiration, ttl, cm);
     } else {
-        return atomic_cell::make_live(type, timestamp, value);
+        return atomic_cell::make_live(type, timestamp, value, cm);
     }
 }
 
@@ -536,7 +537,8 @@ public:
                                            api::timestamp_type(timestamp),
                                            value,
                                            gc_clock::duration(ttl),
-                                           gc_clock::time_point(gc_clock::duration(expiration)));
+                                           gc_clock::time_point(gc_clock::duration(expiration)),
+                                           atomic_cell::collection_member::yes);
                 update_pending_collection(col.cdef, to_bytes(col.collection_extra_data), std::move(ac));
                 return;
             }
@@ -545,7 +547,8 @@ public:
                                        api::timestamp_type(timestamp),
                                        value,
                                        gc_clock::duration(ttl),
-                                       gc_clock::time_point(gc_clock::duration(expiration)));
+                                       gc_clock::time_point(gc_clock::duration(expiration)),
+                                       atomic_cell::collection_member::no);
             if (col.is_static) {
                 _in_progress->as_mutable_static_row().set_cell(*(col.cdef), std::move(ac));
                 return;
@@ -968,7 +971,7 @@ public:
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
-        auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time);
+        auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time, atomic_cell::collection_member::no);
         _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
         return proceed::yes;
     }

@@ -392,6 +392,8 @@ public:
 class atomic_cell final : public atomic_cell_base<managed_bytes> {
     atomic_cell(managed_bytes b) : atomic_cell_base(std::move(b)) {}
 public:
+    using collection_member = bool_class<class collection_member_tag>;
+
     atomic_cell(const abstract_type&, const atomic_cell& ac) : atomic_cell_base(managed_bytes(ac._data)) { }
     atomic_cell(atomic_cell&&) = default;
     atomic_cell& operator=(const atomic_cell&) = delete;
@@ -403,26 +405,29 @@ public:
     static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
         return atomic_cell_type::make_dead(timestamp, deletion_time);
     }
-    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value) {
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value,
+                                 collection_member cm = collection_member::no) {
         return atomic_cell_type::make_live(timestamp, value);
     }
-    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value) {
-        return make_live(type, timestamp, bytes_view(value));
+    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value,
+                                 collection_member cm = collection_member::no) {
+        return make_live(type, timestamp, bytes_view(value), cm);
     }
     static atomic_cell make_live_counter_update(api::timestamp_type timestamp, int64_t value) {
         return atomic_cell_type::make_live_counter_update(timestamp, value);
     }
     static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value,
-        gc_clock::time_point expiry, gc_clock::duration ttl)
+        gc_clock::time_point expiry, gc_clock::duration ttl, collection_member cm = collection_member::no)
     {
         return atomic_cell_type::make_live(timestamp, value, expiry, ttl);
     }
     static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value,
-                                 gc_clock::time_point expiry, gc_clock::duration ttl)
+                                 gc_clock::time_point expiry, gc_clock::duration ttl, collection_member cm = collection_member::no)
     {
-        return make_live(type, timestamp, bytes_view(value), expiry, ttl);
+        return make_live(type, timestamp, bytes_view(value), expiry, ttl, cm);
     }
-    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value, ttl_opt ttl) {
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value, ttl_opt ttl,
+                                 collection_member cm = collection_member::no) {
         if (!ttl) {
             return atomic_cell_type::make_live(timestamp, value);
         } else {
