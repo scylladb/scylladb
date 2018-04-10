@@ -345,12 +345,11 @@ static_assert(min_free_space_for_compaction >= max_managed_object_size,
 extern constexpr log_heap_options segment_descriptor_hist_options(min_free_space_for_compaction, 3, segment_size);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
-    bool _lsa_managed;
     segment::size_type _free_space;
     region::impl* _region;
 
     segment_descriptor()
-        : _lsa_managed(false), _region(nullptr)
+        : _region(nullptr)
     { }
 
     bool is_empty() const {
@@ -605,7 +604,7 @@ segment_pool::containing_segment(const void* obj) const {
     auto offset = addr & (segment::size - 1);
     auto index = (addr - _segments_base) >> segment::size_shift;
     auto& desc = _segments[index];
-    if (desc._lsa_managed) {
+    if (desc._region) {
         return reinterpret_cast<segment*>(addr - offset);
     } else {
         return nullptr;
@@ -614,7 +613,7 @@ segment_pool::containing_segment(const void* obj) const {
 
 segment*
 segment_pool::segment_from(const segment_descriptor& desc) {
-    assert(desc._lsa_managed);
+    assert(desc._region);
     auto index = &desc - &_segments[0];
     return reinterpret_cast<segment*>(_segments_base + (index << segment::size_shift));
 }
@@ -634,7 +633,6 @@ segment_pool::new_segment(region::impl* r) {
     auto seg = allocate_or_fallback_to_reserve();
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
-    desc._lsa_managed = true;
     desc._free_space = segment::size;
     desc._region = r;
     return seg;
@@ -646,7 +644,6 @@ void segment_pool::free_segment(segment* seg) noexcept {
 
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept {
     llogger.trace("Releasing segment {}", seg);
-    desc._lsa_managed = false;
     desc._region = nullptr;
     deallocate_segment(seg);
     --_segments_in_use;
@@ -721,7 +718,6 @@ public:
         _free_segments.pop();
         assert((reinterpret_cast<uintptr_t>(seg) & (sizeof(segment) - 1)) == 0);
         segment_descriptor& desc = _segments[seg];
-        desc._lsa_managed = true;
         desc._free_space = segment::size;
         desc._region = r;
         _segment_descs[&desc] = seg;
@@ -733,7 +729,7 @@ public:
             return i->second;
         } else {
             segment_descriptor& desc = _segments[seg];
-            desc._lsa_managed = false;
+            desc._region = nullptr;
             return desc;
         }
     }
@@ -1881,8 +1877,7 @@ bool segment_pool::migrate_segment(segment* src, segment* dst)
             llogger.trace("Cannot move segment {}", src);
             return false;
         }
-        assert(!dst_desc._lsa_managed);
-        dst_desc._lsa_managed = true;
+        assert(!dst_desc._region);
         dst_desc._free_space = src_desc._free_space;
         src_desc._region->migrate_segment(src, src_desc, dst, dst_desc);
         assert(_lsa_owned_segments_bitmap.test(idx_from_segment(src)));
@@ -1890,7 +1885,6 @@ bool segment_pool::migrate_segment(segment* src, segment* dst)
     _lsa_free_segments_bitmap.set(idx_from_segment(src));
     _lsa_free_segments_bitmap.clear(idx_from_segment(dst));
     dst_desc._region = src_desc._region;
-    src_desc._lsa_managed = false;
     src_desc._region = nullptr;
     return true;
 }
