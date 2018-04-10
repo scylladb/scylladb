@@ -280,6 +280,7 @@ scylla_tests = [
     'tests/streaming_histogram_test',
     'tests/duration_test',
     'tests/vint_serialization_test',
+    'tests/continuous_data_consumer_test',
     'tests/compress_test',
     'tests/chunked_vector_test',
     'tests/loading_cache_test',
