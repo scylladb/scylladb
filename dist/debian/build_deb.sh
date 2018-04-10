@@ -245,7 +245,11 @@ if [ "$TARGET" != "trusty" ]; then
     cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 fi
 
+# According to pbuilder documentation, pbuilder will pick up ~/.pbuilderrc
+# from the root user's home directory.  We've observed both root and the original
+# user, to be safe copy to both.
 cp ./dist/debian/pbuilderrc ~/.pbuilderrc
+sudo cp ./dist/debian/pbuilderrc ~root/.pbuilderrc
 if [ $NO_CLEAN -eq 0 ]; then
     sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
     sudo -E DIST=$TARGET /usr/sbin/pbuilder clean
