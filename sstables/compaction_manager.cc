@@ -26,7 +26,7 @@
 #include <seastar/core/metrics.hh>
 #include "exceptions.hh"
 #include <cmath>
-#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/algorithm/count_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
 
@@ -156,14 +156,13 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
 }
 
 bool compaction_manager::can_register_weight(column_family* cf, int weight) {
-    if (_weight_tracker.empty()) {
-        return true;
-    }
-
     auto has_cf_ongoing_compaction = [&] {
-        return boost::algorithm::any_of(_tasks, [&] (const lw_shared_ptr<task>& task) {
+        auto ret = boost::range::count_if(_tasks, [&] (const lw_shared_ptr<task>& task) {
             return task->compacting_cf == cf;
         });
+        // compaction task trying to proceed is already registered in task list,
+        // so we must check for an additional one.
+        return ret >= 2;
     };
 
     // Only one weight is allowed if parallel compaction is disabled.
