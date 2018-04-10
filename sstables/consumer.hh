@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "vint-serialization.hh"
 #include "core/future.hh"
 #include "core/iostream.hh"
 #include "sstables/exceptions.hh"
@@ -28,6 +29,7 @@
 #include <seastar/core/byteorder.hh>
 #include <seastar/util/variant_utils.hh>
 #include <seastar/net/byteorder.hh>
+#include "bytes.hh"
 
 template<typename T>
 static inline T consume_be(temporary_buffer<char>& p) {
@@ -69,6 +71,8 @@ protected:
         READING_U32,
         READING_U64,
         READING_BYTES,
+        READING_UNSIGNED_VINT,
+        READING_UNSIGNED_VINT_WITH_LEN,
     } _prestate = prestate::NONE;
 
     // state for non-NONE prestates
@@ -156,6 +160,27 @@ protected:
             return read_status::waiting;
         }
     }
+    inline read_status read_unsigned_vint(temporary_buffer<char>& data) {
+        if (data.empty()) {
+            _prestate = prestate::READING_UNSIGNED_VINT;
+            return read_status::waiting;
+        } else {
+            const vint_size_type len = unsigned_vint::serialized_size_from_first_byte(*data.begin());
+            if (data.size() >= len) {
+                _u64 = unsigned_vint::deserialize(
+                        bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
+                data.trim_front(len);
+                return read_status::ready;
+            } else {
+                _read_bytes = temporary_buffer<char>(len);
+                std::copy(data.begin(), data.end(), _read_bytes.get_write());
+                _pos = data.size();
+                data.trim(0);
+                _prestate = prestate::READING_UNSIGNED_VINT_WITH_LEN;
+                return read_status::waiting;
+            }
+        }
+    }
 
     inline void process_buffer(temporary_buffer<char>& data) {
         if (__builtin_expect((_prestate != prestate::NONE), 0)) {
@@ -169,7 +194,21 @@ private:
         // We're in the middle of reading a basic type, which crossed
         // an input buffer. Resume that read before continuing to
         // handle the current state:
-        if (_prestate == prestate::READING_BYTES) {
+        if (_prestate == prestate::READING_UNSIGNED_VINT) {
+            if (read_unsigned_vint(data) == read_status::ready) {
+                _prestate = prestate::NONE;
+            }
+        } else if (_prestate == prestate::READING_UNSIGNED_VINT_WITH_LEN) {
+            const auto n = std::min(_read_bytes.size() - _pos, data.size());
+            std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
+            data.trim_front(n);
+            _pos += n;
+            if (_pos == _read_bytes.size()) {
+                _u64 = unsigned_vint::deserialize(
+                        bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
+                _prestate = prestate::NONE;
+            }
+        } else if (_prestate == prestate::READING_BYTES) {
             auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy(data.begin(), data.begin() + n,
                     _read_bytes.get_write() + _pos);
