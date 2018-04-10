@@ -2627,6 +2627,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
             }
         }
     }).get();
+    slogger.info("Node {} has left the cluster", endpoint);
 
     update_pending_ranges().get();
 }
