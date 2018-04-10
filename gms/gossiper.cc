@@ -1662,6 +1662,15 @@ void gossiper::add_saved_endpoint(inet_address ep) {
         logger.debug("not replacing a previous ep_state for {}, but reusing it: {}", ep, ep_state);
         ep_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(0));
     }
+    auto tokens = service::get_local_storage_service().get_token_metadata().get_tokens(ep);
+    if (!tokens.empty()) {
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        ep_state.add_application_state(gms::application_state::TOKENS, storage_service_value_factory().tokens(tokens_set));
+    }
+    auto host_id = service::get_local_storage_service().get_token_metadata().get_host_id_if_known(ep);
+    if (host_id) {
+        ep_state.add_application_state(gms::application_state::HOST_ID, storage_service_value_factory().host_id(host_id.value()));
+    }
     ep_state.mark_dead();
     endpoint_state_map[ep] = ep_state;
     _unreachable_endpoints[ep] = now();
