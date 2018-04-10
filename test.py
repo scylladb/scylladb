@@ -179,7 +179,8 @@ if __name__ == "__main__":
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
-        seastar_args = '-c2 -m2G --overprovisioned --unsafe-bypass-fsync 1'.split()
+        standard_args =  '--overprovisioned --unsafe-bypass-fsync 1'.split()
+        seastar_args = '-c2 -m2G'.split() + standard_args
         for test in other_tests:
             test_to_run.append((os.path.join(prefix, test), 'other', seastar_args))
         for test in boost_tests:
@@ -187,19 +188,19 @@ if __name__ == "__main__":
 
     if 'release' in modes_to_run:
         test_to_run.append(('build/release/tests/lsa_async_eviction_test', 'other',
-                            '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split()))
+                            '-c1 -m200M --size 1024 --batch 3000 --count 2000000'.split() + standard_args))
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
-                            '-c1 -m100M --count 10 --standard-object-size 3000000'.split()))
+                            '-c1 -m100M --count 10 --standard-object-size 3000000'.split() + standard_args))
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
-                            '-c1 -m100M --count 24000 --standard-object-size 2048'.split()))
+                            '-c1 -m100M --count 24000 --standard-object-size 2048'.split() + standard_args))
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test', 'other',
-                            '-c1 -m1G --count 4000000 --standard-object-size 128'.split()))
+                            '-c1 -m1G --count 4000000 --standard-object-size 128'.split() + standard_args))
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
-                            '-c1 -m2G'.split()))
-        test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1']))
-        test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split()))
+                            '-c1 -m2G'.split() + standard_args))
+        test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1'] + standard_args))
+        test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
     if 'debug' in modes_to_run:
-        test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1']))
+        test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1'] + standard_args))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
