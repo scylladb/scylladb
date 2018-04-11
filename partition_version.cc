@@ -416,54 +416,19 @@ public:
     }
 };
 
-template<typename Func>
-coroutine partition_entry::with_detached_versions(Func&& func) {
-    partition_version* current = &*_version;
-    auto snapshot = _snapshot;
-    if (snapshot) {
-        snapshot->_version = std::move(_version);
-        snapshot->_entry = nullptr;
-        _snapshot = nullptr;
-    }
-    auto prev = std::exchange(_version, {});
-
-    auto revert = defer([&] {
-        if (snapshot) {
-            _snapshot = snapshot;
-            snapshot->_entry = this;
-            _version = std::move(snapshot->_version);
-        } else {
-            _version = std::move(prev);
-        }
-    });
-
-    return func(current);
-}
-
 coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
     logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase)
 {
     if (s.version() != pe_schema.version()) {
-        partition_entry entry(pe.squashed(pe_schema.shared_from_this(), s.shared_from_this()));
-        return entry.with_detached_versions([&] (partition_version* v) {
-            return apply_to_incomplete(s, v, reg, tracker, phase);
-        });
-    } else {
-        return pe.with_detached_versions([&](partition_version* v) {
-            return apply_to_incomplete(s, v, reg, tracker, phase);
-        });
+        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), tracker.cleaner(), &tracker);
     }
-}
 
-coroutine partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
-        logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase) {
-    partition_version& dst = open_version(s, &tracker);
+    bool can_move = !pe._snapshot;
+    partition_version* current = &*pe._version;
+    partition_version& dst = open_version(s, &tracker, phase);
     auto snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
-    bool can_move = true;
-    auto current = version;
     bool static_row_continuous = snp->static_row_continuous();
     while (current) {
-        can_move &= !current->is_referenced();
         dst.partition().apply(current->partition().partition_tombstone());
         if (static_row_continuous) {
             row& static_row = dst.partition().static_row();
@@ -480,9 +445,10 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_versio
             tombstones.apply_monotonically(s, current->partition().row_tombstones());
         }
         current = current->next();
+        can_move &= current && !current->is_referenced();
     }
 
-    partition_entry::rows_iterator source(version, s);
+    partition_entry::rows_iterator source(&*pe.version(), s);
     partition_snapshot_row_cursor cur(s, *snp);
 
     while (!source.done()) {
