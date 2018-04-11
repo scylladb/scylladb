@@ -113,6 +113,32 @@ selectable::with_function::raw::make_count_rows_function() {
 }
 
 shared_ptr<selector::factory>
+selectable::with_anonymous_function::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
+    return abstract_function_selector::new_factory(_function, std::move(factories));
+}
+
+sstring
+selectable::with_anonymous_function::to_string() const {
+    return sprint("%s(%s)", _function->name().name, join(", ", _args));
+}
+
+shared_ptr<selectable>
+selectable::with_anonymous_function::raw::prepare(schema_ptr s) {
+        std::vector<shared_ptr<selectable>> prepared_args;
+        prepared_args.reserve(_args.size());
+        for (auto&& arg : _args) {
+            prepared_args.push_back(arg->prepare(s));
+        }
+        return ::make_shared<with_anonymous_function>(_function, std::move(prepared_args));
+    }
+
+bool
+selectable::with_anonymous_function::raw::processes_selection() const {
+    return true;
+}
+
+shared_ptr<selector::factory>
 selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& factory = _selected->new_selector_factory(db, s, defs);
     auto&& type = factory->new_instance()->get_type();

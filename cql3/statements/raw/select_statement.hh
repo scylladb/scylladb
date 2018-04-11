@@ -75,14 +75,20 @@ public:
         const orderings_type _orderings;
         const bool _is_distinct;
         const bool _allow_filtering;
+        const bool _is_json;
     public:
         parameters();
         parameters(orderings_type orderings,
             bool is_distinct,
             bool allow_filtering);
-        bool is_distinct();
-        bool allow_filtering();
-        orderings_type const& orderings();
+        parameters(orderings_type orderings,
+            bool is_distinct,
+            bool allow_filtering,
+            bool is_json);
+        bool is_distinct() const;
+        bool allow_filtering() const;
+        bool is_json() const;
+        orderings_type const& orderings() const;
     };
     template<typename T>
     using compare_fn = std::function<bool(const T&, const T&)>;
@@ -106,6 +112,7 @@ public:
     }
     std::unique_ptr<prepared> prepare(database& db, cql_stats& stats, bool for_view);
 private:
+    void maybe_jsonize_select_clause(database& db, schema_ptr schema);
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
         database& db,
         schema_ptr schema,
@@ -145,6 +152,7 @@ private:
                 + ", selectClause=" + to_string(_select_clause)
                 + ", whereClause=" + to_string(_where_clause)
                 + ", isDistinct=" + to_string(_parameters->is_distinct())
+                + ", isJson=" + to_string(_parameters->is_json())
                 + ")";
         }
     };

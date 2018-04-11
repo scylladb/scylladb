@@ -2607,3 +2607,125 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_json_types) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql(
+                "CREATE TABLE all_types ("
+                    "    a ascii PRIMARY KEY,"
+                    "    b bigint,"
+                    "    c blob,"
+                    "    d boolean,"
+                    "    e double,"
+                    "    f float,"
+                    "    g inet,"
+                    "    h int,"
+                    "    i text,"
+                    "    j timestamp,"
+                    "    k timeuuid,"
+                    "    l uuid,"
+                    "    m varchar,"
+                    "    n varint,"
+                    "    o decimal,"
+                    "    p tinyint,"
+                    "    q smallint,"
+                    "    r date,"
+                    "    s time,"
+                    "    u duration,"
+                    ");").discard_result();
+        }).then([&e] {
+            e.require_table_exists("ks", "all_types");
+            return e.execute_cql(
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
+                    "    'ascii',"
+                    "    123456789,"
+                    "    0xdeadbeef,"
+                    "    true,"
+                    "    3.14,"
+                    "    3.14,"
+                    "    '127.0.0.1',"
+                    "    3,"
+                    "    'zażółć gęślą jaźń',"
+                    "    '2001-10-18 14:15:55.134+0000',"
+                    "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
+                    "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
+                    "    'varchar',"
+                    "    123,"
+                    "    1.23,"
+                    "    3,"
+                    "    3,"
+                    "    '1970-01-02',"
+                    "    '00:00:00.000000001',"
+                    "    1y2mo3w4d5h6m7s8ms9us10ns"
+                    ");").discard_result();
+        }).then([&e] {
+            return e.execute_cql("SELECT JSON a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,u,unixtimestampof(k) FROM all_types WHERE a = 'ascii'");
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows({
+                {
+                    utf8_type->decompose(sstring(
+                        "{\"a\": \"ascii\", "
+                        "\"b\": 123456789, "
+                        "\"c\": \"deadbeef\", "
+                        "\"d\": true, "
+                        "\"e\": 3.14, "
+                        "\"f\": 3.14, "
+                        "\"g\": \"127.0.0.1\", "
+                        "\"h\": 3, "
+                        "\"i\": \"zażółć gęślą jaźń\", "
+                        "\"j\": \"2001-10-18T14:15:55.134000\", "
+                        "\"k\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
+                        "\"l\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
+                        "\"m\": \"varchar\", "
+                        "\"n\": 123, "
+                        "\"o\": 1.23, "
+                        "\"p\": 3, "
+                        "\"q\": 3, "
+                        "\"r\": \"1970-01-02\", "
+                        "\"s\": 00:00:00.000000001, "
+                        "\"u\": \"1y2mo25d5h6m7s8ms9us10ns\", "
+                        "\"unixtimestampof(k)\": 1261009589805}"
+                    ))
+                }
+             });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_json_collections) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql(
+                "CREATE TABLE collections ("
+                    "    a text PRIMARY KEY,"
+                    "    b map<int, text>,"
+                    "    c set<float>,"
+                    "    d list<tinyint>"
+                    ");").discard_result();
+        }).then([&e] {
+            e.require_table_exists("ks", "collections");
+            return e.execute_cql(
+                "INSERT INTO collections (a, b, c, d) VALUES ("
+                    "    'key',"
+                    "    { 1 : 'abc', 3 : 'de', 2 : '!' },"
+                    "    { 0.0, 4.5, 2.25, 1.125, NAN, INFINITY },"
+                    "    [ 3 , 1, 4, 1, 5, 9 ]"
+                    ");").discard_result();
+        }).then([&e] {
+            return e.execute_cql("SELECT JSON * FROM collections WHERE a = 'key'");
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows({
+                {
+                    utf8_type->decompose(sstring(
+                        "{\"a\": \"key\", "
+                        "\"b\": {\"1\": \"abc\", \"2\": \"!\", \"3\": \"de\"}, "
+                        "\"c\": [0, 1.125, 2.25, 4.5, null, null], " // note - one null is for NAN, one for INFINITY
+                        "\"d\": [3, 1, 4, 1, 5, 9]}"
+                    ))
+                }
+             });
+        });
+    });
+}
+
