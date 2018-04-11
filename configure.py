@@ -294,7 +294,6 @@ scylla_tests = [
     'tests/extensions_test',
     'tests/cql_auth_syntax_test',
     'tests/querier_cache',
-    'tests/querier_cache_resource_based_eviction',
 ]
 
 perf_tests = [
@@ -730,7 +729,6 @@ tests_not_using_seastar_test_framework = set([
     'tests/memory_footprint',
     'tests/gossip',
     'tests/perf/perf_sstable',
-    'tests/querier_cache_resource_based_eviction',
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:

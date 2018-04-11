@@ -22,6 +22,7 @@
 #include "querier.hh"
 #include "service/priority_manager.hh"
 #include "tests/simple_schema.hh"
+#include "tests/cql_test_env.hh"
 
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
@@ -535,4 +536,116 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
         .misses()
         .no_drops()
         .memory_based_evictions();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
+    db::config db_cfg;
+    db_cfg.enable_cache(false);
+    db_cfg.enable_commitlog(false);
+
+    do_with_cql_env([] (cql_test_env& env) {
+        using namespace std::chrono_literals;
+
+        auto& db = env.local_db();
+
+        db.set_querier_cache_entry_ttl(24h);
+
+        try {
+            db.find_keyspace("querier_cache");
+            env.execute_cql("drop keyspace querier_cache;").get();
+        } catch (const no_such_keyspace&) {
+            // expected
+        }
+
+        env.execute_cql("CREATE KEYSPACE querier_cache WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
+        env.execute_cql("CREATE TABLE querier_cache.test (pk int, ck int, value int, primary key (pk, ck));").get();
+
+        env.require_table_exists("querier_cache", "test").get();
+
+        auto insert_id = env.prepare("INSERT INTO querier_cache.test (pk, ck, value) VALUES (?, ?, ?);").get0();
+        auto pk = cql3::raw_value::make_value(data_value(0).serialize());
+        for (int i = 0; i < 100; ++i) {
+            auto ck = cql3::raw_value::make_value(data_value(i).serialize());
+            env.execute_prepared(insert_id, {{pk, ck, ck}}).get();
+        }
+
+        env.require_table_exists("querier_cache", "test").get();
+
+        auto& cf = db.find_column_family("querier_cache", "test");
+        auto s = cf.schema();
+
+        cf.flush().get();
+
+        auto cmd1 = query::read_command(s->id(),
+                s->version(),
+                s->full_slice(),
+                1,
+                gc_clock::now(),
+                stdx::nullopt,
+                1,
+                utils::make_random_uuid());
+
+        // Should save the querier in cache.
+        db.query_mutations(s,
+                cmd1,
+                query::full_partition_range,
+                db.get_result_memory_limiter().new_mutation_read(1024 * 1024).get0(),
+                nullptr,
+                db::no_timeout).get();
+
+        // Make a fake keyspace just to obtain the configuration and
+        // thus the concurrency semaphore.
+        const auto dummy_ks_metadata = keyspace_metadata("dummy_ks", "SimpleStrategy", {{"replication_factor", "1"}}, false);
+        auto cfg = db.make_keyspace_config(dummy_ks_metadata);
+
+        assert(db.get_querier_cache_stats().resource_based_evictions == 0);
+
+        // Drain all resources of the semaphore
+        std::vector<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> permits;
+        const auto resources = cfg.read_concurrency_semaphore->available_resources();
+        permits.reserve(resources.count);
+        const auto per_permit_memory  = resources.memory / resources.count;
+
+        for (int i = 0; i < resources.count; ++i) {
+            permits.emplace_back(cfg.read_concurrency_semaphore->wait_admission(per_permit_memory).get0());
+        }
+
+        assert(cfg.read_concurrency_semaphore->available_resources().count == 0);
+        assert(cfg.read_concurrency_semaphore->available_resources().memory < per_permit_memory);
+
+        auto cmd2 = query::read_command(s->id(),
+                s->version(),
+                s->full_slice(),
+                1,
+                gc_clock::now(),
+                stdx::nullopt,
+                1,
+                utils::make_random_uuid());
+
+        // Should evict the already cached querier.
+        db.query_mutations(s,
+                cmd2,
+                query::full_partition_range,
+                db.get_result_memory_limiter().new_mutation_read(1024 * 1024).get0(),
+                nullptr,
+                db::no_timeout).get();
+
+        assert(db.get_querier_cache_stats().resource_based_evictions == 1);
+
+        // We want to read the entire partition so that the querier
+        // is not saved at the end and thus ensure it is destroyed.
+        // We cannot leave scope with the querier still in the cache
+        // as that sadly leads to use-after-free as the database's
+        // resource_concurrency_semaphore will be destroyed before some
+        // of the tracked buffers.
+        cmd2.row_limit = query::max_rows;
+        cmd2.partition_limit = query::max_partitions;
+        db.query_mutations(s,
+                cmd2,
+                query::full_partition_range,
+                db.get_result_memory_limiter().new_mutation_read(1024 * 1024 * 1024 * 1024).get0(),
+                nullptr,
+                db::no_timeout).get();
+        return make_ready_future<>();
+    }, std::move(db_cfg)).get();
 }
