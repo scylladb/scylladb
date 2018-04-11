@@ -1433,7 +1433,8 @@ future<> sstable::read_filter(const io_priority_class& pc) {
     return seastar::async([this, &pc] () mutable {
         sstables::filter filter;
         read_simple<sstable::component_type::Filter>(filter, pc).get();
-        large_bitset bs(filter.buckets.elements.size() * sizeof(decltype(filter.buckets.elements)::value_type), std::move(filter.buckets.elements));
+        auto nr_bits = filter.buckets.elements.size() * sizeof(decltype(filter.buckets.elements)::value_type);
+        large_bitset bs(nr_bits, std::move(filter.buckets.elements));
         _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs));
     });
 }
