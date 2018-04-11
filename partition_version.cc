@@ -441,7 +441,7 @@ coroutine partition_entry::with_detached_versions(Func&& func) {
 }
 
 coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
-    logalloc::region& reg, cache_tracker& tracker)
+    logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase)
 {
     if (s.version() != pe_schema.version()) {
         partition_entry entry(pe.squashed(pe_schema.shared_from_this(), s.shared_from_this()));
@@ -456,9 +456,9 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
 }
 
 coroutine partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
-        logalloc::region& reg, cache_tracker& tracker) {
+        logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase) {
     partition_version& dst = open_version(s, &tracker);
-    auto snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker);
+    auto snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
     bool can_move = true;
     auto current = version;
     bool static_row_continuous = snp->static_row_continuous();

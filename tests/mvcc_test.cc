@@ -153,6 +153,7 @@ class mvcc_partition;
 class mvcc_container {
     cache_tracker _tracker;
     schema_ptr _schema;
+    partition_snapshot::phase_type _phase = 0;
 public:
     mvcc_container(schema_ptr s) : _schema(s) {}
     mvcc_container(mvcc_container&&) = delete;
@@ -161,6 +162,8 @@ public:
     logalloc::region& region() { return _tracker.region(); }
     cache_tracker& tracker() { return _tracker; }
     mutation_cleaner& cleaner() { return _tracker.cleaner(); }
+    partition_snapshot::phase_type next_phase() { return ++_phase; }
+    partition_snapshot::phase_type phase() const { return _phase; }
 
     mutation_partition squashed(lw_shared_ptr<partition_snapshot>& snp) {
         logalloc::allocating_section as;
@@ -216,7 +219,7 @@ public:
     lw_shared_ptr<partition_snapshot> read() {
         logalloc::allocating_section as;
         return as(region(), [&] {
-            return _e.read(region(), _container.cleaner(), schema(), &_container.tracker());
+            return _e.read(region(), _container.cleaner(), schema(), &_container.tracker(), _container.phase());
         });
     }
 
@@ -232,7 +235,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
         logalloc::allocating_section as;
         auto c = as(region(), [&] {
             return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, region(),
-                _container.tracker());
+                _container.tracker(), _container.next_phase());
         });
         repeat([&] {
             return c.run();

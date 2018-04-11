@@ -1016,7 +1016,8 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
             _tracker.on_partition_merge();
-            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker);
+            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker,
+                _underlying_phase);
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
             cache_entry* entry = current_allocator().construct<cache_entry>(cache_entry::evictable_tag(),
@@ -1025,7 +1026,8 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             _partitions.insert(cache_i, *entry);
-            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker);
+            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker,
+                _underlying_phase);
         } else {
             return make_empty_coroutine();
         }
