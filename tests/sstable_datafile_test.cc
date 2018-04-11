@@ -3187,6 +3187,43 @@ SEASTAR_TEST_CASE(time_window_strategy_time_window_tests) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
+    auto ts = 1451001601000L; // 2015-12-25 @ 00:00:01, in milliseconds
+    auto ts_in_ms = std::chrono::milliseconds(ts);
+    auto ts_in_us = std::chrono::duration_cast<std::chrono::microseconds>(ts_in_ms);
+
+    auto s = schema_builder("tests", "time_window_strategy")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type).build();
+
+    {
+        std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, "MILLISECONDS" }, };
+        time_window_compaction_strategy_options options(opts);
+
+        auto sst = make_sstable(s, "", 1, la, big);
+        sstables::test(sst).set_values("key1", "key1", build_stats(ts_in_ms.count(), ts_in_ms.count(), std::numeric_limits<int32_t>::max()));
+
+        auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
+        auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
+
+        BOOST_REQUIRE(ret.second == expected);
+    }
+
+    {
+        std::map<sstring, sstring> opts = { { time_window_compaction_strategy_options::TIMESTAMP_RESOLUTION_KEY, "MICROSECONDS" }, };
+        time_window_compaction_strategy_options options(opts);
+
+        auto sst = make_sstable(s, "", 1, la, big);
+        sstables::test(sst).set_values("key1", "key1", build_stats(ts_in_us.count(), ts_in_us.count(), std::numeric_limits<int32_t>::max()));
+
+        auto ret = time_window_compaction_strategy::get_buckets({ sst }, options);
+        auto expected = time_window_compaction_strategy::get_window_lower_bound(options.get_sstable_window_size(), ts_in_us.count());
+
+        BOOST_REQUIRE(ret.second == expected);
+    }
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     using namespace std::chrono;
 

@@ -56,7 +56,7 @@ extern logging::logger clogger;
 using namespace std::chrono_literals;
 
 class time_window_compaction_strategy_options {
-private:
+public:
     static constexpr std::chrono::seconds DEFAULT_COMPACTION_WINDOW_UNIT(int window_size) { return window_size * 86400s; }
     static constexpr int DEFAULT_COMPACTION_WINDOW_SIZE = 1;
     static constexpr std::chrono::seconds DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS() { return 600s; }
@@ -65,14 +65,21 @@ private:
     static constexpr auto COMPACTION_WINDOW_UNIT_KEY = "compaction_window_unit";
     static constexpr auto COMPACTION_WINDOW_SIZE_KEY = "compaction_window_size";
     static constexpr auto EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS_KEY = "expired_sstable_check_frequency_seconds";
-
+private:
     const std::unordered_map<sstring, std::chrono::seconds> valid_window_units = { { "MINUTES", 60s }, { "HOURS", 3600s }, { "DAYS", 86400s } };
-    // TODO: add support to timestamp resolution other than microseconds, but it's not that important
-    // because new clients only use this one.
-    const std::unordered_set<sstring> valid_timestamp_resolutions = { "MICROSECONDS" };
+
+    enum class timestamp_resolutions {
+        microsecond,
+        millisecond,
+    };
+    const std::unordered_map<sstring, timestamp_resolutions> valid_timestamp_resolutions = {
+        { "MICROSECONDS", timestamp_resolutions::microsecond },
+        { "MILLISECONDS", timestamp_resolutions::millisecond },
+    };
 
     std::chrono::seconds sstable_window_size = DEFAULT_COMPACTION_WINDOW_UNIT(DEFAULT_COMPACTION_WINDOW_SIZE);
     db_clock::duration expired_sstable_check_frequency = DEFAULT_EXPIRED_SSTABLE_CHECK_FREQUENCY_SECONDS();
+    timestamp_resolutions timestamp_resolution = timestamp_resolutions::microsecond;
 public:
     time_window_compaction_strategy_options(const std::map<sstring, sstring>& options) {
         std::chrono::seconds window_unit;
@@ -107,8 +114,12 @@ public:
         it = options.find(TIMESTAMP_RESOLUTION_KEY);
         if (it != options.end() && !valid_timestamp_resolutions.count(it->second)) {
             throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
+        } else {
+            timestamp_resolution = valid_timestamp_resolutions.at(it->second);
         }
     }
+
+    std::chrono::seconds get_sstable_window_size() const { return sstable_window_size; }
 
     friend class time_window_compaction_strategy;
 };
@@ -154,6 +165,18 @@ public:
         return compaction_descriptor(std::move(compaction_candidates));
     }
 private:
+    static timestamp_type
+    to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
+        switch (resolution) {
+        case time_window_compaction_strategy_options::timestamp_resolutions::microsecond:
+            return timestamp_type(timestamp_from_sstable);
+        case time_window_compaction_strategy_options::timestamp_resolutions::millisecond:
+            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::milliseconds(timestamp_from_sstable)).count();
+        default:
+            throw std::runtime_error("Timestamp resolution invalid for TWCS");
+        };
+    }
+
     std::vector<shared_sstable>
     get_next_non_expired_sstables(column_family& cf, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point gc_before) {
         auto most_interesting = get_compaction_candidates(cf, non_expiring_sstables);
@@ -178,7 +201,7 @@ private:
     }
 
     std::vector<shared_sstable> get_compaction_candidates(column_family& cf, std::vector<shared_sstable> candidate_sstables) {
-        auto p = get_buckets(std::move(candidate_sstables), _options.sstable_window_size);
+        auto p = get_buckets(std::move(candidate_sstables), _options);
         // Update the highest window seen, if necessary
         _highest_window_seen = std::max(_highest_window_seen, p.second);
 
@@ -204,7 +227,7 @@ public:
     // @return A pair, where the left element is the bucket representation (map of timestamp to sstablereader),
     // and the right is the highest timestamp seen
     static std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-    get_buckets(std::vector<shared_sstable> files, std::chrono::seconds sstable_window_size) {
+    get_buckets(std::vector<shared_sstable> files, time_window_compaction_strategy_options& options) {
         std::map<timestamp_type, std::vector<shared_sstable>> buckets;
 
         timestamp_type max_timestamp = 0;
@@ -212,8 +235,8 @@ public:
         // For each sstable, add sstable to the time bucket
         // Where the bucket is the file's max timestamp rounded to the nearest window bucket
         for (auto&& f : files) {
-            timestamp_type ts = f->get_stats_metadata().max_timestamp;
-            timestamp_type lower_bound = get_window_lower_bound(sstable_window_size, ts);
+            timestamp_type ts = to_timestamp_type(options.timestamp_resolution, f->get_stats_metadata().max_timestamp);
+            timestamp_type lower_bound = get_window_lower_bound(options.sstable_window_size, ts);
             buckets[lower_bound].push_back(std::move(f));
             max_timestamp = std::max(max_timestamp, lower_bound);
         }
