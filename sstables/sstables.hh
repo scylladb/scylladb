@@ -70,6 +70,7 @@ namespace sstables {
 extern logging::logger sstlog;
 class key;
 class sstable_writer;
+class sstable_writer_k_l;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
@@ -327,6 +328,10 @@ public:
 
     uint64_t filter_memory_size() const {
         return _components->filter->memory_size();
+    }
+
+    version_types get_version() const {
+        return _version;
     }
 
     // Returns the total bytes of all components.
@@ -696,7 +701,7 @@ public:
     friend class test;
 
     friend class components_writer;
-    friend class sstable_writer;
+    friend class sstable_writer_k_l;
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
@@ -810,34 +815,25 @@ public:
 };
 
 class sstable_writer {
-    sstable& _sst;
-    const schema& _schema;
-    const io_priority_class& _pc;
-    bool _backup;
-    bool _leave_unsealed;
-    bool _compression_enabled;
-    std::unique_ptr<file_writer> _writer;
-    stdx::optional<components_writer> _components_writer;
-    shard_id _shard; // Specifies which shard new sstable will belong to.
-    write_monitor* _monitor;
-    bool _correctly_serialize_non_compound_range_tombstones;
+public:
+    class writer_impl;
 private:
-    void prepare_file_writer();
-    void finish_file_writer();
+    std::unique_ptr<writer_impl> _impl;
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
+
+    sstable_writer(sstable_writer&& o);
+    sstable_writer& operator=(sstable_writer&& o);
+
     ~sstable_writer();
-    sstable_writer(sstable_writer&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
-            _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
-            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
-            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
-    void consume_new_partition(const dht::decorated_key& dk) { return _components_writer->consume_new_partition(dk); }
-    void consume(tombstone t) { _components_writer->consume(t); }
-    stop_iteration consume(static_row&& sr) { return _components_writer->consume(std::move(sr)); }
-    stop_iteration consume(clustering_row&& cr) { return _components_writer->consume(std::move(cr)); }
-    stop_iteration consume(range_tombstone&& rt) { return _components_writer->consume(std::move(rt)); }
-    stop_iteration consume_end_of_partition() { return _components_writer->consume_end_of_partition(); }
+
+    void consume_new_partition(const dht::decorated_key& dk);
+    void consume(tombstone t);
+    stop_iteration consume(static_row&& sr);
+    stop_iteration consume(clustering_row&& cr);
+    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
 };
 

@@ -2163,7 +2163,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
     // Write an index entry minus the "promoted index" (sample of columns)
     // part. We can only write that after processing the entire partition
     // and collecting the sample of columns.
-    write_index_header(_sst._version, _index, p_key, _out.offset());
+    write_index_header(_sst.get_version(), _index, p_key, _out.offset());
     _sst._pi_write.data = {};
     _sst._pi_write.numblocks = 0;
     _sst._pi_write.deltime.local_deletion_time = std::numeric_limits<int32_t>::max();
@@ -2173,7 +2173,7 @@ void components_writer::consume_new_partition(const dht::decorated_key& dk) {
     _sst._pi_write.schemap = &_schema; // sadly we need this
 
     // Write partition key into data file.
-    write(_sst._version, _out, p_key);
+    write(_sst.get_version(), _out, p_key);
 
     _tombstone_written = false;
 }
@@ -2194,7 +2194,7 @@ void components_writer::consume(tombstone t) {
         d.local_deletion_time = std::numeric_limits<int32_t>::max();
         d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
     }
-    write(_sst._version, _out, d);
+    write(_sst.get_version(), _out, d);
     _tombstone_written = true;
     // TODO: need to verify we don't do this twice?
     _sst._pi_write.deltime = d;
@@ -2263,13 +2263,13 @@ stop_iteration components_writer::consume_end_of_partition() {
             _out.offset() - _sst._pi_write.block_start_offset);
         _sst._pi_write.numblocks++;
     }
-    write_index_promoted(_sst._version, _index, _sst._pi_write.data, _sst._pi_write.deltime,
+    write_index_promoted(_sst.get_version(), _index, _sst._pi_write.data, _sst._pi_write.deltime,
             _sst._pi_write.numblocks);
     _sst._pi_write.data = {};
     _sst._pi_write.block_first_colname = {};
 
     int16_t end_of_row = 0;
-    write(_sst._version, _out, end_of_row);
+    write(_sst.get_version(), _out, end_of_row);
 
     // compute size of the current row.
     _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
@@ -2300,7 +2300,7 @@ void components_writer::consume_end_of_stream() {
     }
 
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst._version, _sst._components->statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst._collector, dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
 }
 
@@ -2350,7 +2350,50 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
     write_simple<component_type::Scylla>(*_components->scylla_metadata, pc);
 }
 
-void sstable_writer::prepare_file_writer()
+struct sstable_writer::writer_impl {
+    virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
+    virtual void consume(tombstone t) = 0;
+    virtual stop_iteration consume(static_row&& sr) = 0;
+    virtual stop_iteration consume(clustering_row&& cr) = 0;
+    virtual stop_iteration consume(range_tombstone&& rt) = 0;
+    virtual stop_iteration consume_end_of_partition() = 0;
+    virtual void consume_end_of_stream() = 0;
+    virtual ~writer_impl() {}
+};
+
+class sstable_writer_k_l : public sstable_writer::writer_impl {
+    sstable& _sst;
+    const schema& _schema;
+    const io_priority_class& _pc;
+    bool _backup;
+    bool _leave_unsealed;
+    bool _compression_enabled;
+    std::unique_ptr<file_writer> _writer;
+    stdx::optional<components_writer> _components_writer;
+    shard_id _shard; // Specifies which shard new sstable will belong to.
+    write_monitor* _monitor;
+    bool _correctly_serialize_non_compound_range_tombstones;
+private:
+    void prepare_file_writer();
+    void finish_file_writer();
+public:
+    sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
+            const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
+    ~sstable_writer_k_l();
+    sstable_writer_k_l(sstable_writer_k_l&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
+            _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
+            _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
+            _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
+    void consume_new_partition(const dht::decorated_key& dk) override { return _components_writer->consume_new_partition(dk); }
+    void consume(tombstone t) override { _components_writer->consume(t); }
+    stop_iteration consume(static_row&& sr) override { return _components_writer->consume(std::move(sr)); }
+    stop_iteration consume(clustering_row&& cr) override { return _components_writer->consume(std::move(cr)); }
+    stop_iteration consume(range_tombstone&& rt) override { return _components_writer->consume(std::move(rt)); }
+    stop_iteration consume_end_of_partition() override { return _components_writer->consume_end_of_partition(); }
+    void consume_end_of_stream() override;
+};
+
+void sstable_writer_k_l::prepare_file_writer()
 {
     file_output_stream_options options;
     options.io_priority_class = _pc;
@@ -2364,21 +2407,21 @@ void sstable_writer::prepare_file_writer()
     }
 }
 
-void sstable_writer::finish_file_writer()
+void sstable_writer_k_l::finish_file_writer()
 {
     auto writer = std::move(_writer);
     writer->close().get();
 
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
-        write_digest(_sst._version, _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-        write_crc(_sst._version, _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst._version, _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
+        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
     }
 }
 
-sstable_writer::~sstable_writer() {
+sstable_writer_k_l::~sstable_writer_k_l() {
     if (_writer) {
         try {
             _writer->close().get();
@@ -2388,7 +2431,7 @@ sstable_writer::~sstable_writer() {
     }
 }
 
-sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
+sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
                                const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
     : _sst(sst)
     , _schema(s)
@@ -2414,7 +2457,7 @@ static sstable_enabled_features all_features() {
     return sstable_enabled_features{(1 << sstable_feature::End) - 1};
 }
 
-void sstable_writer::consume_end_of_stream()
+void sstable_writer_k_l::consume_end_of_stream()
 {
     _components_writer->consume_end_of_stream();
     _components_writer = stdx::nullopt;
@@ -2438,6 +2481,43 @@ void sstable_writer::consume_end_of_stream()
 
     _monitor->on_flush_completed();
 }
+
+sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
+    const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
+        : _impl(std::make_unique<sstable_writer_k_l>(sst, s, estimated_partitions, cfg, pc, shard))
+    {}
+
+void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+    return _impl->consume_new_partition(dk);
+}
+
+void sstable_writer::consume(tombstone t) {
+    return _impl->consume(t);
+}
+
+stop_iteration sstable_writer::consume(static_row&& sr) {
+    return _impl->consume(std::move(sr));
+}
+
+stop_iteration sstable_writer::consume(clustering_row&& cr) {
+    return _impl->consume(std::move(cr));
+}
+
+stop_iteration sstable_writer::consume(range_tombstone&& rt) {
+    return _impl->consume(std::move(rt));
+}
+
+stop_iteration sstable_writer::consume_end_of_partition() {
+    return _impl->consume_end_of_partition();
+}
+
+void sstable_writer::consume_end_of_stream() {
+    return _impl->consume_end_of_stream();
+}
+
+sstable_writer::sstable_writer(sstable_writer&& o) = default;
+sstable_writer& sstable_writer::operator=(sstable_writer&& o) = default;
+sstable_writer::~sstable_writer() = default;
 
 future<> sstable::seal_sstable(bool backup)
 {
