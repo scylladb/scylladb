@@ -199,7 +199,7 @@ public:
         return do_apply(other);
     }
 
-    static size_t serialized_size() {
+    static constexpr size_t serialized_size() {
         return counter_shard_view::size;
     }
     void serialize(bytes::iterator& out) const {
@@ -253,15 +253,33 @@ public:
     }
 
     atomic_cell build(api::timestamp_type timestamp) const {
-        return atomic_cell::make_live_from_serializer(*counter_type, timestamp, serialized_size(), [this] (bytes::iterator out) {
-            serialize(out);
-        });
+        // If we can assume that the counter shards never cross fragment boundaries
+        // the serialisation code gets much simpler.
+        static_assert(data::cell::maximum_external_chunk_length % counter_shard::serialized_size() == 0);
+
+        auto ac = atomic_cell::make_live_uninitialized(*counter_type, timestamp, serialized_size());
+
+        auto dst_it = ac.value().begin();
+        auto dst_current = *dst_it++;
+        for (auto&& cs : _shards) {
+            if (dst_current.empty()) {
+                dst_current = *dst_it++;
+            }
+            assert(!dst_current.empty());
+            auto value_dst = dst_current.data();
+            cs.serialize(value_dst);
+            dst_current.remove_prefix(counter_shard::serialized_size());
+        }
+        return ac;
     }
 
     static atomic_cell from_single_shard(api::timestamp_type timestamp, const counter_shard& cs) {
-        return atomic_cell::make_live_from_serializer(*counter_type, timestamp, counter_shard::serialized_size(), [&cs] (bytes::iterator out) {
-            cs.serialize(out);
-        });
+        // We don't really need to bother with fragmentation here.
+        static_assert(data::cell::maximum_external_chunk_length >= counter_shard::serialized_size());
+        auto ac = atomic_cell::make_live_uninitialized(*counter_type, timestamp, counter_shard::serialized_size());
+        auto dst = ac.value().first_fragment().begin();
+        cs.serialize(dst);
+        return ac;
     }
 
     class inserter_iterator : public std::iterator<std::output_iterator_tag, counter_shard> {

@@ -39,9 +39,24 @@ private:
         return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
-        if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
-            dst.apply(new_def, atomic_cell_or_collection(*new_def.type, cell));
+        if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
+            return;
         }
+        auto new_cell = [&] {
+            if (cell.is_live() && !old_type->is_counter()) {
+                if (cell.is_live_and_has_ttl()) {
+                    return atomic_cell_or_collection(
+                        atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize(), cell.expiry(), cell.ttl())
+                    );
+                }
+                return atomic_cell_or_collection(
+                    atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize())
+                );
+            } else {
+                return atomic_cell_or_collection(*new_def.type, cell);
+            }
+        }();
+        dst.apply(new_def, std::move(new_cell));
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
         if (!is_compatible(new_def, old_type, kind)) {

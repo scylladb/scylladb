@@ -96,15 +96,3 @@ struct appending_hash<atomic_cell_or_collection> {
         }
     }
 };
-
-template<>
-struct appending_hash<atomic_cell_value_view> {
-    template<typename Hasher>
-    void operator()(Hasher& h, atomic_cell_value_view v) const {
-        using boost::range::for_each;
-        feed_hash(h, v.size_bytes());
-        for_each(v, [&h] (auto&& chk) {
-            h.update(reinterpret_cast<const char*>(chk.data()), chk.size());
-        });
-    }
-};

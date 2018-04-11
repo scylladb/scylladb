@@ -861,11 +861,6 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
 }
 
 std::ostream&
-operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
-    return out << to_hex(c._data);
-}
-
-std::ostream&
 operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c) {
     return fprint(os, "{column: %s %s}", c.first, c.second);
 }

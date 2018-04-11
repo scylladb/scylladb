@@ -146,8 +146,7 @@ void counter_cell_view::apply(const column_definition& cdef, atomic_cell_or_coll
  with_linearized(dst_ac, [&] (counter_cell_view dst_ccv) {
   with_linearized(src_ac, [&] (counter_cell_view src_ccv) {
 
-    if (dst_ccv.shard_count() >= src_ccv.shard_count()
-        && dst.can_use_mutable_view() && src.can_use_mutable_view()) {
+    if (dst_ccv.shard_count() >= src_ccv.shard_count()) {
         auto dst_amc = dst.as_mutable_atomic_cell(cdef);
         auto src_amc = src.as_mutable_atomic_cell(cdef);
         if (!dst_amc.is_value_fragmented() && !src_amc.is_value_fragmented()) {
