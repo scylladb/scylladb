@@ -292,6 +292,11 @@ public:
         virtual size_t buffer_size() const {
             return _buffer_size;
         }
+
+        circular_buffer<mutation_fragment> detach_buffer() {
+            _buffer_size = 0;
+            return std::exchange(_buffer, {});
+        }
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -408,12 +413,23 @@ public:
             return peek();
         });
     }
+    // A peek at the next fragment in the buffer.
+    // Cannot be called if is_buffer_empty() returns true.
+    const mutation_fragment& peek_buffer() const { return _impl->_buffer.front(); }
     // The actual buffer size of the reader.
     // Altough we consistently refer to this as buffer size throught the code
     // we really use "buffer size" as the size of the collective memory
     // used by all the mutation fragments stored in the buffer of the reader.
     size_t buffer_size() const {
         return _impl->buffer_size();
+    }
+    // Detach the internal buffer of the reader.
+    // Roughly equivalent to depleting it by calling pop_mutation_fragment()
+    // until is_buffer_empty() returns true.
+    // The reader will need to allocate a new buffer on the next fill_buffer()
+    // call.
+    circular_buffer<mutation_fragment> detach_buffer() {
+        return _impl->detach_buffer();
     }
 };
 
@@ -493,7 +509,9 @@ flat_mutation_reader transform(flat_mutation_reader r, T t) {
             return _reader.fast_forward_to(pr, timeout);
         }
         virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
-            throw std::bad_function_call();
+            forward_buffer_to(pr.start());
+            _end_of_stream = false;
+            return _reader.fast_forward_to(std::move(pr), timeout);
         }
         virtual size_t buffer_size() const override {
             return flat_mutation_reader::impl::buffer_size() + _reader.buffer_size();

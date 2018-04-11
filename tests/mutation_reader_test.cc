@@ -22,6 +22,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <boost/range/irange.hpp>
+#include <boost/range/adaptor/uniqued.hpp>
 
 #include "core/sleep.hh"
 #include "core/do_with.hh"
@@ -35,6 +36,7 @@
 #include "tests/simple_schema.hh"
 #include "tests/test_services.hh"
 #include "tests/mutation_source_test.hh"
+#include "tests/cql_test_env.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
@@ -42,6 +44,7 @@
 #include "sstables/sstables.hh"
 #include "database.hh"
 #include "partition_slice_builder.hh"
+#include "schema_registry.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1379,4 +1382,203 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
         run_mutation_source_tests(make_combined_populator(2));
         run_mutation_source_tests(make_combined_populator(3));
     });
+}
+
+// Best run with SMP >= 2
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
+            const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
+            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &mutations] {
+                auto mt = make_lw_shared<memtable>(s.get());
+
+                for (auto& mut : mutations) {
+                    mt->apply(mut);
+                }
+
+                return make_foreign(mt);
+            }).get0();
+
+            auto reader_factory = [remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) {
+                auto remote_reader = smp::submit_to(remote_shard,
+                        [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] {
+                    return make_foreign(std::make_unique<flat_mutation_reader>(remote_mt->make_flat_reader(s.get(),
+                            range,
+                            slice,
+                            pc,
+                            trace_state.get(),
+                            fwd_sm,
+                            fwd_mr)));
+                }).get0();
+                return make_foreign_reader(s, std::move(remote_reader), fwd_sm);
+            };
+
+            auto reader_factory_ptr = make_lw_shared<decltype(reader_factory)>(std::move(reader_factory));
+
+            return mutation_source([reader_factory_ptr] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) {
+                return (*reader_factory_ptr)(std::move(s), range, slice, pc, std::move(trace_state), fwd_sm, fwd_mr);
+            });
+        };
+
+        run_mutation_source_tests(populate);
+        return make_ready_future<>();
+    }).get();
+}
+
+// Shards tokens such that mutations are owned by shards in a round-robin manner.
+class dummy_partitioner : public dht::i_partitioner {
+    dht::i_partitioner& _partitioner;
+    std::vector<dht::token> _tokens;
+
+public:
+    dummy_partitioner(dht::i_partitioner& partitioner, const std::map<dht::token, std::vector<mutation>>& mutations_by_token)
+        : i_partitioner(smp::count)
+        , _partitioner(partitioner)
+        , _tokens(boost::copy_range<std::vector<dht::token>>(mutations_by_token | boost::adaptors::map_keys)) {
+    }
+
+    virtual dht::token midpoint(const dht::token& left, const dht::token& right) const override { return _partitioner.midpoint(left, right); }
+    virtual dht::token get_token(const schema& s, partition_key_view key) override { return _partitioner.get_token(s, key); }
+    virtual dht::token get_token(const sstables::key_view& key) override { return _partitioner.get_token(key); }
+    virtual sstring to_sstring(const dht::token& t) const override { return _partitioner.to_sstring(t); }
+    virtual dht::token from_sstring(const sstring& t) const override { return _partitioner.from_sstring(t); }
+    virtual dht::token from_bytes(bytes_view bytes) const override { return _partitioner.from_bytes(bytes); }
+    virtual dht::token get_random_token() override { return _partitioner.get_random_token(); }
+    virtual bool preserves_order() override { return _partitioner.preserves_order(); }
+    virtual std::map<dht::token, float> describe_ownership(const std::vector<dht::token>& sorted_tokens) override { return _partitioner.describe_ownership(sorted_tokens); }
+    virtual data_type get_token_validator() override { return _partitioner.get_token_validator(); }
+    virtual const sstring name() const override { return _partitioner.name(); }
+    virtual unsigned shard_of(const dht::token& t) const override;
+    virtual dht::token token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans = 1) const override;
+    virtual int tri_compare(dht::token_view t1, dht::token_view t2) const override { return _partitioner.tri_compare(t1, t2); }
+};
+
+unsigned dummy_partitioner::shard_of(const dht::token& t) const {
+    auto it = boost::find(_tokens, t);
+    // Unknown tokens are assigned to shard 0
+    return it == _tokens.end() ? 0 : std::distance(_tokens.begin(), it) % _partitioner.shard_count();
+}
+
+dht::token dummy_partitioner::token_for_next_shard(const dht::token& t, shard_id shard, unsigned spans) const {
+    // Find the first token that belongs to `shard` and is larger than `t`
+    auto it = std::find_if(_tokens.begin(), _tokens.end(), [this, &t, shard] (const dht::token& shard_token) {
+        return shard_token > t && shard_of(shard_token) == shard;
+    });
+
+    if (it == _tokens.end()) {
+        return dht::maximum_token();
+    }
+
+    --spans;
+
+    while (spans) {
+        if (std::distance(it, _tokens.end()) <= _partitioner.shard_count()) {
+            return dht::maximum_token();
+        }
+        it += _partitioner.shard_count();
+        --spans;
+    }
+
+    return *it;
+}
+
+// Best run with SMP >= 2
+SEASTAR_THREAD_TEST_CASE(test_multishard_combined_reader_as_mutation_source) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
+            // We need to group mutations that have the same token so they land on the same shard.
+            std::map<dht::token, std::vector<mutation>> mutations_by_token;
+
+            for (const auto& mut : mutations) {
+                mutations_by_token[mut.token()].push_back(mut);
+            }
+
+            auto partitioner = make_lw_shared<dummy_partitioner>(dht::global_partitioner(), mutations_by_token);
+
+            auto merged_mutations = boost::copy_range<std::vector<std::vector<mutation>>>(mutations_by_token | boost::adaptors::map_values);
+
+            auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<memtable>>>>();
+            for (unsigned shard = 0; shard < partitioner->shard_count(); ++shard) {
+                auto remote_mt = smp::submit_to(shard, [shard, s = global_schema_ptr(s), &merged_mutations, partitioner = *partitioner] {
+                    auto mt = make_lw_shared<memtable>(s.get());
+
+                    for (unsigned i = shard; i < merged_mutations.size(); i += partitioner.shard_count()) {
+                        for (auto& mut : merged_mutations[i]) {
+                            mt->apply(mut);
+                        }
+                    }
+
+                    return make_foreign(mt);
+                }).get0();
+                remote_memtables->emplace_back(std::move(remote_mt));
+            }
+
+            return mutation_source([partitioner, remote_memtables] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd_sm,
+                    mutation_reader::forwarding fwd_mr) {
+                auto factory = [remote_memtables, s, &slice, &pc, trace_state] (unsigned shard,
+                        const dht::partition_range& range,
+                        streamed_mutation::forwarding fwd_sm,
+                        mutation_reader::forwarding fwd_mr) {
+                    return smp::submit_to(shard, [mt = &*remote_memtables->at(shard), s = global_schema_ptr(s), &range, &slice, &pc,
+                            trace_state = tracing::global_trace_state_ptr(trace_state), fwd_sm, fwd_mr] () mutable {
+                        return make_foreign(std::make_unique<flat_mutation_reader>(mt->make_flat_reader(s.get(),
+                                range,
+                                slice,
+                                pc,
+                                trace_state.get(),
+                                fwd_sm,
+                                fwd_mr)));
+                    });
+                };
+
+                return make_multishard_combining_reader(s, range, *partitioner, factory, fwd_sm, fwd_mr);
+            });
+        };
+
+        run_mutation_source_tests(populate);
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP >= 2
+SEASTAR_THREAD_TEST_CASE(test_multishard_combined_reader_reading_empty_table) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        std::vector<bool> shards_touched(smp::count, false);
+        simple_schema s;
+        auto factory = [&shards_touched, &s] (unsigned shard,
+                const dht::partition_range& range,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) {
+            shards_touched[shard] = true;
+            return smp::submit_to(shard, [gs = global_schema_ptr(s.schema())] () mutable {
+                return make_foreign(std::make_unique<flat_mutation_reader>(make_empty_flat_reader(gs.get())));
+            });
+        };
+
+        assert_that(make_multishard_combining_reader(s.schema(), query::full_partition_range, dht::global_partitioner(), std::move(factory)))
+                .produces_end_of_stream();
+
+        for (unsigned i = 0; i < smp::count; ++i) {
+            BOOST_REQUIRE(shards_touched.at(i));
+        }
+
+        return make_ready_future<>();
+    }).get();
 }
