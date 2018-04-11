@@ -25,6 +25,7 @@
 #include "mutation_fragment.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
+#include "utils/coroutine.hh"
 
 #include <boost/intrusive/parent_from_member.hpp>
 
@@ -381,11 +382,11 @@ private:
     // Detaches all versions temporarily around execution of the function.
     // The function receives partition_version* pointing to the latest version.
     template<typename Func>
-    void with_detached_versions(Func&&);
+    coroutine with_detached_versions(Func&&);
 
     void set_version(partition_version*);
 
-    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&, cache_tracker&);
+    coroutine apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&, cache_tracker&);
 public:
     struct evictable_tag {};
     class rows_iterator;
@@ -464,7 +465,10 @@ public:
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&, cache_tracker&);
+    //
+    // Returns a coroutine object representing the operation.
+    // The coroutine must be resumed with the region being unlocked.
+    coroutine apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&, cache_tracker&);
 
     // If this entry is evictable, cache_tracker must be provided.
     partition_version& add_version(const schema& s, cache_tracker*);

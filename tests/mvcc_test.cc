@@ -230,10 +230,13 @@ public:
 void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_schema) {
     with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
-        as(region(), [&] {
-            _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, region(),
+        auto c = as(region(), [&] {
+            return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, region(),
                 _container.tracker());
         });
+        repeat([&] {
+            return c.run();
+        }).get();
     });
 }
 

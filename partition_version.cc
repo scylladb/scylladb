@@ -417,7 +417,7 @@ public:
 };
 
 template<typename Func>
-void partition_entry::with_detached_versions(Func&& func) {
+coroutine partition_entry::with_detached_versions(Func&& func) {
     partition_version* current = &*_version;
     auto snapshot = _snapshot;
     if (snapshot) {
@@ -437,25 +437,25 @@ void partition_entry::with_detached_versions(Func&& func) {
         }
     });
 
-    func(current);
+    return func(current);
 }
 
-void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
+coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
     logalloc::region& reg, cache_tracker& tracker)
 {
     if (s.version() != pe_schema.version()) {
         partition_entry entry(pe.squashed(pe_schema.shared_from_this(), s.shared_from_this()));
-        entry.with_detached_versions([&] (partition_version* v) {
-            apply_to_incomplete(s, v, reg, tracker);
+        return entry.with_detached_versions([&] (partition_version* v) {
+            return apply_to_incomplete(s, v, reg, tracker, phase);
         });
     } else {
-        pe.with_detached_versions([&](partition_version* v) {
-            apply_to_incomplete(s, v, reg, tracker);
+        return pe.with_detached_versions([&](partition_version* v) {
+            return apply_to_incomplete(s, v, reg, tracker, phase);
         });
     }
 }
 
-void partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
+coroutine partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
         logalloc::region& reg, cache_tracker& tracker) {
     partition_version& dst = open_version(s, &tracker);
     auto snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker);
@@ -504,6 +504,7 @@ void partition_entry::apply_to_incomplete(const schema& s, partition_version* ve
         source.remove_current_row_when_possible();
         source.move_to_next_row();
     }
+    return make_empty_coroutine();
 }
 
 mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
