@@ -598,7 +598,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
         const auto dummy_ks_metadata = keyspace_metadata("dummy_ks", "SimpleStrategy", {{"replication_factor", "1"}}, false);
         auto cfg = db.make_keyspace_config(dummy_ks_metadata);
 
-        assert(db.get_querier_cache_stats().resource_based_evictions == 0);
+        BOOST_REQUIRE_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 0);
 
         // Drain all resources of the semaphore
         std::vector<lw_shared_ptr<reader_concurrency_semaphore::reader_permit>> permits;
@@ -610,8 +610,8 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
             permits.emplace_back(cfg.read_concurrency_semaphore->wait_admission(per_permit_memory).get0());
         }
 
-        assert(cfg.read_concurrency_semaphore->available_resources().count == 0);
-        assert(cfg.read_concurrency_semaphore->available_resources().memory < per_permit_memory);
+        BOOST_REQUIRE_EQUAL(cfg.read_concurrency_semaphore->available_resources().count, 0);
+        BOOST_REQUIRE(cfg.read_concurrency_semaphore->available_resources().memory < per_permit_memory);
 
         auto cmd2 = query::read_command(s->id(),
                 s->version(),
@@ -630,7 +630,7 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
                 nullptr,
                 db::no_timeout).get();
 
-        assert(db.get_querier_cache_stats().resource_based_evictions == 1);
+        BOOST_REQUIRE_EQUAL(db.get_querier_cache_stats().resource_based_evictions, 1);
 
         // We want to read the entire partition so that the querier
         // is not saved at the end and thus ensure it is destroyed.
