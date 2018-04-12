@@ -92,10 +92,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             _last_replicas = state->get_last_replicas();
             _query_read_repair_decision = state->get_query_read_repair_decision();
         } else {
-            // Reusing readers is currently only supported for singular queries.
-            if (!_ranges.empty() && query::is_single_partition(_ranges.front())) {
-                _cmd->query_uuid = utils::make_random_uuid();
-            }
+            _cmd->query_uuid = utils::make_random_uuid();
             _cmd->is_first_page = true;
         }
         qlogger.trace("fetch_page query id {}", _cmd->query_uuid);
