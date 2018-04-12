@@ -145,7 +145,6 @@ private:
             /// \brief Try to send one hint read from the file.
             ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
             ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
-            ///  - Limit the maximum time for sending hints.
             ///
             /// If sending fails we are going to clear the state::segment_replay_ok in the _state and \ref rp is going to be stored in the _rps_set.
             /// If sending is successful then \ref rp is going to be removed from the _rps_set.
@@ -159,11 +158,10 @@ private:
             future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char> buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
 
             /// \brief Send all hint from a single file and delete it after it has been successfully sent.
-            /// Send all hints from the given file. Limit the maximum amount of time we are allowed to send.
-            /// If we run out of time we will pick up in the next iteration from where we left in this one.
+            /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next
+            /// iteration from where we left in this one.
             ///
             /// \param fname file to send
-            /// \param sending_began_at time when the sending timer started the current iteration
             /// \return TRUE if file has been successfully sent
             bool send_one_file(const sstring& fname);
 
@@ -187,7 +185,7 @@ private:
             /// \brief Perform a single mutation send atempt.
             ///
             /// If the original destination end point is still a replica for the given mutation - send the mutation directly
-            /// to it, otherwise execute the mutation "from scratch" with CL=ANY.
+            /// to it, otherwise execute the mutation "from scratch" with CL=ALL.
             ///
             /// \param m mutation to send
             /// \param natural_endpoints current replicas for the given mutation
