@@ -1414,6 +1414,10 @@ public:
         return _querier_cache.get_stats();
     }
 
+    query::querier_cache& get_querier_cache() {
+        return _querier_cache;
+    }
+
     friend class distributed_loader;
 };
 
