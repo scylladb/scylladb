@@ -348,7 +348,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
 }
 
 bool manager::end_point_hints_manager::sender::can_send() noexcept {
-    if (_state.contains(state::stopping)) {
+    if (stopping()) {
         return false;
     }
 
@@ -587,7 +587,7 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
 
 
 future<> manager::end_point_hints_manager::sender::stop() noexcept {
-    _state.set(state::stopping);
+    set_stopping();
     return std::move(_stopped);
 }
 
@@ -609,7 +609,7 @@ manager::end_point_hints_manager::sender::clock::duration manager::end_point_hin
 void manager::end_point_hints_manager::sender::start() {
     _stopped = seastar::async([this] {
         manager_logger.trace("ep_manager({})::sender: started", end_point_key());
-        while (!_state.contains(state::stopping)) {
+        while (!stopping()) {
             try {
                 flush_maybe().get();
                 send_hints_maybe();

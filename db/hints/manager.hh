@@ -142,6 +142,14 @@ private:
             /// going to return and next send_hints() is going to continue from the point the previous call left.
             void send_hints_maybe() noexcept;
 
+            void set_stopping() noexcept {
+                _state.set(state::stopping);
+            }
+
+            bool stopping() const noexcept {
+                return _state.contains(state::stopping);
+            }
+
             /// \brief Try to send one hint read from the file.
             ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
             ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
