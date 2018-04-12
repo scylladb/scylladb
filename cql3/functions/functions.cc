@@ -45,7 +45,7 @@ functions::init() {
     declare(make_uuid_fct());
 
     for (auto&& type : cql3_type::values()) {
-        // Note: because text and varchar ends up being synonimous, our automatic makeToBlobFunction doesn't work
+        // Note: because text and varchar ends up being synonymous, our automatic makeToBlobFunction doesn't work
         // for varchar, so we special case it below. We also skip blob for obvious reasons.
         if (type == cql3_type::varchar || type == cql3_type::blob) {
             continue;
@@ -153,6 +153,15 @@ functions::get_overload_count(const function_name& name) {
     return _declared.count(name);
 }
 
+inline
+shared_ptr<function>
+make_to_json_function(data_type t) {
+    return make_native_scalar_function<true>("tojson", utf8_type, {t},
+            [t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
+        return utf8_type->decompose(t->to_json_string(parameters[0].value()));
+    });
+}
+
 shared_ptr<function>
 functions::get(database& db,
         const sstring& keyspace,
@@ -162,12 +171,25 @@ functions::get(database& db,
         const sstring& receiver_cf) {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
+    static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
 
     if (name.has_keyspace()
-        ? name == TOKEN_FUNCTION_NAME
-        : name.name == TOKEN_FUNCTION_NAME.name)
-    {
+                ? name == TOKEN_FUNCTION_NAME
+                : name.name == TOKEN_FUNCTION_NAME.name) {
         return ::make_shared<token_fct>(db.find_schema(receiver_ks, receiver_cf));
+    }
+
+    if (name.has_keyspace()
+                ? name == TO_JSON_FUNCTION_NAME
+                : name.name == TO_JSON_FUNCTION_NAME.name) {
+        if (provided_args.size() != 1) {
+            throw exceptions::invalid_request_exception("toJson() accepts 1 argument only");
+        }
+        selection::selector *sp = dynamic_cast<selection::selector *>(provided_args[0].get());
+        if (!sp) {
+            throw exceptions::invalid_request_exception("toJson() is only valid in SELECT clause");
+        }
+        return make_to_json_function(sp->get_type());
     }
 
     std::vector<shared_ptr<function>> candidates;
