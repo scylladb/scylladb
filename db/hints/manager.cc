@@ -179,7 +179,7 @@ future<> manager::end_point_hints_manager::stop() noexcept {
         }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
 
         if (eptr) {
-            std::rethrow_exception(eptr);
+            manager_logger.error("ep_manager[{}]: exception: {}", _key, eptr);
         }
     });
 }
