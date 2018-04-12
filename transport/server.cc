@@ -607,8 +607,8 @@ future<> cql_server::connection::process()
             return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
         }
     }).finally([this] {
-        _server._notifier->unregister_connection(this);
         return _pending_requests_gate.close().then([this] {
+            _server._notifier->unregister_connection(this);
             return _ready_to_respond.finally([this] {
                 return _write_buf.close();
             });
