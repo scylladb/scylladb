@@ -108,14 +108,12 @@ private:
 
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> make_compaction_state(
             const schema& s,
-            uint32_t row_limit,
-            uint32_t partition_limit,
             gc_clock::time_point query_time,
             emit_only_live_rows only_live) const {
         if (only_live == emit_only_live_rows::yes) {
-            return make_lw_shared<compact_for_query_state<emit_only_live_rows::yes>>(s, query_time, *_slice, row_limit, partition_limit);
+            return make_lw_shared<compact_for_query_state<emit_only_live_rows::yes>>(s, query_time, *_slice, 0, 0);
         } else {
-            return make_lw_shared<compact_for_query_state<emit_only_live_rows::no>>(s, query_time, *_slice, row_limit, partition_limit);
+            return make_lw_shared<compact_for_query_state<emit_only_live_rows::no>>(s, query_time, *_slice, 0, 0);
         }
     }
 
@@ -138,7 +136,7 @@ public:
         , _slice(std::make_unique<query::partition_slice>(slice))
         , _reader(ms.make_reader(schema, *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        , _compaction_state(make_compaction_state(*schema, 0, 0, gc_clock::time_point{}, only_live))
+        , _compaction_state(make_compaction_state(*schema, gc_clock::time_point{}, only_live))
         , _last_ckey(make_lw_shared<std::optional<clustering_key_prefix>>()) {
     }
 
