@@ -43,7 +43,12 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
     return b;
 }
 
-class sstable_mutation_reader;
+class mp_row_consumer_reader : public flat_mutation_reader::impl {
+    friend class mp_row_consumer;
+public:
+    mp_row_consumer_reader(schema_ptr s) : impl(std::move(s)) {}
+    virtual void on_end_of_stream() = 0;
+};
 
 class mp_row_consumer : public row_consumer {
 public:
@@ -52,7 +57,7 @@ public:
         tombstone tomb;
     };
 private:
-    sstable_mutation_reader* _reader;
+    mp_row_consumer_reader* _reader;
     schema_ptr _schema;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
@@ -301,7 +306,7 @@ private:
 public:
     mutation_opt mut;
 
-    mp_row_consumer(sstable_mutation_reader* reader,
+    mp_row_consumer(mp_row_consumer_reader* reader,
                     const schema_ptr schema,
                     const query::partition_slice& slice,
                     const io_priority_class& pc,
@@ -317,7 +322,7 @@ public:
             , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
-    mp_row_consumer(sstable_mutation_reader* reader,
+    mp_row_consumer(mp_row_consumer_reader* reader,
                     const schema_ptr schema,
                     const io_priority_class& pc,
                     reader_resource_tracker resource_tracker,
@@ -725,8 +730,7 @@ future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::
     }
 }
 
-class sstable_mutation_reader : public flat_mutation_reader::impl {
-    friend class mp_row_consumer;
+class sstable_mutation_reader : public mp_row_consumer_reader {
     shared_sstable _sst;
     mp_row_consumer _consumer;
     bool _index_in_current_partition = false; // Whether index lower bound is in current partition
@@ -747,7 +751,7 @@ public:
          reader_resource_tracker resource_tracker,
          streamed_mutation::forwarding fwd,
          read_monitor& mon)
-        : impl(std::move(schema))
+        : mp_row_consumer_reader(std::move(schema))
         , _sst(std::move(sst))
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
@@ -766,7 +770,7 @@ public:
          streamed_mutation::forwarding fwd,
          mutation_reader::forwarding fwd_mr,
          read_monitor& mon)
-        : impl(std::move(schema))
+        : mp_row_consumer_reader(std::move(schema))
         , _sst(std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this, pr, &pc, &slice, resource_tracker = std::move(resource_tracker), fwd_mr] () mutable {
@@ -794,7 +798,7 @@ public:
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon)
-        : impl(std::move(schema))
+        : mp_row_consumer_reader(std::move(schema))
         , _sst(std::move(sst))
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _single_partition_read(true)
