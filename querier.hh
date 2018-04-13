@@ -126,14 +126,14 @@ private:
 public:
     querier(const mutation_source& ms,
             schema_ptr schema,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
+            dht::partition_range range,
+            query::partition_slice slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr,
             emit_only_live_rows only_live)
         : _schema(schema)
-        , _range(std::make_unique<dht::partition_range>(range))
-        , _slice(std::make_unique<query::partition_slice>(slice))
+        , _range(std::make_unique<dht::partition_range>(std::move(range)))
+        , _slice(std::make_unique<query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader(schema, *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _compaction_state(make_compaction_state(*schema, gc_clock::time_point{}, only_live))
