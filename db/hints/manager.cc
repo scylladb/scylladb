@@ -671,6 +671,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     ctx_ptr->rps_set.erase(rp);
                     ++this->shard_stats().sent;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
+                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
                     ctx_ptr->state.set(send_state::segment_replay_failed);
                 });
 
@@ -685,6 +686,7 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
             return make_ready_future<>();
         }).finally([units = std::move(units), ctx_ptr] {});
     }).handle_exception([this, ctx_ptr] (auto eptr) {
+        manager_logger.trace("send_one_file(): Hmmm. Something bad had happend: {}", eptr);
         ctx_ptr->state.set(send_state::segment_replay_failed);
     });
 }
