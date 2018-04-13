@@ -731,13 +731,14 @@ future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::
     }
 }
 
+template <typename DataConsumeRowsContext = data_consume_rows_context>
 class sstable_mutation_reader : public mp_row_consumer_reader {
     shared_sstable _sst;
     mp_row_consumer _consumer;
     bool _index_in_current_partition = false; // Whether index lower bound is in current partition
     bool _will_likely_slice = false;
     bool _read_enabled = true;
-    data_consume_context_opt<data_consume_rows_context> _context;
+    data_consume_context_opt<DataConsumeRowsContext> _context;
     std::unique_ptr<index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
@@ -756,7 +757,7 @@ public:
         , _sst(std::move(sst))
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
-            _context = data_consume_rows<data_consume_rows_context>(_sst, _consumer);
+            _context = data_consume_rows<DataConsumeRowsContext>(_sst, _consumer);
             _monitor.on_read_started(_context->reader_position());
             return make_ready_future<>();
         })
@@ -782,7 +783,7 @@ public:
                 sstable::disk_read_range drr{begin, *end};
                 auto last_end = fwd_mr ? _sst->data_size() : drr.end;
                 _read_enabled = bool(drr);
-                _context = data_consume_rows<data_consume_rows_context>(_sst, _consumer, std::move(drr), last_end);
+                _context = data_consume_rows<DataConsumeRowsContext>(_sst, _consumer, std::move(drr), last_end);
                 _monitor.on_read_started(_context->reader_position());
                 _index_in_current_partition = true;
                 _will_likely_slice = will_likely_slice(slice);
@@ -818,7 +819,7 @@ public:
                     auto [start, end] = _index_reader->data_file_positions();
                     assert(end);
                     _read_enabled = (start != *end);
-                    _context = data_consume_single_partition<data_consume_rows_context>(_sst, _consumer,
+                    _context = data_consume_single_partition<DataConsumeRowsContext>(_sst, _consumer,
                             { start, *end });
                     _monitor.on_read_started(_context->reader_position());
                     _will_likely_slice = will_likely_slice(slice);
@@ -1095,7 +1096,7 @@ public:
 };
 
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
-    return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd, default_read_monitor());
+    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd, default_read_monitor());
 }
 
 flat_mutation_reader
@@ -1107,7 +1108,7 @@ sstables::sstable::read_row_flat(schema_ptr schema,
                                  streamed_mutation::forwarding fwd,
                                  read_monitor& mon)
 {
-    return make_flat_mutation_reader<sstable_mutation_reader>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no, mon);
+    return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no, mon);
 }
 
 flat_mutation_reader
@@ -1119,7 +1120,7 @@ sstable::read_range_rows_flat(schema_ptr schema,
                          streamed_mutation::forwarding fwd,
                          mutation_reader::forwarding fwd_mr,
                          read_monitor& mon) {
-    return make_flat_mutation_reader<sstable_mutation_reader>(
+    return make_flat_mutation_reader<sstable_mutation_reader<>>(
         shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr, mon);
 }
 
