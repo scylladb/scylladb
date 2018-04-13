@@ -4354,9 +4354,9 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
     });
 }
 
-future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr) {
+future<> storage_proxy::start_hints_manager(shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
     if (_hints_manager) {
-        return _hints_manager->start(shared_from_this(), std::move(gossiper_ptr));
+        return _hints_manager->start(shared_from_this(), std::move(gossiper_ptr), std::move(ss_ptr));
     }
     return make_ready_future<>();
 }

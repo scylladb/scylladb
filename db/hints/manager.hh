@@ -32,8 +32,13 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include "gms/gossiper.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
+
+namespace service {
+class storage_service;
+}
 
 namespace db {
 namespace hints {
@@ -43,7 +48,7 @@ using hints_store_ptr = node_to_hint_store_factory_type::entry_ptr;
 using hint_entry_reader = commitlog_entry_reader;
 using timer_clock_type = seastar::lowres_clock;
 
-class manager {
+class manager : public service::endpoint_lifecycle_subscriber {
 private:
     struct stats {
         uint64_t size_of_hints_in_progress = 0;
@@ -52,6 +57,9 @@ private:
         uint64_t dropped = 0;
         uint64_t sent = 0;
     };
+
+    class drain_tag {};
+    using drain = seastar::bool_class<drain_tag>;
 
     class end_point_hints_manager {
     public:
@@ -65,11 +73,13 @@ private:
             enum class state {
                 stopping,               // stop() was called
                 ep_state_is_not_normal, // destination Node state is not NORMAL - usually means that it has been decommissioned
+                draining,               // try to send everything out and ignore errors
             };
 
             using state_set = enum_set<super_enum<state,
                 state::stopping,
-                state::ep_state_is_not_normal>>;
+                state::ep_state_is_not_normal,
+                state::draining>>;
 
             enum class send_state {
                 segment_replay_failed,  // current segment sending failed
@@ -122,7 +132,8 @@ private:
             void start();
 
             /// \brief Stop the sender - make sure all background sending is complete.
-            future<> stop() noexcept;
+            /// \param should_drain if is drain::yes - drain all pending hints
+            future<> stop(drain should_drain) noexcept;
 
             /// \brief Add a new segment ready for sending.
             void add_segment(sstring seg_name);
@@ -141,6 +152,14 @@ private:
             /// send_hints() is going to stop sending if it sends for too long (longer than the timer period). In this case it's
             /// going to return and next send_hints() is going to continue from the point the previous call left.
             void send_hints_maybe() noexcept;
+
+            void set_draining() noexcept {
+                _state.set(state::draining);
+            }
+
+            bool draining() const noexcept {
+                return _state.contains(state::draining);
+            }
 
             void set_stopping() noexcept {
                 _state.set(state::stopping);
@@ -237,12 +256,14 @@ private:
 
         enum class state {
             can_hint,               // hinting is currently allowed (used by the space_watchdog)
-            stopping                // stopping is in progress (stop() method has been called)
+            stopping,               // stopping is in progress (stop() method has been called)
+            stopped                 // stop() has completed
         };
 
         using state_set = enum_set<super_enum<state,
             state::can_hint,
-            state::stopping>>;
+            state::stopping,
+            state::stopped>>;
 
         state_set _state;
         const boost::filesystem::path _hints_dir;
@@ -252,6 +273,7 @@ private:
     public:
         end_point_hints_manager(const key_type& key, manager& shard_manager);
         end_point_hints_manager(end_point_hints_manager&&);
+        ~end_point_hints_manager();
 
         const key_type& end_point_key() const noexcept {
             return _key;
@@ -276,9 +298,17 @@ private:
         /// \return Ready future when end point hints manager is initialized.
         future<> populate_segments_to_replay();
 
-        /// \brief Waits till all writers complete and shuts down the hints store.
-        /// \return Ready future when the store is shut down.
-        future<> stop() noexcept;
+        /// \brief Waits till all writers complete and shuts down the hints store. Drains hints if needed.
+        ///
+        /// If "draining" is requested - sends all pending hints out.
+        ///
+        /// When hints are being drained we will not stop sending after a single hint sending has failed and will continue sending hints
+        /// till the end of the current segment. After that we will remove the current segment and move to the next one till
+        /// there isn't any segment left.
+        ///
+        /// \param should_drain is drain::yes - drain all pending hints
+        /// \return Ready future when all operations are complete
+        future<> stop(drain should_drain = drain::no) noexcept;
 
         /// \brief Start the timer.
         void start();
@@ -308,8 +338,24 @@ private:
             return _state.contains(state::stopping);
         }
 
+        void set_stopped() noexcept {
+            _state.set(state::stopped);
+        }
+
+        void clear_stopped() noexcept {
+            _state.remove(state::stopped);
+        }
+
+        bool stopped() const noexcept {
+            return _state.contains(state::stopped);
+        }
+
         seastar::shared_mutex& file_update_mutex() {
             return _file_update_mutex;
+        }
+
+        const boost::filesystem::path& hints_dir() const noexcept {
+            return _hints_dir;
         }
 
     private:
@@ -397,10 +443,12 @@ private:
     std::unordered_set<sstring> _hinted_dcs;
     shared_ptr<service::storage_proxy> _proxy_anchor;
     shared_ptr<gms::gossiper> _gossiper_anchor;
+    shared_ptr<service::storage_service> _strorage_service_anchor;
     locator::snitch_ptr& _local_snitch_ptr;
     int64_t _max_hint_window_us = 0;
     database& _local_db;
     bool _stopping = false;
+    seastar::gate _draining_eps_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
 
     // Limit the maximum size of in-flight (being sent) hints by 10% of the shard memory.
     // Also don't allow more than 128 in-flight hints to limit the collateral memory consumption as well.
@@ -415,8 +463,8 @@ private:
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, distributed<database>& db);
-    ~manager();
-    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr);
+    virtual ~manager();
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     future<> stop();
     bool store_hint(gms::inet_address ep, schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept;
 
@@ -467,6 +515,14 @@ public:
         return make_ready_future<>();
     }
 
+    virtual void on_join_cluster(const gms::inet_address& endpoint) override {}
+    virtual void on_leave_cluster(const gms::inet_address& endpoint) override {
+        drain_for(endpoint);
+    };
+    virtual void on_up(const gms::inet_address& endpoint) override {}
+    virtual void on_down(const gms::inet_address& endpoint) override {}
+    virtual void on_move(const gms::inet_address& endpoint) override {}
+
 private:
     node_to_hint_store_factory_type& store_factory() noexcept {
         return _store_factory;
@@ -490,6 +546,17 @@ private:
 
     end_point_hints_manager& get_ep_manager(ep_key_type ep);
     bool have_ep_manager(ep_key_type ep) const noexcept;
+
+    /// \brief Initiate the draining when we detect that the node has left the cluster.
+    ///
+    /// If the node that has left is the current node - drains all pending hints to all nodes.
+    /// Otherwise drains hints to the node that has left.
+    ///
+    /// In both cases - removes the corresponding hints' directories after all hints have been drained and erases the
+    /// corresponding end_point_hints_manager objects.
+    ///
+    /// \param endpoint node that left the cluster
+    void drain_for(gms::inet_address endpoint);
 
 private:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {
