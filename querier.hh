@@ -100,8 +100,8 @@ private:
     };
 
     schema_ptr _schema;
-    std::unique_ptr<dht::partition_range> _range;
-    std::unique_ptr<query::partition_slice> _slice;
+    std::unique_ptr<const dht::partition_range> _range;
+    std::unique_ptr<const query::partition_slice> _slice;
     flat_mutation_reader _reader;
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> _compaction_state;
     lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
