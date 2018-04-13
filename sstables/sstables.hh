@@ -71,6 +71,7 @@ extern logging::logger sstlog;
 class key;
 class sstable_writer;
 class sstable_writer_k_l;
+class sstable_writer_m;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
 
@@ -261,6 +262,7 @@ public:
     sstable_writer get_writer(const schema& s,
         uint64_t estimated_partitions,
         const sstable_writer_config&,
+        encoding_stats enc_stats,
         const io_priority_class& pc = default_priority_class(),
         shard_id shard = engine().cpu_id());
 
@@ -702,6 +704,7 @@ public:
 
     friend class components_writer;
     friend class sstable_writer_k_l;
+    friend class sstable_writer_m;
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
@@ -821,7 +824,8 @@ private:
     std::unique_ptr<writer_impl> _impl;
 public:
     sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
-            const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
+            const sstable_writer_config&, encoding_stats enc_stats,
+            const io_priority_class& pc, shard_id shard = engine().cpu_id());
 
     sstable_writer(sstable_writer&& o);
     sstable_writer& operator=(sstable_writer&& o);
