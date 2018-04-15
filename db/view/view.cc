@@ -114,18 +114,19 @@ const column_definition* view_info::view_column(const schema& base, column_id ba
     return _schema.get_column_definition(base.regular_column_at(base_id).name());
 }
 
-stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk(const schema& base) const {
-    if (!_base_non_pk_column_in_view_pk) {
-        _base_non_pk_column_in_view_pk.emplace(stdx::nullopt);
-        for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
-            auto* base_col = base.get_column_definition(view_col.name());
-            if (!base_col->is_primary_key()) {
-                _base_non_pk_column_in_view_pk.emplace(base_col->id);
-                break;
-            }
+
+stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
+    return _base_non_pk_column_in_view_pk;
+}
+
+void view_info::initialize_base_dependent_fields(const schema& base) {
+    for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
+        auto* base_col = base.get_column_definition(view_col.name());
+        if (!base_col->is_primary_key()) {
+            _base_non_pk_column_in_view_pk.emplace(base_col->id);
+            break;
         }
     }
-    return *_base_non_pk_column_in_view_pk;
 }
 
 namespace db {
@@ -178,7 +179,7 @@ static bool update_requires_read_before_write(const schema& base,
         // However, if the view has restrictions on regular columns, then a write that doesn't match those filters
         // needs to add a tombstone (assuming a previous update matched those filter and created a view entry); for
         // now we just do a read-before-write in that case.
-        if (!vf.base_non_pk_column_in_view_pk(base)
+        if (!vf.base_non_pk_column_in_view_pk()
                 && vf.select_statement().get_restrictions()->get_non_pk_restriction().empty()) {
             continue;
         }
@@ -291,7 +292,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
      */
 
     auto marker = base_row.marker();
-    auto col_id = _view_info.base_non_pk_column_in_view_pk(*_base);
+    auto col_id = _view_info.base_non_pk_column_in_view_pk();
     if (col_id) {
         // Note: multi-cell columns can't be part of the primary key.
         auto cell = base_row.cells().cell_at(*col_id).as_atomic_cell();
@@ -463,7 +464,7 @@ void view_updates::generate_update(
         return;
     }
 
-    auto col_id = _view_info.base_non_pk_column_in_view_pk(*_base);
+    auto col_id = _view_info.base_non_pk_column_in_view_pk();
     if (!col_id) {
         // The view key is necessarily the same pre and post update.
         if (existing && !existing->empty()) {
