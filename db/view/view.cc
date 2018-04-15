@@ -349,11 +349,11 @@ static const column_definition* view_column(const schema& base, const schema& vi
     return view.get_column_definition(base.regular_column_at(base_id).name());
 }
 
-static void add_cells_to_view(const schema& base, const schema& view, const row& base_cells, row& view_cells) {
-    base_cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
+    base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
         auto* view_col = view_column(base, view, id);
         if (view_col && !view_col->is_primary_key()) {
-            view_cells.append_cell(view_col->id, c);
+            view_cells.append_cell(view_col->id, std::move(c));
         }
     });
 }
@@ -419,7 +419,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
         auto marker = row_marker(tombstone(ts, now));
         r.apply(marker);
         auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-        add_cells_to_view(*_base, *_view, diff, r.cells());
+        add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
     }
     r.apply(update.tomb());
 }
@@ -450,7 +450,7 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
     r.apply(update.tomb());
 
     auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-    add_cells_to_view(*_base, *_view, diff, r.cells());
+    add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
 }
 
 void view_updates::generate_update(
