@@ -617,9 +617,7 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
 }
 
 static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clustering_row& row) {
-    for (auto&& rt : tracker.range_tombstones_for_row(row.key())) {
-        row.apply(rt.tomb);
-    }
+    row.apply(tracker.tombstone_for_row(row.key()));
 }
 
 future<stop_iteration> view_update_builder::on_results() {
