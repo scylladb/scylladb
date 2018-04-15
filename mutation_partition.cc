@@ -35,6 +35,7 @@
 #include "intrusive_set_external_comparator.hh"
 #include "counters.hh"
 #include "row_cache.hh"
+#include "view_info.hh"
 #include <seastar/core/execution_stage.hh>
 
 template<bool reversed>
@@ -1264,8 +1265,8 @@ uint32_t mutation_partition::do_compact(const schema& s,
         deletable_row& row = e.row();
         row_tombstone tomb = tombstone_for_row(s, e);
 
-        bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before);
-        is_live |= row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
+        bool is_live = row.marker().compact_and_expire(tomb.tomb(), query_time, can_gc, gc_before);
+        is_live |= row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, can_gc, gc_before, row.marker());
 
         if (should_purge_row_tombstone(row.deleted_at())) {
             row.remove_tombstone();
@@ -1552,9 +1553,30 @@ void row::apply_monotonically(const schema& s, column_kind kind, row&& other) {
     });
 }
 
-bool row::compact_and_expire(const schema& s, column_kind kind, row_tombstone tomb, gc_clock::time_point query_time,
-    can_gc_fn& can_gc, gc_clock::time_point gc_before)
+// When views contain a primary key column that is not part of the base table primary key,
+// that column determines whether the row is live or not. We need to ensure that when that
+// cell is dead, and thus the derived row marker, either by normal deletion of by TTL, so
+// is the rest of the row. To ensure that none of the regular columns keep the row alive,
+// we erase the live cells according to the shadowable_tombstone rules.
+static bool dead_marker_shadows_row(const schema& s, column_kind kind, const row_marker& marker) {
+    return s.is_view()
+            && s.view_info()->base_non_pk_column_in_view_pk()
+            && !marker.is_live()
+            && kind == column_kind::regular_column; // not applicable to static rows
+}
+
+bool row::compact_and_expire(
+        const schema& s,
+        column_kind kind,
+        row_tombstone tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        const row_marker& marker)
 {
+    if (dead_marker_shadows_row(s, kind, marker)) {
+        tomb.apply(shadowable_tombstone(api::max_timestamp, gc_clock::time_point::max()), row_marker());
+    }
     bool any_live = false;
     remove_if([&] (column_id id, atomic_cell_or_collection& c) {
         bool erase = false;
@@ -1594,6 +1616,17 @@ bool row::compact_and_expire(const schema& s, column_kind kind, row_tombstone to
         return erase;
     });
     return any_live;
+}
+
+bool row::compact_and_expire(
+        const schema& s,
+        column_kind kind,
+        row_tombstone tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before) {
+    row_marker m;
+    return compact_and_expire(s, kind, tomb, query_time, can_gc, gc_before, m);
 }
 
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const

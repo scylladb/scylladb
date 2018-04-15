@@ -215,7 +215,7 @@ public:
         }
         t.apply(current_tombstone);
         bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before);
-        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before);
+        is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before, cr.marker());
         if (only_live() && is_live) {
             partition_is_not_empty(consumer);
             auto stop = consumer.consume(std::move(cr), t, true);

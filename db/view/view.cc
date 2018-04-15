@@ -578,12 +578,12 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
         existing->marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before);
+        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before, existing->marker());
         update.apply(*_schema, *existing);
     }
 
     update.marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-    update.cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before);
+    update.cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before, update.marker());
 
     for (auto&& v : _view_updates) {
         v.generate_update(_key, update, existing, _now);
