@@ -151,25 +151,7 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
     //  - the primary key is excluded by the view filter (note that this isn't true of the filter on regular columns:
     //    even if an update don't match a view condition on a regular column, that update can still invalidate a
     //    pre-existing entry) - note that the upper layers should already have checked the partition key;
-    //  - the update doesn't modify any of the columns impacting the view (where "impacting" the view means that column
-    //    is neither included in the view, nor used by the view filter).
-    if (!clustering_prefix_matches(base, view, key.key(), update.key())) {
-        return false;
-    }
-
-    // We want to check if the update modifies any of the columns that are part of the view (in which case the view is
-    // affected). But iff the view includes all the base table columns, or the update has either a row deletion or a
-    // row marker, we know the view is affected right away.
-    if (view.include_all_columns() || update.row().deleted_at() || update.row().marker().is_live()) {
-        return true;
-    }
-
-    bool affected = false;
-    update.row().cells().for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell) {
-        affected = view.view_column(base, id);
-        return stop_iteration(affected);
-    });
-    return affected;
+    return clustering_prefix_matches(base, view, key.key(), update.key());
 }
 
 static bool update_requires_read_before_write(const schema& base,
