@@ -291,12 +291,7 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(_proxy, client_state);
 
-    auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
-    if (client_state.is_internal()) {
-        fut = statement->execute_internal(_proxy, query_state, options);
-    } else  {
-        fut = statement->execute(_proxy, query_state, options);
-    }
+    auto fut = statement->execute(_proxy, query_state, options);
 
     return fut.then([statement] (auto msg) {
         if (msg) {
@@ -522,7 +517,7 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
-    return state->p->statement->execute_internal(_proxy, *_internal_state, *state->opts).then(
+    return state->p->statement->execute(_proxy, *_internal_state, *state->opts).then(
             [state, this](::shared_ptr<cql_transport::messages::result_message> msg) mutable {
         class visitor : public result_message::visitor_base {
             ::shared_ptr<internal_query_state> _state;
@@ -563,7 +558,7 @@ query_processor::execute_internal(
         const std::initializer_list<data_value>& values) {
     query_options opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
-        return p->statement->execute_internal(
+        return p->statement->execute(
                 _proxy,
                 *_internal_state,
                 opts).then([&opts, stmt = p->statement](auto msg) {
