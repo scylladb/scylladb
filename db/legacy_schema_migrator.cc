@@ -582,7 +582,7 @@ public:
                 db::schema_tables::add_type_to_schema_mutation(t.metadata, t.timestamp.time_since_epoch().count(), mutations);
             }
         }
-        return _qp.proxy().local().mutate_locally(std::move(mutations));
+        return _qp.proxy().mutate_locally(std::move(mutations));
     }
 
     future<> migrate_indexes() {
@@ -602,7 +602,7 @@ public:
         });
     }
     future<> flush_schemas() {
-        return _qp.proxy().local().get_db().invoke_on_all([this] (database& db) {
+        return _qp.proxy().get_db().invoke_on_all([this] (database& db) {
             return parallel_for_each(db::schema_tables::ALL, [this, &db](const sstring& cf_name) {
                 auto& cf = db.find_column_family(db::schema_tables::NAME, cf_name);
                 return cf.flush();

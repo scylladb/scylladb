@@ -268,7 +268,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
                 // send to partially or wholly fail in actually sending stuff. Since we don't
                 // have hints (yet), send with CL=ALL, and hope we can re-do this soon.
                 // See below, we use retry on write failure.
-                return _qp.proxy().local().mutate(mutations, db::consistency_level::ALL, nullptr);
+                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, nullptr);
             });
         }).then_wrapped([this, id](future<> batch_result) {
             try {
@@ -288,7 +288,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             mutation m(schema, key);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-            return _qp.proxy().local().mutate_locally(m);
+            return _qp.proxy().mutate_locally(m);
         });
     };
 

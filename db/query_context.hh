@@ -47,7 +47,7 @@ struct query_context {
     }
 
     service::storage_proxy& proxy() {
-        return _qp.local().proxy().local();
+        return _qp.local().proxy();
     }
 
     api::timestamp_type next_timestamp() {

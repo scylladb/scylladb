@@ -102,7 +102,7 @@ public:
 
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
-    distributed<service::storage_proxy>& _proxy;
+    service::storage_proxy& _proxy;
     distributed<database>& _db;
 
     struct stats {
@@ -135,7 +135,7 @@ public:
 
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
-    query_processor(distributed<service::storage_proxy>& proxy, distributed<database>& db);
+    query_processor(service::storage_proxy& proxy, distributed<database>& db);
 
     ~query_processor();
 
@@ -143,7 +143,7 @@ public:
         return _db;
     }
 
-    distributed<service::storage_proxy>& proxy() {
+    service::storage_proxy& proxy() {
         return _proxy;
     }
 
