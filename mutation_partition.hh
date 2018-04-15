@@ -327,6 +327,8 @@ public:
 
     void prepare_hash(const schema& s, column_kind kind) const;
 
+    bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
+
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
 
