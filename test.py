@@ -90,6 +90,7 @@ boost_tests = [
     'cell_locker_test',
     'view_schema_test',
     'view_build_test',
+    'view_complex_test',
     'clustering_ranges_walker_test',
     'vint_serialization_test',
     'duration_test',
