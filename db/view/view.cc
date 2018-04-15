@@ -160,14 +160,6 @@ static bool update_requires_read_before_write(const schema& base,
         const rows_entry& update) {
     for (auto&& v : views) {
         view_info& vf = *v->view_info();
-        // A view whose primary key contains only the base's primary key columns doesn't require a read-before-write.
-        // However, if the view has restrictions on regular columns, then a write that doesn't match those filters
-        // needs to add a tombstone (assuming a previous update matched those filter and created a view entry); for
-        // now we just do a read-before-write in that case.
-        if (!vf.base_non_pk_column_in_view_pk()
-                && vf.select_statement().get_restrictions()->get_non_pk_restriction().empty()) {
-            continue;
-        }
         if (may_be_affected_by(base, vf, key, update)) {
             return true;
         }
