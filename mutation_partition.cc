@@ -1320,7 +1320,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
     do_compact(s, compaction_time, all_rows, false, query::max_rows, can_gc);
 }
 
-// Returns true if there is no live data or tombstones.
+// Returns true if the mutation_partition represents no writes.
 bool mutation_partition::empty() const
 {
     if (_tombstone.timestamp != api::missing_timestamp) {

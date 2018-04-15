@@ -1046,7 +1046,7 @@ public:
     // Range tombstones will be trimmed to the boundaries of the clustering ranges.
     mutation_partition sliced(const schema& s, const query::clustering_row_ranges&) const;
 
-    // Returns true if there is no live data or tombstones.
+    // Returns true if the mutation_partition represents no writes.
     bool empty() const;
 public:
     deletable_row& clustered_row(const schema& s, const clustering_key& key);
