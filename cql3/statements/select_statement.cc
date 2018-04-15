@@ -532,14 +532,6 @@ select_statement::execute(service::storage_proxy& proxy,
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute_internal(service::storage_proxy& proxy,
-                                   service::query_state& state,
-                                   const query_options& options)
-{
-    return execute(proxy, state, options);
-}
-
 shared_ptr<cql_transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,

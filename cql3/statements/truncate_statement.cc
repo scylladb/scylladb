@@ -106,12 +106,6 @@ truncate_statement::execute(service::storage_proxy& proxy, service::query_state&
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
-{
-    throw std::runtime_error("unsupported operation");
-}
-
 }
 
 }

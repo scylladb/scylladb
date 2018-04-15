@@ -438,26 +438,6 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 #endif
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_internal(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
-    if (has_conditions()) {
-        throw exceptions::unsupported_operation_exception();
-    }
-
-    tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
-
-    inc_cql_stats();
-
-    return get_mutations(proxy, options, true, options.get_timestamp(qs), qs.get_trace_state()).then(
-            [&proxy] (auto mutations) {
-                return proxy.mutate_locally(std::move(mutations));
-            }).then(
-            [] {
-                return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
-                        ::shared_ptr<cql_transport::messages::result_message> {});
-            });
-}
-
 void
 modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     _restrictions = ::make_shared<restrictions::statement_restrictions>(

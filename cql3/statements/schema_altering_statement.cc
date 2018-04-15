@@ -120,11 +120,6 @@ schema_altering_statement::execute(service::storage_proxy& proxy, service::query
     });
 }
 
-future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
-    return execute(proxy, state, options);
-}
-
 }
 
 }

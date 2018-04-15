@@ -71,9 +71,6 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
-
-    virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
 };
 
 }

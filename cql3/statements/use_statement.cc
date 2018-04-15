@@ -105,12 +105,6 @@ use_statement::execute(service::storage_proxy& proxy, service::query_state& stat
     return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(result);
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-use_statement::execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
-    // Internal queries are exclusively on the system keyspace and 'use' is thus useless
-    throw std::runtime_error("unsupported operation");
-}
-
 }
 
 }

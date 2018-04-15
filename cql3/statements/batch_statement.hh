@@ -154,10 +154,6 @@ private:
             const query_options& options,
             service::query_state& state);
 public:
-    virtual future<shared_ptr<cql_transport::messages::result_message>> execute_internal(
-            service::storage_proxy& proxy,
-            service::query_state& query_state, const query_options& options) override;
-
     // FIXME: no cql_statement::to_string() yet
 #if 0
     sstring to_string() const {

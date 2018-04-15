@@ -403,23 +403,6 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 #endif
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_internal(
-        service::storage_proxy& proxy,
-        service::query_state& query_state, const query_options& options)
-{
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
-#if 0
-    assert !hasConditions;
-    for (IMutation mutation : getMutations(BatchQueryOptions.withoutPerStatementVariables(options), true, queryState.getTimestamp()))
-    {
-        // We don't use counters internally.
-        assert mutation instanceof Mutation;
-        ((Mutation) mutation).apply();
-    }
-    return null;
-#endif
-}
-
 namespace raw {
 
 std::unique_ptr<prepared_statement>
