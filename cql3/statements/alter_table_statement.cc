@@ -305,14 +305,10 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             }
         }
 
-        // If a column is dropped which is included in a view, we don't allow the drop to take place.
-        auto view_names = ::join(", ", cf.views()
-                   | boost::adaptors::filtered([&] (auto&& v) { return bool(v->get_column_definition(column_name->name())); })
-                   | boost::adaptors::transformed([] (auto&& v) { return v->cf_name(); }));
-        if (!view_names.empty()) {
+        if (!cf.views().empty()) {
             throw exceptions::invalid_request_exception(sprint(
-                    "Cannot drop column %s, depended on by materialized views (%s.{%s})",
-                    column_name, keyspace(), view_names));
+                    "Cannot drop column %s on base table %s.%s with materialized views",
+                    column_name, keyspace(), column_family()));
         }
         break;
     }
