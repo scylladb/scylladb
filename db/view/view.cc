@@ -111,9 +111,12 @@ const column_definition* view_info::view_column(const schema& base, column_id ba
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return _schema.get_column_definition(base.regular_column_at(base_id).name());
+    return view_column(base.regular_column_at(base_id));
 }
 
+const column_definition* view_info::view_column(const column_definition& base_def) const {
+    return _schema.get_column_definition(base_def.name());
+}
 
 stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
     return _base_non_pk_column_in_view_pk;

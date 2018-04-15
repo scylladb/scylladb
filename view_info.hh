@@ -62,6 +62,7 @@ public:
     const query::partition_slice& partition_slice() const;
     const dht::partition_range_vector& partition_ranges() const;
     const column_definition* view_column(const schema& base, column_id base_id) const;
+    const column_definition* view_column(const column_definition& base_def) const;
     stdx::optional<column_id> base_non_pk_column_in_view_pk() const;
     void initialize_base_dependent_fields(const schema& base);
 
