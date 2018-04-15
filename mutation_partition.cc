@@ -1335,8 +1335,12 @@ deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at.tomb());
-    return _marker.is_live(base_tombstone, query_time)
-           || has_any_live_data(s, column_kind::regular_column, _cells, base_tombstone, query_time);
+    return _marker.is_live(base_tombstone, query_time) || _cells.is_live(s, column_kind::regular_column, base_tombstone, query_time);
+}
+
+bool
+row::is_live(const schema& s, column_kind kind, tombstone base_tombstone, gc_clock::time_point query_time) const {
+    return has_any_live_data(s, kind, *this, base_tombstone, query_time);
 }
 
 bool
