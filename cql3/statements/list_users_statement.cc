@@ -45,7 +45,7 @@
 #include "auth/common.hh"
 #include "transport/messages/result_message.hh"
 
-void cql3::statements::list_users_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
+void cql3::statements::list_users_statement::validate(service::storage_proxy& proxy, const service::client_state& state) {
 }
 
 future<> cql3::statements::list_users_statement::check_access(const service::client_state& state) {
@@ -54,7 +54,7 @@ future<> cql3::statements::list_users_statement::check_access(const service::cli
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-cql3::statements::list_users_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
     static const sstring virtual_table_name("users");
 
     static const auto make_column_spec = [](const sstring& name, const ::shared_ptr<const abstract_type>& ty) {

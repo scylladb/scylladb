@@ -107,11 +107,11 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override;
 
     const std::vector<shared_ptr<modification_statement>>& get_statements();
 private:
-    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state);
 
 public:
     /**
@@ -121,27 +121,27 @@ public:
     static void verify_batch_size(const std::vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
-            distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override;
+            service::storage_proxy& storage, service::query_state& state, const query_options& options) override;
 private:
     friend class batch_statement_executor;
     future<shared_ptr<cql_transport::messages::result_message>> do_execute(
-            distributed<service::storage_proxy>& storage,
+            service::storage_proxy& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now);
 
     future<> execute_without_conditions(
-            distributed<service::storage_proxy>& storage,
+            service::storage_proxy& storage,
             std::vector<mutation> mutations,
             db::consistency_level cl,
             tracing::trace_state_ptr tr_state);
 
     future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditions(
-            distributed<service::storage_proxy>& storage,
+            service::storage_proxy& storage,
             const query_options& options,
             service::query_state& state);
 public:
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute_internal(
-            distributed<service::storage_proxy>& proxy,
+            service::storage_proxy& proxy,
             service::query_state& query_state, const query_options& options) override;
 
     // FIXME: no cql_statement::to_string() yet

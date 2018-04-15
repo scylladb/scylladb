@@ -60,8 +60,8 @@ public:
     const sstring& keyspace() const override;
 
     future<> check_access(const service::client_state& state) override;
-    void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override;
-    future<shared_ptr<cql_transport::event::schema_change>> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+    void validate(service::storage_proxy& proxy, const service::client_state& state) override;
+    future<shared_ptr<cql_transport::event::schema_change>> announce_migration(service::storage_proxy& proxy, bool is_local_only) override;
     virtual std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;
 };
 

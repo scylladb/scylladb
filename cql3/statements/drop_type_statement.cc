@@ -66,10 +66,10 @@ future<> drop_type_statement::check_access(const service::client_state& state)
     return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }
 
-void drop_type_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+void drop_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     try {
-        auto&& ks = proxy.local().get_db().local().find_keyspace(keyspace());
+        auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
         auto&& all_types = ks.metadata()->user_types()->get_all_types();
         auto old = all_types.find(_name.get_user_type_name());
         if (old == all_types.end()) {
@@ -140,9 +140,9 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
-    auto&& db = proxy.local().get_db().local();
+    auto&& db = proxy.get_db().local();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());

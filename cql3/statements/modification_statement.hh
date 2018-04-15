@@ -143,7 +143,7 @@ public:
 
     virtual future<> check_access(const service::client_state& state) override;
 
-    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+    void validate(service::storage_proxy&, const service::client_state& state) override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 
@@ -198,7 +198,7 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
-                distributed<service::storage_proxy>& proxy,
+                service::storage_proxy& proxy,
                 dht::partition_range_vector keys,
                 lw_shared_ptr<query::clustering_row_ranges> ranges,
                 bool local,
@@ -206,23 +206,23 @@ protected:
                 tracing::trace_state_ptr trace_state);
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
+    do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
     friend class modification_statement_executor;
 public:
     bool has_conditions();
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
+    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
+    execute_internal(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
 private:
     future<>
-    execute_without_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
+    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_with_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
+    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
 #if 0
     public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException
@@ -349,11 +349,11 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
-                distributed<service::storage_proxy>& proxy,
+                service::storage_proxy& proxy,
                 lw_shared_ptr<dht::partition_range_vector> keys,
                 lw_shared_ptr<query::clustering_row_ranges> ranges,
                 const query_options& options,

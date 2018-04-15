@@ -75,7 +75,7 @@ future<> alter_table_statement::check_access(const service::client_state& state)
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
 }
 
-void alter_table_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+void alter_table_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     // validated in announce_migration()
 }
@@ -165,9 +165,9 @@ static void validate_column_rename(database& db, const schema& schema, const col
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
-    auto& db = proxy.local().get_db().local();
+    auto& db = proxy.get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
     if (schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");

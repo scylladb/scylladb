@@ -65,7 +65,7 @@ public:
     virtual future<> check_access(const service::client_state&) override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>&, service::query_state&, const query_options&) override;
+    execute(service::storage_proxy&, service::query_state&, const query_options&) override;
 };
 
 }

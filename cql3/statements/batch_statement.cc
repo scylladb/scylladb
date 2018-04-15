@@ -167,7 +167,7 @@ void batch_statement::validate()
     }
 }
 
-void batch_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+void batch_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     for (auto&& s : _statements) {
         s->validate(proxy, state);
@@ -179,7 +179,7 @@ const std::vector<shared_ptr<modification_statement>>& batch_statement::get_stat
     return _statements;
 }
 
-future<std::vector<mutation>> batch_statement::get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state) {
+future<std::vector<mutation>> batch_statement::get_mutations(service::storage_proxy& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state) {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     return do_with(mutation_set_type(), [this, &storage, &options, now, local, trace_state] (auto& result) {
@@ -274,14 +274,14 @@ struct batch_statement_executor {
 static thread_local auto batch_stage = seastar::make_execution_stage("cql3_batch", batch_statement_executor::get());
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute(
-        distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) {
+        service::storage_proxy& storage, service::query_state& state, const query_options& options) {
     ++_stats.batches;
     return batch_stage(this, seastar::ref(storage), seastar::ref(state),
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
-        distributed<service::storage_proxy>& storage,
+        service::storage_proxy& storage,
         service::query_state& query_state, const query_options& options,
         bool local, api::timestamp_type now)
 {
@@ -305,7 +305,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
 }
 
 future<> batch_statement::execute_without_conditions(
-        distributed<service::storage_proxy>& storage,
+        service::storage_proxy& storage,
         std::vector<mutation> mutations,
         db::consistency_level cl,
         tracing::trace_state_ptr tr_state)
@@ -335,11 +335,11 @@ future<> batch_statement::execute_without_conditions(
             mutate_atomic = false;
         }
     }
-    return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
+    return storage.mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(
-        distributed<service::storage_proxy>& storage,
+        service::storage_proxy& storage,
         const query_options& options,
         service::query_state& state)
 {
@@ -392,7 +392,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_internal(
-        distributed<service::storage_proxy>& proxy,
+        service::storage_proxy& proxy,
         service::query_state& query_state, const query_options& options)
 {
     throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));

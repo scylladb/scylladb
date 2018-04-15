@@ -59,7 +59,7 @@ future<> cql3::statements::alter_keyspace_statement::check_access(const service:
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-void cql3::statements::alter_keyspace_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
+void cql3::statements::alter_keyspace_statement::validate(service::storage_proxy& proxy, const service::client_state& state) {
     try {
         service::get_local_storage_proxy().get_db().local().find_keyspace(_name); // throws on failure
         auto tmp = _name;
@@ -90,7 +90,7 @@ void cql3::statements::alter_keyspace_statement::validate(distributed<service::s
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+future<shared_ptr<cql_transport::event::schema_change>> cql3::statements::alter_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
     auto old_ksm = service::get_local_storage_proxy().get_db().local().find_keyspace(_name).metadata();
     return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm), is_local_only).then([this] {
         using namespace cql_transport;

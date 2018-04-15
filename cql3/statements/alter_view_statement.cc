@@ -69,14 +69,14 @@ future<> alter_view_statement::check_access(const service::client_state& state)
     return make_ready_future<>();
 }
 
-void alter_view_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+void alter_view_statement::validate(service::storage_proxy&, const service::client_state& state)
 {
     // validated in announce_migration()
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
-    auto&& db = proxy.local().get_db().local();
+    auto&& db = proxy.get_db().local();
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     if (!schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER MATERIALIZED VIEW on Table");
@@ -86,10 +86,10 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_view_statement::an
         throw exceptions::invalid_request_exception("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
     }
 
-    _properties->validate(proxy.local().get_db().local().get_config().extensions());
+    _properties->validate(proxy.get_db().local().get_config().extensions());
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, proxy.local().get_db().local().get_config().extensions());
+    _properties->apply_to_builder(builder, proxy.get_db().local().get_config().extensions());
 
     if (builder.get_gc_grace_seconds() == 0) {
         throw exceptions::invalid_request_exception(

@@ -94,7 +94,7 @@ future<> create_view_statement::check_access(const service::client_state& state)
     return state.has_column_family_access(keyspace(), _base_name->get_column_family(), auth::permission::ALTER);
 }
 
-void create_view_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
+void create_view_statement::validate(service::storage_proxy&, const service::client_state& state) {
     // validated in announceMigration()
 }
 
@@ -148,7 +148,7 @@ static bool validate_primary_key(
     return new_non_pk_column;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
     // We need to make sure that:
     //  - primary key includes all columns in base table's primary key
     //  - make sure that the select statement does not have anything other than columns
@@ -158,7 +158,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     //  - make sure there is not currently a table or view
     //  - make sure base_table gc_grace_seconds > 0
 
-    _properties.validate(proxy.local().get_db().local().get_config().extensions());
+    _properties.validate(proxy.get_db().local().get_config().extensions());
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(sprint(
@@ -179,7 +179,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
                 _base_name->get_keyspace(), keyspace()));
     }
 
-    auto&& db = proxy.local().get_db().local();
+    auto&& db = proxy.get_db().local();
     schema_ptr schema = validation::validate_column_family(db, _base_name->get_keyspace(), _base_name->get_column_family());
 
     if (schema->is_counter()) {
@@ -321,7 +321,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     add_columns(target_partition_keys, column_kind::partition_key);
     add_columns(target_clustering_keys, column_kind::clustering_key);
     add_columns(target_non_pk_columns, column_kind::regular_column);
-    _properties.properties()->apply_to_builder(builder, proxy.local().get_db().local().get_config().extensions());
+    _properties.properties()->apply_to_builder(builder, proxy.get_db().local().get_config().extensions());
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(

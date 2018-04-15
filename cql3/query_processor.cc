@@ -218,13 +218,13 @@ query_processor::process_statement(
     return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options]() {
         auto& client_state = query_state.get_client_state();
 
-        statement->validate(_proxy, client_state);
+        statement->validate(_proxy.local(), client_state);
 
         auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
         if (client_state.is_internal()) {
-            fut = statement->execute_internal(_proxy, query_state, options);
+            fut = statement->execute_internal(_proxy.local(), query_state, options);
         } else  {
-            fut = statement->execute(_proxy, query_state, options);
+            fut = statement->execute(_proxy.local(), query_state, options);
         }
 
         return fut.then([statement] (auto msg) {
@@ -378,7 +378,7 @@ statements::prepared_statement::checked_weak_ptr query_processor::prepare_intern
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
-        np->statement->validate(_proxy, *_internal_state);
+        np->statement->validate(_proxy.local(), *_internal_state);
         p = std::move(np); // inserts it into map
     }
     return p->checked_weak_from_this();
@@ -451,7 +451,7 @@ future<> query_processor::for_each_cql_result(
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(::shared_ptr<internal_query_state> state) {
-    return state->p->statement->execute_internal(_proxy, *_internal_state, *state->opts).then(
+    return state->p->statement->execute_internal(_proxy.local(), *_internal_state, *state->opts).then(
             [state, this](::shared_ptr<cql_transport::messages::result_message> msg) mutable {
         class visitor : public result_message::visitor_base {
             ::shared_ptr<internal_query_state> _state;
@@ -493,7 +493,7 @@ query_processor::execute_internal(
     query_options opts = make_internal_options(p, values);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
         return p->statement->execute_internal(
-                _proxy,
+                _proxy.local(),
                 *_internal_state,
                 opts).then([&opts, stmt = p->statement](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
@@ -511,7 +511,7 @@ query_processor::process(
         return process(prepare_internal(query_string), cl, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
-        p->statement->validate(_proxy, *_internal_state);
+        p->statement->validate(_proxy.local(), *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
         return process(std::move(checked_weak_ptr), cl, values).finally([p = std::move(p)] {});
     }
@@ -524,7 +524,7 @@ query_processor::process(
         const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values, cl);
     return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
-        return p->statement->execute(_proxy, *_internal_state, opts).then([](auto msg) {
+        return p->statement->execute(_proxy.local(), *_internal_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
         });
     });
@@ -537,8 +537,8 @@ query_processor::process_batch(
         query_options& options) {
     return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch] {
         batch->validate();
-        batch->validate(_proxy, query_state.get_client_state());
-        return batch->execute(_proxy, query_state, options);
+        batch->validate(_proxy.local(), query_state.get_client_state());
+        return batch->execute(_proxy.local(), query_state, options);
     });
 }
 

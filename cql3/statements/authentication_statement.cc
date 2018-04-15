@@ -67,7 +67,7 @@ bool cql3::statements::authentication_statement::depends_on_column_family(
 }
 
 void cql3::statements::authentication_statement::validate(
-                distributed<service::storage_proxy>&,
+                service::storage_proxy&,
                 const service::client_state& state) {
 }
 
@@ -76,7 +76,7 @@ future<> cql3::statements::authentication_statement::check_access(const service:
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>> cql3::statements::authentication_statement::execute_internal(
-                distributed<service::storage_proxy>& proxy,
+                service::storage_proxy& proxy,
                 service::query_state& state, const query_options& options) {
     // Internal queries are exclusively on the system keyspace and makes no sense here
     throw std::runtime_error("unsupported operation");

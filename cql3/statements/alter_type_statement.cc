@@ -66,7 +66,7 @@ future<> alter_type_statement::check_access(const service::client_state& state)
     return state.has_keyspace_access(keyspace(), auth::permission::ALTER);
 }
 
-void alter_type_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+void alter_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     // Validation is left to announceMigration as it's easier to do it while constructing the updated type.
     // It doesn't really change anything anyway.
@@ -135,10 +135,10 @@ void alter_type_statement::do_announce_migration(database& db, ::keyspace& ks, b
     }
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> alter_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
     return seastar::async([this, &proxy, is_local_only] {
-        auto&& db = proxy.local().get_db().local();
+        auto&& db = proxy.get_db().local();
         try {
             auto&& ks = db.find_keyspace(keyspace());
             do_announce_migration(db, ks, is_local_only);

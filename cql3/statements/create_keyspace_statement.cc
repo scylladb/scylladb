@@ -69,7 +69,7 @@ future<> create_keyspace_statement::check_access(const service::client_state& st
     return state.has_all_keyspaces_access(auth::permission::CREATE);
 }
 
-void create_keyspace_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+void create_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state)
 {
     std::string name;
     name.resize(_name.length());
@@ -103,7 +103,7 @@ void create_keyspace_statement::validate(distributed<service::storage_proxy>&, c
 #endif
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> create_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only);

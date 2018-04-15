@@ -59,7 +59,7 @@ cql3::statements::list_permissions_statement::list_permissions_statement(
 }
 
 void cql3::statements::list_permissions_statement::validate(
-        distributed<service::storage_proxy>& proxy,
+        service::storage_proxy& proxy,
         const service::client_state& state) {
     // a check to ensure the existence of the user isn't being leaked by user existence check.
     state.ensure_not_anonymous();
@@ -101,7 +101,7 @@ future<> cql3::statements::list_permissions_statement::check_access(const servic
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 cql3::statements::list_permissions_statement::execute(
-        distributed<service::storage_proxy>& proxy,
+        service::storage_proxy& proxy,
         service::query_state& state,
         const query_options& options) {
     static auto make_column = [](sstring name) {

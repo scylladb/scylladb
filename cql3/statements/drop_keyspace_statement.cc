@@ -60,7 +60,7 @@ future<> drop_keyspace_statement::check_access(const service::client_state& stat
     return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }
 
-void drop_keyspace_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+void drop_keyspace_statement::validate(service::storage_proxy&, const service::client_state& state)
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0
@@ -73,7 +73,7 @@ const sstring& drop_keyspace_statement::keyspace() const
     return _keyspace;
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> drop_keyspace_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([this, is_local_only] {
         return service::get_local_migration_manager().announce_keyspace_drop(_keyspace, is_local_only);

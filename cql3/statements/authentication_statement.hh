@@ -64,10 +64,10 @@ public:
 
     future<> check_access(const service::client_state& state) override;
 
-    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+    void validate(service::storage_proxy&, const service::client_state& state) override;
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
+    execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
 };
 
 }

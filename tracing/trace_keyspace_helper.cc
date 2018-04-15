@@ -362,7 +362,7 @@ future<> trace_keyspace_helper::apply_events_mutation(lw_shared_ptr<one_session_
             cql3::query_options::make_batch_options(cql3::query_options(db::consistency_level::ANY, std::experimental::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest()), std::move(values)),
             cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats()),
             [this] (auto& batch_options, auto& batch) {
-                return batch.execute(service::get_storage_proxy(), _dummy_query_state, batch_options).then([] (shared_ptr<cql_transport::messages::result_message> res) { return now(); });
+                return batch.execute(service::get_storage_proxy().local(), _dummy_query_state, batch_options).then([] (shared_ptr<cql_transport::messages::result_message> res) { return now(); });
             }
         );
     });

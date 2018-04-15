@@ -91,7 +91,7 @@ protected:
     query::partition_slice::option_set _opts;
     cql_stats& _stats;
 protected :
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options);
     friend class select_statement_executor;
 public:
@@ -110,17 +110,17 @@ public:
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() override;
     virtual future<> check_access(const service::client_state& state) override;
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
     virtual bool depends_on_keyspace(const sstring& ks_name) const;
     virtual bool depends_on_column_family(const sstring& cf_name) const;
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) override;
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_internal(distributed<service::storage_proxy>& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_internal(service::storage_proxy& proxy,
             service::query_state& state, const query_options& options) override;
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(service::storage_proxy& proxy,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now);
 
@@ -183,10 +183,10 @@ private:
                                                            schema_ptr schema,
                                                            ::shared_ptr<restrictions::statement_restrictions> restrictions);
 
-    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(distributed<service::storage_proxy>& proxy,
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
                                                                                      service::query_state& state, const query_options& options) override;
 
-    future<dht::partition_range_vector> find_index_partition_ranges(distributed<service::storage_proxy>& proxy,
+    future<dht::partition_range_vector> find_index_partition_ranges(service::storage_proxy& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
 };

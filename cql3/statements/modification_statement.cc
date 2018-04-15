@@ -150,7 +150,7 @@ future<> modification_statement::check_access(const service::client_state& state
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
+modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
     auto keys = make_lw_shared(build_partition_keys(options));
     auto ranges = make_lw_shared(create_clustering_ranges(options));
     return make_update_parameters(proxy, keys, ranges, options, local, now, std::move(trace_state)).then(
@@ -171,7 +171,7 @@ modification_statement::get_mutations(distributed<service::storage_proxy>& proxy
 
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
-        distributed<service::storage_proxy>& proxy,
+        service::storage_proxy& proxy,
         lw_shared_ptr<dht::partition_range_vector> keys,
         lw_shared_ptr<query::clustering_row_ranges> ranges,
         const query_options& options,
@@ -257,7 +257,7 @@ public:
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
-        distributed<service::storage_proxy>& proxy,
+        service::storage_proxy& proxy,
         dht::partition_range_vector keys,
         lw_shared_ptr<query::clustering_row_ranges> ranges,
         bool local,
@@ -294,7 +294,7 @@ modification_statement::read_required_rows(
                 query::partition_slice::option::collections_as_maps>());
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
-    return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(keys),
+    return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
             cl, {std::move(trace_state)}).then([this, ps] (auto qr) {
         return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
             auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
@@ -355,12 +355,12 @@ struct modification_statement_executor {
 static thread_local auto modify_stage = seastar::make_execution_stage("cql3_modification", modification_statement_executor::get());
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     return modify_stage(this, seastar::ref(proxy), seastar::ref(qs), seastar::cref(options));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::do_execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
@@ -380,7 +380,7 @@ modification_statement::do_execute(distributed<service::storage_proxy>& proxy, s
 }
 
 future<>
-modification_statement::execute_without_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     auto cl = options.get_consistency();
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
@@ -393,12 +393,12 @@ modification_statement::execute_without_condition(distributed<service::storage_p
             return now();
         }
 
-        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
+        return proxy.mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
     });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     fail(unimplemented::cause::LWT);
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
@@ -426,7 +426,7 @@ modification_statement::execute_with_condition(distributed<service::storage_prox
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+modification_statement::execute_internal(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions()) {
         throw exceptions::unsupported_operation_exception();
     }
@@ -437,7 +437,7 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
 
     return get_mutations(proxy, options, true, options.get_timestamp(qs), qs.get_trace_state()).then(
             [&proxy] (auto mutations) {
-                return proxy.local().mutate_locally(std::move(mutations));
+                return proxy.mutate_locally(std::move(mutations));
             }).then(
             [] {
                 return make_ready_future<::shared_ptr<cql_transport::messages::result_message>>(
@@ -560,7 +560,7 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
 }
 
 void
-modification_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
+modification_statement::validate(service::storage_proxy&, const service::client_state& state) {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }

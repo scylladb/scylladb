@@ -75,9 +75,9 @@ create_index_statement::check_access(const service::client_state& state) {
 }
 
 void
-create_index_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+create_index_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
-    auto& db = proxy.local().get_db().local();
+    auto& db = proxy.get_db().local();
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
 
     if (schema->is_counter()) {
@@ -216,11 +216,11 @@ void create_index_statement::validate_targets_for_multi_column_index(std::vector
 }
 
 future<::shared_ptr<cql_transport::event::schema_change>>
-create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+create_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
     if (!service::get_local_storage_service().cluster_supports_indexes()) {
         throw exceptions::invalid_request_exception("Index support is not enabled");
     }
-    auto& db = proxy.local().get_db().local();
+    auto& db = proxy.get_db().local();
     auto schema = db.find_schema(keyspace(), column_family());
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {

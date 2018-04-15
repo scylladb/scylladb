@@ -60,7 +60,7 @@ protected:
 public:
     permission_altering_statement(auth::permission_set, auth::resource, const cql3::role_name&);
 
-    void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+    void validate(service::storage_proxy&, const service::client_state&) override;
     future<> check_access(const service::client_state&) override;
 };
 

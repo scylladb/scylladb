@@ -62,12 +62,12 @@ public:
                 , _options(std::move(options)) {
     }
 
-    void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+    void validate(service::storage_proxy&, const service::client_state&) override;
 
     virtual future<> check_access(const service::client_state&) override;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>&, service::query_state&, const query_options&) override;
+    execute(service::storage_proxy&, service::query_state&, const query_options&) override;
 };
 
 }

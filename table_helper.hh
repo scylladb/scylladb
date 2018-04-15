@@ -93,7 +93,7 @@ public:
     future<> insert(service::query_state& qs, OptMaker opt_maker, Args&&... opt_maker_args) {
         return cache_table_info(qs).then([this, &qs, opt_maker = std::move(opt_maker), args = std::forward_as_tuple(std::forward<Args>(opt_maker_args)...)] () mutable {
             return do_with(apply(opt_maker, std::move(args)), [this, &qs] (auto& opts) {
-                return _insert_stmt->execute(service::get_storage_proxy(), qs, opts);
+                return _insert_stmt->execute(service::get_storage_proxy().local(), qs, opts);
             });
         }).discard_result();
     }

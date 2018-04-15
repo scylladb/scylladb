@@ -76,10 +76,10 @@ inline bool create_type_statement::type_exists_in(::keyspace& ks)
     return keyspace_types.find(_name.get_user_type_name()) != keyspace_types.end();
 }
 
-void create_type_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
+void create_type_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     try {
-        auto&& ks = proxy.local().get_db().local().find_keyspace(keyspace());
+        auto&& ks = proxy.get_db().local().find_keyspace(keyspace());
         if (type_exists_in(ks) && !_if_not_exists) {
             throw exceptions::invalid_request_exception(sprint("A user type of name %s already exists", _name.to_string()));
         }
@@ -129,9 +129,9 @@ inline user_type create_type_statement::create_type(database& db)
         std::move(field_names), std::move(field_types));
 }
 
-future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
+future<shared_ptr<cql_transport::event::schema_change>> create_type_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only)
 {
-    auto&& db = proxy.local().get_db().local();
+    auto&& db = proxy.get_db().local();
 
     // Keyspace exists or we wouldn't have validated otherwise
     auto&& ks = db.find_keyspace(keyspace());

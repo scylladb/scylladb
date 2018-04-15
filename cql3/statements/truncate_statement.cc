@@ -84,7 +84,7 @@ future<> truncate_statement::check_access(const service::client_state& state)
     return state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
 }
 
-void truncate_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+void truncate_statement::validate(service::storage_proxy&, const service::client_state& state)
 {
     warn(unimplemented::cause::VALIDATION);
 #if 0
@@ -93,7 +93,7 @@ void truncate_statement::validate(distributed<service::storage_proxy>&, const se
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options)
+truncate_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
 {
     if (service::get_local_storage_proxy().get_db().local().find_schema(keyspace(), column_family())->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
@@ -106,7 +106,7 @@ truncate_statement::execute(distributed<service::storage_proxy>& proxy, service:
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-truncate_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options)
+truncate_statement::execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
 {
     throw std::runtime_error("unsupported operation");
 }

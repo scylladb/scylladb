@@ -246,7 +246,7 @@ future<> select_statement::check_access(const service::client_state& state) {
     }
 }
 
-void select_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
+void select_statement::validate(service::storage_proxy&, const service::client_state& state) {
     // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 
@@ -336,7 +336,7 @@ struct select_statement_executor {
 static thread_local auto select_stage = seastar::make_execution_stage("cql3_select", select_statement_executor::get());
 
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute(distributed<service::storage_proxy>& proxy,
+select_statement::execute(service::storage_proxy& proxy,
                              service::query_state& state,
                              const query_options& options)
 {
@@ -344,7 +344,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::do_execute(distributed<service::storage_proxy>& proxy,
+select_statement::do_execute(service::storage_proxy& proxy,
                           service::query_state& state,
                           const query_options& options)
 {
@@ -422,7 +422,7 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute(distributed<service::storage_proxy>& proxy,
+select_statement::execute(service::storage_proxy& proxy,
                           lw_shared_ptr<query::read_command> cmd,
                           dht::partition_range_vector&& partition_ranges,
                           service::query_state& state,
@@ -440,7 +440,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
-                return proxy.local().query(_schema,
+                return proxy.query(_schema,
                         command,
                         std::move(prange),
                         options.get_consistency(),
@@ -452,7 +452,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {state.get_trace_state()})
+        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {state.get_trace_state()})
             .then([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             });
@@ -460,7 +460,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
+select_statement::execute_internal(service::storage_proxy& proxy,
                                    service::query_state& state,
                                    const query_options& options)
 {
@@ -485,7 +485,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                return proxy.local().query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {state.get_trace_state(),
+                return proxy.query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {state.get_trace_state(),
                         db::no_timeout}).then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
@@ -494,7 +494,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy,
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] { });
     } else {
-        auto query = proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {state.get_trace_state(), db::no_timeout});
+        auto query = proxy.query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {state.get_trace_state(), db::no_timeout});
         return query.then([command, this, &options, now] (service::storage_proxy::coordinator_query_result qr) {
             return this->process_results(std::move(qr.query_result), command, options, now);
         }).finally([command] {});
@@ -599,7 +599,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
 {}
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& proxy,
+indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                              service::query_state& state,
                              const query_options& options)
 {
@@ -631,14 +631,14 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
 }
 
 future<dht::partition_range_vector>
-indexed_table_select_statement::find_index_partition_ranges(distributed<service::storage_proxy>& proxy,
+indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
                                              const query_options& options)
 {
     const auto& im = _index.metadata();
     sstring index_table_name = sprint("%s_index", im.name());
     tracing::add_table_name(state.get_trace_state(), keyspace(), index_table_name);
-    auto& db = proxy.local().get_db().local();
+    auto& db = proxy.get_db().local();
     const auto& view = db.find_column_family(_schema->ks_name(), index_table_name);
     dht::partition_range_vector partition_ranges;
     for (const auto& restriction : _restrictions->index_restrictions()) {
@@ -662,7 +662,7 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
             query::max_partitions,
             utils::UUID(),
             options.get_timestamp(state));
-    return proxy.local().query(view.schema(),
+    return proxy.query(view.schema(),
             cmd,
             std::move(partition_ranges),
             options.get_consistency(),
