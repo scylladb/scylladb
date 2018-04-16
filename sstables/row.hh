@@ -114,8 +114,15 @@ public:
 };
 
 class consumer_m {
+    reader_resource_tracker _resource_tracker;
+    const io_priority_class& _pc;
 public:
     using proceed = data_consumer::proceed;
+
+    consumer_m(reader_resource_tracker resource_tracker, const io_priority_class& pc)
+    : _resource_tracker(resource_tracker)
+    , _pc(pc) {
+    }
 
     virtual ~consumer_m() = default;
 
@@ -134,6 +141,16 @@ public:
 
     // Called when the reader is fast forwarded to given element.
     virtual void reset(sstables::indexable_element) = 0;
+
+    // Under which priority class to place I/O coming from this consumer
+    const io_priority_class& io_priority() const {
+        return _pc;
+    }
+
+    // The restriction that applies to this consumer
+    reader_resource_tracker resource_tracker() const {
+        return _resource_tracker;
+    }
 };
 
 namespace sstables {
@@ -179,6 +196,7 @@ private:
 
     bool _shadowable;
 public:
+    using consumer = row_consumer;
     bool non_consuming() const {
         return (((_state == state::DELETION_TIME_3)
                 || (_state == state::CELL_VALUE_BYTES_2)
@@ -503,6 +521,7 @@ private:
     unfiltered_extended_flags_m _extended_flags{0};
     bool _is_first_unfiltered = true;
 public:
+    using consumer = consumer_m;
     bool non_consuming() const {
         return (_state == state::DELETION_TIME_3
                 || _state == state::FLAGS_2

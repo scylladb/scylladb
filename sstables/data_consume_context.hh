@@ -38,15 +38,15 @@ class reader_position_tracker;
 
 template <typename DataConsumeRowsContext>
 data_consume_context<DataConsumeRowsContext>
-data_consume_rows(shared_sstable, row_consumer&, sstable::disk_read_range, uint64_t);
+data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::disk_read_range, uint64_t);
 
 template <typename DataConsumeRowsContext>
 data_consume_context<DataConsumeRowsContext>
-data_consume_single_partition(shared_sstable, row_consumer&, sstable::disk_read_range);
+data_consume_single_partition(shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::disk_read_range);
 
 template <typename DataConsumeRowsContext>
 data_consume_context<DataConsumeRowsContext>
-data_consume_rows(shared_sstable, row_consumer&);
+data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&);
 
 // data_consume_context is an object returned by sstable::data_consume_rows()
 // which allows knowing when the consumer stops reading, and starting it again
@@ -78,17 +78,18 @@ class data_consume_context {
     std::unique_ptr<DataConsumeRowsContext> _ctx;
 
     // This object can only be constructed by sstable::data_consume_rows()
-    data_consume_context(shared_sstable sst, row_consumer &consumer, input_stream<char> &&input, uint64_t start, uint64_t maxlen)
+    template <typename Consumer>
+    data_consume_context(shared_sstable sst, Consumer &consumer, input_stream<char> &&input, uint64_t start, uint64_t maxlen)
         : _sst(std::move(sst)), _ctx(new DataConsumeRowsContext(consumer, std::move(input), start, maxlen))
     { }
 
     friend class sstable;
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows<DataConsumeRowsContext>(shared_sstable, row_consumer&, sstable::disk_read_range, uint64_t);
+    data_consume_rows<DataConsumeRowsContext>(shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::disk_read_range, uint64_t);
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_single_partition<DataConsumeRowsContext>(shared_sstable, row_consumer&, sstable::disk_read_range);
+    data_consume_single_partition<DataConsumeRowsContext>(shared_sstable, typename DataConsumeRowsContext::consumer&, sstable::disk_read_range);
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows<DataConsumeRowsContext>(shared_sstable, row_consumer&);
+    data_consume_rows<DataConsumeRowsContext>(shared_sstable, typename DataConsumeRowsContext::consumer&);
 
     data_consume_context() = default;
 
@@ -173,7 +174,7 @@ using data_consume_context_opt = optimized_optional<data_consume_context<DataCon
 // The amount of this excessive read is controlled by read ahead
 // hueristics which learn from the usefulness of previous read aheads.
 template <typename DataConsumeRowsContext>
-inline data_consume_context<DataConsumeRowsContext> data_consume_rows(shared_sstable sst, row_consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
+inline data_consume_context<DataConsumeRowsContext> data_consume_rows(shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread, uint64_t last_end) {
     // Although we were only asked to read until toread.end, we'll not limit
     // the underlying file input stream to this end, but rather to last_end.
     // This potentially enables read-ahead beyond end, until last_end, which
@@ -184,14 +185,14 @@ inline data_consume_context<DataConsumeRowsContext> data_consume_rows(shared_sst
 }
 
 template <typename DataConsumeRowsContext>
-inline data_consume_context<DataConsumeRowsContext> data_consume_single_partition(shared_sstable sst, row_consumer& consumer, sstable::disk_read_range toread) {
+inline data_consume_context<DataConsumeRowsContext> data_consume_single_partition(shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
     auto input = sst->data_stream(toread.start, toread.end - toread.start, consumer.io_priority(), consumer.resource_tracker(), sst->_single_partition_history);
     return { std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start };
 }
 
 // Like data_consume_rows() with bounds, but iterates over whole range
 template <typename DataConsumeRowsContext>
-inline data_consume_context<DataConsumeRowsContext> data_consume_rows(shared_sstable sst, row_consumer& consumer) {
+inline data_consume_context<DataConsumeRowsContext> data_consume_rows(shared_sstable sst, typename DataConsumeRowsContext::consumer& consumer) {
         auto data_size = sst->data_size();
         return data_consume_rows<DataConsumeRowsContext>(std::move(sst), consumer, {0, data_size}, data_size);
 }

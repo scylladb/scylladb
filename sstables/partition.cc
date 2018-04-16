@@ -40,6 +40,31 @@
 
 namespace sstables {
 
+template
+data_consume_context<data_consume_rows_context>
+data_consume_rows<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range, uint64_t);
+
+template
+data_consume_context<data_consume_rows_context>
+data_consume_single_partition<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range);
+
+template
+data_consume_context<data_consume_rows_context>
+data_consume_rows<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&);
+
+template
+data_consume_context<data_consume_rows_context_m>
+data_consume_rows<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range, uint64_t);
+
+template
+data_consume_context<data_consume_rows_context_m>
+data_consume_single_partition<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range);
+
+template
+data_consume_context<data_consume_rows_context_m>
+data_consume_rows<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&);
+
+
 static
 future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
     auto& ranges = slice.row_ranges(s, *key.key());
@@ -436,6 +461,10 @@ public:
 };
 
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
+    if (_version == version_types::mc) {
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+            shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd, default_read_monitor());
+    }
     return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd, default_read_monitor());
 }
 
@@ -448,6 +477,10 @@ sstables::sstable::read_row_flat(schema_ptr schema,
                                  streamed_mutation::forwarding fwd,
                                  read_monitor& mon)
 {
+    if (_version == version_types::mc) {
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+            shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no, mon);
+    }
     return make_flat_mutation_reader<sstable_mutation_reader<>>(shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no, mon);
 }
 
@@ -460,6 +493,10 @@ sstable::read_range_rows_flat(schema_ptr schema,
                          streamed_mutation::forwarding fwd,
                          mutation_reader::forwarding fwd_mr,
                          read_monitor& mon) {
+    if (_version == version_types::mc) {
+        return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
+            shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr, mon);
+    }
     return make_flat_mutation_reader<sstable_mutation_reader<>>(
         shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr, mon);
 }

@@ -698,13 +698,13 @@ public:
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, row_consumer&, disk_read_range, uint64_t);
+    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_single_partition(shared_sstable, row_consumer&, disk_read_range);
+    data_consume_single_partition(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, row_consumer&);
+    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&);
 };
 
 struct entry_descriptor {

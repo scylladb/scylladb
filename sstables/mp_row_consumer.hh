@@ -797,9 +797,6 @@ public:
 };
 
 class mp_row_consumer_m : public consumer_m {
-    reader_resource_tracker _resource_tracker;
-    const io_priority_class& _pc;
-
     mp_row_consumer_reader* _reader;
     schema_ptr _schema;
     const query::partition_slice& _slice;
@@ -827,8 +824,7 @@ public:
                             reader_resource_tracker resource_tracker,
                         streamed_mutation::forwarding fwd,
                         const shared_sstable& sst)
-        : _resource_tracker(resource_tracker)
-        , _pc(pc)
+        : consumer_m(resource_tracker, pc)
         , _reader(reader)
         , _schema(schema)
         , _slice(slice)
@@ -843,16 +839,6 @@ public:
                         const shared_sstable& sst)
     : mp_row_consumer_m(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst)
     { }
-
-    // Under which priority class to place I/O coming from this consumer
-    const io_priority_class& io_priority() const {
-        return _pc;
-    }
-
-    // The restriction that applies to this consumer
-    reader_resource_tracker resource_tracker() const {
-        return _resource_tracker;
-    }
 
     virtual ~mp_row_consumer_m() {}
 
