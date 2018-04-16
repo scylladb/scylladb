@@ -39,6 +39,15 @@ typename bytes::value_type operator "" _b(unsigned long long value) {
     return static_cast<bytes::value_type>(value);
 }
 
+template <class Vint>
+void test_serialized_size_from_first_byte(vint_size_type size, bytes_view bytes) {
+}
+
+template <>
+void test_serialized_size_from_first_byte<unsigned_vint>(vint_size_type size, bytes_view bytes) {
+    BOOST_REQUIRE_EQUAL(size, unsigned_vint::serialized_size_from_first_byte(bytes[0]));
+}
+
 // Check that the encoded value decodes back to the value. Also allows inspecting the encoded bytes.
 template <class Vint, class BytesInspector>
 void check_bytes_and_roundtrip(typename Vint::value_type value, BytesInspector&& f) {
@@ -51,6 +60,7 @@ void check_bytes_and_roundtrip(typename Vint::value_type value, BytesInspector&&
     const auto deserialized = Vint::deserialize(view);
     BOOST_REQUIRE_EQUAL(deserialized.value, value);
     BOOST_REQUIRE_EQUAL(deserialized.size, size);
+    test_serialized_size_from_first_byte<Vint>(size, view);
 };
 
 // Check that the encoded value decodes back to the value.
