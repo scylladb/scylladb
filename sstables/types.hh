@@ -512,5 +512,51 @@ inline column_mask operator&(column_mask m1, column_mask m2) {
 inline column_mask operator|(column_mask m1, column_mask m2) {
     return column_mask(static_cast<uint8_t>(m1) | static_cast<uint8_t>(m2));
 }
+
+class unfiltered_flags_m final {
+    static const uint8_t END_OF_PARTITION = 0x01u;
+    static const uint8_t IS_MARKER = 0x02u;
+    static const uint8_t HAS_TIMESTAMP = 0x04u;
+    static const uint8_t HAS_TTL = 0x08u;
+    static const uint8_t HAS_DELETION = 0x10u;
+    static const uint8_t HAS_EXTENDED_FLAGS = 0x80u;
+    uint8_t _flags;
+    bool check_flag(const uint8_t flag) const {
+        return (_flags & flag) != 0u;
+    }
+public:
+    explicit unfiltered_flags_m(uint8_t flags) : _flags(flags) { }
+    bool is_end_of_partition() const {
+        return check_flag(END_OF_PARTITION);
+    }
+    bool is_range_tombstone() const {
+        return check_flag(IS_MARKER);
+    }
+    bool has_extended_flags() const {
+        return check_flag(HAS_EXTENDED_FLAGS);
+    }
+    bool has_timestamp() const {
+        return check_flag(HAS_TIMESTAMP);
+    }
+    bool has_ttl() const {
+        return check_flag(HAS_TTL);
+    }
+    bool has_deletion() const {
+        return check_flag(HAS_DELETION);
+    }
+};
+
+class unfiltered_extended_flags_m final {
+    static const uint8_t IS_STATIC = 0x01u;
+    uint8_t _flags;
+    bool check_flag(const uint8_t flag) const {
+        return (_flags & flag) != 0u;
+    }
+public:
+    explicit unfiltered_extended_flags_m(uint8_t flags) : _flags(flags) { }
+    bool is_static() const {
+        return check_flag(IS_STATIC);
+    }
+};
 }
 
