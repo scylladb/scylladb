@@ -977,6 +977,9 @@ future<> foreign_reader::fast_forward_to(position_range pr, db::timeout_clock::t
 flat_mutation_reader make_foreign_reader(schema_ptr schema,
             foreign_ptr<std::unique_ptr<flat_mutation_reader>> reader,
             streamed_mutation::forwarding fwd_sm) {
+    if (reader.get_owner_shard() == engine().cpu_id()) {
+        return std::move(*reader);
+    }
     return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(reader), fwd_sm);
 }
 
