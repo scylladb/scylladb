@@ -92,14 +92,12 @@ if [ ! -f /usr/bin/dh_testdir ]; then
     pkg_install debhelper
 fi
 
-CODENAME=`lsb_release -c|awk '{print $2}'`
-
 if [ -z "$TARGET" ]; then
     if is_debian_variant; then
         if [ ! -f /usr/bin/lsb_release ]; then
             pkg_install lsb-release
         fi
-        TARGET=$CODENAME
+        TARGET=`lsb_release -c|awk '{print $2}'`
     else
         echo "Please specify target"
         exit 1
