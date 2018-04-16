@@ -104,6 +104,7 @@ boost_tests = [
     'extensions_test',
     'cql_auth_syntax_test',
     'querier_cache',
+    'limiting_data_source_test',
 ]
 
 other_tests = [
