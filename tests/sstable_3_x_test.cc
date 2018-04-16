@@ -30,6 +30,7 @@
 #include "schema_builder.hh"
 #include "tests/test-utils.hh"
 #include "sstable_test.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 using namespace sstables;
 
@@ -41,7 +42,10 @@ public:
                             path,
                             generation,
                             sstable_version_types::mc,
-                            sstable_format_types::big))
+                            sstable_format_types::big,
+                            gc_clock::now(),
+                            default_io_error_handler_gen(),
+                            1))
     { }
     void read_toc() {
         _sst->read_toc().get();
@@ -61,6 +65,9 @@ public:
     future<index_list> read_index() {
         load();
         return sstables::test(_sst).read_indexes();
+    }
+    flat_mutation_reader read_rows_flat() {
+        return _sst->read_rows_flat(_sst->_schema);
     }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
@@ -107,6 +114,30 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_load) {
     return seastar::async([] {
         sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
         sst.load();
+    });
+}
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, pk);
+        };
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_partition_end()
+            .produces_end_of_stream();
     });
 }
 
