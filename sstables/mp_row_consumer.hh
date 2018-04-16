@@ -33,17 +33,18 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
 
 class mp_row_consumer_reader : public flat_mutation_reader::impl {
     friend class mp_row_consumer_k_l;
+    friend class mp_row_consumer_m;
 public:
     mp_row_consumer_reader(schema_ptr s) : impl(std::move(s)) {}
     virtual void on_end_of_stream() = 0;
 };
 
+struct new_mutation {
+    partition_key key;
+    tombstone tomb;
+};
+
 class mp_row_consumer_k_l : public row_consumer {
-public:
-    struct new_mutation {
-        partition_key key;
-        tombstone tomb;
-    };
 private:
     mp_row_consumer_reader* _reader;
     schema_ptr _schema;
@@ -265,7 +266,6 @@ private:
         }
     }
 
-    // Returns true if and only if the position is inside requested ranges.
     // Assumes that this and the other advance_to() are called with monotonic positions.
     // We rely on the fact that the first 'S' in SSTables stands for 'sorted'
     // and the clustering row keys are always in an ascending order.
@@ -793,6 +793,152 @@ public:
         _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
         sstlog.trace("mp_row_consumer_k_l {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
         return _ck_ranges_walker->lower_bound();
+    }
+};
+
+class mp_row_consumer_m : public consumer_m {
+    reader_resource_tracker _resource_tracker;
+    const io_priority_class& _pc;
+
+    mp_row_consumer_reader* _reader;
+    schema_ptr _schema;
+    const query::partition_slice& _slice;
+    bool _out_of_range = false;
+    stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
+    stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
+
+    stdx::optional<new_mutation> _mutation;
+    bool _is_mutation_end = true;
+    position_in_partition _fwd_end = position_in_partition::after_all_clustered_rows(); // Restricts the stream on top of _ck_ranges_walker.
+    streamed_mutation::forwarding _fwd;
+
+    void set_up_ck_ranges(const partition_key& pk) {
+        _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
+        _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges(), _schema->has_static_columns());
+        _fwd_end = _fwd ? position_in_partition::before_all_clustered_rows() : position_in_partition::after_all_clustered_rows();
+        _out_of_range = false;
+    }
+
+public:
+    mp_row_consumer_m(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                            reader_resource_tracker resource_tracker,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
+        : _resource_tracker(resource_tracker)
+        , _pc(pc)
+        , _reader(reader)
+        , _schema(schema)
+        , _slice(slice)
+        , _fwd(fwd)
+    { }
+
+    mp_row_consumer_m(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        const io_priority_class& pc,
+                            reader_resource_tracker resource_tracker,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
+    : mp_row_consumer_m(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst)
+    { }
+
+    // Under which priority class to place I/O coming from this consumer
+    const io_priority_class& io_priority() const {
+        return _pc;
+    }
+
+    // The restriction that applies to this consumer
+    reader_resource_tracker resource_tracker() const {
+        return _resource_tracker;
+    }
+
+    virtual ~mp_row_consumer_m() {}
+
+    proceed push_ready_fragments() {
+        if (_out_of_range) {
+            _reader->on_end_of_stream();
+            return proceed::no;
+        }
+
+        return proceed::yes;
+    }
+
+    // Tries to fast forward the consuming context to the next position.
+    // Must be called outside consuming context.
+    stdx::optional<position_in_partition_view> maybe_skip() {
+        return _ck_ranges_walker->lower_bound();
+    }
+
+    bool is_mutation_end() const {
+        return _is_mutation_end;
+    }
+
+    void setup_for_partition(const partition_key& pk) {
+        _is_mutation_end = false;
+        set_up_ck_ranges(pk);
+    }
+
+    stdx::optional<new_mutation> get_mutation() {
+        return std::exchange(_mutation, { });
+    }
+
+    // Changes current fragment range.
+    //
+    // When there are no more fragments for current range,
+    // is_out_of_range() will return true.
+    //
+    // The new range must not overlap with the previous range and
+    // must be after it.
+    //
+    stdx::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
+        _out_of_range = _is_mutation_end;
+        _fwd_end = std::move(r).end();
+
+        _ck_ranges_walker->trim_front(std::move(r).start());
+        if (_ck_ranges_walker->out_of_range()) {
+            _out_of_range = true;
+            return { };
+        }
+
+        if (_out_of_range) {
+            return { };
+        }
+
+        auto start = _ck_ranges_walker->lower_bound();
+
+        position_in_partition::less_compare less(*_schema);
+        if (!less(start, _fwd_end)) {
+            _out_of_range = true;
+            return { };
+        }
+
+        return start;
+    }
+
+    virtual proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) override {
+        if (!_is_mutation_end) {
+            return proceed::yes;
+        }
+        _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
+        setup_for_partition(_mutation->key);
+        return proceed::no;
+    }
+
+    virtual proceed consume_partition_end() override {
+        _is_mutation_end = true;
+        _out_of_range = true;
+        return proceed::no;
+    }
+
+    virtual void reset(sstables::indexable_element el) override {
+        if (el == indexable_element::partition) {
+            _is_mutation_end = true;
+            _out_of_range = true;
+        } else {
+            _is_mutation_end = false;
+        }
     }
 };
 

@@ -60,7 +60,7 @@ concept bool RowConsumer() {
         { t.io_priority() } -> const io_priority_class&;
         { t.is_mutation_end() } -> bool;
         { t.setup_for_partition(pk) } -> void;
-        { t.get_mutation() } -> stdx::optional<mp_row_consumer_k_l::new_mutation>;
+        { t.get_mutation() } -> stdx::optional<new_mutation>;
         { t.push_ready_fragments() } -> row_consumer::proceed;
         { t.maybe_skip() } -> stdx::optional<position_in_partition_view>;
         { t.fast_forward_to(std::move(cr), timeout) } -> stdx::optional<position_in_partition_view>;
