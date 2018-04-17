@@ -245,20 +245,16 @@ if [ "$TARGET" != "trusty" ]; then
     cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 fi
 
-# According to pbuilder documentation, pbuilder will pick up ~/.pbuilderrc
-# from the root user's home directory.  We've observed both root and the original
-# user, to be safe copy to both.
-cp ./dist/debian/pbuilderrc ~/.pbuilderrc
 sudo cp ./dist/debian/pbuilderrc ~root/.pbuilderrc
 if [ $NO_CLEAN -eq 0 ]; then
     sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
-    sudo -E DIST=$TARGET /usr/sbin/pbuilder clean
-    sudo -E DIST=$TARGET /usr/sbin/pbuilder create --allow-untrusted
+    sudo -H DIST=$TARGET /usr/sbin/pbuilder clean
+    sudo -H DIST=$TARGET /usr/sbin/pbuilder create --allow-untrusted
 fi
-sudo -E DIST=$TARGET /usr/sbin/pbuilder update --allow-untrusted
+sudo -H DIST=$TARGET /usr/sbin/pbuilder update --allow-untrusted
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ] || [ "$TARGET" = "bionic" ]; then
-    sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
+    sudo -H DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
 elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
-    sudo -E DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/debian_install_gpgkey.sh
+    sudo -H DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/debian_install_gpgkey.sh
 fi
-sudo -E DIST=$TARGET pdebuild --buildresult build/debs
+sudo -H DIST=$TARGET pdebuild --buildresult build/debs
