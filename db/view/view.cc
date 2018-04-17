@@ -950,9 +950,12 @@ view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_di
 }
 
 future<> view_builder::start() {
-    return seastar::async([this] {
+    _started = seastar::async([this] {
         // Wait for schema agreement even if we're a seed node.
         while (!_mm.have_schema_agreement()) {
+            if (_as.abort_requested()) {
+                return;
+            }
             seastar::sleep(500ms).get();
         }
         auto built = system_keyspace::load_built_views().get0();
@@ -962,15 +965,18 @@ future<> view_builder::start() {
         _current_step = _base_to_build_step.begin();
         _build_step.trigger();
     });
+    return make_ready_future<>();
 }
 
 future<> view_builder::stop() {
     vlogger.info("Stopping view builder");
-    _mm.unregister_listener(this);
     _as.request_abort();
-    return _sem.wait().then([this] {
-        _sem.broken();
-        return _build_step.join();
+    return _started.finally([this] {
+        _mm.unregister_listener(this);
+        return _sem.wait().then([this] {
+            _sem.broken();
+            return _build_step.join();
+        });
     });
 }
 

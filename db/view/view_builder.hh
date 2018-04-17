@@ -148,6 +148,7 @@ class view_builder final : public service::migration_listener::only_view_notific
     // the algorithms. Also synchronizes an operation wrt. a call to stop().
     seastar::semaphore _sem{1};
     seastar::abort_source _as;
+    future<> _started = make_ready_future<>();
     // Used to coordinate between shards the conclusion of the build process for a particular view.
     std::unordered_set<utils::UUID> _built_views;
     // Used for testing.
