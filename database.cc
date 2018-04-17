@@ -4385,7 +4385,7 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), lock = std::move(lock), this, timeout] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->as_mutation_source().make_reader(
+            auto reader = this->make_reader(
                 base,
                 pk,
                 slice,
