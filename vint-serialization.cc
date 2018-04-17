@@ -154,3 +154,8 @@ unsigned_vint::deserialized_type unsigned_vint::deserialize(bytes_view v) {
 
     return deserialized_type{result, total_size};
 }
+
+vint_size_type unsigned_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
+    int8_t first_byte_casted = first_byte;
+    return 1 + (first_byte_casted >= 0 ? 0 : count_extra_bytes(first_byte_casted));
+}

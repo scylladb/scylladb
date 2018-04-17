@@ -280,6 +280,7 @@ scylla_tests = [
     'tests/streaming_histogram_test',
     'tests/duration_test',
     'tests/vint_serialization_test',
+    'tests/continuous_data_consumer_test',
     'tests/compress_test',
     'tests/chunked_vector_test',
     'tests/loading_cache_test',
@@ -294,6 +295,7 @@ scylla_tests = [
     'tests/extensions_test',
     'tests/cql_auth_syntax_test',
     'tests/querier_cache',
+    'tests/limiting_data_source_test',
 ]
 
 perf_tests = [
@@ -383,6 +385,7 @@ scylla_core = (['database.cc',
                  'utils/logalloc.cc',
                  'utils/large_bitset.cc',
                  'utils/buffer_input_stream.cc',
+                 'utils/limiting_data_source.cc',
                  'mutation_partition.cc',
                  'mutation_partition_view.cc',
                  'mutation_partition_serializer.cc',

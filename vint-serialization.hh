@@ -23,6 +23,8 @@
 // For reference, see https://developers.google.com/protocol-buffers/docs/encoding#varints
 //
 
+#pragma once
+
 #include "bytes.hh"
 
 #include <cstdint>
@@ -42,6 +44,8 @@ struct unsigned_vint final {
     static vint_size_type serialize(value_type, bytes::iterator out);
 
     static deserialized_type deserialize(bytes_view v);
+
+    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
 };
 
 struct signed_vint final {

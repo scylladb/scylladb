@@ -21,6 +21,9 @@
  */
 
 #pragma once
+
+#include <seastar/core/print.hh>
+
 namespace sstables {
 class malformed_sstable_exception : public std::exception {
     sstring _msg;

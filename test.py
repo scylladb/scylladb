@@ -33,6 +33,7 @@ boost_tests = [
     'bytes_ostream_test',
     'chunked_vector_test',
     'compress_test',
+    'continuous_data_consumer_test',
     'types_test',
     'keys_test',
     'mutation_test',
@@ -104,6 +105,7 @@ boost_tests = [
     'extensions_test',
     'cql_auth_syntax_test',
     'querier_cache',
+    'limiting_data_source_test',
 ]
 
 other_tests = [

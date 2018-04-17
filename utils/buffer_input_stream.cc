@@ -20,6 +20,7 @@
  */
 
 #include "buffer_input_stream.hh"
+#include "limiting_data_source.hh"
 
 using namespace seastar;
 
@@ -45,6 +46,13 @@ public:
 };
 
 input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf) {
-    return input_stream<char>{
-        data_source{std::make_unique<buffer_data_source_impl>(std::move(buf))}};
+    return input_stream < char > {
+        data_source{std::make_unique<buffer_data_source_impl>(std::move(buf))}
+    };
+}
+
+input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf,
+                                            seastar::noncopyable_function<size_t()>&& limit_generator) {
+    auto res = data_source{std::make_unique<buffer_data_source_impl>(std::move(buf))};
+    return input_stream < char > { make_limiting_data_source(std::move(res), std::move(limit_generator)) };
 }

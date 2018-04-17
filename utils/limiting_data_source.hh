@@ -21,21 +21,18 @@
 
 #pragma once
 
-#include <seastar/core/iostream.hh>
-#include <seastar/core/temporary_buffer.hh>
+#include <stddef.h>
 #include <seastar/util/noncopyable_function.hh>
-#include "seastarx.hh"
 
-/// \brief Creates an input_stream to read from a supplied buffer
-///
-/// \param buf Buffer to return from the stream while reading
-/// \return resulting input stream
-input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf);
+namespace seastar {
 
-/// \brief Creates an input_stream to read from a supplied buffer
+class data_source;
+
+}
+
+/// \brief Creates an data_source from another data_source but returns its data in chunks not bigger than a given limit
 ///
-/// \param buf Buffer to return from the stream while reading
-/// \param limit_generator Generates limits of chunk sizes
-/// \return resulting input stream
-input_stream<char> make_buffer_input_stream(temporary_buffer<char>&& buf,
-                                            seastar::noncopyable_function<size_t()>&& limit_generator);
+/// \param src Source data_source from which data will be taken
+/// \return resulting data_source that returns data in chunks not bigger than a given limit
+seastar::data_source make_limiting_data_source(seastar::data_source&& src,
+                                               seastar::noncopyable_function<size_t()>&& limit_generator);
