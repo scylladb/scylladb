@@ -8,4 +8,10 @@ class token {
     dht::token::kind _kind;
     bytes _data;
 };
+
+class decorated_key {
+    dht::token token();
+    partition_key key();
+};
+
 }
