@@ -178,6 +178,11 @@ public:
     dht::token _token;
     partition_key _key;
 
+    decorated_key(dht::token t, partition_key k)
+        : _token(std::move(t))
+        , _key(std::move(k)) {
+    }
+
     struct less_comparator {
         schema_ptr s;
         less_comparator(schema_ptr s);
