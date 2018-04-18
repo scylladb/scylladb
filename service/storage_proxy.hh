@@ -239,15 +239,11 @@ public:
         db::read_repair_decision read_repair_decision;
 
         coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-                replicas_per_token_range last_replicas,
-                db::read_repair_decision read_repair_decision)
+                replicas_per_token_range last_replicas = {},
+                db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
             : query_result(std::move(query_result))
             , last_replicas(std::move(last_replicas))
             , read_repair_decision(std::move(read_repair_decision)) {
-        }
-
-        coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result)
-            : query_result(std::move(query_result)) {
         }
     };
 private:
