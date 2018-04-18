@@ -513,11 +513,7 @@ future<> messaging_service::init_local_preferred_ip_cache() {
         // just read.
         //
         for (auto& p : _preferred_ip_cache) {
-            msg_addr id = {
-                .addr = p.first
-            };
-
-            this->remove_rpc_client(id);
+            this->remove_rpc_client(msg_addr(p.first));
         }
     });
 }

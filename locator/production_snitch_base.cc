@@ -238,11 +238,7 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
         //
         netw::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
             local_ms.cache_preferred_ip(public_address, local_address);
-
-            netw::msg_addr id = {
-                .addr = public_address
-            };
-            local_ms.remove_rpc_client(id);
+            local_ms.remove_rpc_client(netw::msg_addr(public_address));
         }).get();
 
         logger().debug("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);

@@ -35,6 +35,8 @@ struct msg_addr {
     struct hash {
         size_t operator()(const msg_addr& id) const;
     };
+    explicit msg_addr(gms::inet_address ip) : addr(ip), cpu_id(0) { }
+    msg_addr(gms::inet_address ip, uint32_t cpu) : addr(ip), cpu_id(cpu) { }
 };
 
 }
