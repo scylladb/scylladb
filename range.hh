@@ -63,6 +63,9 @@ class wrapping_range {
     using optional = std::experimental::optional<U>;
 public:
     using bound = range_bound<T>;
+
+    template <typename Transformer>
+    using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::result_of_t<Transformer(T)>>>;
 private:
     optional<bound> _start;
     optional<bound> _end;
@@ -355,7 +358,7 @@ public:
             return *this;
         }
     }
-    template<typename Bound, typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    template<typename Bound, typename Transformer, typename U = transformed_type<Transformer>>
     static stdx::optional<typename wrapping_range<U>::bound> transform_bound(Bound&& b, Transformer&& transformer) {
         if (b) {
             return { { transformer(std::forward<Bound>(b).value().value()), b->is_inclusive() } };
@@ -364,11 +367,11 @@ public:
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
-    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_range<U> transform(Transformer&& transformer) && {
         return wrapping_range<U>(transform_bound(std::move(_start), transformer), transform_bound(std::move(_end), transformer), _singular);
     }
-    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_range<U> transform(Transformer&& transformer) const & {
         return wrapping_range<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
     }
@@ -429,6 +432,9 @@ class nonwrapping_range {
     using optional = std::experimental::optional<U>;
 public:
     using bound = range_bound<T>;
+
+    template <typename Transformer>
+    using transformed_type = typename wrapping_range<T>::template transformed_type<Transformer>;
 private:
     wrapping_range<T> _range;
 public:
@@ -559,11 +565,11 @@ public:
     }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
-    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    template<typename Transformer, typename U = transformed_type<Transformer>>
     nonwrapping_range<U> transform(Transformer&& transformer) && {
         return nonwrapping_range<U>(std::move(_range).transform(std::forward<Transformer>(transformer)));
     }
-    template<typename Transformer, typename U = typename std::result_of<Transformer(T)>::type>
+    template<typename Transformer, typename U = transformed_type<Transformer>>
     nonwrapping_range<U> transform(Transformer&& transformer) const & {
         return nonwrapping_range<U>(_range.transform(std::forward<Transformer>(transformer)));
     }
