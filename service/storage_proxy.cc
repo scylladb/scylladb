@@ -3173,7 +3173,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
-        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, pcf);
+        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, {}, pcf);
         ++i;
 
         // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
@@ -3183,7 +3183,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         {
             dht::partition_range& next_range = *i;
             std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, pcf);
+            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, {}, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -3203,7 +3203,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 break;
             }
 
-            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, pcf);
+            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, {}, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {

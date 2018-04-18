@@ -253,8 +253,12 @@ filter_for_query(consistency_level cl,
     return selected_endpoints;
 }
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf) {
-    return filter_for_query(cl, ks, live_endpoints, {}, read_repair_decision::NONE, nullptr, cf);
+std::vector<gms::inet_address> filter_for_query(consistency_level cl,
+        keyspace& ks,
+        std::vector<gms::inet_address>& live_endpoints,
+        const std::vector<gms::inet_address>& preferred_endpoints,
+        column_family* cf) {
+    return filter_for_query(cl, ks, live_endpoints, preferred_endpoints, read_repair_decision::NONE, nullptr, cf);
 }
 
 bool

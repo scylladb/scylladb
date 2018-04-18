@@ -84,7 +84,11 @@ filter_for_query(consistency_level cl,
                  gms::inet_address* extra,
                  column_family* cf);
 
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints, column_family* cf);
+std::vector<gms::inet_address> filter_for_query(consistency_level cl,
+        keyspace& ks,
+        std::vector<gms::inet_address>& live_endpoints,
+        const std::vector<gms::inet_address>& preferred_endpoints,
+        column_family* cf);
 
 struct dc_node_count {
     size_t live = 0;
