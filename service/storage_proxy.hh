@@ -69,7 +69,7 @@ class abstract_write_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 
-using replicas_per_token_range = std::unordered_map<nonwrapping_range<dht::token>, std::vector<utils::UUID>>;
+using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:

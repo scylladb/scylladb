@@ -3025,7 +3025,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         storage_proxy::coordinator_query_options query_options) {
-    std::vector<std::pair<::shared_ptr<abstract_read_executor>, nonwrapping_range<dht::token>>> exec;
+    std::vector<std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>> exec;
     exec.reserve(partition_ranges.size());
 
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
@@ -3038,7 +3038,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
             throw std::runtime_error("mixed singular and non singular range are not supported");
         }
 
-        auto token_range = nonwrapping_range<dht::token>::make_singular(pr.start()->value().token());
+        auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
         const auto replicas = it == query_options.preferred_replicas.end()
             ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
@@ -3053,7 +3053,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     auto used_replicas = make_lw_shared<replicas_per_token_range>();
 
     auto f = ::map_reduce(exec.begin(), exec.end(), [timeout = query_options.timeout(*this), used_replicas] (
-                std::pair<::shared_ptr<abstract_read_executor>, nonwrapping_range<dht::token>>& executor_and_token_range) {
+                std::pair<::shared_ptr<abstract_read_executor>, dht::token_range>& executor_and_token_range) {
         auto& [rex, token_range] = executor_and_token_range;
         utils::latency_counter lc;
         lc.start();
