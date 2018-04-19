@@ -85,7 +85,7 @@ class std_vector:
         self.ref = ref
 
     def __len__(self):
-        return self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start']
+        return int(self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start'])
 
     def __iter__(self):
         i = self.ref['_M_impl']['_M_start']
@@ -489,7 +489,7 @@ def get_seastar_memory_start_and_size():
     cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
     page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     total_mem = int(cpu_mem['nr_pages']) * page_size
-    start = int(cpu_mem['memory'])
+    start = long(cpu_mem['memory'])
     return start, total_mem
 
 def seastar_memory_layout():
@@ -509,7 +509,7 @@ class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        ptr = int(arg, 0)
+        ptr = long(arg, 0)
 
         owning_thread = None
         for t, start, size in seastar_memory_layout():
@@ -527,7 +527,7 @@ class scylla_ptr(gdb.Command):
 
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
-        offset = ptr - int(cpu_mem['memory'])
+        offset = ptr - long(cpu_mem['memory'])
         ptr_page_idx = offset / page_size
         pages = cpu_mem['pages']
         page = pages[ptr_page_idx];
@@ -681,7 +681,7 @@ class lsa_object_descriptor(object):
     @staticmethod
     def decode(pos):
         def next():
-            nonlocal pos
+            global pos
             byte = pos.dereference() & 0xff
             pos = pos + 1
             return byte
@@ -1074,7 +1074,7 @@ def find_in_live(mem_start, mem_size, value, size_selector='g'):
             if 'live' in ptr_info:
                 m = re.search('live \((0x[0-9a-f]+)', ptr_info)
                 if m:
-                    obj_start = int(m.group(1), 0)
+                    obj_start = long(m.group(1), 0)
                     addr = int(line, 0)
                     offset = addr - obj_start
                     yield obj_start, offset
