@@ -85,7 +85,7 @@ class std_vector:
         self.ref = ref
 
     def __len__(self):
-        return self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start']
+        return int(self.ref['_M_impl']['_M_finish'] - self.ref['_M_impl']['_M_start'])
 
     def __iter__(self):
         i = self.ref['_M_impl']['_M_start']
@@ -149,16 +149,16 @@ def find_db(shard):
 def find_dbs():
     return [find_db(shard) for shard in range(cpus())]
 
-def list_unordered_map(map):
+def list_unordered_map(map, cache=True):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(kt.name, vt.name))
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
+    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>' ).pointer()
     h = map['_M_h']
     p = h['_M_before_begin']['_M_nxt']
     while p:
         pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield (pc['first'], pc['second'].address)
+        yield (pc['first'], pc['second'])
         p = p['_M_nxt']
     raise StopIteration()
 
@@ -182,7 +182,7 @@ class scylla_keyspaces(gdb.Command):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
             for (key, value) in list_unordered_map(keyspaces):
-                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value))
+                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
 
 class scylla_column_families(gdb.Command):
     def __init__(self):
@@ -252,6 +252,112 @@ class scylla_task_histogram(gdb.Command):
             sym = resolve(vptr)
             if sym:
                 gdb.write('%10d: 0x%x %s\n' % (count, vptr, sym))
+
+def find_vptrs():
+    cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
+    page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
+    mem_start = cpu_mem['memory']
+    vptr_type = gdb.lookup_type('uintptr_t').pointer()
+    pages = cpu_mem['pages']
+    nr_pages = int(cpu_mem['nr_pages'])
+
+    sections = gdb.execute('info files', False, True).split('\n')
+    for line in sections:
+        # vptrs are in .rodata section
+        if line.find("is .rodata") > -1:
+            items = line.split()
+            text_start = int(items[0], 16)
+            text_end = int(items[2], 16)
+            break
+
+    def is_vptr(addr):
+        return addr >= text_start and addr <= text_end
+
+    idx = 0
+    while idx < nr_pages:
+        if pages[idx]['free']:
+            idx += pages[idx]['span_size']
+            continue
+        pool = pages[idx]['pool']
+        if not pool or pages[idx]['offset_in_span'] != 0:
+            idx += 1
+            continue
+        objsize = int(pool.dereference()['_object_size'])
+        span_size = pages[idx]['span_size'] * page_size
+        for idx2 in range(0, int(span_size / objsize) + 1):
+            obj_addr = mem_start + idx * page_size + idx2 * objsize
+            vptr = obj_addr.reinterpret_cast(vptr_type).dereference()
+            if is_vptr(vptr):
+                yield obj_addr, vptr
+        idx += pages[idx]['span_size']
+
+def find_single_sstable_readers():
+    try:
+        # For Scylla < 2.1
+        # FIXME: this only finds range readers
+        ptr_type = gdb.lookup_type('sstable_range_wrapping_reader').pointer()
+        vtable_name = 'vtable for sstable_range_wrapping_reader'
+    except:
+        ptr_type = gdb.lookup_type('sstables::sstable_mutation_reader').pointer()
+        vtable_name = 'vtable for sstables::sstable_mutation_reader'
+
+    for obj_addr, vtable_addr in find_vptrs():
+        name = resolve(vtable_addr)
+        if name and name.startswith(vtable_name):
+            yield obj_addr.reinterpret_cast(ptr_type)
+
+# Yields sstable* once for each active sstable reader
+def find_active_sstables():
+    sstable_ptr_type = gdb.lookup_type('sstables::sstable').pointer()
+    for reader in  find_single_sstable_readers():
+        sstable_ptr = reader['_sst']['_p']
+        yield sstable_ptr.reinterpret_cast(sstable_ptr_type)
+
+class schema_ptr:
+    def __init__(self, ptr):
+        schema_ptr_type = gdb.lookup_type('schema').pointer()
+        self.ptr = ptr['_p'].reinterpret_cast(schema_ptr_type)
+
+    def table_name(self):
+        return '%s.%s' % (self.ptr['_raw']['_ks_name'], self.ptr['_raw']['_cf_name'])
+
+class scylla_active_sstables(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla active-sstables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        try:
+            sizeof_index_entry = int(gdb.parse_and_eval('sizeof(sstables::index_entry)'))
+            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::shared_index_lists::entry)'))
+            def count_index_lists(sst):
+                index_lists_size = 0
+                for key, entry in list_unordered_map(sst['_index_lists']['_lists'], cache=False):
+                    index_entries = std_vector(entry['list'])
+                    index_lists_size += sizeof_entry
+                    for e in index_entries:
+                        index_lists_size += sizeof_index_entry
+                        index_lists_size += e['_key']['_size']
+                        index_lists_size += e['_promoted_index_bytes']['_size']
+                return index_lists_size
+        except:
+            count_index_lists = None
+
+        sstables = dict() # name -> sstable*
+        for sst in find_active_sstables():
+            schema = schema_ptr(sst['_schema'])
+            id = '%s#%d' % (schema.table_name(), sst['_generation'])
+            if id in sstables:
+                sst, count = sstables[id]
+                sstables[id] = (sst, count + 1)
+                continue
+            sstables[id] = (sst, 1)
+
+        total_index_lists_size = 0
+        for id, (sst, count) in sstables.items():
+            if count_index_lists:
+                total_index_lists_size += count_index_lists(sst)
+            gdb.write('sstable %s, readers=%d data_file_size=%d\n' % (id, count, sst['_data_file_size']))
+
+        gdb.write('sstable_count=%d, total_index_lists_size=%d\n' % (len(sstables), total_index_lists_size))
 
 class scylla_memory(gdb.Command):
     def __init__(self):
@@ -489,7 +595,7 @@ def get_seastar_memory_start_and_size():
     cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
     page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
     total_mem = int(cpu_mem['nr_pages']) * page_size
-    start = int(cpu_mem['memory'])
+    start = long(cpu_mem['memory'])
     return start, total_mem
 
 def seastar_memory_layout():
@@ -509,7 +615,7 @@ class scylla_ptr(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla ptr', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        ptr = int(arg, 0)
+        ptr = long(arg, 0)
 
         owning_thread = None
         for t, start, size in seastar_memory_layout():
@@ -527,7 +633,7 @@ class scylla_ptr(gdb.Command):
 
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
-        offset = ptr - int(cpu_mem['memory'])
+        offset = ptr - long(cpu_mem['memory'])
         ptr_page_idx = offset / page_size
         pages = cpu_mem['pages']
         page = pages[ptr_page_idx];
@@ -681,7 +787,7 @@ class lsa_object_descriptor(object):
     @staticmethod
     def decode(pos):
         def next():
-            nonlocal pos
+            global pos
             byte = pos.dereference() & 0xff
             pos = pos + 1
             return byte
@@ -1074,7 +1180,7 @@ def find_in_live(mem_start, mem_size, value, size_selector='g'):
             if 'live' in ptr_info:
                 m = re.search('live \((0x[0-9a-f]+)', ptr_info)
                 if m:
-                    obj_start = int(m.group(1), 0)
+                    obj_start = long(m.group(1), 0)
                     addr = int(line, 0)
                     offset = addr - obj_start
                     yield obj_start, offset
@@ -1137,3 +1243,4 @@ scylla_task_stats()
 scylla_tasks()
 scylla_find()
 scylla_task_histogram()
+scylla_active_sstables()
