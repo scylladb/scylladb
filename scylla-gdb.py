@@ -149,16 +149,16 @@ def find_db(shard):
 def find_dbs():
     return [find_db(shard) for shard in range(cpus())]
 
-def list_unordered_map(map):
+def list_unordered_map(map, cache=True):
     kt = map.type.template_argument(0)
     vt = map.type.template_argument(1)
-    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(kt.name, vt.name))
-    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
+    value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>' ).pointer()
     h = map['_M_h']
     p = h['_M_before_begin']['_M_nxt']
     while p:
         pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
-        yield (pc['first'], pc['second'].address)
+        yield (pc['first'], pc['second'])
         p = p['_M_nxt']
     raise StopIteration()
 
@@ -182,7 +182,7 @@ class scylla_keyspaces(gdb.Command):
             db = find_db(shard)
             keyspaces = db['_keyspaces']
             for (key, value) in list_unordered_map(keyspaces):
-                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value))
+                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, str(key), value.address))
 
 class scylla_column_families(gdb.Command):
     def __init__(self):
