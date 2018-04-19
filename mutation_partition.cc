@@ -443,7 +443,10 @@ void
 mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
     clustered_row(s, key).apply(row_marker(created_at));
 }
-
+void mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at,
+        gc_clock::duration ttl, gc_clock::time_point expiry) {
+    clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
+}
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
     auto e = current_allocator().construct<rows_entry>(key, std::move(row));
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
