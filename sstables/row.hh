@@ -121,7 +121,6 @@ class data_consume_rows_context : public data_consumer::continuous_data_consumer
 private:
     enum class state {
         ROW_START,
-        ROW_KEY_BYTES,
         DELETION_TIME,
         DELETION_TIME_2,
         DELETION_TIME_3,
@@ -196,14 +195,7 @@ public:
         sstlog.trace("data_consume_row_context {}: state={}, size={}", this, static_cast<int>(_state), data.size());
         switch (_state) {
         case state::ROW_START:
-            // read 2-byte key length into _u16
-            if (read_16(data) != read_status::ready) {
-                _state = state::ROW_KEY_BYTES;
-                break;
-            }
-        case state::ROW_KEY_BYTES:
-            // After previously reading 16-bit length, read key's bytes.
-            if (read_bytes(data, _u16, _key) != read_status::ready) {
+            if (read_short_length_bytes(data, _key) != read_status::ready) {
                 _state = state::DELETION_TIME;
                 break;
             }
