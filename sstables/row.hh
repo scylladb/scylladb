@@ -126,7 +126,6 @@ private:
         DELETION_TIME_3,
         ATOM_START,
         ATOM_START_2,
-        ATOM_NAME_BYTES,
         ATOM_MASK,
         ATOM_MASK_2,
         COUNTER_CELL,
@@ -225,21 +224,10 @@ public:
             }
         }
         case state::ATOM_START:
-            if (read_16(data) == read_status::ready) {
-                if (_u16 == 0) {
-                    // end of row marker
-                    _state = state::ROW_START;
-                    if (_consumer.consume_row_end() ==
-                            row_consumer::proceed::no) {
-                        return row_consumer::proceed::no;
-                    }
-                } else {
-                    _state = state::ATOM_NAME_BYTES;
-                }
-            } else {
+            if (read_short_length_bytes(data, _key) != read_status::ready) {
                 _state = state::ATOM_START_2;
+                break;
             }
-            break;
         case state::ATOM_START_2:
             if (_u16 == 0) {
                 // end of row marker
@@ -249,14 +237,9 @@ public:
                     return row_consumer::proceed::no;
                 }
             } else {
-                _state = state::ATOM_NAME_BYTES;
+                _state = state::ATOM_MASK;
             }
             break;
-        case state::ATOM_NAME_BYTES:
-            if (read_bytes(data, _u16, _key) != read_status::ready) {
-                _state = state::ATOM_MASK;
-                break;
-            }
         case state::ATOM_MASK:
             if (read_8(data) != read_status::ready) {
                 _state = state::ATOM_MASK_2;
