@@ -141,7 +141,6 @@ private:
         RANGE_TOMBSTONE_2,
         RANGE_TOMBSTONE_3,
         RANGE_TOMBSTONE_4,
-        RANGE_TOMBSTONE_5,
         STOP_THEN_ATOM_START,
     } _state = state::ROW_START;
 
@@ -164,7 +163,7 @@ public:
                 || (_state == state::ATOM_MASK_2)
                 || (_state == state::STOP_THEN_ATOM_START)
                 || (_state == state::COUNTER_CELL_2)
-                || (_state == state::RANGE_TOMBSTONE_5)
+                || (_state == state::RANGE_TOMBSTONE_4)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
@@ -373,27 +372,21 @@ public:
             break;
         }
         case state::RANGE_TOMBSTONE:
-            if (read_16(data) != read_status::ready) {
+            if (read_short_length_bytes(data, _val) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_2;
                 break;
             }
         case state::RANGE_TOMBSTONE_2:
-            // read the end column into _val.
-            if (read_bytes(data, _u16, _val) != read_status::ready) {
+            if (read_32(data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_3;
                 break;
             }
         case state::RANGE_TOMBSTONE_3:
-            if (read_32(data) != read_status::ready) {
+            if (read_64(data) != read_status::ready) {
                 _state = state::RANGE_TOMBSTONE_4;
                 break;
             }
         case state::RANGE_TOMBSTONE_4:
-            if (read_64(data) != read_status::ready) {
-                _state = state::RANGE_TOMBSTONE_5;
-                break;
-            }
-        case state::RANGE_TOMBSTONE_5:
         {
             deletion_time del;
             del.local_deletion_time = _u32;
