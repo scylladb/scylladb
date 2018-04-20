@@ -71,6 +71,7 @@ protected:
         READING_U32,
         READING_U64,
         READING_BYTES,
+        READING_U16_BYTES,
         READING_UNSIGNED_VINT,
         READING_UNSIGNED_VINT_WITH_LEN,
     } _prestate = prestate::NONE;
@@ -157,6 +158,15 @@ protected:
             return read_status::waiting;
         }
     }
+    inline read_status read_short_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
+        if (data.size() >= sizeof(uint16_t)) {
+            _u16 = consume_be<uint16_t>(data);
+        } else {
+            _read_bytes_where = &where;
+            return read_partial_int(data, prestate::READING_U16_BYTES);
+        }
+        return read_bytes(data, uint32_t{_u16}, where);
+    }
     inline read_status read_unsigned_vint(temporary_buffer<char>& data) {
         if (data.empty()) {
             _prestate = prestate::READING_UNSIGNED_VINT;
@@ -223,6 +233,7 @@ private:
                 len = sizeof(uint8_t);
                 break;
             case prestate::READING_U16:
+            case prestate::READING_U16_BYTES:
                 len = sizeof(uint16_t);
                 break;
             case prestate::READING_U32:
@@ -254,6 +265,11 @@ private:
                 case prestate::READING_U64:
                     _u64 = net::ntoh(_read_int.uint64);
                     break;
+                case prestate::READING_U16_BYTES:
+                    _u16 = net::ntoh(_read_int.uint16);
+                    _prestate = prestate::NONE;
+                    read_bytes(data, _u16, *_read_bytes_where);
+                    return;
                 default:
                     throw sstables::malformed_sstable_exception(
                             "unknown prestate");
