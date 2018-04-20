@@ -94,6 +94,15 @@ protected:
     temporary_buffer<char>* _read_bytes_where; // which temporary_buffer to set, _key or _val?
 
     enum class read_status { ready, waiting };
+private:
+    inline read_status read_partial_int(temporary_buffer<char>& data, prestate next_state) {
+        std::copy(data.begin(), data.end(), _read_int.bytes);
+        _pos = data.size();
+        data.trim(0);
+        _prestate = next_state;
+        return read_status::waiting;
+    }
+protected:
     inline read_status read_8(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint8_t)) {
             _u8 = consume_be<uint8_t>(data);
@@ -113,11 +122,7 @@ protected:
             _u16 = consume_be<uint16_t>(data);
             return read_status::ready;
         } else {
-            std::copy(data.begin(), data.end(), _read_int.bytes);
-            _pos = data.size();
-            data.trim(0);
-            _prestate = prestate::READING_U16;
-            return read_status::waiting;
+            return read_partial_int(data, prestate::READING_U16);
         }
     }
     inline read_status read_32(temporary_buffer<char>& data) {
@@ -125,11 +130,7 @@ protected:
             _u32 = consume_be<uint32_t>(data);
             return read_status::ready;
         } else {
-            std::copy(data.begin(), data.end(), _read_int.bytes);
-            _pos = data.size();
-            data.trim(0);
-            _prestate = prestate::READING_U32;
-            return read_status::waiting;
+            return read_partial_int(data, prestate::READING_U32);
         }
     }
     inline read_status read_64(temporary_buffer<char>& data) {
@@ -137,11 +138,7 @@ protected:
             _u64 = consume_be<uint64_t>(data);
             return read_status::ready;
         } else {
-            std::copy(data.begin(), data.end(), _read_int.bytes);
-            _pos = data.size();
-            data.trim(0);
-            _prestate = prestate::READING_U64;
-            return read_status::waiting;
+            return read_partial_int(data, prestate::READING_U64);
         }
     }
     inline read_status read_bytes(temporary_buffer<char>& data, uint32_t len, temporary_buffer<char>& where) {
