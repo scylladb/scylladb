@@ -243,16 +243,15 @@ if [ "$TARGET" != "trusty" ]; then
     cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
 fi
 
-sudo cp ./dist/debian/pbuilderrc ~root/.pbuilderrc
 if [ $NO_CLEAN -eq 0 ]; then
     sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
-    sudo -H DIST=$TARGET /usr/sbin/pbuilder clean
-    sudo -H DIST=$TARGET /usr/sbin/pbuilder create --allow-untrusted
+    sudo DIST=$TARGET /usr/sbin/pbuilder clean --configfile ./dist/debian/pbuilderrc
+    sudo DIST=$TARGET /usr/sbin/pbuilder create --configfile ./dist/debian/pbuilderrc --allow-untrusted
 fi
-sudo -H DIST=$TARGET /usr/sbin/pbuilder update --allow-untrusted
+sudo DIST=$TARGET /usr/sbin/pbuilder update --configfile ./dist/debian/pbuilderrc --allow-untrusted
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ] || [ "$TARGET" = "bionic" ]; then
-    sudo -H DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/ubuntu_enable_ppa.sh
+    sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/ubuntu_enable_ppa.sh
 elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
-    sudo -H DIST=$TARGET /usr/sbin/pbuilder execute --save-after-exec dist/debian/debian_install_gpgkey.sh
+    sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/debian_install_gpgkey.sh
 fi
-sudo -H DIST=$TARGET pdebuild --buildresult build/debs
+sudo DIST=$TARGET pdebuild --configfile ./dist/debian/pbuilderrc --buildresult build/debs
