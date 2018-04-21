@@ -127,8 +127,8 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
-        token t1({dht::token::kind::key,
-             {(int8_t*)d2t(cur_point1 / ring_points.size()).data(), 8}});
+        token t1{dht::token::kind::key,
+             {(int8_t*)d2t(cur_point1 / ring_points.size()).data(), 8}};
         uint64_t cache_hit_count = ars_ptr->get_cache_hits_count();
         auto endpoints1 = ars_ptr->get_natural_endpoints(t1);
 
@@ -145,8 +145,8 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
         //
         cache_hit_count = ars_ptr->get_cache_hits_count();
         double cur_point2 = rp.point - 0.2;
-        token t2({dht::token::kind::key,
-             {(int8_t*)d2t(cur_point2 / ring_points.size()).data(), 8}});
+        token t2{dht::token::kind::key,
+             {(int8_t*)d2t(cur_point2 / ring_points.size()).data(), 8}};
         auto endpoints2 = ars_ptr->get_natural_endpoints(t2);
 
         endpoints_check(ars_ptr, endpoints2);
