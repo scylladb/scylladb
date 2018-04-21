@@ -4615,7 +4615,7 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         auto builder = schema_builder("tests", "test")
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("value", utf8_type);
-        builder.set_compressor_params(compression_parameters({ }));
+        builder.set_compressor_params(compression_parameters());
         auto s = builder.build(schema_builder::compact_storage::no);
         const column_definition& col = *s->get_column_definition("value");
 
