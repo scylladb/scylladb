@@ -424,7 +424,7 @@ public:
 
     template<typename Consumer>
     GCC6_CONCEPT(
-        requires MutationFragmentConsumer<Consumer, decltype(auto)>()
+        requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>()
     )
     decltype(auto) consume(Consumer& consumer) && {
         switch (_kind) {
