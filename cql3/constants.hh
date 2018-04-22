@@ -85,8 +85,8 @@ public:
             virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
             virtual sstring to_string() const override { return "null"; }
         };
-        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
     public:
+        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             if (!is_assignable(test_assignment(db, keyspace, receiver))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
