@@ -32,13 +32,13 @@ static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
 }
 
 class mp_row_consumer_reader : public flat_mutation_reader::impl {
-    friend class mp_row_consumer;
+    friend class mp_row_consumer_k_l;
 public:
     mp_row_consumer_reader(schema_ptr s) : impl(std::move(s)) {}
     virtual void on_end_of_stream() = 0;
 };
 
-class mp_row_consumer : public row_consumer {
+class mp_row_consumer_k_l : public row_consumer {
 public:
     struct new_mutation {
         partition_key key;
@@ -280,7 +280,7 @@ private:
             _out_of_range |= _ck_ranges_walker->out_of_range();
         }
 
-        sstlog.trace("mp_row_consumer {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, pos, _out_of_range, _skip_in_progress);
+        sstlog.trace("mp_row_consumer_k_l {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, pos, _out_of_range, _skip_in_progress);
     }
 
     // Assumes that this and other advance_to() overloads are called with monotonic positions.
@@ -297,7 +297,7 @@ private:
             _out_of_range |= _ck_ranges_walker->out_of_range();
         }
 
-        sstlog.trace("mp_row_consumer {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, rt, _out_of_range, _skip_in_progress);
+        sstlog.trace("mp_row_consumer_k_l {}: advance_to({}) => out_of_range={}, skip_in_progress={}", this, rt, _out_of_range, _skip_in_progress);
     }
 
     void advance_to(const mutation_fragment& mf) {
@@ -309,7 +309,7 @@ private:
     }
 
     void set_up_ck_ranges(const partition_key& pk) {
-        sstlog.trace("mp_row_consumer {}: set_up_ck_ranges({})", this, pk);
+        sstlog.trace("mp_row_consumer_k_l {}: set_up_ck_ranges({})", this, pk);
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges(), _schema->has_static_columns());
         _last_lower_bound_counter = 0;
@@ -321,13 +321,13 @@ private:
 public:
     mutation_opt mut;
 
-    mp_row_consumer(mp_row_consumer_reader* reader,
-                    const schema_ptr schema,
-                    const query::partition_slice& slice,
-                    const io_priority_class& pc,
-                    reader_resource_tracker resource_tracker,
-                    streamed_mutation::forwarding fwd,
-                    const shared_sstable& sst)
+    mp_row_consumer_k_l(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                        reader_resource_tracker resource_tracker,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
         : row_consumer(std::move(resource_tracker), pc)
         , _reader(reader)
         , _schema(schema)
@@ -337,13 +337,13 @@ public:
         , _treat_non_compound_rt_as_compound(!sst->has_correct_non_compound_range_tombstones())
     { }
 
-    mp_row_consumer(mp_row_consumer_reader* reader,
-                    const schema_ptr schema,
-                    const io_priority_class& pc,
-                    reader_resource_tracker resource_tracker,
-                    streamed_mutation::forwarding fwd,
-                    const shared_sstable& sst)
-        : mp_row_consumer(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst) { }
+    mp_row_consumer_k_l(mp_row_consumer_reader* reader,
+                        const schema_ptr schema,
+                        const io_priority_class& pc,
+                        reader_resource_tracker resource_tracker,
+                        streamed_mutation::forwarding fwd,
+                        const shared_sstable& sst)
+        : mp_row_consumer_k_l(reader, schema, schema->full_slice(), pc, std::move(resource_tracker), fwd, sst) { }
 
     virtual proceed consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (!_is_mutation_end) {
@@ -361,7 +361,7 @@ public:
     }
 
     proceed flush() {
-        sstlog.trace("mp_row_consumer {}: flush(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
+        sstlog.trace("mp_row_consumer_k_l {}: flush(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
         flush_pending_collection(*_schema);
         // If _ready is already set we have a bug: get_mutation_fragment()
         // was not called, and below we will lose one clustering row!
@@ -378,7 +378,7 @@ public:
     }
 
     proceed flush_if_needed(range_tombstone&& rt) {
-        sstlog.trace("mp_row_consumer {}: flush_if_needed(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
+        sstlog.trace("mp_row_consumer_k_l {}: flush_if_needed(in_progress={}, ready={}, skip={})", this, _in_progress, _ready, _skip_in_progress);
         proceed ret = proceed::yes;
         if (_in_progress) {
             ret = flush();
@@ -395,7 +395,7 @@ public:
     }
 
     proceed flush_if_needed(bool is_static, position_in_partition&& pos) {
-        sstlog.trace("mp_row_consumer {}: flush_if_needed({})", this, pos);
+        sstlog.trace("mp_row_consumer_k_l {}: flush_if_needed({})", this, pos);
 
         // Part of workaround for #1203
         _first_row_encountered = !is_static;
@@ -712,7 +712,7 @@ public:
     }
 
     virtual void reset(indexable_element el) override {
-        sstlog.trace("mp_row_consumer {}: reset({})", this, static_cast<int>(el));
+        sstlog.trace("mp_row_consumer_k_l {}: reset({})", this, static_cast<int>(el));
         _ready = {};
         if (el == indexable_element::partition) {
             _pending_collection = {};
@@ -734,7 +734,7 @@ public:
     // must be after it.
     //
     stdx::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
-        sstlog.trace("mp_row_consumer {}: fast_forward_to({})", this, r);
+        sstlog.trace("mp_row_consumer_k_l {}: fast_forward_to({})", this, r);
         _out_of_range = _is_mutation_end;
         _fwd_end = std::move(r).end();
 
@@ -744,7 +744,7 @@ public:
         if (_ck_ranges_walker->out_of_range()) {
             _out_of_range = true;
             _ready = {};
-            sstlog.trace("mp_row_consumer {}: no more ranges", this);
+            sstlog.trace("mp_row_consumer_k_l {}: no more ranges", this);
             return { };
         }
 
@@ -757,24 +757,24 @@ public:
         if (_in_progress) {
             advance_to(*_in_progress);
             if (!_skip_in_progress) {
-                sstlog.trace("mp_row_consumer {}: _in_progress in range", this);
+                sstlog.trace("mp_row_consumer_k_l {}: _in_progress in range", this);
                 return { };
             }
         }
 
         if (_out_of_range) {
-            sstlog.trace("mp_row_consumer {}: _out_of_range=true", this);
+            sstlog.trace("mp_row_consumer_k_l {}: _out_of_range=true", this);
             return { };
         }
 
         position_in_partition::less_compare less(*_schema);
         if (!less(start, _fwd_end)) {
             _out_of_range = true;
-            sstlog.trace("mp_row_consumer {}: no overlap with restrictions", this);
+            sstlog.trace("mp_row_consumer_k_l {}: no overlap with restrictions", this);
             return { };
         }
 
-        sstlog.trace("mp_row_consumer {}: advance_context({})", this, start);
+        sstlog.trace("mp_row_consumer_k_l {}: advance_context({})", this, start);
         _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
         return start;
     }
@@ -791,7 +791,7 @@ public:
             return { };
         }
         _last_lower_bound_counter = _ck_ranges_walker->lower_bound_change_counter();
-        sstlog.trace("mp_row_consumer {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
+        sstlog.trace("mp_row_consumer_k_l {}: advance_context({})", this, _ck_ranges_walker->lower_bound());
         return _ck_ranges_walker->lower_bound();
     }
 };

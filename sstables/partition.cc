@@ -60,7 +60,7 @@ concept bool RowConsumer() {
         { t.io_priority() } -> const io_priority_class&;
         { t.is_mutation_end() } -> bool;
         { t.setup_for_partition(pk) } -> void;
-        { t.get_mutation() } -> stdx::optional<mp_row_consumer::new_mutation>;
+        { t.get_mutation() } -> stdx::optional<mp_row_consumer_k_l::new_mutation>;
         { t.push_ready_fragments() } -> row_consumer::proceed;
         { t.maybe_skip() } -> stdx::optional<position_in_partition_view>;
         { t.fast_forward_to(std::move(cr), timeout) } -> stdx::optional<position_in_partition_view>;
@@ -68,7 +68,7 @@ concept bool RowConsumer() {
 }
 )
 
-template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer>
+template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer_k_l>
 GCC6_CONCEPT(
     requires RowConsumer<Consumer>()
 )
