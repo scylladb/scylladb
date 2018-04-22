@@ -31,9 +31,11 @@
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
 #include "db/commitlog/replay_position.hh"
+#include "version.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
+#include "version.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -44,12 +46,17 @@ static inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+struct commitlog_interval {
+    db::replay_position start;
+    db::replay_position end;
+};
+
 struct deletion_time {
     int32_t local_deletion_time;
     int64_t marked_for_delete_at;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(local_deletion_time, marked_for_delete_at); }
 
     bool live() const {
         return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
@@ -73,7 +80,7 @@ struct option {
     disk_string<uint16_t> value;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(key, value); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(key, value); }
 };
 
 struct filter {
@@ -81,7 +88,7 @@ struct filter {
     disk_array<uint32_t, uint64_t> buckets;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(hashes, buckets); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(hashes, buckets); }
 
     // Create an always positive filter if nothing else is specified.
     filter() : hashes(0), buckets({}) {}
@@ -94,7 +101,7 @@ struct filter_ref {
     disk_array_ref<uint32_t, uint64_t> buckets;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(hashes, buckets); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(hashes, buckets); }
     explicit filter_ref(int hashes, const utils::chunked_vector<uint64_t>& buckets) : hashes(hashes), buckets(buckets) {}
 };
 
@@ -255,26 +262,26 @@ class file_writer;
 
 struct metadata {
     virtual ~metadata() {}
-    virtual uint64_t serialized_size() const = 0;
-    virtual void write(file_writer& write) const = 0;
+    virtual uint64_t serialized_size(sstable_version_types v) const = 0;
+    virtual void write(sstable_version_types v, file_writer& write) const = 0;
 };
 
 template <typename T>
-uint64_t serialized_size(const T& object);
+uint64_t serialized_size(sstable_version_types v, const T& object);
 
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, void>
-write(file_writer& out, const T& t);
+write(sstable_version_types v, file_writer& out, const T& t);
 
 // serialized_size() implementation for metadata class
 template <typename Component>
 class metadata_base : public metadata {
 public:
-    virtual uint64_t serialized_size() const override {
-        return sstables::serialized_size(static_cast<const Component&>(*this));
+    virtual uint64_t serialized_size(sstable_version_types v) const override {
+        return sstables::serialized_size(v, static_cast<const Component&>(*this));
     }
-    virtual void write(file_writer& writer) const override {
-        return sstables::write(writer, static_cast<const Component&>(*this));
+    virtual void write(sstable_version_types v, file_writer& writer) const override {
+        return sstables::write(v, writer, static_cast<const Component&>(*this));
     }
 };
 
@@ -283,7 +290,7 @@ struct validation_metadata : public metadata_base<validation_metadata> {
     double filter_chance;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(partitioner, filter_chance); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(partitioner, filter_chance); }
 };
 
 struct compaction_metadata : public metadata_base<compaction_metadata> {
@@ -291,16 +298,19 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
     disk_array<uint32_t, uint8_t> cardinality;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(ancestors, cardinality); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(ancestors, cardinality); }
 };
 
-struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
+struct stats_metadata : public metadata_base<stats_metadata> {
     utils::estimated_histogram estimated_row_size;
     utils::estimated_histogram estimated_column_count;
     db::replay_position position;
     int64_t min_timestamp;
     int64_t max_timestamp;
+    int32_t min_local_deletion_time; // 3_x only
     int32_t max_local_deletion_time;
+    int32_t min_ttl; // 3_x only
+    int32_t max_ttl; // 3_x only
     double compression_ratio;
     utils::streaming_histogram estimated_tombstone_drop_time;
     uint32_t sstable_level;
@@ -308,34 +318,66 @@ struct ka_stats_metadata : public metadata_base<ka_stats_metadata> {
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
     disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     bool has_legacy_counter_shards;
+    int64_t columns_count; // 3_x only
+    int64_t rows_count; // 3_x only
+    db::replay_position commitlog_lower_bound; // 3_x only
+    disk_array<uint32_t, commitlog_interval> commitlog_intervals; // 3_x only
 
     template <typename Describer>
-    auto describe_type(Describer f) {
-        return f(
-            estimated_row_size,
-            estimated_column_count,
-            position,
-            min_timestamp,
-            max_timestamp,
-            max_local_deletion_time,
-            compression_ratio,
-            estimated_tombstone_drop_time,
-            sstable_level,
-            repaired_at,
-            min_column_names,
-            max_column_names,
-            has_legacy_counter_shards
-        );
+    auto describe_type(sstable_version_types v, Describer f) {
+        switch (v) {
+        case sstable_version_types::mc:
+            return f(
+                estimated_row_size,
+                estimated_column_count,
+                position,
+                min_timestamp,
+                max_timestamp,
+                min_ttl,
+                max_ttl,
+                min_local_deletion_time,
+                max_local_deletion_time,
+                compression_ratio,
+                estimated_tombstone_drop_time,
+                sstable_level,
+                repaired_at,
+                min_column_names,
+                max_column_names,
+                has_legacy_counter_shards,
+                columns_count,
+                rows_count,
+                commitlog_lower_bound,
+                commitlog_intervals
+            );
+        case sstable_version_types::ka:
+        case sstable_version_types::la:
+            return f(
+                estimated_row_size,
+                estimated_column_count,
+                position,
+                min_timestamp,
+                max_timestamp,
+                max_local_deletion_time,
+                compression_ratio,
+                estimated_tombstone_drop_time,
+                sstable_level,
+                repaired_at,
+                min_column_names,
+                max_column_names,
+                has_legacy_counter_shards
+            );
+        }
+        // Should never reach here - compiler will complain if switch above does not cover all sstable versions
+        abort();
     }
 };
-using stats_metadata = ka_stats_metadata;
 
 struct disk_token_bound {
     uint8_t exclusive; // really a boolean
     disk_string<uint16_t> token;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(exclusive, token); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(exclusive, token); }
 };
 
 struct disk_token_range {
@@ -343,7 +385,7 @@ struct disk_token_range {
     disk_token_bound right;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(left, right); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(left, right); }
 };
 
 // Scylla-specific sharding information.  This is a set of token
@@ -354,7 +396,7 @@ struct sharding_metadata {
     disk_array<uint32_t, disk_token_range> token_ranges;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(token_ranges); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(token_ranges); }
 };
 
 // Scylla-specific list of features an sstable supports.
@@ -377,7 +419,7 @@ struct sstable_enabled_features {
     }
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(enabled_features); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(enabled_features); }
 };
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
@@ -388,6 +430,7 @@ enum class metadata_type : uint32_t {
     Validation = 0,
     Compaction = 1,
     Stats = 2,
+    Serialization = 3,
 };
 
 enum class scylla_metadata_type : uint32_t {
@@ -422,7 +465,7 @@ struct scylla_metadata {
     }
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(data); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(data); }
 };
 
 static constexpr int DEFAULT_CHUNK_SIZE = 65536;
@@ -433,7 +476,7 @@ struct checksum {
     utils::chunked_vector<uint32_t> checksums;
 
     template <typename Describer>
-    auto describe_type(Describer f) { return f(chunk_size, checksums); }
+    auto describe_type(sstable_version_types v, Describer f) { return f(chunk_size, checksums); }
 };
 
 }

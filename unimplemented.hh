@@ -56,6 +56,7 @@ enum class cause {
     STORAGE_SERVICE,
     SCHEMA_CHANGE,
     MIXED_CF,
+    SSTABLE_FORMAT_M,
 };
 
 [[noreturn]] void fail(cause what);
