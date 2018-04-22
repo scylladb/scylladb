@@ -20,6 +20,7 @@
  */
 
 #include "functions.hh"
+
 #include "function_call.hh"
 #include "token_fct.hh"
 #include "cql3/maps.hh"
@@ -169,16 +170,32 @@ make_to_json_function(data_type t) {
     });
 }
 
+inline
+shared_ptr<function>
+make_from_json_function(database& db, const sstring& keyspace, data_type t) {
+    return make_native_scalar_function<true>("fromjson", t, {utf8_type},
+            [&db, &keyspace, t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
+        Json::Value json_value = json::to_json_value(utf8_type->to_string(parameters[0].value()));
+        bytes_opt parsed_json_value;
+        if (!json_value.isNull()) {
+            parsed_json_value.emplace(t->from_json_object(json_value, sf));
+        }
+        return std::move(parsed_json_value);
+    });
+}
+
 shared_ptr<function>
 functions::get(database& db,
         const sstring& keyspace,
         const function_name& name,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
-        const sstring& receiver_cf) {
+        const sstring& receiver_cf,
+        shared_ptr<column_specification> receiver) {
 
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
+    static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
@@ -197,6 +214,18 @@ functions::get(database& db,
             throw exceptions::invalid_request_exception("toJson() is only valid in SELECT clause");
         }
         return make_to_json_function(sp->get_type());
+    }
+
+    if (name.has_keyspace()
+                ? name == FROM_JSON_FUNCTION_NAME
+                : name.name == FROM_JSON_FUNCTION_NAME.name) {
+        if (provided_args.size() != 1) {
+            throw exceptions::invalid_request_exception("fromJson() accepts 1 argument only");
+        }
+        if (!receiver) {
+            throw exceptions::invalid_request_exception("fromJson() can only be called if receiver type is known");
+        }
+        return make_from_json_function(db, keyspace, receiver->type);
     }
 
     std::vector<shared_ptr<function>> candidates;
@@ -443,7 +472,7 @@ function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<
             [] (auto&& x) -> shared_ptr<assignment_testable> {
         return x;
     });
-    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name);
+    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name, receiver);
     if (!fun) {
         throw exceptions::invalid_request_exception(sprint("Unknown function %s called", _name));
     }
@@ -507,7 +536,7 @@ function_call::raw::test_assignment(database& db, const sstring& keyspace, share
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     try {
-        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver->ks_name, receiver->cf_name);
+        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver->ks_name, receiver->cf_name, receiver);
         if (fun && receiver->type->equals(fun->return_type())) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (!fun || receiver->type->is_value_compatible_with(*fun->return_type())) {

@@ -80,16 +80,18 @@ public:
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
-                                    const sstring& receiver_cf);
+                                    const sstring& receiver_cf,
+                                    ::shared_ptr<column_specification> receiver = nullptr);
     template <typename AssignmentTestablePtrRange>
     static shared_ptr<function> get(database& db,
                                     const sstring& keyspace,
                                     const function_name& name,
                                     AssignmentTestablePtrRange&& provided_args,
                                     const sstring& receiver_ks,
-                                    const sstring& receiver_cf) {
+                                    const sstring& receiver_cf,
+                                    ::shared_ptr<column_specification> receiver = nullptr) {
         const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
-        return get(db, keyspace, name, args, receiver_ks, receiver_cf);
+        return get(db, keyspace, name, args, receiver_ks, receiver_cf, receiver);
     }
     static std::vector<shared_ptr<function>> find(const function_name& name);
     static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
