@@ -451,33 +451,51 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings]
     : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.emplace_back(c, reversed); }
     ;
 
+jsonValue returns [::shared_ptr<cql3::term::raw> value]
+    :
+    | s=STRING_LITERAL { $value = cql3::constants::literal::string(sstring{$s.text}); }
+    | ':' id=ident     { $value = new_bind_variables(id); }
+    | QMARK            { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
+    ;
+
 /**
  * INSERT INTO <CF> (<column>, <column>, <column>, ...)
  * VALUES (<value>, <value>, <value>, ...)
  * USING TIMESTAMP <long>;
  *
  */
-insertStatement returns [::shared_ptr<raw::insert_statement> expr]
+insertStatement returns [::shared_ptr<raw::modification_statement> expr]
     @init {
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
         std::vector<::shared_ptr<cql3::term::raw>> values;
         bool if_not_exists = false;
+        ::shared_ptr<cql3::term::raw> json_value;
     }
     : K_INSERT K_INTO cf=columnFamilyName
           '(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
-        K_VALUES
-          '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
-
-        ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
-        ( usingClause[attrs] )?
-      {
-          $expr = ::make_shared<raw::insert_statement>(std::move(cf),
-                                                   std::move(attrs),
-                                                   std::move(column_names),
-                                                   std::move(values),
-                                                   if_not_exists);
-      }
+        ( K_VALUES
+              '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
+            ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+            ( usingClause[attrs] )?
+              {
+              $expr = ::make_shared<raw::insert_statement>(std::move(cf),
+                                                       std::move(attrs),
+                                                       std::move(column_names),
+                                                       std::move(values),
+                                                       if_not_exists);
+              }
+        | K_JSON
+          json_token=jsonValue { json_value = $json_token.value; }
+            ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+            ( usingClause[attrs] )?
+              {
+              $expr = ::make_shared<raw::insert_json_statement>(std::move(cf),
+                                                       std::move(attrs),
+                                                       std::move(json_value),
+                                                       if_not_exists);
+              }
+        )
     ;
 
 usingClause[::shared_ptr<cql3::attributes::raw> attrs]
