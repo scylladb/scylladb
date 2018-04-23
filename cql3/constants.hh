@@ -203,6 +203,10 @@ public:
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
+            execute(m, prefix, params, column, std::move(value));
+        }
+
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
             if (value.is_null()) {
                 m.set_cell(prefix, column, std::move(make_dead_cell(params)));
             } else if (value.is_value()) {
