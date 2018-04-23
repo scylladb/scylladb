@@ -64,13 +64,15 @@ class single_column_primary_key_restrictions : public primary_key_restrictions<V
     using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
 private:
     schema_ptr _schema;
+    bool _allow_filtering;
     ::shared_ptr<single_column_restrictions> _restrictions;
     bool _slice;
     bool _contains;
     bool _in;
 public:
-    single_column_primary_key_restrictions(schema_ptr schema)
+    single_column_primary_key_restrictions(schema_ptr schema, bool allow_filtering)
         : _schema(schema)
+        , _allow_filtering(allow_filtering)
         , _restrictions(::make_shared<single_column_restrictions>(schema))
         , _slice(false)
         , _contains(false)
@@ -110,7 +112,7 @@ public:
     }
 
     void do_merge_with(::shared_ptr<single_column_restriction> restriction) {
-        if (!_restrictions->empty()) {
+        if (!_restrictions->empty() && !_allow_filtering) {
             auto last_column = *_restrictions->last_column();
             auto new_column = restriction->get_column_def();
 
