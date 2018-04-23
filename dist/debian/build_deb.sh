@@ -237,6 +237,9 @@ fi
 if [ "$TARGET" != "trusty" ]; then
     cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
     sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
+    if [ "$TARGET" = "jessie" ]; then
+        sed -i -e "s#AmbientCapabilities=CAP_SYS_NICE##g" debian/scylla-server.service
+    fi
     cp dist/common/systemd/scylla-housekeeping-daily.service.in debian/scylla-server.scylla-housekeeping-daily.service
     sed -i -e "s#@@REPOFILES@@#'/etc/apt/sources.list.d/scylla*.list'#g" debian/scylla-server.scylla-housekeeping-daily.service
     cp dist/common/systemd/scylla-housekeeping-restart.service.in debian/scylla-server.scylla-housekeeping-restart.service
