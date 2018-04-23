@@ -200,11 +200,9 @@ if __name__ == "__main__":
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
                             '-c1 -m2G'.split() + standard_args))
         test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1'] + standard_args))
-        test_to_run.append(('build/release/tests/sstable_3_x_test', 'boost', ['-c1'] + standard_args))
         test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
     if 'debug' in modes_to_run:
         test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1'] + standard_args))
-        test_to_run.append(('build/debug/tests/sstable_3_x_test', 'boost', ['-c1'] + standard_args))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]

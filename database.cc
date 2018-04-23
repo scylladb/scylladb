@@ -1128,7 +1128,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
         return lister::scan_dir(lister::path(cf._config.datadir) / "upload", { directory_entry_type::regular },
                 [&work] (lister::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-            if (comps.component != component_type::TOC) {
+            if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
             work.descriptors.emplace(comps.generation, std::move(comps));
@@ -1187,7 +1187,7 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
     return do_with(work(start, std::move(all_generations)), [this] (work& work) {
         return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (lister::path parent_dir, directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(parent_dir.native(), de.name);
-            if (comps.component != component_type::TOC) {
+            if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
             }
             // Skip generations that were already loaded by Scylla at a previous stage.
@@ -1920,7 +1920,7 @@ future<sstables::entry_descriptor> distributed_loader::probe_file(distributed<da
     // Every table will have a TOC. Using a specific file as a criteria, as
     // opposed to, say verifying _sstables.count() to be zero is more robust
     // against parallel loading of the directory contents.
-    if (comps.component != component_type::TOC) {
+    if (comps.component != sstable::component_type::TOC) {
         return make_ready_future<entry_descriptor>(std::move(comps));
     }
     auto cf_sstable_open = [sstdir, comps, fname] (column_family& cf, sstables::foreign_sstable_open_info info) {
@@ -1985,28 +1985,28 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
         return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (lister::path sstdir, directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
             auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
-                if (entry.component == component_type::TemporaryStatistics) {
+                if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
-                        entry.format, component_type::TemporaryStatistics));
+                        entry.format, sstables::sstable::component_type::TemporaryStatistics));
                 }
 
                 if (verifier->count(entry.generation)) {
                     if (verifier->at(entry.generation).status == component_status::has_toc_file) {
                         lister::path file_path(sstdir / de.name.c_str());
-                        if (entry.component == component_type::TOC) {
+                        if (entry.component == sstables::sstable::component_type::TOC) {
                             throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
-                        } else if (entry.component == component_type::TemporaryTOC) {
+                        } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
                             throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", file_path.native());
                         }
-                    } else if (entry.component == component_type::TOC) {
+                    } else if (entry.component == sstables::sstable::component_type::TOC) {
                         verifier->at(entry.generation).status = component_status::has_toc_file;
-                    } else if (entry.component == component_type::TemporaryTOC) {
+                    } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
                         verifier->at(entry.generation).status = component_status::has_temporary_toc_file;
                     }
                 } else {
-                    if (entry.component == component_type::TOC) {
+                    if (entry.component == sstables::sstable::component_type::TOC) {
                         verifier->emplace(entry.generation, sstable_descriptor{component_status::has_toc_file, entry.version, entry.format});
-                    } else if (entry.component == component_type::TemporaryTOC) {
+                    } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
                         verifier->emplace(entry.generation, sstable_descriptor{component_status::has_temporary_toc_file, entry.version, entry.format});
                     } else {
                         verifier->emplace(entry.generation, sstable_descriptor{component_status::has_some_file, entry.version, entry.format});

@@ -25,7 +25,6 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "compound.hh"
 #include "schema.hh"
-#include "sstables/version.hh"
 
 //
 // This header provides adaptors between the representation used by our compound_type<>
@@ -303,7 +302,7 @@ private:
     }
 public:
     template <typename Describer>
-    auto describe_type(sstables::sstable_version_types v, Describer f) const {
+    auto describe_type(Describer f) const {
         return f(const_cast<bytes&>(_bytes));
     }
 

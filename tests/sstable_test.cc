@@ -239,7 +239,7 @@ struct sstdesc {
     int64_t gen;
 };
 
-static future<> compare_files(sstdesc file1, sstdesc file2, component_type component) {
+static future<> compare_files(sstdesc file1, sstdesc file2, sstable::component_type component) {
     auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
     return read_file(file_path).then([component, file2] (auto ret) {
         auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
@@ -254,7 +254,7 @@ static future<> compare_files(sstdesc file1, sstdesc file2, component_type compo
 
 }
 
-static future<> check_component_integrity(component_type component) {
+static future<> check_component_integrity(sstable::component_type component) {
     auto tmp = make_lw_shared<tmpdir>();
     auto s = make_lw_shared(schema({}, "ks", "cf", {}, {}, {}, {}, utf8_type));
     return write_sst_info(s, "tests/sstables/compressed", tmp->path, 1).then([component, tmp] {
@@ -265,7 +265,7 @@ static future<> check_component_integrity(component_type component) {
 }
 
 SEASTAR_TEST_CASE(check_compressed_info_func) {
-    return check_component_integrity(component_type::CompressionInfo);
+    return check_component_integrity(sstable::component_type::CompressionInfo);
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {
@@ -287,7 +287,7 @@ SEASTAR_TEST_CASE(check_summary_func) {
 }
 
 SEASTAR_TEST_CASE(check_filter_func) {
-    return check_component_integrity(component_type::Filter);
+    return check_component_integrity(sstable::component_type::Filter);
 }
 
 SEASTAR_TEST_CASE(check_statistics_func) {
@@ -891,7 +891,7 @@ SEASTAR_TEST_CASE(wrong_range) {
 
 static future<>
 test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
-    auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, component_type::Data);
+    auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, sstable::component_type::Data);
     return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
         if (exists) {
             BOOST_CHECK_NO_THROW(f.get0());
@@ -918,7 +918,7 @@ SEASTAR_TEST_CASE(set_generation) {
         }).then([] {
             return compare_files(sstdesc{uncompressed_dir(), 1 },
                                  sstdesc{generation_dir(), 2 },
-                                 component_type::Data);
+                                 sstable::component_type::Data);
         });
     }, generation_dir());
 }
