@@ -110,7 +110,8 @@ enum class messaging_verb : int32_t {
     SCHEMA_CHECK = 22,
     COUNTER_MUTATION = 23,
     MUTATION_FAILED = 24,
-    LAST = 25,
+    STREAM_MUTATION_FRAGMENTS = 25,
+    LAST = 26,
 };
 
 } // namespace netw
@@ -241,6 +242,12 @@ public:
     // Wrapper for STREAM_MUTATION verb
     void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, rpc::optional<bool>)>&& func);
     future<> send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id, bool fragmented);
+
+    // Wrapper for STREAM_MUTATION_FRAGMENTS
+    // The receiver of STREAM_MUTATION_FRAGMENTS sends status code to the sender to notify any error on the receiver side. The status code is of type int32_t. 0 means successful, -1 means error, other status code value are reserved for future use.
+    void register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::source<frozen_mutation_fragment> source)>&& func);
+    rpc::sink<int32_t> make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment>& source);
+    future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>> make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, msg_addr id);
 
     void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
     future<> send_stream_mutation_done(msg_addr id, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id);
