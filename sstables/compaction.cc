@@ -609,6 +609,27 @@ class resharding_compaction final : public compaction {
     shard_id _shard; // shard of current sstable writer
     std::function<shared_sstable(shard_id)> _sstable_creator;
     compaction_backlog_tracker _resharding_backlog_tracker;
+
+    // Partition count estimation for a shard S:
+    //
+    // TE, the total estimated partition count for a shard S, is defined as
+    // TE = Sum(i = 0...N) { Ei / Si }.
+    //
+    // where i is an input sstable that belongs to shard S,
+    //       Ei is the estimated partition count for sstable i,
+    //       Si is the total number of shards that own sstable i.
+    //
+    struct estimated_values {
+        uint64_t estimated_size = 0;
+        uint64_t estimated_partitions = 0;
+    };
+    std::vector<estimated_values> _estimation_per_shard;
+private:
+    // return estimated partitions per sstable for a given shard
+    uint64_t partitions_per_sstable(shard_id s) const {
+        uint64_t estimated_sstables = std::max(uint64_t(1), uint64_t(ceil(double(_estimation_per_shard[s].estimated_size) / _max_sstable_size)));
+        return ceil(double(_estimation_per_shard[s].estimated_partitions) / estimated_sstables);
+    }
 public:
     resharding_compaction(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable(shard_id)> creator,
             uint64_t max_sstable_size, uint32_t sstable_level)
@@ -616,10 +637,19 @@ public:
         , _output_sstables(smp::count)
         , _sstable_creator(std::move(creator))
         , _resharding_backlog_tracker(std::make_unique<resharding_backlog_tracker>())
+        , _estimation_per_shard(smp::count)
     {
         cf.get_compaction_manager().register_backlog_tracker(_resharding_backlog_tracker);
-        for (auto& s : _sstables) {
-            _resharding_backlog_tracker.add_sstable(s);
+        for (auto& sst : _sstables) {
+            _resharding_backlog_tracker.add_sstable(sst);
+
+            const auto& shards = sst->get_shards_for_this_sstable();
+            auto size = sst->bytes_on_disk();
+            auto estimated_partitions = sst->get_estimated_key_count();
+            for (auto& s : shards) {
+                _estimation_per_shard[s].estimated_size += std::max(uint64_t(1), uint64_t(ceil(double(size) / shards.size())));
+                _estimation_per_shard[s].estimated_partitions += std::max(uint64_t(1), uint64_t(ceil(double(estimated_partitions) / shards.size())));
+            }
         }
         _info->type = compaction_type::Reshard;
     }
@@ -665,7 +695,7 @@ public:
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
             auto&& priority = service::get_local_compaction_priority();
-            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, priority, _shard));
+            writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(_shard), cfg, priority, _shard));
         }
         return &*writer;
     }
