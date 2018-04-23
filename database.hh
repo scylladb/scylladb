@@ -629,6 +629,8 @@ public:
     flat_mutation_reader make_streaming_reader(schema_ptr schema,
             const dht::partition_range_vector& ranges) const;
 
+    sstables::shared_sstable make_streaming_sstable_for_write();
+
     mutation_source as_mutation_source() const;
 
     void set_virtual_reader(mutation_source virtual_reader) {

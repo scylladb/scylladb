@@ -681,6 +681,17 @@ table::make_reader(schema_ptr s,
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
+sstables::shared_sstable
+table::make_streaming_sstable_for_write() {
+    sstring dir = _config.datadir;
+    auto newtab = sstables::make_sstable(_schema,
+            dir, calculate_generation_for_new_table(),
+            get_highest_supported_format(),
+            sstables::sstable::format_types::big);
+    dblog.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
+    return newtab;
+}
+
 flat_mutation_reader
 table::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
