@@ -259,6 +259,7 @@ void messaging_service::start_listen() {
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
+    so.streaming_domain = rpc::streaming_domain_type(0x55AA);
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
