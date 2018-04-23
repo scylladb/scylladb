@@ -362,6 +362,8 @@ arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_i
                         help='enable allocation failure injection')
 arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default=None,
                         help='path to antlr3 executable')
+arg_parser.add_argument('--with-ragel', dest='ragel_exec', action='store', default=None,
+                        help='path to ragel executable')
 args = arg_parser.parse_args()
 
 defines = []
@@ -985,6 +987,11 @@ if args.antlr3_exec:
 else:
     antlr3_exec = "antlr3"
 
+if args.ragel_exec:
+    ragel_exec = args.ragel_exec
+else:
+    ragel_exec = "ragel"
+
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
@@ -998,7 +1005,7 @@ with open(buildfile, 'w') as f:
         pool seastar_pool
             depth = 1
         rule ragel
-            command = ragel -G2 -o $out $in
+            command = {ragel_exec} -G2 -o $out $in
             description = RAGEL $out
         rule gen
             command = echo -e $text > $out
