@@ -203,6 +203,14 @@ public:
     future<> remove_component(sstable::component_type c) {
         return remove_file(_sst->filename(c));
     }
+
+    const sstring filename(sstable::component_type c) const {
+        return _sst->filename(c);
+    }
+
+    void set_shards(std::vector<unsigned> shards) {
+        _sst->_shards = std::move(shards);
+    }
 };
 
 inline sstring get_test_dir(const sstring& name, const sstring& ks, const sstring& cf)
