@@ -85,7 +85,7 @@ class insert_prepared_json_statement : public update_statement {
 public:
     insert_prepared_json_statement(uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, uint64_t* cql_stats_counter_ptr, ::shared_ptr<term> t)
         : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), cql_stats_counter_ptr), _term(t) {
-        _restrictions = ::make_shared<restrictions::statement_restrictions>(s);
+        _restrictions = ::make_shared<restrictions::statement_restrictions>(s, false);
     }
 private:
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) override;

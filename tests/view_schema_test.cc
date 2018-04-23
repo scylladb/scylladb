@@ -1784,10 +1784,50 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_unrestricted_part) {
     });
 }
 
-// FIXME: Requires re-organization of validation around relations and restrictions (#2367)
-#if 0
+// Test that although normal SELECT queries limit the ability to query
+// for slices (ranges) of partition keys, because there is no way to implement
+// such queries efficiently, the same slices *do* work for the SELECT statement
+// defining a materialized view - there the condition is tested for each
+// partition separately, so the performance concerns do not hold.
+// This verifies part of issue #2367. See also test_clustering_key_in_restrictions.
 SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
     return do_with_cql_env_thread([] (auto& e) {
+        // Although the test below tests that slices are allowed in MV's
+        // SELECT, let's first verify that these slices are still *not*
+        // allowed in ordinary SELECT queries:
+
+        e.execute_cql("create table cf (a int, b int, primary key (a))").get();
+        try {
+            e.execute_cql("select * from cf where a > 0").get();
+            BOOST_FAIL("slice query of partition key");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "Only EQ and IN relation are supported on the
+            // partition key (unless you use the token() function)"
+        }
+        e.execute_cql("drop table cf").get();
+
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a, b, c))").get();
+        try {
+            e.execute_cql("select * from cf where a = 1 and b > 0 and c > 0").get();
+            BOOST_FAIL("slice of clustering key with non-contiguous range");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "Clustering column "c" cannot be restricted
+            // (preceding column "b" is restricted by a non-EQ relation)"
+        }
+        e.execute_cql("drop table cf").get();
+
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a, b, c))").get();
+        try {
+            e.execute_cql("select * from cf where a = 1 and c = 1 and b > 0").get();
+            BOOST_FAIL("slice of clustering key with non-contiguous range");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "PRIMARY KEY column "c" cannot be restricted
+            // (preceding column "b" is restricted by a non-EQ relation)
+        }
+        e.execute_cql("drop table cf").get();
+
+
+        // And now for the actual MV tests, where the slices should be allowed:
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
             e.execute_cql(sprint("create materialized view vcf as select * from cf "
@@ -1846,7 +1886,6 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
         }
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(test_partition_key_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
@@ -2213,8 +2252,7 @@ SEASTAR_TEST_CASE(test_clustering_key_slice_restrictions) {
     });
 }
 
-// FIXME: Requires re-organization of validation around relations and restrictions (#2367)
-#if 0
+// Another test for issue #2367.
 SEASTAR_TEST_CASE(test_clustering_key_in_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
@@ -2279,7 +2317,6 @@ SEASTAR_TEST_CASE(test_clustering_key_in_restrictions) {
         }
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(test_clustering_key_multi_column_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
