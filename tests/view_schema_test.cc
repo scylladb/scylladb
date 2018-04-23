@@ -1292,27 +1292,6 @@ SEASTAR_TEST_CASE(test_update) {
     });
 }
 
-SEASTAR_TEST_CASE(test_ignore_update) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select p, c, v1 from cf "
-                      "where p is not null and c is not null and v1 is not null primary key (c, p)").get();
-
-        e.execute_cql("insert into cf (p, c, v2) values (0, 0, 0)").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get0();
-        assert_that(msg).is_rows()
-                .with_size(1);
-        });
-        e.execute_cql("update cf set v2 = 3 where p = 1 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get0();
-        assert_that(msg).is_rows()
-                .with_size(1);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c));").get();
@@ -2933,6 +2912,30 @@ void complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(cql_test_en
     eventually([&] {
     auto msg = e.execute_cql("select * from vcf").get0();
     assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(2)}, {int32_type->decompose(1)}, {}, {} }});
+    });
+
+    // Reset values TS=10
+    e.execute_cql("insert into cf (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 10").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get0();
+    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(4)}, {long_type->decompose(10L)} }});
+    });
+
+    // Update values TS=20
+    e.execute_cql("update cf using timestamp 20 set v2 = 5 where p = 1 and c = 2").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get0();
+    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
+    });
+
+    // Delete row TS=10
+    e.execute_cql("delete from cf using timestamp 10 where p = 1 and c = 2").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf").get0();
+    assert_that(msg).is_rows().with_rows({{ { }, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
     });
 
     e.execute_cql("drop materialized view vcf").get();
