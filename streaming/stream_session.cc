@@ -391,12 +391,12 @@ void stream_session::start_streaming_files() {
         set_state(stream_session_state::STREAMING);
     }
     do_for_each(_transfers.begin(), _transfers.end(), [this] (auto& item) {
-        sslog.debug("[Stream #{}] Start to send cf_id={}", plan_id(), item.first);
+        sslog.debug("[Stream #{}] Start to send cf_id={}", this->plan_id(), item.first);
         return item.second.execute();
     }).then([this] {
         this->transfer_task_completed_all();
     }).handle_exception([this] (auto ep) {
-        sslog.warn("[Stream #{}] Failed to send: {}", plan_id(), ep);
+        sslog.warn("[Stream #{}] Failed to send: {}", this->plan_id(), ep);
         this->on_error();
     });
 }
