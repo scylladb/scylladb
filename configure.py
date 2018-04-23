@@ -360,6 +360,8 @@ arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
                         help='enable allocation failure injection')
+arg_parser.add_argument('--with-antlr3', dest='antlr3_exec', action='store', default=None,
+                        help='path to antlr3 executable')
 args = arg_parser.parse_args()
 
 defines = []
@@ -978,6 +980,11 @@ do_sanitize = True
 if args.static:
     do_sanitize = False
 
+if args.antlr3_exec:
+    antlr3_exec = args.antlr3_exec
+else:
+    antlr3_exec = "antlr3"
+
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
@@ -1037,7 +1044,7 @@ with open(buildfile, 'w') as f:
                 # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
                 # name, we also add a global typedef to avoid compilation errors. 
                 command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in $
-                     && antlr3 $builddir/{mode}/gen/$in $
+                     && {antlr3_exec} $builddir/{mode}/gen/$in $
                      && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
                         -e '1i using ExceptionBaseType = int;' $
                         -e 's/^{{/{{ ExceptionBaseType\* ex = nullptr;/; $
@@ -1045,7 +1052,7 @@ with open(buildfile, 'w') as f:
                             s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/' $
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
-            ''').format(mode = mode, **modeval))
+            ''').format(mode = mode, antlr3_exec = antlr3_exec, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
