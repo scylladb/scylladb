@@ -81,6 +81,27 @@ public:
 
 };
 
+class insert_json_statement : public raw::modification_statement {
+private:
+    ::shared_ptr<cf_name> _name;
+    ::shared_ptr<attributes::raw> _attrs;
+    ::shared_ptr<term::raw> _json_value;
+    bool _if_not_exists;
+public:
+    /**
+     * A parsed <code>INSERT JSON</code> statement.
+     *
+     * @param name column family being operated on
+     * @param json_value JSON string representing names and values
+     * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
+     */
+    insert_json_statement(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, ::shared_ptr<term::raw> json_value, bool if_not_exists);
+
+    virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(database& db, schema_ptr schema,
+                ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs, cql_stats& stats) override;
+
+};
+
 }
 
 }

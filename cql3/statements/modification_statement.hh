@@ -112,9 +112,11 @@ private:
         };
 
     uint64_t* _cql_modification_counter_ptr = nullptr;
-
+protected:
     ::shared_ptr<restrictions::statement_restrictions> _restrictions;
 public:
+    typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
+
     modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr);
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
@@ -123,7 +125,7 @@ public:
 
     virtual bool allow_clustering_key_slices() const = 0;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) = 0;
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) = 0;
 
     virtual uint32_t get_bound_terms() override;
 
@@ -186,10 +188,11 @@ public:
 
     void process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
 
-private:
-    dht::partition_range_vector build_partition_keys(const query_options& options);
-    query::clustering_row_ranges create_clustering_ranges(const query_options& options);
+protected:
+    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache);
+    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache);
 
+private:
     bool applies_only_to_static_columns() const {
         return _sets_static_columns && !_sets_regular_columns;
     }
@@ -368,6 +371,7 @@ protected:
      * @throws InvalidRequestException
      */
     virtual void validate_where_clause_for_conditions();
+    virtual json_cache_opt maybe_prepare_json_cache(const query_options& options);
     friend class raw::modification_statement;
 };
 
