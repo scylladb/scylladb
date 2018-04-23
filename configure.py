@@ -837,6 +837,22 @@ for pkglist in optional_packages:
             alternatives = ':'.join(pkglist[1:])
             print('Missing optional package {pkglist[0]} (or alteratives {alternatives})'.format(**locals()))
 
+
+compiler_test_src = '''
+#if __GNUC__ < 7
+    #error "MAJOR"
+#elif __GNUC__ == 7
+    #if __GNUC_MINOR__ < 3
+        #error "MINOR"
+    #endif
+#endif
+
+int main() { return 0; }
+'''
+if not try_compile_and_link(compiler=args.cxx, source=compiler_test_src):
+    print('Wrong GCC version. Scylla needs GCC >= 7.3 to compile.')
+    sys.exit(1)
+
 if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
     print('Boost not installed.  Please install {}.'.format(pkgname("boost-devel")))
     sys.exit(1)
