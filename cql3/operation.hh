@@ -87,15 +87,15 @@ public:
 
     virtual ~operation() {}
 
-    atomic_cell make_dead_cell(const update_parameters& params) const {
+    static atomic_cell make_dead_cell(const update_parameters& params) {
         return params.make_dead_cell();
     }
 
-    atomic_cell make_cell(bytes_view value, const update_parameters& params) const {
+    static atomic_cell make_cell(bytes_view value, const update_parameters& params) {
         return params.make_cell(value);
     }
 
-    atomic_cell make_counter_update_cell(int64_t delta, const update_parameters& params) const {
+    static atomic_cell make_counter_update_cell(int64_t delta, const update_parameters& params) {
         return params.make_counter_update_cell(delta);
     }
 

@@ -71,7 +71,32 @@ private:
 
     virtual bool allow_clustering_key_slices() const override;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params) override;
+    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) override;
+
+    virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache);
+};
+
+/*
+ * Update statement specification that has specifically one bound name - a JSON string.
+ * Overridden add_update_for_key uses this parsed JSON to look up values for columns.
+ */
+class insert_prepared_json_statement : public update_statement {
+    ::shared_ptr<term> _term;
+public:
+    insert_prepared_json_statement(uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, uint64_t* cql_stats_counter_ptr, ::shared_ptr<term> t)
+        : update_statement(statement_type::INSERT, bound_terms, s, std::move(attrs), cql_stats_counter_ptr), _term(t) {
+        _restrictions = ::make_shared<restrictions::statement_restrictions>(s);
+    }
+private:
+    virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) override;
+
+    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) override;
+
+    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) override;
+
+    json_cache_opt maybe_prepare_json_cache(const query_options& options) override;
+
+    void execute_set_value(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const bytes_opt& value);
 };
 
 }

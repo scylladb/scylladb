@@ -225,7 +225,12 @@ sets::marker::bind(const query_options& options) {
 
 void
 sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) {
-    const auto& value = _t->bind(params._options);
+    auto value = _t->bind(params._options);
+    execute(m, row_key, params, column, std::move(value));
+}
+
+void
+sets::setter::execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
     if (value == constants::UNSET_VALUE) {
         return;
     }

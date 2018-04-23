@@ -113,6 +113,7 @@ public:
                 : operation(column, std::move(t)) {
         }
         virtual void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params) override;
+        static void execute(mutation& m, const clustering_key_prefix& row_key, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value);
     };
 
     class adder : public operation {

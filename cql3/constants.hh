@@ -85,8 +85,8 @@ public:
             virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
             virtual sstring to_string() const override { return "null"; }
         };
-        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
     public:
+        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             if (!is_assignable(test_assignment(db, keyspace, receiver))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
@@ -203,6 +203,10 @@ public:
 
         virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override {
             auto value = _t->bind_and_get(params._options);
+            execute(m, prefix, params, column, std::move(value));
+        }
+
+        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
             if (value.is_null()) {
                 m.set_cell(prefix, column, std::move(make_dead_cell(params)));
             } else if (value.is_value()) {

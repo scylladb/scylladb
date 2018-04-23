@@ -237,7 +237,12 @@ lists::precision_time::get_next(db_clock::time_point millis) {
 
 void
 lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
-    const auto& value = _t->bind(params._options);
+    auto value = _t->bind(params._options);
+    execute(m, prefix, params, column, std::move(value));
+}
+
+void
+lists::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, ::shared_ptr<terminal> value) {
     if (value == constants::UNSET_VALUE) {
         return;
     }

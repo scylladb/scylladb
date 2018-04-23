@@ -2608,7 +2608,7 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
     });
 }
 
-SEASTAR_TEST_CASE(test_json_types) {
+SEASTAR_TEST_CASE(test_select_json_types) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(
             "CREATE TABLE all_types ("
@@ -2665,7 +2665,7 @@ SEASTAR_TEST_CASE(test_json_types) {
                 utf8_type->decompose(
                     "{\"a\": \"ascii\", "
                     "\"b\": 123456789, "
-                    "\"c\": \"deadbeef\", "
+                    "\"c\": \"0xdeadbeef\", "
                     "\"d\": true, "
                     "\"e\": 3.14, "
                     "\"f\": 3.14, "
@@ -2696,7 +2696,7 @@ SEASTAR_TEST_CASE(test_json_types) {
             {
                 utf8_type->decompose("\"ascii\""),
                 utf8_type->decompose("123456789"),
-                utf8_type->decompose("\"deadbeef\""),
+                utf8_type->decompose("\"0xdeadbeef\""),
                 utf8_type->decompose("true"),
                 utf8_type->decompose("3.14"),
                 utf8_type->decompose("3.14"),
@@ -2721,7 +2721,7 @@ SEASTAR_TEST_CASE(test_json_types) {
     });
 }
 
-SEASTAR_TEST_CASE(test_json_collections) {
+SEASTAR_TEST_CASE(test_select_json_collections) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(
             "CREATE TABLE collections ("
@@ -2771,5 +2771,189 @@ SEASTAR_TEST_CASE(test_json_collections) {
             e.execute_cql("SELECT toJson() FROM collections WHERE a = 'key'").get();
             BOOST_FAIL("should've thrown");
         } catch (...) {}
+    });
+}
+
+SEASTAR_TEST_CASE(test_insert_json_types) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+            "CREATE TABLE all_types ("
+                "    a ascii PRIMARY KEY,"
+                "    b bigint,"
+                "    c blob,"
+                "    d boolean,"
+                "    e double,"
+                "    f float,"
+                "    g inet,"
+                "    h int,"
+                "    i text,"
+                "    j timestamp,"
+                "    k timeuuid,"
+                "    l uuid,"
+                "    m varchar,"
+                "    n varint,"
+                "    o decimal,"
+                "    p tinyint,"
+                "    q smallint,"
+                "    r date,"
+                "    s time,"
+                "    u duration,"
+                ");").get();
+
+        e.require_table_exists("ks", "all_types").get();
+        e.execute_cql(
+            "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) JSON '"
+                "{\"a\": \"ascii\", "
+                "\"b\": 123456789, "
+                "\"c\": \"0xdeadbeef\", "
+                "\"d\": true, "
+                "\"e\": 3.14, "
+                "\"f\": 3.14, "
+                "\"g\": \"127.0.0.1\", "
+                "\"h\": 3, "
+                "\"i\": \"zażółć gęślą jaźń\", "
+                "\"j\": \"2001-10-18T14:15:55.134+0000\", "
+                "\"k\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
+                "\"l\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
+                "\"m\": \"varchar\", "
+                "\"n\": 123, "
+                "\"o\": 1.23, "
+                "\"p\": 3, "
+                "\"q\": 3, "
+                "\"r\": \"1970-01-02\", "
+                "\"s\": \"00:00:00.000000001\", "
+                "\"u\": \"1y2mo25d5h6m7s8ms9us10ns\"}"
+                "'").get();
+
+        auto msg = e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'").get0();
+        struct tm t = { 0 };
+        t.tm_year = 2001 - 1900;
+        t.tm_mon = 10 - 1;
+        t.tm_mday = 18;
+        t.tm_hour = 14;
+        t.tm_min = 15;
+        t.tm_sec = 55;
+        auto tp = db_clock::from_time_t(timegm(&t)) + std::chrono::milliseconds(134);
+        assert_that(msg).is_rows().with_rows({
+            {
+                ascii_type->decompose(sstring("ascii")), long_type->decompose(123456789l),
+                from_hex("deadbeef"), boolean_type->decompose(true),
+                double_type->decompose(3.14), float_type->decompose(3.14f),
+                inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
+                int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                timestamp_type->decompose(tp),
+                timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123)),
+                decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(123) }),
+                byte_type->decompose(int8_t(3)),
+                short_type->decompose(int16_t(3)),
+                simple_date_type->decompose(int32_t(0x80000001)),
+                time_type->decompose(int64_t(0x0000000000000001)),
+                duration_type->decompose(cql_duration("1y2mo3w4d5h6m7s8ms9us10ns"))
+            }
+        });
+
+        e.execute_cql("UPDATE all_types SET b = fromJson('42') WHERE a = fromJson('\"ascii\"');").get();
+        e.execute_cql("UPDATE all_types SET i = fromJson('\"zażółć gęślą jaźń\"') WHERE a = fromJson('\"ascii\"');").get();
+
+        msg = e.execute_cql("SELECT a, b, i FROM all_types WHERE a = 'ascii'").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                ascii_type->decompose(sstring("ascii")),
+                long_type->decompose(42l),
+                utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_insert_json_collections) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql(
+            "CREATE TABLE collections ("
+                "    a text PRIMARY KEY,"
+                "    b map<int, text>,"
+                "    c set<float>,"
+                "    d list<frozen<list<tinyint>>>"
+                ");").get();
+
+        e.require_table_exists("ks", "collections").get();
+
+        e.execute_cql(
+            "INSERT INTO collections (a, b, c, d) JSON '"
+                "{\"a\": \"key\", "
+                "\"b\": {\"1\": \"abc\", \"2\": \"!\", \"3\": \"de\"}, "
+                "\"c\": [0, 1.125, 2.25, 4.5], "
+                "\"d\": [[3, 1, 4, 1, 5, 9], [], [1, 1, 2]]}"
+                "'").get();
+
+        auto msg = e.execute_cql("SELECT JSON * FROM collections WHERE a = 'key'").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                utf8_type->decompose(
+                    "{\"a\": \"key\", "
+                    "\"b\": {\"1\": \"abc\", \"2\": \"!\", \"3\": \"de\"}, "
+                    "\"c\": [0, 1.125, 2.25, 4.5], "
+                    "\"d\": [[3, 1, 4, 1, 5, 9], [], [1, 1, 2]]}"
+                )
+            }
+         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_prepared_json) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto prepared = e.execute_cql(
+            "CREATE TABLE json_data ("
+                "    a text PRIMARY KEY,"
+                "    b map<int, text>,"
+                "    c decimal,"
+                "    d list<float>"
+                ");").get();
+
+        e.require_table_exists("ks", "json_data").get();
+
+        cql3::prepared_cache_key_type prepared_id = e.prepare(
+            "begin batch \n"
+                "  insert into json_data (k, v) json :named_bound0; \n"
+                "  insert into json_data (k, v) json ?; \n"
+                "  insert into json_data (k, v) json :named_bound1; \n"
+                "  insert into json_data (k, v) json ?; \n"
+                "apply batch;").get0();
+
+        std::vector<cql3::raw_value> raw_values;
+        raw_values.emplace_back(cql3::raw_value::make_value(utf8_type->decompose(
+            "{\"a\": \"a1\", \"b\": {\"3\": \"three\", \"6\": \"six\", \"0\": \"zero\"}, \"c\": 1.23, \"d\": [1.25, 3.75, 2.5]}")));
+        raw_values.emplace_back(cql3::raw_value::make_value(utf8_type->decompose(
+            "{\"a\": \"a2\", \"b\": {\"6\": \"six\", \"0\": \"zero\"}, \"c\": 1.23, \"d\": [3.75, 2.5]}")));
+        raw_values.emplace_back(cql3::raw_value::make_value(utf8_type->decompose(
+            "{\"a\": \"a3\", \"b\": {\"3\": \"three\", \"0\": \"zero\"}, \"c\": 1.23, \"d\": [1.25, 2.5]}")));
+        raw_values.emplace_back(cql3::raw_value::make_value(utf8_type->decompose(
+            "{\"a\": \"a4\", \"b\": {\"1\": \"one\"}, \"c\": 1.23, \"d\": [1]}")));
+
+        e.execute_prepared(prepared_id, raw_values).get();
+
+        auto msg = e.execute_cql("select json * from json_data where a='a1'").get0();
+        assert_that(msg).is_rows().with_rows({{
+                utf8_type->decompose(
+                    "{\"a\": \"a1\", \"b\": {\"0\": \"zero\", \"3\": \"three\", \"6\": \"six\"}, \"c\": 1.23, \"d\": [1.25, 3.75, 2.5]}")
+        }});
+        msg = e.execute_cql("select json * from json_data where a='a2'").get0();
+        assert_that(msg).is_rows().with_rows({{
+                utf8_type->decompose(
+                    "{\"a\": \"a2\", \"b\": {\"0\": \"zero\", \"6\": \"six\"}, \"c\": 1.23, \"d\": [3.75, 2.5]}")
+        }});
+        msg = e.execute_cql("select json * from json_data where a='a3'").get0();
+        assert_that(msg).is_rows().with_rows({{
+                utf8_type->decompose(
+                    "{\"a\": \"a3\", \"b\": {\"0\": \"zero\", \"3\": \"three\"}, \"c\": 1.23, \"d\": [1.25, 2.5]}")
+        }});
+        msg = e.execute_cql("select json * from json_data where a='a4'").get0();
+        assert_that(msg).is_rows().with_rows({{
+                utf8_type->decompose(
+                    "{\"a\": \"a4\", \"b\": {\"1\": \"one\"}, \"c\": 1.23, \"d\": [1]}")
+        }});
+
     });
 }

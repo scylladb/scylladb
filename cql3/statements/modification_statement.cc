@@ -151,10 +151,11 @@ future<> modification_statement::check_access(const service::client_state& state
 
 future<std::vector<mutation>>
 modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
-    auto keys = make_lw_shared(build_partition_keys(options));
-    auto ranges = make_lw_shared(create_clustering_ranges(options));
+    auto json_cache = maybe_prepare_json_cache(options);
+    auto keys = make_lw_shared(build_partition_keys(options, json_cache));
+    auto ranges = make_lw_shared(create_clustering_ranges(options, json_cache));
     return make_update_parameters(proxy, keys, ranges, options, local, now, std::move(trace_state)).then(
-            [this, keys, ranges, now] (auto params_ptr) {
+            [this, keys, ranges, now, json_cache = std::move(json_cache)] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
@@ -162,7 +163,7 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
                     mutations.emplace_back(s, std::move(*key.start()->value().key()));
                     auto& m = mutations.back();
                     for (auto&& r : *ranges) {
-                        this->add_update_for_key(m, r, *params_ptr);
+                        this->add_update_for_key(m, r, *params_ptr, json_cache);
                     }
                 }
                 return make_ready_future<decltype(mutations)>(std::move(mutations));
@@ -305,7 +306,7 @@ modification_statement::read_required_rows(
 }
 
 std::vector<query::clustering_range>
-modification_statement::create_clustering_ranges(const query_options& options) {
+modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) {
     // If the only updated/deleted columns are static, then we don't need clustering columns.
     // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
     // suggest something unintended. For instance, given:
@@ -341,7 +342,7 @@ modification_statement::create_clustering_ranges(const query_options& options) {
 }
 
 dht::partition_range_vector
-modification_statement::build_partition_keys(const query_options& options) {
+modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) {
     auto keys = _restrictions->get_partition_key_restrictions()->bounds_ranges(options);
     for (auto&& k : keys) {
         validation::validate_cql_key(s, *k.start()->value().key());
@@ -500,7 +501,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
 namespace raw {
 
 std::unique_ptr<prepared_statement>
-modification_statement::modification_statement::prepare(database& db, cql_stats& stats) {
+modification_statement::prepare(database& db, cql_stats& stats) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names, stats);
@@ -516,7 +517,6 @@ modification_statement::prepare(database& db, ::shared_ptr<variable_specificatio
     prepared_attributes->collect_marker_specification(bound_names);
 
     ::shared_ptr<cql3::statements::modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes), stats);
-
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
         if (stmt->is_counter()) {
             throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
@@ -644,6 +644,10 @@ bool modification_statement::has_conditions() {
 
 void modification_statement::validate_where_clause_for_conditions() {
     //  no-op by default
+}
+
+modification_statement::json_cache_opt modification_statement::maybe_prepare_json_cache(const query_options& options) {
+    return {};
 }
 
 const statement_type statement_type::INSERT = statement_type(statement_type::type::insert);
