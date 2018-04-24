@@ -90,3 +90,13 @@ SEASTAR_TEST_CASE(test_secondary_index_case_sensitive) {
         e.execute_cql("SELECT * from tab WHERE \"FooBar\" = 1").get();
     });
 }
+
+SEASTAR_TEST_CASE(test_cannot_drop_secondary_index_backing_mv) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int primary key, a int)").get();
+        e.execute_cql("create index on cf (a)").get();
+        auto s = e.local_db().find_schema(sstring("ks"), sstring("cf"));
+        auto index_name = s->index_names().front();
+        assert_that_failed(e.execute_cql(sprint("drop materialized view %s_index", index_name)));
+    });
+}
