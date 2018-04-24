@@ -59,7 +59,7 @@ namespace json_helpers {
  */
 static std::unordered_map<sstring, Json::Value> handle_case_sensitivity(Json::Value&& value_map) {
     std::unordered_map<sstring, Json::Value> case_sensitive_map;
-    for (Json::ValueConstIterator it = value_map.begin(); it != value_map.end(); ++it) {
+    for (auto it = value_map.begin(); it != value_map.end(); ++it) {
         sstring name = it.name();
         if (!name.empty() && *name.begin() == '"' && name.back() == '"') {
             case_sensitive_map.emplace(name.substr(1, name.size() - 1), std::move(*it));

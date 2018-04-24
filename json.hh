@@ -29,6 +29,16 @@
 namespace seastar { // FIXME: not ours
 namespace json {
 
+// These helpers are needed to workaround issues with int64_t/uint64_t typeders on old
+// versions of JsonCpp library - see https://github.com/scylladb/scylla/issues/3208#issuecomment-383763067
+inline int64_t to_int64_t(const Json::Value& value) {
+    return value.asInt64();
+}
+
+inline uint64_t to_uint64_t(const Json::Value& value) {
+    return value.asUInt64();
+}
+
 inline sstring to_sstring(const Json::Value& value) {
 #if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010400) // >= 1.4.0
     Json::StreamWriterBuilder wbuilder;

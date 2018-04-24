@@ -216,7 +216,7 @@ private:
     Json::Value _tg_properties;
     std::string _current_dir;
     stdx::optional<std::pair<sstring, sstring>> _static_param; // .first = name, .second = description
-    std::unordered_map<std::string, size_t> _test_count;
+    std::unordered_map<std::string, uint32_t> _test_count;
     struct metadata {
         std::string version;
         std::string date;
@@ -285,10 +285,20 @@ public:
         _static_param = std::pair(name, description);
     }
 
+    // Helpers to workaround issue with ambiguous typedefs in older versions of JsonCpp - see #3208.
+    template <typename T>
+    void assign_to(Json::Value& value, const T& t) {
+        value = t;
+    }
+
+    inline void assign_to(Json::Value& value, uint64_t u) {
+        value = static_cast<Json::UInt64>(u);
+    }
+
     template <std::size_t... Is>
     void write_test_values_impl(Json::Value& stats_value,
             const output_items& stats_names, const stats_values& values, std::index_sequence<Is...>) {
-        ((stats_value[stats_names.at(Is).value] = std::get<Is>(values)), ...);
+        (assign_to(stats_value[stats_names.at(Is).value], std::get<Is>(values)), ...);
     }
     template <typename... Ts>
     void write_test_values_impl(Json::Value& stats_value,
@@ -328,7 +338,7 @@ public:
         }
 
         // Increase the test run count before we append it to all_params_values
-        const size_t test_run_count = ++_test_count[all_params_values];
+        const auto test_run_count = ++_test_count[all_params_values];
 
         const std::string test_run_count_name = "test_run_count";
         params_value[test_run_count_name.c_str()] = test_run_count;

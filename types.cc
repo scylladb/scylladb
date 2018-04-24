@@ -236,7 +236,7 @@ struct integer_type_impl : simple_type_impl<T> {
         return to_sstring(compose_value(b));
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        return this->decompose(T(value.asLargestInt()));
+        return this->decompose(T(json::to_int64_t(value)));
     }
 };
 
@@ -567,7 +567,7 @@ public:
             throw marshal_exception("date_type must be represented as string or integer");
         }
         if (value.isIntegral()) {
-            return long_type->decompose(value.asLargestInt());
+            return long_type->decompose(json::to_int64_t(value));
         }
         return from_string(value.asString());
     }
@@ -857,7 +857,7 @@ public:
             throw marshal_exception("uuid_type must be represented as string or integer");
         }
          if (value.isIntegral()) {
-            return long_type->decompose(value.asLargestInt());
+            return long_type->decompose(json::to_int64_t(value));
         }
         return from_string(value.asString());
     }
@@ -1679,7 +1679,7 @@ public:
         if (!value.isIntegral()) {
             throw marshal_exception("Counters must be represented as JSON integer");
         }
-        return counter_cell_view::total_value_type()->decompose(value.asLargestInt());
+        return counter_cell_view::total_value_type()->decompose(json::to_int64_t(value));
     }
     virtual bytes from_string(sstring_view text) const override {
         fail(unimplemented::cause::COUNTERS);
