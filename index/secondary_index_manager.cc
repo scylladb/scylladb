@@ -93,11 +93,14 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     _indices.emplace(im.name(), index{index_target_name, im});
 }
 
+static sstring index_table_name(const sstring& index_name) {
+    return sprint("%s_index", index_name);
+}
+
 view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
     auto schema = _cf.schema();
-    sstring index_table_name = sprint("%s_index", im.name());
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
-    schema_builder builder{schema->ks_name(), index_table_name};
+    schema_builder builder{schema->ks_name(), index_table_name(im.name())};
     auto target = target_parser::parse(schema, im);
     const auto* index_target = std::get<const column_definition*>(target);
     auto target_type = std::get<cql3::statements::index_target::target_type>(target);
@@ -129,4 +132,14 @@ std::vector<index_metadata> secondary_index_manager::get_dependent_indices(const
 std::vector<index> secondary_index_manager::list_indexes() const {
     return boost::copy_range<std::vector<index>>(_indices | boost::adaptors::map_values);
 }
+
+bool secondary_index_manager::is_index(view_ptr view) const {
+    for (auto& i : list_indexes()) {
+        if (view->cf_name() == index_table_name(i.metadata().name())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }

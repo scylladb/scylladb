@@ -48,6 +48,7 @@
 #include "service/migration_task.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
+#include "view_info.hh"
 
 namespace service {
 
@@ -746,6 +747,9 @@ future<> migration_manager::announce_view_drop(const sstring& ks_name,
         auto& view = db.find_column_family(ks_name, cf_name).schema();
         if (!view->is_view()) {
             throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
+        }
+        if (db.find_column_family(view->view_info()->base_id()).get_index_manager().is_index(view_ptr(view))) {
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
