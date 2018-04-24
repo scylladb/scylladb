@@ -20,6 +20,7 @@
  */
 
 #include <seastar/tests/test-utils.hh>
+#include <seastar/net/inet_address.hh>
 #include <utils/UUID_gen.hh>
 #include <boost/asio/ip/address_v4.hpp>
 #include <net/ip.hh>
@@ -220,7 +221,7 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_string_conversions) {
 }
 
 BOOST_AUTO_TEST_CASE(test_inet_type_string_conversions) {
-    net::ipv4_address addr("127.0.0.1");
+    net::inet_address addr("127.0.0.1");
     BOOST_REQUIRE(inet_addr_type->equal(inet_addr_type->from_string("127.0.0.1"), inet_addr_type->decompose(addr)));
 
     test_parsing_fails(inet_addr_type, "something");

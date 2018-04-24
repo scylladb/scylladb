@@ -26,6 +26,8 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <seastar/net/inet_address.hh>
+
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
 #include "tests/cql_assertions.hh"
@@ -1586,7 +1588,7 @@ SEASTAR_TEST_CASE(test_types) {
                     ascii_type->decompose(sstring("ascii")), long_type->decompose(123456789l),
                     from_hex("deadbeef"), boolean_type->decompose(true),
                     double_type->decompose(3.14), float_type->decompose(3.14f),
-                    inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
+                    inet_addr_type->decompose(net::inet_address("127.0.0.1")),
                     int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
@@ -1638,7 +1640,7 @@ SEASTAR_TEST_CASE(test_types) {
                     ascii_type->decompose(sstring("ascii2")), long_type->decompose(123456789l),
                     from_hex("000000000000000c"), boolean_type->decompose(true),
                     double_type->decompose(3.14), float_type->decompose(3.14f),
-                    inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
+                    inet_addr_type->decompose(net::inet_address("127.0.0.1")),
                     int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
@@ -2789,7 +2791,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
         assert_that(msg).is_rows().with_rows({
             {
                 ascii_type->decompose(sstring("ascii")),
-                inet_addr_type->decompose(net::ipv4_address("127.0.0.1")), // note - case-sensitive columns go right after the key
+                inet_addr_type->decompose(net::inet_address("127.0.0.1")), // note - case-sensitive columns go right after the key
                 int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
                 long_type->decompose(123456789l),
                 from_hex("deadbeef"), boolean_type->decompose(true),

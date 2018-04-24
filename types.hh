@@ -44,6 +44,7 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
 #include "net/ip.hh"
+#include <seastar/net/inet_address.hh>
 #include "util/backtrace.hh"
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
@@ -374,6 +375,7 @@ public:
     data_value(float);
     data_value(double);
     data_value(net::ipv4_address);
+    data_value(seastar::net::inet_address);
     data_value(simple_date_native_type);
     data_value(timestamp_native_type);
     data_value(timeuuid_native_type);
@@ -1283,7 +1285,7 @@ shared_ptr<const abstract_type> data_type_for<timeuuid_native_type>() {
 
 template <>
 inline
-shared_ptr<const abstract_type> data_type_for<net::ipv4_address>() {
+shared_ptr<const abstract_type> data_type_for<net::inet_address>() {
     return inet_addr_type;
 }
 

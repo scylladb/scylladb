@@ -21,6 +21,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <seastar/net/inet_address.hh>
 #include "tests/test-utils.hh"
 #include "sstable_test.hh"
 #include "sstables/key.hh"
@@ -506,7 +507,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
         return repeat([s, reader] {
             return read_mutation_from_flat_mutation_reader(*reader).then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
-                    return mut->key().equal(*s, partition_key::from_deeply_exploded(*s, { net::ipv4_address(ip) }));
+                    return mut->key().equal(*s, partition_key::from_deeply_exploded(*s, { net::inet_address(ip) }));
                 };
 
                 if (!mut) {

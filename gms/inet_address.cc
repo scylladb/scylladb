@@ -37,11 +37,18 @@
  */
 
 #include <seastar/net/inet_address.hh>
+#include <seastar/core/print.hh>
+#include <seastar/core/future.hh>
 #include "inet_address.hh"
+
+using namespace seastar;
+
+gms::inet_address::inet_address(const net::inet_address& in)
+    : inet_address(in.as_ipv4_address())
+{}
 
 future<gms::inet_address> gms::inet_address::lookup(sstring name) {
     return seastar::net::inet_address::find(name, seastar::net::inet_address::family::INET).then([](seastar::net::inet_address&& a) {
-        ::in_addr in = a;
-        return make_ready_future<gms::inet_address>(net::ntoh(in.s_addr));
+        return make_ready_future<gms::inet_address>(a);
     });
 }

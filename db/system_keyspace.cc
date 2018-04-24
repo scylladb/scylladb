@@ -68,6 +68,7 @@
 #include "log.hh"
 #include "serializer.hh"
 #include <core/enum.hh>
+#include <seastar/net/inet_address.hh>
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
@@ -996,8 +997,7 @@ static distributed<local_cache> _local_cache;
 static future<> build_dc_rack_info() {
     return execute_cql(sprint("SELECT peer, data_center, rack from system.%s", PEERS)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         return do_for_each(*msg, [] (auto& row) {
-            // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
-            net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
+            net::inet_address peer = row.template get_as<net::inet_address>("peer");
             if (!row.has("data_center") || !row.has("rack")) {
                 return make_ready_future<>();
             }
@@ -1299,7 +1299,7 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> lo
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, std::unordered_set<dht::token>> ret;
         for (auto& row : *cql_result) {
-            auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
+            auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("tokens")) {
                 auto blob = row.get_blob("tokens");
                 auto cdef = peers()->get_column_definition("tokens");
@@ -1317,7 +1317,7 @@ future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
     return execute_cql(req).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         std::unordered_map<gms::inet_address, utils::UUID> ret;
         for (auto& row : *cql_result) {
-            auto peer = gms::inet_address(row.get_as<net::ipv4_address>("peer"));
+            auto peer = gms::inet_address(row.get_as<net::inet_address>("peer"));
             if (row.has("host_id")) {
                 ret.emplace(peer, row.get_as<utils::UUID>("host_id"));
             }
@@ -1332,7 +1332,7 @@ future<std::unordered_map<gms::inet_address, sstring>> load_peer_features() {
         std::unordered_map<gms::inet_address, sstring> ret;
         for (auto& row : *cql_result) {
             if (row.has("supported_features")) {
-                ret.emplace(row.get_as<net::ipv4_address>("peer"),
+                ret.emplace(row.get_as<net::inet_address>("peer"),
                         row.get_as<sstring>("supported_features"));
             }
         }
@@ -1354,8 +1354,8 @@ future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_i
 
         for (auto& r : *cql_res_set) {
             if (r.has("preferred_ip")) {
-                res.emplace(gms::inet_address(r.get_as<net::ipv4_address>("peer")),
-                            gms::inet_address(r.get_as<net::ipv4_address>("preferred_ip")));
+                res.emplace(gms::inet_address(r.get_as<net::inet_address>("peer")),
+                            gms::inet_address(r.get_as<net::inet_address>("preferred_ip")));
             }
         }
 

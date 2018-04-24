@@ -45,6 +45,7 @@
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <seastar/net/inet_address.hh>
 #include "utils/big_decimal.hh"
 #include "utils/date.h"
 #include "mutation_partition.hh"
@@ -78,7 +79,7 @@ sstring boolean_to_string(const bool b) {
     return b ? "true" : "false";
 }
 
-sstring inet_to_string(const net::ipv4_address& addr) {
+sstring inet_to_string(const seastar::net::inet_address& addr) {
     std::ostringstream out;
     out << addr;
     return out.str();
@@ -1168,39 +1169,59 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     }
 };
 
-struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
-    inet_addr_type_impl() : concrete_type<net::ipv4_address>(inet_addr_type_name) {}
+using inet_address = seastar::net::inet_address;
+
+struct inet_addr_type_impl : concrete_type<inet_address> {
+    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
         }
         // FIXME: support ipv6
-        auto& ipv4e = from_value(value);
-        if (ipv4e.empty()) {
+        auto& ipv = from_value(value);
+        if (ipv.empty()) {
             return;
         }
-        auto& ipv4 = ipv4e.get();
-        uint32_t u = htonl(ipv4.ip);
-        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
+        auto& ip = ipv.get();
+        switch (ip.in_family()) {
+        case inet_address::family::INET:
+        {
+            const ::in_addr& in = ip;
+            out = std::copy_n(reinterpret_cast<const char*>(&in.s_addr), sizeof(in.s_addr), out);
+            break;
+        }
+        case inet_address::family::INET6:
+        {
+            const ::in6_addr& i6 = ip;
+            out = std::copy_n(i6.s6_addr, ip.size(), out);
+            break;
+        }
+        }
     }
     virtual size_t serialized_size(const void* value) const override {
-        if (!value || from_value(value).empty()) {
+        if (!value) {
             return 0;
         }
-        return 4;
+        // FIXME: support ipv6
+        auto& ipv = from_value(value);
+        if (ipv.empty()) {
+            return 0;
+        }
+        return ipv.get().size();
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
             return make_empty();
         }
-        if (v.size() == 16) {
-            throw std::runtime_error("IPv6 addresses not supported");
+        switch (v.size()) {
+        case 4:
+            // gah. read_simple_be, please...
+            return make_value(inet_address(::in_addr{net::hton(read_simple<uint32_t>(v))}));
+        case 16:
+            return make_value(inet_address(*reinterpret_cast<const ::in6_addr *>(v.data())));
+        default:
+            throw marshal_exception(sprint("Cannot deserialize inet_address, unsupported size %d bytes", v.size()));
         }
-        auto ip = read_simple<int32_t>(v);
-        if (!v.empty()) {
-            throw marshal_exception(sprint("Cannot deserialize inet_addr, %d bytes left", v.size()));
-        }
-        return make_value(net::ipv4_address(ip));
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
@@ -1215,7 +1236,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         return std::hash<bytes_view>()(v);
     }
     virtual void validate(bytes_view v) const override {
-        if (v.size() != 0 && v.size() != sizeof(uint32_t)) {
+        if (v.size() != 0 && v.size() != sizeof(uint32_t) && v.size() != 16) {
             throw marshal_exception(sprint("Validation failed for inet_addr - got %d bytes", v.size()));
         }
     }
@@ -1224,15 +1245,15 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         if (s.empty()) {
             return bytes();
         }
-        native_type ipv4;
+        native_type ip;
         try {
-            ipv4 = net::ipv4_address(std::string(s.data(), s.size()));
+            ip = inet_address(std::string(s.data(), s.size()));
         } catch (...) {
             throw marshal_exception(sprint("Failed to parse inet_addr from '%s'", s));
         }
-        bytes b(bytes::initialized_later(), sizeof(uint32_t));
+        bytes b(bytes::initialized_later(), ip.get().size());
         auto out = b.begin();
-        serialize(&ipv4, out);
+        serialize(&ip, out);
         return b;
     }
     virtual sstring to_string(const bytes& b) const override {
@@ -3648,7 +3669,10 @@ data_value::data_value(float v) : data_value(make_new(float_type, v)) {
 data_value::data_value(double v) : data_value(make_new(double_type, v)) {
 }
 
-data_value::data_value(net::ipv4_address v) : data_value(make_new(inet_addr_type, v)) {
+data_value::data_value(seastar::net::inet_address v) : data_value(make_new(inet_addr_type, v)) {
+}
+
+data_value::data_value(seastar::net::ipv4_address v) : data_value(seastar::net::inet_address(v)) {
 }
 
 data_value::data_value(simple_date_native_type v) : data_value(make_new(simple_date_type, v.days)) {
@@ -3867,7 +3891,7 @@ std::function<data_value(data_value)> make_castas_fctn_from_boolean_to_string() 
 
 std::function<data_value(data_value)> make_castas_fctn_from_inet_to_string() {
     return [](data_value from) -> data_value {
-        return inet_to_string(value_cast<net::ipv4_address>(from));
+        return inet_to_string(value_cast<inet_address>(from));
     };
 }
 
