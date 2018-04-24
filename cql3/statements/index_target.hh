@@ -65,6 +65,7 @@ struct index_target {
     }
 
     sstring as_cql_string(schema_ptr schema) const;
+    sstring as_string() const;
 
     static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);

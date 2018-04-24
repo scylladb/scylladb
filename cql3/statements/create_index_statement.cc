@@ -279,7 +279,7 @@ index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
     index_options_map new_options = options;
     auto target_option = boost::algorithm::join(targets | boost::adaptors::transformed(
             [schema](const auto &target) -> sstring {
-                return target->as_cql_string(schema);
+                return target->as_string();
             }), ",");
     new_options.emplace(index_target::target_option_name, target_option);
     return index_metadata{name, new_options, kind};
