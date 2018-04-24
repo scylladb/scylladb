@@ -54,6 +54,7 @@
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/timeout_clock.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 namespace cql3 {
 
@@ -67,6 +68,8 @@ namespace functions {
  * 'as_json' function, which also keeps information about underlying
  * selector names and types. This function is not registered in functions.cc,
  * because it should not be invoked directly from CQL.
+ * Case-sensitive column names are wrapped in additional quotes,
+ * as stated in CQL-JSON documentation.
  */
 class as_json_function : public scalar_function {
     std::vector<sstring> _selector_names;
@@ -83,8 +86,15 @@ public:
             if (i > 0) {
                 encoded_row.write(", ", 2);
             }
+            bool has_any_upper = boost::algorithm::any_of(_selector_names[i], [](unsigned char c) { return std::isupper(c); });
             encoded_row.write("\"", 1);
+            if (has_any_upper) {
+                encoded_row.write("\\\"", 2);
+            }
             encoded_row.write(_selector_names[i].c_str(), _selector_names[i].size());
+            if (has_any_upper) {
+                encoded_row.write("\\\"", 2);
+            }
             encoded_row.write("\": ", 3);
             if (parameters[i]) {
                 sstring row_sstring = _selector_types[i]->to_json_string(parameters[i].value());

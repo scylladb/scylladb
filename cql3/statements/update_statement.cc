@@ -61,8 +61,8 @@ static std::unordered_map<sstring, Json::Value> handle_case_sensitivity(Json::Va
     std::unordered_map<sstring, Json::Value> case_sensitive_map;
     for (auto it = value_map.begin(); it != value_map.end(); ++it) {
         sstring name = it.name();
-        if (!name.empty() && *name.begin() == '"' && name.back() == '"') {
-            case_sensitive_map.emplace(name.substr(1, name.size() - 1), std::move(*it));
+        if (name.size() > 1 && *name.begin() == '"' && name.back() == '"') {
+            case_sensitive_map.emplace(name.substr(1, name.size() - 2), std::move(*it));
         } else {
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
             case_sensitive_map.emplace(std::move(name), std::move(*it));
@@ -77,7 +77,7 @@ parse(const sstring& json_string, const std::vector<column_definition>& expected
     Json::Value raw_value_map = json::to_json_value(json_string);
     std::unordered_map<sstring, Json::Value> prepared_map = handle_case_sensitivity(std::move(raw_value_map));
     for (const auto& def : expected_receivers) {
-        sstring cql_name = def.name_as_cql_string();
+        sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
         if (value_it == prepared_map.end() || value_it->second.isNull()) {
             json_map.emplace(std::move(cql_name), bytes_opt{});
@@ -200,7 +200,7 @@ dht::partition_range_vector
 insert_prepared_json_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) {
     dht::partition_range_vector ranges;
     for (const auto& def : s->partition_key_columns()) {
-        auto json_value = json_cache->at(def.name_as_cql_string());
+        auto json_value = json_cache->at(def.name_as_text());
         auto k = query::range<partition_key>::make_singular(partition_key::from_single_value(*s, json_value.value()));
         ranges.emplace_back(std::move(k).transform(
                     [this] (partition_key&& k) -> query::ring_position {
@@ -215,7 +215,7 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
     query::clustering_row_ranges ranges;
     std::vector<bytes_opt> exploded;
     for (const auto& def : s->clustering_key_columns()) {
-        auto json_value = json_cache->at(def.name_as_cql_string());
+        auto json_value = json_cache->at(def.name_as_text());
         exploded.emplace_back(json_value.value());
     }
     auto k = query::range<clustering_key_prefix>::make_singular(clustering_key_prefix::from_optional_exploded(*s, std::move(exploded)));
@@ -229,7 +229,7 @@ void insert_prepared_json_statement::execute_operations_for_key(mutation& m, con
             throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s in JSON", def.name_as_text()));
         }
 
-        auto value = json_cache->at(def.name_as_cql_string());
+        auto value = json_cache->at(def.name_as_text());
         execute_set_value(m, prefix, params, def, value);
     }
 }
