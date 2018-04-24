@@ -2374,7 +2374,7 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
                 lw_shared_ptr<column_family> cf = column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
                 auto sstdir = ks.column_family_directory(cfname, uuid);
-                dblog.info("Keyspace {}: Reading CF {} ", ks_name, cfname);
+                dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
                 }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
