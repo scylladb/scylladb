@@ -2570,9 +2570,9 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 "    d boolean,"
                 "    e double,"
                 "    f float,"
-                "    g inet,"
-                "    h int,"
-                "    i text,"
+                "    \"G\" inet," // note - case-sensitive column names
+                "    \"H\" int,"
+                "    \"I\" text,"
                 "    j timestamp,"
                 "    k timeuuid,"
                 "    l uuid,"
@@ -2588,7 +2588,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
 
         e.require_table_exists("ks", "all_types").get();
         e.execute_cql(
-            "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES ("
+            "INSERT INTO all_types (a, b, c, d, e, f, \"G\", \"H\", \"I\", j, k, l, m, n, o, p, q, r, s, u) VALUES ("
                 "    'ascii',"
                 "    123456789,"
                 "    0xdeadbeef,"
@@ -2611,7 +2611,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 "    1y2mo3w4d5h6m7s8ms9us10ns"
                 ");").get();
 
-        auto msg = e.execute_cql("SELECT JSON a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u, unixtimestampof(k) FROM all_types WHERE a = 'ascii'").get0();
+        auto msg = e.execute_cql("SELECT JSON a, b, c, d, e, f, \"G\", \"H\", \"I\", j, k, l, m, n, o, p, q, r, s, u, unixtimestampof(k) FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 utf8_type->decompose(
@@ -2621,9 +2621,9 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                     "\"d\": true, "
                     "\"e\": 3.14, "
                     "\"f\": 3.14, "
-                    "\"g\": \"127.0.0.1\", "
-                    "\"h\": 3, "
-                    "\"i\": \"zażółć gęślą jaźń\", "
+                    "\"\\\"G\\\"\": \"127.0.0.1\", " // note the double quoting on case-sensitive column names
+                    "\"\\\"H\\\"\": 3, "
+                    "\"\\\"I\\\"\": \"zażółć gęślą jaźń\", "
                     "\"j\": \"2001-10-18T14:15:55.134000\", "
                     "\"k\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
                     "\"l\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
@@ -2641,7 +2641,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
          });
 
         msg = e.execute_cql("SELECT toJson(a), toJson(b), toJson(c), toJson(d), toJson(e), toJson(f),"
-                "toJson(g), toJson(h), toJson(i), toJson(j), toJson(k), toJson(l), toJson(m), toJson(n),"
+                "toJson(\"G\"), toJson(\"H\"), toJson(\"I\"), toJson(j), toJson(k), toJson(l), toJson(m), toJson(n),"
                 "toJson(o), toJson(p), toJson(q), toJson(r), toJson(s), toJson(u),"
                 "toJson(unixtimestampof(k)), toJson(toJson(toJson(p))) FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
@@ -2736,9 +2736,9 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 "    d boolean,"
                 "    e double,"
                 "    f float,"
-                "    g inet,"
-                "    h int,"
-                "    i text,"
+                "    \"G\" inet,"
+                "    \"H\" int,"
+                "    \"I\" text,"
                 "    j timestamp,"
                 "    k timeuuid,"
                 "    l uuid,"
@@ -2761,9 +2761,9 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 "\"d\": true, "
                 "\"e\": 3.14, "
                 "\"f\": 3.14, "
-                "\"g\": \"127.0.0.1\", "
-                "\"h\": 3, "
-                "\"i\": \"zażółć gęślą jaźń\", "
+                "\"\\\"G\\\"\": \"127.0.0.1\", "
+                "\"\\\"H\\\"\": 3, "
+                "\"\\\"I\\\"\": \"zażółć gęślą jaźń\", "
                 "\"j\": \"2001-10-18T14:15:55.134+0000\", "
                 "\"k\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
                 "\"l\": \"d2177dd0-eaa2-11de-a572-001b779c76e3\", "
@@ -2788,11 +2788,12 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
         auto tp = db_clock::from_time_t(timegm(&t)) + std::chrono::milliseconds(134);
         assert_that(msg).is_rows().with_rows({
             {
-                ascii_type->decompose(sstring("ascii")), long_type->decompose(123456789l),
+                ascii_type->decompose(sstring("ascii")),
+                inet_addr_type->decompose(net::ipv4_address("127.0.0.1")), // note - case-sensitive columns go right after the key
+                int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                long_type->decompose(123456789l),
                 from_hex("deadbeef"), boolean_type->decompose(true),
                 double_type->decompose(3.14), float_type->decompose(3.14f),
-                inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
-                int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
                 timestamp_type->decompose(tp),
                 timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                 uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
@@ -2807,9 +2808,9 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
         });
 
         e.execute_cql("UPDATE all_types SET b = fromJson('42') WHERE a = fromJson('\"ascii\"');").get();
-        e.execute_cql("UPDATE all_types SET i = fromJson('\"zażółć gęślą jaźń\"') WHERE a = fromJson('\"ascii\"');").get();
+        e.execute_cql("UPDATE all_types SET \"I\" = fromJson('\"zażółć gęślą jaźń\"') WHERE a = fromJson('\"ascii\"');").get();
 
-        msg = e.execute_cql("SELECT a, b, i FROM all_types WHERE a = 'ascii'").get0();
+        msg = e.execute_cql("SELECT a, b, \"I\" FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 ascii_type->decompose(sstring("ascii")),
