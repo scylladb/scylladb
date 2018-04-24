@@ -56,8 +56,12 @@
 #include "db/commitlog/replay_position.hh"
 #include "flat_mutation_reader.hh"
 #include "utils/phased_barrier.hh"
+#include "component_type.hh"
+#include "sstable_version.hh"
 
 #include <seastar/util/optimized_optional.hh>
+
+class sstable_assertions;
 
 namespace sstables {
 
@@ -136,22 +140,8 @@ shared_sstable make_sstable(schema_ptr schema, sstring dir, int64_t generation, 
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(), size_t buffer_size = default_sstable_buffer_size());
 
 class sstable : public enable_lw_shared_from_this<sstable> {
+    friend ::sstable_assertions;
 public:
-    enum class component_type {
-        Index,
-        CompressionInfo,
-        Data,
-        TOC,
-        Summary,
-        Digest,
-        CRC,
-        Filter,
-        Statistics,
-        TemporaryTOC,
-        TemporaryStatistics,
-        Scylla,
-        Unknown,
-    };
     using version_types = sstable_version_types;
     using format_types = sstable_format_types;
     static const size_t default_buffer_size = default_sstable_buffer_size();
@@ -239,7 +229,7 @@ public:
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
-    static component_type component_from_sstring(sstring& s);
+    static component_type component_from_sstring(version_types v, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
@@ -463,7 +453,6 @@ private:
 
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
-    static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;
@@ -539,10 +528,10 @@ private:
     const sstring filename(component_type f) const;
     future<file> open_file(component_type, open_flags, file_open_options = {});
 
-    template <sstable::component_type Type, typename T>
+    template <component_type Type, typename T>
     future<> read_simple(T& comp, const io_priority_class& pc);
 
-    template <sstable::component_type Type, typename T>
+    template <component_type Type, typename T>
     void write_simple(const T& comp, const io_priority_class& pc);
 
     void generate_toc(compressor_ptr c, double filter_fp_chance);
@@ -642,12 +631,6 @@ private:
 public:
     future<> read_toc();
 
-    shareable_components& get_shared_components() {
-        return *_components;
-    }
-    const shareable_components& get_shared_components() const {
-        return *_components;
-    }
     schema_ptr get_schema() const {
         return _schema;
     }
@@ -782,13 +765,13 @@ struct entry_descriptor {
     sstable::version_types version;
     int64_t generation;
     sstable::format_types format;
-    sstable::component_type component;
+    component_type component;
 
     static entry_descriptor make_descriptor(sstring sstdir, sstring fname);
 
     entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
                      int64_t generation, sstable::format_types format,
-                     sstable::component_type component)
+                     component_type component)
         : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
 
@@ -935,7 +918,7 @@ utils::phased_barrier& background_jobs();
 class file_io_extension {
 public:
     virtual ~file_io_extension() {}
-    virtual future<file> wrap_file(sstable&, sstable::component_type, file, open_flags flags) = 0;
+    virtual future<file> wrap_file(sstable&, component_type, file, open_flags flags) = 0;
 };
 
 }

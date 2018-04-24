@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2017 ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
+ *
  */
 
 /*
@@ -23,7 +24,24 @@
 
 namespace sstables {
 
-enum class sstable_version_types { ka, la, mc };
-enum class sstable_format_types { big };
+enum class component_type {
+    Index,
+    CompressionInfo,
+    Data,
+    TOC,
+    Summary,
+    Digest,
+    CRC,
+    Filter,
+    Statistics,
+    TemporaryTOC,
+    TemporaryStatistics,
+    Scylla,
+    Unknown,
+};
 
 }
+
+using component_type = ::sstables::component_type;
+
+std::ostream& operator<<(std::ostream&, const sstables::component_type&);
