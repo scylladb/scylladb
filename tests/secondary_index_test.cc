@@ -71,3 +71,22 @@ SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
         });
     });
 }
+
+// CQL usually folds identifier names - keyspace, table and column names -
+// to lowercase. That is, unless the identifier is enclosed in double
+// quotation marks ("). Let's test that case-sensitive (quoted) column
+// names can be indexed. This reproduces issue #3154.
+SEASTAR_TEST_CASE(test_secondary_index_case_sensitive) {
+    return do_with_cql_env_thread([] (auto& e) {
+        // Test case-sensitive *table* name.
+        e.execute_cql("CREATE TABLE \"FooBar\" (a int PRIMARY KEY, b int, c int)").get();
+        e.execute_cql("CREATE INDEX ON \"FooBar\" (b)").get();
+        e.execute_cql("SELECT * from \"FooBar\" WHERE b = 1").get();
+        // Test case-sensitive *indexed column* name.
+        // This not working was issue #3154. The symptom was that the SELECT
+        // below threw a "No index found." runtime error.
+        e.execute_cql("CREATE TABLE tab (a int PRIMARY KEY, \"FooBar\" int, c int)").get();
+        e.execute_cql("CREATE INDEX ON tab (\"FooBar\")").get();
+        e.execute_cql("SELECT * from tab WHERE \"FooBar\" = 1").get();
+    });
+}
