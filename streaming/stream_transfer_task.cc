@@ -52,6 +52,7 @@
 #include "service/storage_service.hh"
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_set.hpp>
+#include "sstables/sstables.hh"
 
 namespace streaming {
 
@@ -99,6 +100,15 @@ struct send_info {
         , ranges(std::move(ranges_))
         , prs(to_partition_ranges(ranges))
         , reader(cf.make_streaming_reader(cf.schema(), prs)) {
+    }
+    size_t estimate_partitions() {
+        auto sstables = cf.get_sstables();
+        size_t partition_count = 0;
+        for (auto& range : ranges) {
+            partition_count = boost::accumulate(*sstables, uint64_t(0),
+                [&range] (uint64_t x, auto&& sst) { return x + sst->estimated_keys_for_range(range); });
+        }
+        return partition_count;
     }
 };
 
