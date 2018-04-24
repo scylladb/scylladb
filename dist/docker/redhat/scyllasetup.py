@@ -31,6 +31,16 @@ class ScyllaSetup:
         self._run(['/usr/lib/scylla/scylla_cpuset_setup', '--cpuset', self._cpuset])
 
     def io(self):
+        conf_dir = "/etc/scylla"
+        cfg = yaml.load(open(os.path.join(conf_dir, "scylla.yaml")))
+        data_dirs = cfg["data_file_directories"]
+        if len(data_dirs) > 1:
+            logging.warn("%d data directories found. scylla_io_setup currently lacks support for it, and only %s will be evaluated",
+                    len(data_dirs), data_dirs[0])
+        data_dir = data_dirs[0]
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir)
+
         self._run(['/usr/lib/scylla/scylla_io_setup'])
 
     def cqlshrc(self):
