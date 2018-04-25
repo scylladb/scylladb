@@ -2,10 +2,11 @@
 
 . /etc/os-release
 print_usage() {
-    echo "build_deb.sh -target <codename> --dist --rebuild-dep"
+    echo "build_deb.sh -target <codename> --dist --rebuild-dep --jobs 2"
     echo "  --target target distribution codename"
     echo "  --dist  create a public distribution package"
     echo "  --no-clean  don't rebuild pbuilder tgz"
+    echo "  --jobs  specify number of jobs"
     exit 1
 }
 install_deps() {
@@ -19,6 +20,7 @@ install_deps() {
 DIST=0
 TARGET=
 NO_CLEAN=0
+JOBS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         "--dist")
@@ -32,6 +34,10 @@ while [ $# -gt 0 ]; do
         "--no-clean")
             NO_CLEAN=1
             shift 1
+            ;;
+        "--jobs")
+            JOBS=$2
+            shift 2
             ;;
         *)
             print_usage
@@ -251,10 +257,13 @@ if [ $NO_CLEAN -eq 0 ]; then
     sudo DIST=$TARGET /usr/sbin/pbuilder clean --configfile ./dist/debian/pbuilderrc
     sudo DIST=$TARGET /usr/sbin/pbuilder create --configfile ./dist/debian/pbuilderrc --allow-untrusted
 fi
+if [ $JOBS -ne 0 ]; then
+    DEB_BUILD_OPTIONS="parallel=$JOBS"
+fi
 sudo DIST=$TARGET /usr/sbin/pbuilder update --configfile ./dist/debian/pbuilderrc --allow-untrusted
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ] || [ "$TARGET" = "bionic" ]; then
     sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/ubuntu_enable_ppa.sh
 elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
     sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/debian_install_gpgkey.sh
 fi
-sudo DIST=$TARGET pdebuild --configfile ./dist/debian/pbuilderrc --buildresult build/debs
+sudo -E DIST=$TARGET DEB_BUILD_OPTIONS=$DEB_BUILD_OPTIONS pdebuild --buildresult build/debs
