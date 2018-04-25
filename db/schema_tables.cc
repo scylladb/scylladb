@@ -133,7 +133,7 @@ struct user_types_to_drop final {
     seastar::noncopyable_function<void()> drop;
 };
 
-[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
+static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy,
     schema_result&& before,
     schema_result&& after);
 
@@ -1022,7 +1022,7 @@ static inline void collect_types(std::set<sstring>& keys, schema_result& result,
 }
 
 // see the comments for merge_keyspaces()
-[[nodiscard]] static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
+static user_types_to_drop merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
 {
     std::vector<naked_user_type> created, altered, dropped;
 
