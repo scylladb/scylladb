@@ -3828,9 +3828,9 @@ void storage_proxy::init_messaging_service() {
             p->_stats.forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize<void>::apply([timeout, &p, &m, reply_to, src_addr = std::move(src_addr)] () mutable {
+                futurize<void>::apply([timeout, &p, &m, reply_to, shard, src_addr = std::move(src_addr)] () mutable {
                     // FIXME: get_schema_for_write() doesn't timeout
-                    return get_schema_for_write(m.schema_version(), std::move(src_addr)).then([&m, &p, timeout] (schema_ptr s) {
+                    return get_schema_for_write(m.schema_version(), netw::messaging_service::msg_addr{reply_to, shard}).then([&m, &p, timeout] (schema_ptr s) {
                         return p->mutate_locally(std::move(s), m, timeout);
                     });
                 }).then([reply_to, shard, response_id, trace_state_ptr] () {
