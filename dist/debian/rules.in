@@ -1,12 +1,13 @@
 #!/usr/bin/make -f
 
 export PYBUILD_DISABLE=1
+jobs := $(shell echo $$DEB_BUILD_OPTIONS | sed -r "s/.*parallel=([0-9]+).*/-j\1/")
 
 override_dh_auto_configure:
 	./configure.py --with=scylla --with=iotune --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=@@COMPILER@@ --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/" --ldflags="-Wl,-rpath=/opt/scylladb/lib"
 
 override_dh_auto_build:
-	PATH="/opt/scylladb/bin:$$PATH" ninja
+	PATH="/opt/scylladb/bin:$$PATH" ninja $(jobs)
 
 override_dh_auto_clean:
 	rm -rf build/release seastar/build
