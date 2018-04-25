@@ -1129,7 +1129,11 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
 }
 
 void multishard_combining_reader::shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
-    _read_ahead.emplace(_reader->fill_buffer(timeout));
+    if (_reader) {
+        _read_ahead.emplace(_reader->fill_buffer(timeout));
+    } else {
+        _read_ahead.emplace(create_reader().then([this, timeout] { return _reader->fill_buffer(timeout); }));
+    }
 }
 
 void multishard_combining_reader::move_to_next_shard() {
