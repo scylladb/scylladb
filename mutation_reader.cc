@@ -1034,10 +1034,6 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
             return _reader->peek_buffer();
         }
         future<> fill_buffer(db::timeout_clock::time_point timeout);
-        void read_ahead(db::timeout_clock::time_point timeout);
-        bool is_read_ahead_in_progress() const {
-            return _read_ahead.has_value();
-        }
 
         // These methods don't assume the reader is already created.
         void next_partition();
@@ -1049,6 +1045,10 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         }
         bool done() const {
             return _reader.has_value() && _reader->is_buffer_empty() && _reader->is_end_of_stream();
+        }
+        void read_ahead(db::timeout_clock::time_point timeout);
+        bool is_read_ahead_in_progress() const {
+            return _read_ahead.has_value();
         }
     };
 
@@ -1086,10 +1086,6 @@ future<> multishard_combining_reader::shard_reader::fill_buffer(db::timeout_cloc
         return *std::exchange(_read_ahead, std::nullopt);
     }
     return _reader->fill_buffer();
-}
-
-void multishard_combining_reader::shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
-    _read_ahead.emplace(_reader->fill_buffer(timeout));
 }
 
 void multishard_combining_reader::shard_reader::next_partition() {
@@ -1130,6 +1126,10 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
             _reader->next_partition();
         }
     });
+}
+
+void multishard_combining_reader::shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
+    _read_ahead.emplace(_reader->fill_buffer(timeout));
 }
 
 void multishard_combining_reader::move_to_next_shard() {
