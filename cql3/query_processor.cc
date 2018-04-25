@@ -210,7 +210,7 @@ query_processor::~query_processor() {
 
 future<> query_processor::stop() {
     service::get_local_migration_manager().unregister_listener(_migration_subscriber.get());
-    return make_ready_future<>();
+    return _prepared_cache.stop();
 }
 
 future<::shared_ptr<result_message>>

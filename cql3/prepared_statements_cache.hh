@@ -155,6 +155,10 @@ public:
     size_t memory_footprint() const {
         return _cache.memory_footprint();
     }
+
+    future<> stop() {
+        return _cache.stop();
+    }
 };
 }
 
