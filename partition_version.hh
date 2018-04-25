@@ -429,7 +429,6 @@ public:
     // Use only on non-evictable entries.
     void apply(const schema& s, const mutation_partition& mp, const schema& mp_schema);
     void apply(const schema& s, mutation_partition&& mp, const schema& mp_schema);
-    void apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema);
 
     // Adds mutation_partition represented by "other" to the one represented
     // by this entry.

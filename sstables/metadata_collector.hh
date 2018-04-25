@@ -42,6 +42,7 @@
 #pragma once
 
 #include "types.hh"
+#include "utils/extremum_tracking.hh"
 #include "utils/murmur_hash.hh"
 #include "hyperloglog.hh"
 #include "db/commitlog/replay_position.hh"
@@ -50,66 +51,6 @@
 namespace sstables {
 
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
-
-template <typename T>
-class min_tracker {
-    T _default_value;
-    bool _is_set = false;
-    T _value;
-public:
-    min_tracker() {}
-    min_tracker(T default_value) {
-        _default_value = default_value;
-    }
-
-    void update(T value) {
-        if (!_is_set) {
-            _value = value;
-            _is_set = true;
-        } else {
-            if (value < _value) {
-                _value = value;
-            }
-        }
-    }
-
-    T get() {
-        if (_is_set) {
-            return _value;
-        }
-        return _default_value;
-    }
-};
-
-template <typename T>
-class max_tracker {
-    T _default_value;
-    bool _is_set = false;
-    T _value;
-public:
-    max_tracker() {}
-    max_tracker(T default_value) {
-        _default_value = default_value;
-    }
-
-    void update(T value) {
-        if (!_is_set) {
-            _value = value;
-            _is_set = true;
-        } else {
-            if (value > _value) {
-                _value = value;
-            }
-        }
-    }
-
-    T get() {
-        if (_is_set) {
-            return _value;
-        }
-        return _default_value;
-    }
-};
 
 /**
  * ColumnStats holds information about the columns for one row inside sstable

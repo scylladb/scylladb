@@ -23,7 +23,6 @@
 #include <seastar/util/defer.hh>
 
 #include "partition_version.hh"
-#include "partition_builder.hh"
 #include "row_cache.hh"
 #include "partition_snapshot_row_cursor.hh"
 
@@ -284,14 +283,6 @@ void partition_entry::apply(const schema& s, mutation_partition&& mp, const sche
     }
     new_version->insert_before(*_version);
     set_version(new_version);
-}
-
-void partition_entry::apply(const schema& s, mutation_partition_view mpv, const schema& mp_schema)
-{
-    mutation_partition mp(mp_schema.shared_from_this());
-    partition_builder pb(mp_schema, mp);
-    mpv.accept(mp_schema, pb);
-    apply(s, std::move(mp), mp_schema);
 }
 
 // Iterates over all rows in mutation represented by partition_entry.

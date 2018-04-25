@@ -4588,8 +4588,8 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.monitor = &monitor;
-    return sst->write_components(mt.make_flush_reader(mt.schema(), pc),
-                                 mt.partition_count(), mt.schema(), cfg, pc);
+    return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(),
+        mt.schema(), cfg, mt.get_stats(), pc);
 }
 
 future<>

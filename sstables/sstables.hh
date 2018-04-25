@@ -46,6 +46,7 @@
 #include "core/stream.hh"
 #include "writer.hh"
 #include "metadata_collector.hh"
+#include "encoding_stats.hh"
 #include "filter.hh"
 #include "exceptions.hh"
 #include "mutation_reader.hh"
@@ -314,6 +315,7 @@ public:
             uint64_t estimated_partitions,
             schema_ptr schema,
             const sstable_writer_config&,
+            encoding_stats stats,
             const io_priority_class& pc = default_priority_class());
 
     sstable_writer get_writer(const schema& s,
