@@ -46,7 +46,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
             i = 0;
         }
     }
-    write_memtable_to_sstable(*mt, sst).get();
+    write_memtable_to_sstable_for_test(*mt, sst).get();
     sst->open_data().get();
 
     std::set<mutation, mutation_decorated_key_less_comparator> merged;
@@ -68,4 +68,3 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 
     return sst;
 }
-

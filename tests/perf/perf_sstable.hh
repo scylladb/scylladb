@@ -25,12 +25,14 @@
 #include "sstables/compaction_manager.hh"
 #include "cell_locking.hh"
 #include "mutation_reader.hh"
-#include "memtable-sstable.hh"
+#include "tests/sstable_utils.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>
 
 using namespace sstables;
+
+static db::nop_large_partition_handler nop_lp_handler;
 
 class test_env {
 public:
@@ -139,7 +141,7 @@ public:
             auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), idx, sstable::version_types::ka, sstable::format_types::big);
 
             auto start = test_env::now();
-            write_memtable_to_sstable(*_mt, sst).get();
+            write_memtable_to_sstable_for_test(*_mt, sst).get();
             auto end = test_env::now();
 
             _mt->revert_flushed_memory();
@@ -160,7 +162,7 @@ public:
                 std::vector<shared_sstable> ssts;
                 for (auto i = 0u; i < _cfg.sstables; i++) {
                     auto sst = sst_gen();
-                    write_memtable_to_sstable(*_mt, sst).get();
+                    write_memtable_to_sstable_for_test(*_mt, sst).get();
                     sst->open_data().get();
                     _mt->revert_flushed_memory();
                     ssts.push_back(std::move(sst));
@@ -168,7 +170,9 @@ public:
 
                 cell_locker_stats cl_stats;
                 auto cm = make_lw_shared<compaction_manager>();
-                auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, cl_stats);
+                column_family::config cfg;
+                cfg.large_partition_handler = &nop_lp_handler;
+                auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, cl_stats);
 
                 auto start = test_env::now();
                 auto ret = sstables::compact_sstables(sstables::compaction_descriptor(std::move(ssts)), *cf, sst_gen).get0();

@@ -86,6 +86,7 @@
 #include "db/timeout_clock.hh"
 #include "querier.hh"
 #include "mutation_query.hh"
+#include "db/large_partition_handler.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -309,7 +310,7 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
+        db::large_partition_handler* large_partition_handler;
     };
     struct no_commitlog {};
     struct stats {
@@ -808,8 +809,9 @@ public:
         return _index_manager;
     }
 
-    uint64_t large_partition_warning_threshold_bytes() const {
-        return _config.large_partition_warning_threshold_bytes;
+    db::large_partition_handler* get_large_partition_handler() {
+        assert(_config.large_partition_handler);
+        return _config.large_partition_handler;
     }
 
     future<> populate_views(
@@ -1037,7 +1039,7 @@ public:
      */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
-    column_family::config make_column_family_config(const schema& s, const db::config& db_config) const;
+    column_family::config make_column_family_config(const schema& s, const db::config& db_config, db::large_partition_handler* lp_handler) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_or_update_column_family(const schema_ptr& s) {
         _metadata->add_or_update_column_family(s);
@@ -1163,6 +1165,8 @@ private:
     compaction_controller _compaction_controller;
 
     querier_cache _querier_cache;
+
+    std::unique_ptr<db::large_partition_handler> _large_partition_handler;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&, db::timeout_clock::time_point timeout);
@@ -1301,6 +1305,10 @@ public:
 
     const db::config& get_config() const {
         return *_cfg;
+    }
+
+    db::large_partition_handler* get_large_partition_handler() {
+        return _large_partition_handler.get();
     }
 
     future<> flush_all_memtables();

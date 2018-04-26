@@ -16,9 +16,11 @@
 #include "tmpdir.hh"
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
-#include "memtable-sstable.hh"
+#include "sstable_utils.hh"
 
 using namespace sstables;
+
+static db::nop_large_partition_handler nop_lp_handler;
 
 static inline dht::token create_token_from_key(sstring key) {
     sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
@@ -67,7 +69,9 @@ void run_sstable_resharding_test() {
     auto s = get_schema();
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm, *cl_stats);
+    column_family::config cfg;
+    cfg.large_partition_handler = &nop_lp_handler;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats);
     cf->mark_ready_for_writes();
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;
@@ -92,7 +96,7 @@ void run_sstable_resharding_test() {
             }
         }
         auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
-        write_memtable_to_sstable(*mt, sst).get();
+        write_memtable_to_sstable_for_test(*mt, sst).get();
     }
     auto sst = sstables::make_sstable(s, tmp->path, 0, version, sstables::sstable::format_types::big);
     sst->load().get();

@@ -895,7 +895,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             database_sstable_write_monitor monitor(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
             return do_with(std::move(monitor), [this, newtab, old, permit = std::move(permit)] (auto& monitor) mutable {
                 auto&& priority = service::get_local_streaming_write_priority();
-                return write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false).then([this, newtab, old] {
+                return write_memtable_to_sstable(*old, newtab, monitor, get_large_partition_handler(), incremental_backups_enabled(), priority, false).then([this, newtab, old] {
                     return newtab->open_data();
                 }).then([this, old, newtab] () {
                     return with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, newtab, old] {
@@ -954,7 +954,7 @@ future<> column_family::seal_active_streaming_memtable_big(streaming_memtable_bi
                 auto fp = permit.release_sstable_write_permit();
                 auto monitor = std::make_unique<database_sstable_write_monitor>(std::move(fp), newtab, _compaction_manager, _compaction_strategy);
                 auto&& priority = service::get_local_streaming_write_priority();
-                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, incremental_backups_enabled(), priority, true);
+                auto fut = write_memtable_to_sstable(*old, newtab, *monitor, get_large_partition_handler(), incremental_backups_enabled(), priority, true);
                 return fut.then_wrapped([this, newtab, old, &smb, permit = std::move(permit), monitor = std::move(monitor)] (future<> f) mutable {
                     if (!f.failed()) {
                         smb.sstables.push_back(monitored_sstable{std::move(monitor), newtab});
@@ -1050,7 +1050,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old, sstabl
     database_sstable_write_monitor monitor(std::move(permit), newtab, _compaction_manager, _compaction_strategy);
     return do_with(std::move(monitor), [this, old, newtab] (auto& monitor) {
         auto&& priority = service::get_local_memtable_flush_priority();
-        auto f = write_memtable_to_sstable(*old, newtab, monitor, incremental_backups_enabled(), priority, false);
+        auto f = write_memtable_to_sstable(*old, newtab, monitor, get_large_partition_handler(), incremental_backups_enabled(), priority, false);
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
         // priority inversion.
@@ -1327,7 +1327,7 @@ column_family::on_compaction_completion(const std::vector<sstables::shared_sstab
 
     // This is done in the background, so we can consider this compaction completed.
     seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
-        return sstables::delete_atomically(sstables_to_remove).then_wrapped([this, sstables_to_remove] (future<> f) {
+        return sstables::delete_atomically(sstables_to_remove, *get_large_partition_handler()).then_wrapped([this, sstables_to_remove] (future<> f) {
             std::exception_ptr eptr;
             try {
                 f.get();
@@ -1864,9 +1864,9 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                 cf->replace_ancestors_needed_rewrite(sstables);
                             });
                         }
-                    }).then([sstables] {
+                    }).then([&cf, sstables] {
                         // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                        sstables::delete_atomically(std::move(sstables)).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                        sstables::delete_atomically(std::move(sstables), *cf->get_large_partition_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
                             try {
                                 std::rethrow_exception(eptr);
                             } catch (...) {
@@ -2136,6 +2136,7 @@ database::database(const db::config& cfg, database_config dbcfg)
         }
         return _compaction_manager->backlog() / memory::stats().total_memory();
     }))
+    , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
     _compaction_manager->start();
@@ -2620,7 +2621,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema) {
     auto& ks = find_keyspace(schema->ks_name());
-    add_column_family(ks, schema, ks.make_column_family_config(*schema, get_config()));
+    add_column_family(ks, schema, ks.make_column_family_config(*schema, get_config(), get_large_partition_handler()));
     find_column_family(schema).get_index_manager().reload();
     return ks.make_directory_for_column_family(schema->cf_name(), schema->id());
 }
@@ -2788,7 +2789,7 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
 }
 
 column_family::config
-keyspace::make_column_family_config(const schema& s, const db::config& db_config) const {
+keyspace::make_column_family_config(const schema& s, const db::config& db_config, db::large_partition_handler* lp_handler) const {
     column_family::config cfg;
     cfg.datadir = column_family_directory(s.cf_name(), s.id());
     cfg.enable_disk_reads = _config.enable_disk_reads;
@@ -2807,7 +2808,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
-    cfg.large_partition_warning_threshold_bytes = db_config.compaction_large_partition_warning_threshold_mb()*1024*1024;
+    cfg.large_partition_handler = lp_handler;
 
     return cfg;
 }
@@ -4186,7 +4187,7 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
         }).then([this, p]() mutable {
             return parallel_for_each(p->remove, [this](sstables::shared_sstable s) {
                 _compaction_strategy.get_backlog_tracker().remove_sstable(s);
-                return sstables::delete_atomically({s});
+                return sstables::delete_atomically({s}, *get_large_partition_handler());
             }).then([p] {
                 return make_ready_future<db::replay_position>(p->rp);
             });
@@ -4581,21 +4582,22 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
 
 future<>
 write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst,
-                          sstables::write_monitor& monitor,
+                          sstables::write_monitor& monitor, db::large_partition_handler* lp_handler,
                           bool backup, const io_priority_class& pc, bool leave_unsealed) {
     sstables::sstable_writer_config cfg;
     cfg.replay_position = mt.replay_position();
     cfg.backup = backup;
     cfg.leave_unsealed = leave_unsealed;
     cfg.monitor = &monitor;
+    cfg.large_partition_handler = lp_handler;
     return sst->write_components(mt.make_flush_reader(mt.schema(), pc), mt.partition_count(),
         mt.schema(), cfg, mt.get_stats(), pc);
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
-    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst] (auto& monitor) {
-        return write_memtable_to_sstable(mt, std::move(sst), monitor);
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, db::large_partition_handler* lp_handler) {
+    return do_with(permit_monitor(sstable_write_permit::unconditional()), [&mt, sst, lp_handler] (auto& monitor) {
+        return write_memtable_to_sstable(mt, std::move(sst), monitor, lp_handler);
     });
 }
 
