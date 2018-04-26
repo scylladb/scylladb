@@ -641,7 +641,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, summary& s) {
             // Positions are encoded in little-endian.
             auto b = buf.get();
             s.positions = utils::chunked_vector<pos_type>();
-            return do_until([&s] { return s.positions.size() == s.header.size; }, [&s, b] () mutable {
+            return do_until([&s] { return s.positions.size() == s.header.size; }, [&s, buf = std::move(buf), b] () mutable {
                 s.positions.push_back(seastar::read_le<pos_type>(b));
                 b += sizeof(pos_type);
                 return make_ready_future<>();
