@@ -249,11 +249,9 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
 
             auto&& keyspace = e.db().local().find_keyspace("ks").metadata();
 
-            auto legacy_version = utils::UUID_gen::get_time_UUID();
             auto s0 = schema_builder("ks", "table1")
                 .with_column("pk", bytes_type, column_kind::partition_key)
                 .with_column("v1", bytes_type)
-                .with_version(legacy_version)
                 .build();
 
             auto find_table = [&] () -> column_family& {
@@ -261,14 +259,11 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
             };
 
             auto muts1 = db::schema_tables::make_create_table_mutations(keyspace, s0, api::new_timestamp()).get0();
-            service::get_storage_proxy().local().mutate_locally(muts1).get();
-            e.db().invoke_on_all([gs = global_schema_ptr(s0)] (database& db) {
-                return db.add_column_family_and_make_directory(gs);
-            }).get();
+            mm.announce(muts1).get();
 
             auto s1 = find_table().schema();
 
-            BOOST_REQUIRE_EQUAL(legacy_version, s1->version());
+            auto legacy_version = s1->version();
 
             mm.announce(muts1).get();
 
