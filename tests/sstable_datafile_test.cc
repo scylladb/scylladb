@@ -51,6 +51,7 @@
 #include "memtable-sstable.hh"
 #include "tests/sstable_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "tests/make_random_string.hh"
 
 #include <stdio.h>
 #include <ftw.h>

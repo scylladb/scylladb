@@ -23,7 +23,6 @@
 
 #pragma once
 
-#include "make_random_string.hh"
 #include "schema.hh"
 #include "keys.hh"
 #include "mutation_fragment.hh"
