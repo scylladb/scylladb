@@ -1557,7 +1557,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     }).get();
 }
 
-// Best run with SMP >= 2
+// Best run with SMP >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         std::vector<bool> shards_touched(smp::count, false);
