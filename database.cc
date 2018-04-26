@@ -2812,6 +2812,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.statement_scheduling_group = _config.statement_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.large_partition_handler = lp_handler;
+    cfg.view_update_concurrency_semaphore = _config.view_update_concurrency_semaphore;
 
     return cfg;
 }
@@ -3504,7 +3505,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
     if (cf.views().empty()) {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally([op = std::move(op)] { });
     }
-    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m);
+    future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout);
     return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op)] (row_locker::lock_holder lock) mutable {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally(
                 // Hold the local lock on the base-table partition or row
@@ -3589,6 +3590,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;
     cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg->enable_keyspace_column_family_metrics();
+
+    cfg.view_update_concurrency_semaphore = &_view_update_concurrency_sem;
     return cfg;
 }
 
@@ -4325,13 +4328,17 @@ std::vector<view_ptr> column_family::affected_views(const schema_ptr& base, cons
 future<> column_family::generate_and_propagate_view_updates(const schema_ptr& base,
         std::vector<view_ptr>&& views,
         mutation&& m,
-        flat_mutation_reader_opt existings) const {
+        flat_mutation_reader_opt existings,
+        db::timeout_clock::time_point timeout) const {
     auto base_token = m.token();
     return db::view::generate_view_updates(base,
                         std::move(views),
                         flat_mutation_reader_from_mutations({std::move(m)}),
-                        std::move(existings)).then([base_token = std::move(base_token)] (auto&& updates) {
-        db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([] (auto ignored) { });
+                        std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
+        return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
+                [base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
+            db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([units = std::move(units)] (auto ignored) { });
+        });
     });
 }
 
@@ -4339,7 +4346,7 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
  * Given an update for the base table, calculates the set of potentially affected views,
  * generates the relevant updates, and sends them to the paired view replicas.
  */
-future<row_locker::lock_holder> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const {
+future<row_locker::lock_holder> column_family::push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const {
     //FIXME: Avoid unfreezing here.
     auto m = fm.unfreeze(s);
     auto& base = schema();
@@ -4350,7 +4357,7 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
     }
     auto cr_ranges = db::view::calculate_affected_clustering_ranges(*base, m.decorated_key(), m.partition(), views);
     if (cr_ranges.empty()) {
-        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }).then([] {
+        return generate_and_propagate_view_updates(base, std::move(views), std::move(m), { }, timeout).then([] {
                 // In this case we are not doing a read-before-write, just a
                 // write, so no lock is needed.
                 return make_ready_future<row_locker::lock_holder>();
@@ -4372,18 +4379,18 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
     future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges());
-    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this] (row_locker::lock_holder lock) {
+    return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout] (row_locker::lock_holder lock) {
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
         std::move(slice),
         std::move(m),
-        [base, views = std::move(views), lock = std::move(lock), this] (auto& pk, auto& slice, auto& m) mutable {
+        [base, views = std::move(views), lock = std::move(lock), this, timeout] (auto& pk, auto& slice, auto& m) mutable {
             auto reader = this->make_reader(
                 base,
                 pk,
                 slice,
                 service::get_local_sstable_query_read_priority());
-            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader)).then([lock = std::move(lock)] () mutable {
+            return this->generate_and_propagate_view_updates(base, std::move(views), std::move(m), std::move(reader), timeout).then([lock = std::move(lock)] () mutable {
                 // return the local partition/row lock we have taken so it
                 // remains locked until the caller is done modifying this
                 // partition/row and destroys the lock object.
