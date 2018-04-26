@@ -310,6 +310,7 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
+        db::timeout_semaphore* view_update_concurrency_semaphore;
     };
     struct no_commitlog {};
     struct stats {
@@ -787,7 +788,7 @@ public:
     void add_or_update_view(view_ptr v);
     void remove_view(view_ptr v);
     const std::vector<view_ptr>& views() const;
-    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm) const;
+    future<row_locker::lock_holder> push_view_replica_updates(const schema_ptr& s, const frozen_mutation& fm, db::timeout_clock::time_point timeout) const;
     void add_coordinator_read_latency(utils::estimated_histogram::duration latency);
     std::chrono::milliseconds get_coordinator_read_latency_percentile(double percentile);
 
@@ -803,7 +804,8 @@ private:
     future<> generate_and_propagate_view_updates(const schema_ptr& base,
             std::vector<view_ptr>&& views,
             mutation&& m,
-            flat_mutation_reader_opt existings) const;
+            flat_mutation_reader_opt existings,
+            db::timeout_clock::time_point timeout) const;
 
     mutable row_locker _row_locker;
     future<row_locker::lock_holder> local_base_lock(const schema_ptr& s, const dht::decorated_key& pk, const query::clustering_row_ranges& rows) const;
@@ -989,6 +991,7 @@ public:
         seastar::scheduling_group query_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
+        db::timeout_semaphore* view_update_concurrency_semaphore = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -1118,6 +1121,8 @@ private:
     reader_concurrency_semaphore _system_read_concurrency_sem;
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
+
+    db::timeout_semaphore _view_update_concurrency_sem{100}; // Stand-in hack for #2538
 
     concrete_execution_stage<future<lw_shared_ptr<query::result>>,
         column_family*,
