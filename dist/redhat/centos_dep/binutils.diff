@@ -33,8 +33,8 @@
  Requires(post): coreutils
 -Requires(post): %{_sbindir}/alternatives
 -Requires(preun): %{_sbindir}/alternatives
-+Requires(post): /sbin/alternatives
-+Requires(preun): /sbin/alternatives
++Requires(post): /usr/sbin/alternatives
++Requires(preun): /usr/sbin/alternatives
  %endif
  
  # On ARM EABI systems, we do want -gnueabi to be part of the
@@ -58,13 +58,13 @@
  %if "%{build_gold}" == "both"
  %__rm -f %{_bindir}/%{?cross}ld
 -%{_sbindir}/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
-+/sbin/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
++/usr/sbin/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
    %{_bindir}/%{?cross}ld.bfd %{ld_bfd_priority}
 -%{_sbindir}/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
-+/sbin/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
++/usr/sbin/alternatives --install %{_bindir}/%{?cross}ld %{?cross}ld \
    %{_bindir}/%{?cross}ld.gold %{ld_gold_priority}
 -%{_sbindir}/alternatives --auto %{?cross}ld 
-+/sbin/alternatives --auto %{?cross}ld 
++/usr/sbin/alternatives --auto %{?cross}ld 
  %endif
  %if %{isnative}
  /sbin/ldconfig
@@ -74,8 +74,8 @@
  if [ $1 = 0 ]; then
 -  %{_sbindir}/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.bfd
 -  %{_sbindir}/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.gold
-+  /sbin/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.bfd
-+  /sbin/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.gold
++  /usr/sbin/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.bfd
++  /usr/sbin/alternatives --remove %{?cross}ld %{_bindir}/%{?cross}ld.gold
  fi
  %endif
  %if %{isnative}
