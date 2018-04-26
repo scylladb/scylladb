@@ -38,7 +38,6 @@
 #include "clustering_key_filter.hh"
 #include "core/enum.hh"
 #include "compress.hh"
-#include "row.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation.hh"
@@ -64,59 +63,37 @@
 
 class sstable_assertions;
 
+class row_consumer;
+
 namespace sstables {
 
 extern logging::logger sstlog;
-
-class data_consume_rows_context;
-
-// data_consume_context is an object returned by sstable::data_consume_rows()
-// which allows knowing when the consumer stops reading, and starting it again
-// (e.g., when the consumer wants to stop after every sstable row).
-//
-// The read() method initiates reading into the consumer, and continues to
-// read and feed data into the consumer until one of the consumer's callbacks
-// requests to stop,  or until we reach the end of the data range originally
-// requested. read() returns a future which completes when reading stopped.
-// If we're at the end-of-file, the read may complete without reading anything
-// so it's the consumer class's task to check if anything was consumed.
-// Note:
-// The caller MUST ensure that between calling read() on this object,
-// and the time the returned future is completed, the object lives on.
-// Moreover, the sstable object used for the sstable::data_consume_rows()
-// call which created this data_consume_context, must also be kept alive.
-//
-// data_consume_rows() and data_consume_rows_at_once() both can read just a
-// single row or many rows. The difference is that data_consume_rows_at_once()
-// is optimized to reading one or few rows (reading it all into memory), while
-// data_consume_rows() uses a read buffer, so not all the rows need to fit
-// memory in the same time (they are delivered to the consumer one by one).
-class data_consume_context {
-    shared_sstable _sst;
-    std::unique_ptr<data_consume_rows_context> _ctx;
-    // This object can only be constructed by sstable::data_consume_rows()
-    data_consume_context(shared_sstable,row_consumer& consumer, input_stream<char>&& input, uint64_t start, uint64_t maxlen);
-    friend class sstable;
-    data_consume_context();
-    explicit operator bool() const noexcept;
-    friend class optimized_optional<data_consume_context>;
-public:
-    future<> read();
-    future<> fast_forward_to(uint64_t begin, uint64_t end);
-    future<> skip_to(indexable_element, uint64_t begin);
-    const reader_position_tracker& reader_position() const;
-    bool eof() const;
-    ~data_consume_context();
-    data_consume_context(data_consume_context&&) noexcept;
-    data_consume_context& operator=(data_consume_context&&) noexcept;
-};
-
-using data_consume_context_opt = optimized_optional<data_consume_context>;
-
 class key;
 class sstable_writer;
 struct foreign_sstable_open_info;
 struct sstable_open_info;
+
+GCC6_CONCEPT(
+template<typename T>
+concept bool ConsumeRowsContext() {
+    return requires(T c, indexable_element el, size_t s) {
+        { c.consume_input() } -> future<>;
+        { c.reset(el) } -> void;
+        { c.fast_forward_to(s, s) } -> future<>;
+        { c.position() } -> uint64_t;
+        { c.skip_to(s) } -> future<>;
+        { c.reader_position() } -> const sstables::reader_position_tracker&;
+        { c.eof() } -> bool;
+        { c.close() } -> future<>;
+    };
+}
+)
+
+template <typename DataConsumeRowsContext>
+GCC6_CONCEPT(
+    requires ConsumeRowsContext<DataConsumeRowsContext>()
+)
+class data_consume_context;
 
 class index_reader;
 
@@ -192,45 +169,7 @@ public:
         }
     };
 
-    // data_consume_rows() iterates over rows in the data file from
-    // a particular range, feeding them into the consumer. The iteration is
-    // done as efficiently as possible - reading only the data file (not the
-    // summary or index files) and reading data in batches.
-    //
-    // The consumer object may request the iteration to stop before reaching
-    // the end of the requested data range (e.g. stop after each sstable row).
-    // A context object is returned which allows to resume this consumption:
-    // This context's read() method requests that consumption begins, and
-    // returns a future which will be resolved when it ends (because the
-    // consumer asked to stop, or the data range ended). Only after the
-    // returned future is resolved, may read() be called again to consume
-    // more.
-    // The caller must ensure (e.g., using do_with()) that the context object,
-    // as well as the sstable, remains alive as long as a read() is in
-    // progress (i.e., returned a future which hasn't completed yet).
-    //
-    // The "toread" range specifies the range we want to read initially.
-    // However, the object returned by the read, a data_consume_context, also
-    // provides a fast_forward_to(start,end) method which allows resetting
-    // the reader to a new range. To allow that, we also have a "last_end"
-    // byte which should be the last end to which fast_forward_to is
-    // eventually allowed. If last_end==end, fast_forward_to is not allowed
-    // at all, if last_end==file_size fast_forward_to is allowed until the
-    // end of the file, and it can be something in between if we know that we
-    // are planning to skip parts, but eventually read until last_end.
-    // When last_end==end, we guarantee that the read will only read the
-    // desired byte range from disk. However, when last_end > end, we may
-    // read beyond end in anticipation of a small skip via fast_foward_to.
-    // The amount of this excessive read is controlled by read ahead
-    // hueristics which learn from the usefulness of previous read aheads.
-    data_consume_context data_consume_rows(row_consumer& consumer, disk_read_range toread, uint64_t last_end);
-
-    data_consume_context data_consume_single_partition(row_consumer& consumer, disk_read_range toread);
-
-    // Like data_consume_rows() with bounds, but iterates over whole range
-    data_consume_context data_consume_rows(row_consumer& consumer);
-
-    static component_type component_from_sstring(version_types v, sstring& s);
+    static component_type component_from_sstring(version_types version, sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
@@ -759,6 +698,15 @@ public:
     friend class components_writer;
     friend class sstable_writer;
     friend class index_reader;
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_single_partition(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
+    template <typename DataConsumeRowsContext>
+    friend data_consume_context<DataConsumeRowsContext>
+    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&);
 };
 
 struct entry_descriptor {

@@ -792,11 +792,11 @@ future<> parse(sstable_version_types v, random_access_reader& in, utils::estimat
         eh.buckets.reserve(length);
 
         auto type_size = sizeof(uint64_t) * 2;
-        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto buf) {
+        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto&& buf) {
             check_buf_size(buf, length * type_size);
 
-            auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
-            return do_with(size_t(0), [nr, &eh, length] (size_t& j) mutable {
+            return do_with(size_t(0), std::move(buf), [&eh, length] (size_t& j, auto& buf) mutable {
+                auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
                 return do_until([&eh, length] { return eh.buckets.size() == length; }, [nr, &eh, &j] () mutable {
                     auto offset = net::ntoh(nr[j++]);
                     auto bucket = net::ntoh(nr[j++]);

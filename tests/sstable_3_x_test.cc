@@ -29,6 +29,8 @@
 #include "compress.hh"
 #include "schema_builder.hh"
 #include "tests/test-utils.hh"
+#include "sstable_test.hh"
+#include "flat_mutation_reader_assertions.hh"
 
 using namespace sstables;
 
@@ -40,7 +42,10 @@ public:
                             path,
                             generation,
                             sstable_version_types::mc,
-                            sstable_format_types::big))
+                            sstable_format_types::big,
+                            gc_clock::now(),
+                            default_io_error_handler_gen(),
+                            1))
     { }
     void read_toc() {
         _sst->read_toc().get();
@@ -56,6 +61,13 @@ public:
     }
     void load() {
         _sst->load().get();
+    }
+    future<index_list> read_index() {
+        load();
+        return sstables::test(_sst).read_indexes();
+    }
+    flat_mutation_reader read_rows_flat() {
+        return _sst->read_rows_flat(_sst->_schema);
     }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
@@ -76,6 +88,58 @@ public:
         }
     }
 };
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_only
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk) VALUES(1);
+// INSERT INTO test_ks.test_table(pk) VALUES(2);
+// INSERT INTO test_ks.test_table(pk) VALUES(3);
+// INSERT INTO test_ks.test_table(pk) VALUES(4);
+// INSERT INTO test_ks.test_table(pk) VALUES(5);
+
+static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_ONLY_PATH =
+    "tests/sstables/3.x/uncompressed/partition_key_only";
+static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_load) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
+        sst.load();
+    });
+}
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, pk);
+        };
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
 
 // Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
@@ -143,5 +207,13 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_load) {
     return seastar::async([] {
         sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
         sst.load();
+    });
+}
+
+SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
+        auto vec = sst.read_index().get0();
+        BOOST_REQUIRE_EQUAL(1, vec.size());
     });
 }
