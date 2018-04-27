@@ -63,6 +63,14 @@ std::ostream& operator<<(std::ostream& out, const bound_kind k) {
         return out << "excl end";
     case bound_kind::incl_start:
         return out << "incl start";
+    case bound_kind::excl_end_incl_start:
+        return out << "excl end + incl start";
+    case bound_kind::static_clustering:
+        return out << "static clustering";
+    case bound_kind ::clustering:
+        return out << "clustering";
+    case bound_kind::incl_end_excl_start:
+        return out << "incl end + excl start";
     case bound_kind::incl_end:
         return out << "incl end";
     case bound_kind::excl_start:
@@ -77,6 +85,10 @@ bound_kind invert_kind(bound_kind k) {
     case bound_kind::incl_start: return bound_kind::excl_end;
     case bound_kind::excl_end:   return bound_kind::incl_start;
     case bound_kind::incl_end:   return bound_kind::excl_start;
+    case bound_kind::excl_end_incl_start:   return bound_kind::incl_end_excl_start;
+    case bound_kind::incl_end_excl_start:   return bound_kind::excl_end_incl_start;
+    case bound_kind::static_clustering:   return bound_kind::static_clustering;
+    case bound_kind::clustering:   return bound_kind::clustering;
     }
     abort();
 }
@@ -91,6 +103,8 @@ int32_t weight(bound_kind k) {
         return 1;
     case bound_kind::excl_start:
         return 2;
+    default:
+        throw std::invalid_argument(sprint("weight() is not defined for bound_kind {}", k));
     }
     abort();
 }

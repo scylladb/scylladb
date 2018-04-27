@@ -239,6 +239,9 @@ struct integer_type_impl : simple_type_impl<T> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return this->decompose(T(json::to_int64_t(value)));
     }
+    virtual bool is_fixed_length() const override {
+        return true;
+    }
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
@@ -350,6 +353,9 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
+    virtual bool is_fixed_length() const override {
+        return false;
+    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -436,6 +442,9 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         // bytesType validate everything, so it is compatible with the former.
         return this == &other || &other == ascii_type.get() || &other == utf8_type.get();
     }
+    virtual bool is_fixed_length() const override {
+        return false;
+    }
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
@@ -511,6 +520,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 
@@ -590,6 +602,9 @@ public:
             return true;
         }
         return false;
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 logging::logger date_type_impl::_logger(date_type_name);
@@ -688,6 +703,9 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
@@ -880,6 +898,9 @@ public:
         }
         return false;
     }
+    virtual bool is_fixed_length() const override {
+        return true;
+    }
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 
@@ -974,6 +995,9 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::date;
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 
@@ -1076,6 +1100,9 @@ struct time_type_impl : public simple_type_impl<int64_t> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::time;
     }
+    virtual bool is_fixed_length() const override {
+        return true;
+    }
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
@@ -1166,6 +1193,9 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 
@@ -1271,6 +1301,9 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 
@@ -1422,6 +1455,9 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception("Only float/double types can be parsed from JSON floating point object");
         }
     }
+    virtual bool is_fixed_length() const override {
+        return true;
+    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -1559,6 +1595,9 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
     }
+    virtual bool is_fixed_length() const override {
+        return false;
+    }
     friend class decimal_type_impl;
 };
 
@@ -1666,6 +1705,9 @@ public:
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::decimal;
     }
+    virtual bool is_fixed_length() const override {
+        return false;
+    }
 };
 
 class counter_type_impl : public abstract_type {
@@ -1740,6 +1782,9 @@ public:
     }
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         return std::experimental::nullopt;
+    }
+    virtual bool is_fixed_length() const override {
+        fail(unimplemented::cause::COUNTERS);
     }
 };
 
@@ -1886,6 +1931,9 @@ public:
     virtual bool references_duration() const override {
         return true;
     }
+    virtual bool is_fixed_length() const override {
+        return false;
+    }
 private:
     using counter_type = cql_duration::common_counter_type;
 
@@ -1974,6 +2022,9 @@ struct empty_type_impl : abstract_type {
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
         abort();
+    }
+    virtual bool is_fixed_length() const override {
+        return true;
     }
 };
 

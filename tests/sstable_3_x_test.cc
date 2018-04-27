@@ -20,17 +20,23 @@
  */
 
 #include <set>
+#include <fstream>
+#include <iterator>
 
 #include <boost/test/unit_test.hpp>
 
 #include <seastar/core/thread.hh>
+#include <seastar/tests/test-utils.hh>
 
 #include "sstables/sstables.hh"
 #include "compress.hh"
 #include "schema_builder.hh"
-#include "tests/test-utils.hh"
 #include "sstable_test.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "memtable-sstable.hh"
+#include "sstable_test.hh"
+#include "tests/test_services.hh"
+#include "tests/tmpdir.hh"
 
 using namespace sstables;
 
@@ -217,3 +223,515 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
         BOOST_REQUIRE_EQUAL(1, vec.size());
     });
 }
+
+static void compare_files(sstring filename1, sstring filename2) {
+    std::ifstream ifs1(filename1);
+    std::ifstream ifs2(filename2);
+
+    std::istream_iterator<char> b1(ifs1), e1;
+    std::istream_iterator<char> b2(ifs2), e2;
+    BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
+}
+
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
+    storage_service_for_tests ssft;
+    tmpdir tmp;
+    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    write_memtable_to_sstable(*mt, sst).get();
+
+    for (auto file_type : {component_type::Data, component_type::Index}) {
+        auto orig_filename =
+                sstable::filename("tests/sstables/3.x/uncompressed/write_" + table_name, "ks",
+                                  table_name, sstables::sstable_version_types::mc, 1, big, file_type);
+        auto result_filename =
+                sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
+        compare_files(orig_filename, result_filename);
+    }
+}
+
+SEASTAR_TEST_CASE(test_write_static_row) {
+    return seastar::async([] {
+        sstring table_name = "static_row";
+        // CREATE TABLE static_row (pk int, ck int, st1 int static, st2 text static, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", utf8_type}},
+            // clustering key
+            {{"ck", int32_type}},
+            // regular columns
+            {},
+            // static columns
+            {{"st1", int32_type}, {"st2", utf8_type}},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - static row test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+        api::timestamp_type ts = api::new_timestamp();
+
+        // INSERT INTO static_row (pk, st1, st2) values ('key1', 1135, 'hello');
+        auto key = make_dkey(s, {to_bytes("key1")});
+        mutation mut{s, key};
+        mut.set_static_cell("st1", data_value{1135}, ts);
+        mut.set_static_cell("st2", data_value{"hello"}, ts);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_composite_clustering_key) {
+    return seastar::async([] {
+        sstring table_name = "composite_clustering_key";
+        // CREATE TABLE composite_clustering_key (a int , b text, c int, d text, e int, f text, PRIMARY KEY (a, b, c, d)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"a", int32_type}},
+            // clustering key
+            {{"b", utf8_type}, {"c", int32_type}, {"d", utf8_type}},
+            // regular columns
+            {{"e", int32_type}, {"f", utf8_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - composite clustering key test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+        api::timestamp_type ts = api::new_timestamp();
+
+        // INSERT INTO composite_clustering_key (a,b,c,d,e,f) values (1, 'hello', 2, 'dear', 3, 'world');
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { "hello", 2, "dear" });
+        mut.partition().apply_insert(*s, ckey, ts);
+        mut.set_cell(ckey, "e", data_value{3}, ts);
+        mut.set_cell(ckey, "f", data_value{"world"}, ts);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_wide_partition) {
+    return seastar::async([] {
+        sstring table_name = "wide_partition";
+        // CREATE TABLE wide_partition (pk text , ck text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", utf8_type}},
+            // clustering key
+            {{"ck", utf8_type}},
+            // regular columns
+            {{"rc", utf8_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - wide partition test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = make_dkey(s, {to_bytes("key")});
+        mutation mut{s, key};
+        sstring ck_base(1024, 'a');
+        sstring rc_base(1024, 'b');
+        api::timestamp_type ts = api::new_timestamp();
+        for (auto idx: boost::irange(0, 1024)) {
+            clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
+            mut.partition().apply_insert(*s, ckey, ts);
+            mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+            mt->apply(std::move(mut));
+            seastar::thread::yield();
+        }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_ttled_row) {
+    return seastar::async([] {
+        sstring table_name = "ttled_row";
+        // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk));
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {{"ck", int32_type}},
+            // regular columns
+            {{"rc", int32_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - TTL-ed row test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // INSERT INTO ttled_row (pk, ck, rc) VALUES ( 1, 2, 3) USING TTL 1135;
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
+        api::timestamp_type ts = api::new_timestamp();
+        gc_clock::time_point tp = gc_clock::now();
+        gc_clock::duration ttl{1135};
+        mut.partition().apply_insert(*s, ckey, ts, ttl, tp + ttl);
+        mut.set_cell(ckey, "rc", data_value{3}, ts);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_ttled_column) {
+    return seastar::async([] {
+        sstring table_name = "ttled_column";
+        // CREATE TABLE ttled_column (pk text, rc int, PRIMARY KEY (pk));
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", utf8_type}},
+            // clustering key
+            {},
+            // regular columns
+            {{"rc", int32_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - TTL-ed column test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // UPDATE ttled_column USING TTL 1135 SET rc = 1 WHERE pk='key';
+        auto key = make_dkey(s, {to_bytes("key")});
+        mutation mut{s, key};
+        api::timestamp_type ts = api::new_timestamp();
+        gc_clock::duration ttl{1135};
+        mut.set_clustered_cell(clustering_key::make_empty(), "rc", data_value{1}, ts, ttl);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_deleted_column) {
+    return seastar::async([] {
+        sstring table_name = "deleted_column";
+        // CREATE TABLE deleted_cell (int pk, int rc, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {},
+            // regular columns
+            {{"rc", int32_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - deleted column test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // DELETE rc FROM deleted_column WHERE pk=1;
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+        //mut.partition().apply_delete(*s, clustering_key::make_empty(), tombstone{api::new_timestamp(), gc_clock::now()});
+        auto column_def = s->get_column_definition("rc");
+        if (!column_def) {
+            throw std::runtime_error("no column definition found");
+        }
+        mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(api::new_timestamp(), gc_clock::now()));
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_deleted_row) {
+    return seastar::async([] {
+        sstring table_name = "deleted_row";
+        // CREATE TABLE deleted_row (int pk, int ck, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {{"ck", int32_type}},
+            // regular columns
+            {},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - deleted row test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // DELETE FROM deleted_row WHERE pk=1 and ck=2;
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
+        mut.partition().apply_delete(*s, ckey, tombstone{api::new_timestamp(), gc_clock::now()});
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_collection_wide_update) {
+    return seastar::async([] {
+        sstring table_name = "collection_wide_update";
+        auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+        // CREATE TABLE collection_wide_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {},
+            // regular columns
+            {{"col", set_of_ints_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - collection wide update test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // INSERT INTO collection_wide_update (pk, col) VALUES (1, {2, 3});
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+
+        api::timestamp_type ts = api::new_timestamp();
+        gc_clock::time_point tp = gc_clock::now();
+        mut.partition().apply_insert(*s, clustering_key::make_empty(), ts);
+        set_type_impl::mutation set_values {
+            {ts - 1, tp}, // tombstone
+            {
+                {int32_type->decompose(2), atomic_cell::make_live(ts, bytes_view{})},
+                {int32_type->decompose(3), atomic_cell::make_live(ts, bytes_view{})},
+            }
+        };
+
+        mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_collection_incremental_update) {
+    return seastar::async([] {
+        sstring table_name = "collection_incremental_update";
+        auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+        // CREATE TABLE collection_incremental_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {},
+            // regular columns
+            {{"col", set_of_ints_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - collection incremental update test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // UPDATE collection_incremental_update SET col = col + {2} WHERE pk = 1;
+        auto key = partition_key::from_deeply_exploded(*s, { 1 });
+        mutation mut{s, key};
+
+        api::timestamp_type ts = api::new_timestamp();
+        set_type_impl::mutation set_values {
+            {}, // tombstone
+            {
+                {int32_type->decompose(2), atomic_cell::make_live(ts, bytes_view{})},
+            }
+        };
+
+        mut.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("col"), set_of_ints_type->serialize_mutation_form(set_values));
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_multiple_partitions) {
+    return seastar::async([] {
+        sstring table_name = "multiple_partitions";
+        // CREATE TABLE multiple_partitions (pk int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {},
+            // regular columns
+            {{"rc1", int32_type}, {"rc2", int32_type}, {"rc3", int32_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - multiple partitions test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        api::timestamp_type ts = api::new_timestamp();
+        // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10);
+        // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20);
+        // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30);
+        for (auto i : boost::irange(1, 4)) {
+            auto key = partition_key::from_deeply_exploded(*s, {i});
+            mutation mut{s, key};
+
+            mut.set_cell(clustering_key::make_empty(), to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
+            mt->apply(std::move(mut));
+            ts += 10;
+        }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_multiple_rows) {
+    return seastar::async([] {
+        sstring table_name = "multiple_rows";
+        // CREATE TABLE multiple_rows (pk int, ck int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {{"ck", int32_type}},
+            // regular columns
+            {{"rc1", int32_type}, {"rc2", int32_type}, {"rc3", int32_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - multiple rows test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_deeply_exploded(*s, {0});
+        api::timestamp_type ts = api::new_timestamp();
+        mutation mut{s, key};
+
+        // INSERT INTO multiple_rows (pk, ck, rc1) VALUES (0, 1, 10);
+        // INSERT INTO multiple_rows (pk, ck, rc2) VALUES (0, 2, 20);
+        // INSERT INTO multiple_rows (pk, ck, rc3) VALUES (0, 3, 30);
+        for (auto i : boost::irange(1, 4)) {
+            clustering_key ckey = clustering_key::from_deeply_exploded(*s, { i });
+            mut.partition().apply_insert(*s, ckey, ts);
+            mut.set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
+            ts += 10;
+        }
+
+        mt->apply(std::move(mut));
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+// Information on missing columns is serialized differently when the number of columns is > 64.
+// This test checks that this information is encoded correctly.
+SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
+    return seastar::async([] {
+        sstring table_name = "missing_columns_large_set";
+        // CREATE TABLE missing_columns_large_set (pk int, ck int, rc1 int, ..., rc64, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        std::vector<schema::column> regular_columns;
+        regular_columns.reserve(64);
+        for (auto idx: boost::irange(1, 65)) {
+            regular_columns.push_back({to_bytes(format("rc{}", idx)), int32_type});
+        }
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"pk", int32_type}},
+            // clustering key
+            {{"ck", int32_type}},
+            regular_columns,
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - missing columns large set test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_deeply_exploded(*s, {0});
+        api::timestamp_type ts = api::new_timestamp();
+        mutation mut{s, key};
+
+        // INSERT INTO missing_columns_large_set (pk, ck, rc1, ..., rc62) VALUES (0, 0, 1, ..., 62);
+        // For missing columns, the missing ones will be written as majority are present.
+        {
+            clustering_key ckey = clustering_key::from_deeply_exploded(*s, {0});
+            mut.partition().apply_insert(*s, ckey, ts);
+            for (auto idx: boost::irange(1, 63)) {
+                mut.set_cell(ckey, to_bytes(format("rc{}", idx)), data_value{idx}, ts);
+            }
+            mt->apply(std::move(mut));
+        }
+        ts += 10;
+        // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64);
+        // For missing columns, the present ones will be written as majority are missing.
+        {
+            clustering_key ckey = clustering_key::from_deeply_exploded(*s, {1});
+            mut.partition().apply_insert(*s, ckey, ts);
+            mut.set_cell(ckey, to_bytes(format("rc63", 63)), data_value{63}, ts);
+            mut.set_cell(ckey, to_bytes(format("rc64", 63)), data_value{64}, ts);
+            mt->apply(std::move(mut));
+        }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
