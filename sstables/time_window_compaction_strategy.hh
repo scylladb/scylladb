@@ -112,10 +112,12 @@ public:
         }
 
         it = options.find(TIMESTAMP_RESOLUTION_KEY);
-        if (it != options.end() && !valid_timestamp_resolutions.count(it->second)) {
-            throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
-        } else {
-            timestamp_resolution = valid_timestamp_resolutions.at(it->second);
+        if (it != options.end()) {
+            if (!valid_timestamp_resolutions.count(it->second)) {
+                throw exceptions::syntax_exception(sstring("Invalid timestamp resolution ") + it->second + "for " + TIMESTAMP_RESOLUTION_KEY);
+            } else {
+                timestamp_resolution = valid_timestamp_resolutions.at(it->second);
+            }
         }
     }
 
