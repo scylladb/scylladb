@@ -24,13 +24,24 @@
 #include "timestamp.hh"
 
 // Stores statistics on all the updates done to a memtable
-// The collected statistics is used for flushing memtable to the disk
+// The collected statistics are used for flushing memtable to the disk
 struct encoding_stats {
 
-    // The fixed epoch corresponds to 2018-03-22, 00:00:00 GMT-0.
+    // The fixed epoch corresponds to the one used by Origin - 22/09/2015, 00:00:00, GMT-0:
+    //        Calendar c = Calendar.getInstance(TimeZone.getTimeZone("GMT-0"), Locale.US);
+    //        c.set(Calendar.YEAR, 2015);
+    //        c.set(Calendar.MONTH, Calendar.SEPTEMBER);
+    //        c.set(Calendar.DAY_OF_MONTH, 22);
+    //        c.set(Calendar.HOUR_OF_DAY, 0);
+    //        c.set(Calendar.MINUTE, 0);
+    //        c.set(Calendar.SECOND, 0);
+    //        c.set(Calendar.MILLISECOND, 0);
+    //
+    //        long TIMESTAMP_EPOCH = c.getTimeInMillis() * 1000; // timestamps should be in microseconds by convention
+    //        int DELETION_TIME_EPOCH = (int)(c.getTimeInMillis() / 1000); // local deletion times are in seconds
     // Encoding stats are used for delta-encoding, so we want some default values
     // that are just good enough so we take some recent date in the past
-    static constexpr uint32_t deletion_time_epoch = 1521676800;
+    static constexpr uint32_t deletion_time_epoch = 1442880000;
     static constexpr api::timestamp_type timestamp_epoch = deletion_time_epoch * 1000 * 1000;
     static constexpr uint32_t ttl_epoch = 0;
 
