@@ -131,7 +131,7 @@ struct simple_type_traits<db_clock::time_point> {
 
 template <typename T>
 struct simple_type_impl : concrete_type<T> {
-    simple_type_impl(sstring name) : concrete_type<T>(std::move(name)) {}
+    simple_type_impl(sstring name, bool is_fixed_length) : concrete_type<T>(std::move(name), is_fixed_length) {}
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -162,7 +162,7 @@ struct simple_type_impl : concrete_type<T> {
 
 template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
-    integer_type_impl(sstring name) : simple_type_impl<T>(name) {}
+    integer_type_impl(sstring name) : simple_type_impl<T>(name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -239,9 +239,6 @@ struct integer_type_impl : simple_type_impl<T> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return this->decompose(T(json::to_int64_t(value)));
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
@@ -297,7 +294,7 @@ struct long_type_impl : integer_type_impl<int64_t> {
 
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(sstring name)
-        : concrete_type(name) {}
+        : concrete_type(name, false) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -353,9 +350,6 @@ struct string_type_impl : public concrete_type<sstring> {
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
         return from_string(value.asString());
     }
-    virtual bool is_fixed_length() const override {
-        return false;
-    }
 };
 
 struct ascii_type_impl final : public string_type_impl {
@@ -380,7 +374,7 @@ struct utf8_type_impl final : public string_type_impl {
 };
 
 struct bytes_type_impl final : public concrete_type<bytes> {
-    bytes_type_impl() : concrete_type(bytes_type_name) {}
+    bytes_type_impl() : concrete_type(bytes_type_name, false) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -442,13 +436,10 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         // bytesType validate everything, so it is compatible with the former.
         return this == &other || &other == ascii_type.get() || &other == utf8_type.get();
     }
-    virtual bool is_fixed_length() const override {
-        return false;
-    }
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
-    boolean_type_impl() : simple_type_impl<bool>(boolean_type_name) {}
+    boolean_type_impl() : simple_type_impl<bool>(boolean_type_name, true) {}
     void serialize_value(maybe_empty<bool> value, bytes::iterator& out) const {
         if (!value.empty()) {
             *out++ = char(value);
@@ -521,15 +512,12 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
-    date_type_impl() : concrete_type(date_type_name) {}
+    date_type_impl() : concrete_type(date_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -603,14 +591,11 @@ public:
         }
         return false;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
-    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name) {}
+    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -704,9 +689,6 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
         auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
@@ -728,7 +710,7 @@ private:
 class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
     static logging::logger _logger;
 public:
-    timestamp_type_impl() : simple_type_impl(timestamp_type_name) {}
+    timestamp_type_impl() : simple_type_impl(timestamp_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -898,14 +880,11 @@ public:
         }
         return false;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 
 struct simple_date_type_impl : public simple_type_impl<uint32_t> {
-    simple_date_type_impl() : simple_type_impl{simple_date_type_name}
+    simple_date_type_impl() : simple_type_impl{simple_date_type_name, true}
     { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -996,13 +975,10 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::date;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 struct time_type_impl : public simple_type_impl<int64_t> {
-    time_type_impl() : simple_type_impl{time_type_name}
+    time_type_impl() : simple_type_impl{time_type_name, true}
     { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -1100,13 +1076,10 @@ struct time_type_impl : public simple_type_impl<int64_t> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::time;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
-    uuid_type_impl() : concrete_type(uuid_type_name) {}
+    uuid_type_impl() : concrete_type(uuid_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1194,15 +1167,12 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 using inet_address = seastar::net::inet_address;
 
 struct inet_addr_type_impl : concrete_type<inet_address> {
-    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name) {}
+    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1302,9 +1272,6 @@ struct inet_addr_type_impl : concrete_type<inet_address> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 // Integer of same length of a given type. This is useful because our
@@ -1338,7 +1305,7 @@ template<> struct simple_type_traits<double> : public float_type_traits<double> 
 
 template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
-    floating_type_impl(sstring name) : simple_type_impl<T>(std::move(name)) {}
+    floating_type_impl(sstring name) : simple_type_impl<T>(std::move(name), true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1455,9 +1422,6 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception("Only float/double types can be parsed from JSON floating point object");
         }
     }
-    virtual bool is_fixed_length() const override {
-        return true;
-    }
 };
 
 struct double_type_impl : floating_type_impl<double> {
@@ -1477,7 +1441,7 @@ struct float_type_impl : floating_type_impl<float> {
 
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:
-    varint_type_impl() : concrete_type{varint_type_name} { }
+    varint_type_impl() : concrete_type{varint_type_name, false} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1595,15 +1559,12 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
     }
-    virtual bool is_fixed_length() const override {
-        return false;
-    }
     friend class decimal_type_impl;
 };
 
 class decimal_type_impl : public concrete_type<big_decimal> {
 public:
-    decimal_type_impl() : concrete_type{decimal_type_name} { }
+    decimal_type_impl() : concrete_type{decimal_type_name, false} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1705,14 +1666,11 @@ public:
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::decimal;
     }
-    virtual bool is_fixed_length() const override {
-        return false;
-    }
 };
 
 class counter_type_impl : public abstract_type {
 public:
-    counter_type_impl() : abstract_type{counter_type_name} { }
+    counter_type_impl() : abstract_type{counter_type_name, true} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1783,9 +1741,6 @@ public:
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         return std::experimental::nullopt;
     }
-    virtual bool is_fixed_length() const override {
-        fail(unimplemented::cause::COUNTERS);
-    }
 };
 
 // TODO(jhaberku): Move this to Seastar.
@@ -1800,7 +1755,7 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
 
 class duration_type_impl : public concrete_type<cql_duration> {
 public:
-    duration_type_impl() : concrete_type(duration_type_name) {
+    duration_type_impl() : concrete_type(duration_type_name, false) {
     }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (value == nullptr) {
@@ -1931,9 +1886,6 @@ public:
     virtual bool references_duration() const override {
         return true;
     }
-    virtual bool is_fixed_length() const override {
-        return false;
-    }
 private:
     using counter_type = cql_duration::common_counter_type;
 
@@ -1954,7 +1906,7 @@ private:
 };
 
 struct empty_type_impl : abstract_type {
-    empty_type_impl() : abstract_type(empty_type_name) {}
+    empty_type_impl() : abstract_type(empty_type_name, true) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
     }
     virtual size_t serialized_size(const void* value) const override {
@@ -2022,9 +1974,6 @@ struct empty_type_impl : abstract_type {
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
         abort();
-    }
-    virtual bool is_fixed_length() const override {
-        return true;
     }
 };
 
@@ -3241,14 +3190,14 @@ bool list_type_impl::references_duration() const {
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
-        : concrete_type(std::move(name)), _types(std::move(types)) {
+        : concrete_type(std::move(name), false), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
-        : concrete_type(make_name(types)), _types(std::move(types)) {
+        : concrete_type(make_name(types), false), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }
