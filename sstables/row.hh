@@ -533,6 +533,7 @@ public:
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
         switch (_state) {
         case state::PARTITION_START:
+        partition_start_label:
             _is_first_unfiltered = true;
             if (read_short_length_bytes(data, _pk) != read_status::ready) {
                 _state = state::DELETION_TIME;
@@ -562,6 +563,7 @@ public:
             }
         }
         case state::FLAGS:
+        flags_label:
             if (read_8(data) != read_status::ready) {
                 _state = state::FLAGS_2;
                 break;
@@ -574,14 +576,14 @@ public:
                 if (_consumer.consume_partition_end() == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
-                break;
+                goto partition_start_label;
             } else if (_flags.is_range_tombstone()) {
                 _state = state::RANGE_TOMBSTONE_MARKER;
-                break;
+                goto range_tombstone_marker_label;
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::NON_STATIC_ROW;
-                break;
+                goto non_static_row_label;
             }
             if (read_8(data) != read_status::ready) {
                 _state = state::EXTENDED_FLAGS;
@@ -592,12 +594,13 @@ public:
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
                     _state = state::STATIC_ROW;
-                    break;
+                    goto static_row_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
         case state::NON_STATIC_ROW:
+        non_static_row_label:
             _is_first_unfiltered = false;
             // Clustering blocks should be read here but serialization header is needed for that.
             // Table with just partition key does not have any so it's ok for the first version.
@@ -616,7 +619,7 @@ public:
             // Ignore the result
             if (!_flags.has_timestamp()) {
                 _state = state::NON_STATIC_ROW_DELETION;
-                break;
+                goto non_static_row_deletion_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::NON_STATIC_ROW_TIMESTAMP;
@@ -626,7 +629,7 @@ public:
             // TODO: consume timestamp
             if (!_flags.has_ttl()) {
                 _state = state::NON_STATIC_ROW_DELETION;
-                break;
+                goto non_static_row_deletion_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::NON_STATIC_ROW_TIMESTAMP_TTL;
@@ -641,9 +644,10 @@ public:
         case state::NON_STATIC_ROW_TIMESTAMP_DELTIME:
             // TODO consume deltime
         case state::NON_STATIC_ROW_DELETION:
+        non_static_row_deletion_label:
             if (!_flags.has_deletion()) {
                 _state = state::FLAGS;
-                break;
+                goto flags_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::NON_STATIC_ROW_DELETION_2;
@@ -658,10 +662,12 @@ public:
         case state::NON_STATIC_ROW_DELETION_3:
             // TODO consume local_deletion_time
             _state = state::FLAGS;
-            break;
+            goto flags_label;
         case state::STATIC_ROW:
+        static_row_label:
             throw malformed_sstable_exception("unimplemented state");
         case state::RANGE_TOMBSTONE_MARKER:
+        range_tombstone_marker_label:
             throw malformed_sstable_exception("unimplemented state");
         default:
             throw malformed_sstable_exception("unknown state");
