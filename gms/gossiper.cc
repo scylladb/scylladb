@@ -1293,17 +1293,24 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
+
+    logger.debug("removing expire time for endpoint : {}", addr);
+    _unreachable_endpoints.erase(addr);
+    _expire_time_endpoint_map.erase(addr);
+
     auto it_ = std::find(_live_endpoints.begin(), _live_endpoints.end(), addr);
-    if (it_ == _live_endpoints.end()) {
-        _live_endpoints.push_back(addr);
+    bool was_live = it_ != _live_endpoints.end();
+    if (was_live) {
+        return;
     }
+
+    _live_endpoints.push_back(addr);
+
     auto it = std::find(_live_endpoints_just_added.begin(), _live_endpoints_just_added.end(), addr);
     if (it == _live_endpoints_just_added.end()) {
         _live_endpoints_just_added.push_back(addr);
     }
-    _unreachable_endpoints.erase(addr);
-    _expire_time_endpoint_map.erase(addr);
-    logger.debug("removing expire time for endpoint : {}", addr);
+
     if (!_in_shadow_round) {
         logger.info("InetAddress {} is now UP, status = {}", addr, get_gossip_status(local_state));
     }
