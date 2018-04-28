@@ -194,6 +194,18 @@ public:
         return _snp.get_change_mark() == _change_mark;
     }
 
+    // Advances cursor to the first entry with position >= pos, if such entry exists.
+    // Otherwise returns false and the cursor is left not pointing at a row and invalid.
+    bool maybe_advance_to(position_in_partition_view pos) {
+        prepare_heap(pos);
+        _change_mark = _snp.get_change_mark();
+        if (_heap.empty()) {
+            return false;
+        }
+        recreate_current_row();
+        return true;
+    }
+
     // Brings back the cursor to validity.
     // Can be only called when cursor is pointing at a row.
     //
@@ -238,6 +250,16 @@ public:
                     boost::range::push_heap(_heap, heap_less);
                 }
             }
+        }
+        return true;
+    }
+
+    // Brings back the cursor to validity, pointing at the first row with position not smaller
+    // than the current position. Returns false iff no such row exists.
+    // Assumes that rows are not inserted into the snapshot (static). They can be removed.
+    bool maybe_refresh_static() {
+        if (!iterators_valid()) {
+            return maybe_advance_to(_position);
         }
         return true;
     }
