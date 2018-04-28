@@ -142,7 +142,7 @@ install -m755 seastar/dpdk/usertools/dpdk-devbind.py $RPM_BUILD_ROOT%{_prefix}/l
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
-install -m755 scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+install -m755 dist/common/scripts/scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 if @@HOUSEKEEPING_CONF@@; then
     install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
