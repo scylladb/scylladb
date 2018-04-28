@@ -1722,8 +1722,7 @@ void write_cell_value(file_writer& out, const abstract_type& type, bytes_view va
 }
 
 static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type timestamp) {
-    c_stats.update_min_timestamp(timestamp);
-    c_stats.update_max_timestamp(timestamp);
+    c_stats.update_timestamp(timestamp);
     c_stats.column_count++;
 }
 
@@ -1740,7 +1739,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
 
-        _c_stats.update_max_local_deletion_time(deletion_time);
+        _c_stats.update_local_deletion_time(deletion_time);
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
@@ -1778,7 +1777,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
             }
         }
 
-        _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());
+        _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     } else if (cell.is_live_and_has_ttl()) {
         // expiring cell
 
@@ -1787,7 +1786,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         uint32_t expiration = cell.expiry().time_since_epoch().count();
         disk_string_view<uint32_t> cell_value { cell.value() };
 
-        _c_stats.update_max_local_deletion_time(expiration);
+        _c_stats.update_local_deletion_time(expiration);
         // tombstone histogram is updated with expiration time because if ttl is longer
         // than gc_grace_seconds for all data, sstable will be considered fully expired
         // when actually nothing is expired.
@@ -1800,7 +1799,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         column_mask mask = column_mask::none;
         disk_string_view<uint32_t> cell_value { cell.value() };
 
-        _c_stats.update_max_local_deletion_time(std::numeric_limits<int>::max());
+        _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
 
         write(_version, out, mask, timestamp, cell_value);
     }
@@ -1841,7 +1840,7 @@ void sstable::write_deletion_time(file_writer& out, const tombstone t) {
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
 
     update_cell_stats(_c_stats, timestamp);
-    _c_stats.update_max_local_deletion_time(deletion_time);
+    _c_stats.update_local_deletion_time(deletion_time);
     _c_stats.tombstone_histogram.update(deletion_time);
 
     write(_version, out, deletion_time, timestamp);
@@ -2199,9 +2198,8 @@ void components_writer::consume(tombstone t) {
         d.marked_for_delete_at = t.timestamp;
 
         _sst._c_stats.tombstone_histogram.update(d.local_deletion_time);
-        _sst._c_stats.update_max_local_deletion_time(d.local_deletion_time);
-        _sst._c_stats.update_min_timestamp(d.marked_for_delete_at);
-        _sst._c_stats.update_max_timestamp(d.marked_for_delete_at);
+        _sst._c_stats.update_local_deletion_time(d.local_deletion_time);
+        _sst._c_stats.update_timestamp(d.marked_for_delete_at);
     } else {
         // Default values for live, undeleted rows.
         d.local_deletion_time = std::numeric_limits<int32_t>::max();
@@ -2285,9 +2283,9 @@ stop_iteration components_writer::consume_end_of_partition() {
     write(_sst.get_version(), _out, end_of_row);
 
     // compute size of the current row.
-    _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
+    _sst._c_stats.partition_size = _out.offset() - _sst._c_stats.start_offset;
 
-    maybe_log_large_partition_warning(_schema, *_partition_key, _sst._c_stats.row_size, _large_partition_warning_threshold_bytes);
+    maybe_log_large_partition_warning(_schema, *_partition_key, _sst._c_stats.partition_size, _large_partition_warning_threshold_bytes);
 
     // update is about merging column_stats with the data being stored by collector.
     _sst._collector.update(_schema, std::move(_sst._c_stats));

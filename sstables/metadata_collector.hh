@@ -53,19 +53,21 @@ namespace sstables {
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
 
 /**
- * ColumnStats holds information about the columns for one row inside sstable
+ * ColumnStats holds information about the columns for one partition inside sstable
  */
 struct column_stats {
-    /** how many columns are there in the row */
+    /** how many columns are there in the partition */
     uint64_t column_count;
+    /** how many rows are there in the partition */
+    uint64_t rows_count;
 
     uint64_t start_offset;
-    uint64_t row_size;
+    uint64_t partition_size;
 
-    /** the largest (client-supplied) timestamp in the row */
-    min_tracker<api::timestamp_type> min_timestamp;
-    max_tracker<api::timestamp_type> max_timestamp;
-    max_tracker<int32_t> max_local_deletion_time;
+    /** the largest/smallest (client-supplied) timestamp in the partition */
+    min_max_tracker<api::timestamp_type> timestamp_tracker;
+    min_max_tracker<int32_t> local_deletion_time_tracker;
+    min_max_tracker<int32_t> ttl_tracker;
     /** histogram of tombstone drop time */
     utils::streaming_histogram tombstone_histogram;
 
@@ -73,11 +75,12 @@ struct column_stats {
 
     column_stats() :
         column_count(0),
+        rows_count(0),
         start_offset(0),
-        row_size(0),
-        min_timestamp(std::numeric_limits<api::timestamp_type>::min()),
-        max_timestamp(std::numeric_limits<api::timestamp_type>::max()),
-        max_local_deletion_time(std::numeric_limits<int32_t>::max()),
+        partition_size(0),
+        timestamp_tracker(),
+        local_deletion_time_tracker(std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max()),
+        ttl_tracker(0, 0),
         tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
         has_legacy_counter_shards(false)
         {
@@ -87,16 +90,15 @@ struct column_stats {
         *this = column_stats();
     }
 
-    void update_min_timestamp(api::timestamp_type potential_min) {
-        min_timestamp.update(potential_min);
+    void update_timestamp(api::timestamp_type value) {
+        timestamp_tracker.update(value);
     }
-    void update_max_timestamp(api::timestamp_type potential_max) {
-        max_timestamp.update(potential_max);
+    void update_local_deletion_time(int32_t value) {
+        local_deletion_time_tracker.update(value);
     }
-    void update_max_local_deletion_time(int32_t potential_value) {
-        max_local_deletion_time.update(potential_value);
+    void update_ttl(int32_t value) {
+        ttl_tracker.update(value);
     }
-
 };
 
 class metadata_collector {
@@ -113,10 +115,10 @@ private:
     // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
     utils::estimated_histogram _estimated_column_count{114};
     db::replay_position _replay_position;
-    api::timestamp_type _min_timestamp = std::numeric_limits<api::timestamp_type>::max();
-    api::timestamp_type _max_timestamp = std::numeric_limits<api::timestamp_type>::min();
+    min_max_tracker<api::timestamp_type> _timestamp_tracker;
     uint64_t _repaired_at = 0;
-    int32_t _max_local_deletion_time = std::numeric_limits<int32_t>::min();
+    min_max_tracker<int32_t> _local_deletion_time_tracker;
+    min_max_tracker<int32_t> _ttl_tracker;
     double _compression_ratio = NO_COMPRESSION_RATIO;
     std::set<int> _ancestors;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
@@ -172,18 +174,6 @@ public:
         _compression_ratio = (double) compressed/uncompressed;
     }
 
-    void update_min_timestamp(api::timestamp_type potential_min) {
-        _min_timestamp = std::min(_min_timestamp, potential_min);
-    }
-
-    void update_max_timestamp(api::timestamp_type potential_max) {
-        _max_timestamp = std::max(_max_timestamp, potential_max);
-    }
-
-    void update_max_local_deletion_time(int32_t max_local_deletion_time) {
-        _max_local_deletion_time = std::max(_max_local_deletion_time, max_local_deletion_time);
-    }
-
     void set_replay_position(const db::replay_position & rp) {
         _replay_position = rp;
     }
@@ -213,10 +203,10 @@ public:
     }
 
     void update(const schema& s, column_stats&& stats) {
-        update_min_timestamp(stats.min_timestamp.get());
-        update_max_timestamp(stats.max_timestamp.get());
-        update_max_local_deletion_time(stats.max_local_deletion_time.get());
-        add_row_size(stats.row_size);
+        _timestamp_tracker.update(stats.timestamp_tracker);
+        _local_deletion_time_tracker.update(stats.local_deletion_time_tracker);
+        _ttl_tracker.update(stats.ttl_tracker);
+        add_row_size(stats.partition_size);
         add_column_count(stats.column_count);
         merge_tombstone_histogram(stats.tombstone_histogram);
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
@@ -234,9 +224,12 @@ public:
         m.estimated_row_size = std::move(_estimated_row_size);
         m.estimated_column_count = std::move(_estimated_column_count);
         m.position = _replay_position;
-        m.min_timestamp = _min_timestamp;
-        m.max_timestamp = _max_timestamp;
-        m.max_local_deletion_time = _max_local_deletion_time;
+        m.min_timestamp = _timestamp_tracker.min();
+        m.max_timestamp = _timestamp_tracker.max();
+        m.min_local_deletion_time = _local_deletion_time_tracker.min();
+        m.max_local_deletion_time = _local_deletion_time_tracker.max();
+        m.min_ttl = _ttl_tracker.min();
+        m.max_ttl = _ttl_tracker.max();
         m.compression_ratio = _compression_ratio;
         m.estimated_tombstone_drop_time = std::move(_estimated_tombstone_drop_time);
         m.sstable_level = _sstable_level;
