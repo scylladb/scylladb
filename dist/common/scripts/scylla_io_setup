@@ -37,23 +37,34 @@ if __name__ == "__main__":
     if not scylla_util.is_developer_mode():
         if args.ami:
             idata = scylla_util.aws_instance()
-            nr_io_queues = cpudata.nr_shards()
 
-            if idata.instance_class() == "i3":
-                sysfs_file = "/sys/block/%s/queue/nr_requests"
-                max_seastar_shard_req = 128
-                max_sysfs_shard_req = sum([ int(file(sysfs_file % x).readline().strip()) for x in idata.ephemeral_disks() ])
-                # obtained running iotune multiple times against a single i3 disk.
-                max_iotune_disk = 192 * len(idata.ephemeral_disks())
-                nr_reqs = min(max_seastar_shard_req * cpudata.nr_shards(), max_sysfs_shard_req, max_iotune_disk)
+            disk_properties = {}
+            nr_disks = len(idata.ephemeral_disks())
+            ## both i3 and i2 can run with 1 I/O Queue per shard
+            if idata.instance() == "i3.large":
+                disk_properties["read_iops"] = 111000
+                disk_properties["read_bandwidth"] = 653925080
+                disk_properties["write_iops"] = 36800
+                disk_properties["write_bandwdith"] = 215066473
+            elif idata.instance() == "i3.xlarge":
+                disk_properties["read_iops"] = 200800
+                disk_properties["read_bandwidth"] = 1185106376
+                disk_properties["write_iops"] = 53180
+                disk_properties["write_bandwdith"] = 423621267
+            elif idata.instance_class() == "i3":
+                disk_properties["read_iops"] = 411200 * nr_disks
+                disk_properties["read_bandwidth"] = 2015342735 * nr_disks
+                disk_properties["write_iops"] = 181500 * nr_disks
+                disk_properties["write_bandwdith"] = 808775652 * nr_disks
             elif idata.instance_class() == "i2":
-                nr_reqs = 32 * len(idata.ephemeral_disks())
-            else:
-                nr_reqs = 16 * max(len(idata.ephemeral_disks()), 2)
-            if nr_reqs/nr_io_queues < 4:
-                nr_io_queues = nr_reqs / 4
+                disk_properties["read_iops"] = 64000 * nr_disks
+                disk_properties["read_bandwidth"] = 507338935 * nr_disks
+                disk_properties["write_iops"] = 57100 * nr_disks
+                disk_properties["write_bandwdith"] = 483141731 * nr_disks
+            properties_file = file("/etc/scylla.d/io_properties.yaml", "w")
+            yaml.dump({ "disks": disk_properties }, properties_file,  default_flow_style=False)
             ioconf = file("/etc/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--num-io-queues {} --max-io-requests {}\"\n".format(nr_io_queues, nr_reqs))
+            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file))
         else:
             if os.environ.has_key("SCYLLA_CONF"):
                 conf_dir = os.environ["SCYLLA_CONF"]
