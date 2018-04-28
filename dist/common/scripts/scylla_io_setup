@@ -25,6 +25,7 @@ import argparse
 import yaml
 import logging
 import sys
+import scylla_blocktune as blocktune
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
@@ -77,6 +78,7 @@ if __name__ == "__main__":
             elif cpudata.smp():
                 iotune_args += [ "--smp", cpudata.smp() ]
 
+            blocktune.tune_fs(data_dir, '2')
             try:
                 subprocess.check_call(["iotune",
                                        "--evaluation-directory", data_dir,
