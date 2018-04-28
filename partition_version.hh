@@ -147,6 +147,7 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
     mutation_partition _partition;
 
     friend class partition_version_ref;
+    friend class partition_entry;
 public:
     static partition_version& container_of(mutation_partition& mp) {
         return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
@@ -260,7 +261,8 @@ class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot>
 public:
     // Only snapshots created with the same value of phase can point to the same version.
     using phase_type = uint64_t;
-    static constexpr phase_type default_phase = 0;
+    static constexpr phase_type default_phase = 0; // For use with non-evictable snapshots
+    static constexpr phase_type min_phase = 1; // Use 1 to prevent underflow on apply_to_incomplete()
     static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
 public:
     // Used for determining reference stability.
@@ -311,6 +313,10 @@ public:
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
     partition_snapshot& operator=(partition_snapshot&&) = delete;
+
+    static partition_snapshot& container_of(partition_version_ref* ref) {
+        return *boost::intrusive::get_parent_from_member(ref, &partition_snapshot::_version);
+    }
 
     // If possible merges the version pointed to by this snapshot with
     // adjacent partition versions. Leaves the snapshot in an unspecified state.
@@ -461,8 +467,8 @@ public:
     //
     // Returns a coroutine object representing the operation.
     // The coroutine must be resumed with the region being unlocked.
-    coroutine apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&, cache_tracker&,
-        partition_snapshot::phase_type);
+    coroutine apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::allocating_section&,
+        logalloc::region&, cache_tracker&, partition_snapshot::phase_type);
 
     // If this entry is evictable, cache_tracker must be provided.
     partition_version& add_version(const schema& s, cache_tracker*);

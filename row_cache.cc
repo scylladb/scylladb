@@ -947,6 +947,8 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     });
 
     return seastar::async([this, &m, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
+        coroutine update;
+        size_t size_entry;
         // In case updater fails, we must bring the cache to consistency without deferring.
         auto cleanup = defer([&m, this] {
             invalidate_sync(m);
@@ -955,36 +957,41 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
         });
         partition_presence_checker is_present = _prev_snapshot->make_partition_presence_checker();
         while (!m.partitions.empty()) {
-            coroutine update;
-            size_t size_entry;
             with_allocator(_tracker.allocator(), [&] () {
                 auto cmp = cache_entry::compare(_schema);
                 {
                     size_t partition_count = 0;
-                    _update_section(_tracker.region(), [&] {
+                    {
                         STAP_PROBE(scylla, row_cache_update_one_batch_start);
                         // FIXME: we should really be checking should_yield() here instead of
                         // need_preempt(). However, should_yield() is currently quite
                         // expensive and we need to amortize it somehow.
                         do {
-                          auto i = m.partitions.begin();
                           STAP_PROBE(scylla, row_cache_update_partition_start);
                           with_linearized_managed_bytes([&] {
-                            memtable_entry& mem_e = *i;
                             if (!update) {
-                                // FIXME: Optimize knowing we lookup in-order.
-                                auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
-                                update = updater(cache_i, mem_e, is_present);
-                                size_entry = mem_e.size_in_allocator(_tracker.allocator());
+                                _update_section(_tracker.region(), [&] {
+                                    memtable_entry& mem_e = *m.partitions.begin();
+                                    size_entry = mem_e.size_in_allocator(_tracker.allocator());
+                                    auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
+                                    update = updater(_update_section, cache_i, mem_e, is_present);
+                                });
                             }
+                            // We use cooperative deferring instead of futures so that
+                            // this layer has a chance to restore invariants before deferring,
+                            // in particular set _prev_snapshot_pos to the correct value.
                             if (update.run() == stop_iteration::no) {
                                 return;
                             }
                             update = {};
                             real_dirty_acc.unpin_memory(size_entry);
-                            i = m.partitions.erase(i);
-                            mem_e.partition().evict(_tracker.memtable_cleaner());
-                            current_allocator().destroy(&mem_e);
+                            _update_section(_tracker.region(), [&] {
+                                auto i = m.partitions.begin();
+                                memtable_entry& mem_e = *i;
+                                m.partitions.erase(i);
+                                mem_e.partition().evict(_tracker.memtable_cleaner());
+                                current_allocator().destroy(&mem_e);
+                            });
                             ++partition_count;
                           });
                           STAP_PROBE(scylla, row_cache_update_partition_end);
@@ -993,11 +1000,13 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                             if (m.partitions.empty()) {
                                 _prev_snapshot_pos = {};
                             } else {
-                                _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
+                                _update_section(_tracker.region(), [&] {
+                                    _prev_snapshot_pos = dht::ring_position(m.partitions.begin()->key());
+                                });
                             }
                         });
                         STAP_PROBE1(scylla, row_cache_update_one_batch_end, partition_count);
-                    });
+                    }
                 }
             });
             seastar::thread::yield();
@@ -1007,8 +1016,8 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
 }
 
 future<> row_cache::update(external_updater eu, memtable& m) {
-    return do_update(std::move(eu), m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e,
-            partition_presence_checker& is_present) mutable {
+    return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
+            row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e, partition_presence_checker& is_present) mutable {
         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
         //        search it.
@@ -1016,7 +1025,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             cache_entry& entry = *cache_i;
             upgrade_entry(entry);
             _tracker.on_partition_merge();
-            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker,
+            return entry.partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), alloc, _tracker.region(), _tracker,
                 _underlying_phase);
         } else if (cache_i->continuous() || is_present(mem_e.key()) == partition_presence_checker_result::definitely_doesnt_exist) {
             // Partition is absent in underlying. First, insert a neutral partition entry.
@@ -1026,7 +1035,7 @@ future<> row_cache::update(external_updater eu, memtable& m) {
             entry->set_continuous(cache_i->continuous());
             _tracker.insert(*entry);
             _partitions.insert(cache_i, *entry);
-            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), _tracker.region(), _tracker,
+            return entry->partition().apply_to_incomplete(*_schema, std::move(mem_e.partition()), *mem_e.schema(), alloc, _tracker.region(), _tracker,
                 _underlying_phase);
         } else {
             return make_empty_coroutine();
@@ -1035,8 +1044,8 @@ future<> row_cache::update(external_updater eu, memtable& m) {
 }
 
 future<> row_cache::update_invalidating(external_updater eu, memtable& m) {
-    return do_update(std::move(eu), m, [this] (row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e,
-            partition_presence_checker& is_present) {
+    return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
+        row_cache::partitions_type::iterator cache_i, memtable_entry& mem_e, partition_presence_checker& is_present) {
         if (cache_i != partitions_end() && cache_i->key().equal(*_schema, mem_e.key())) {
             // FIXME: Invalidate only affected row ranges.
             // This invalidates all information about the partition.

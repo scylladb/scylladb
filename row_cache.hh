@@ -375,7 +375,7 @@ private:
     // of the range at the time when reading began.
 
     mutation_source _underlying;
-    phase_type _underlying_phase = 0;
+    phase_type _underlying_phase = partition_snapshot::min_phase;
     mutation_source_opt _prev_snapshot;
 
     // Positions >= than this are using _prev_snapshot, the rest is using _underlying.

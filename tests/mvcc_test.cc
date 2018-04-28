@@ -153,7 +153,7 @@ class mvcc_partition;
 class mvcc_container {
     cache_tracker _tracker;
     schema_ptr _schema;
-    partition_snapshot::phase_type _phase = 0;
+    partition_snapshot::phase_type _phase = partition_snapshot::min_phase;
 public:
     mvcc_container(schema_ptr s) : _schema(s) {}
     mvcc_container(mvcc_container&&) = delete;
@@ -234,7 +234,7 @@ void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_sc
     with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
         auto c = as(region(), [&] {
-            return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, region(),
+            return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, as, region(),
                 _container.tracker(), _container.next_phase());
         });
         repeat([&] {
