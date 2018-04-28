@@ -332,6 +332,15 @@ public:
         return mf;
     }
 
+    // Can be called only when cursor is valid and pointing at a row.
+    // Monotonic exception guarantees.
+    template <typename Consumer>
+    void consume_row(Consumer&& consumer) {
+        for (position_in_version& v : _current_row) {
+            consumer(deletable_row(v.it->row())); // FIXME: pass as an r-value if unused
+        }
+    }
+
     struct ensure_result {
         rows_entry& row;
         bool inserted = false;
