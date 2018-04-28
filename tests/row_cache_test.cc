@@ -2956,6 +2956,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
         m0.partition().make_fully_continuous();
         circular_buffer<mutation> versions;
         size_t last_generation = 0;
+        size_t cache_generation = 0; // cache contains only versions >= than this
         underlying.apply(m0);
         versions.emplace_back(m0);
 
@@ -2984,7 +2985,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
             generations[id] = last_generation;
             return seastar::async([&, id] {
                 while (!done) {
-                    auto oldest_generation = last_generation;
+                    auto oldest_generation = cache_generation;
                     generations[id] = oldest_generation;
                     gc_versions();
 
@@ -3030,6 +3031,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                 versions.emplace_back(std::move(new_version));
                 ++last_generation;
             }, *mt).get();
+            cache_generation = last_generation;
 
             later().get();
             tracker.region().evict_some();
