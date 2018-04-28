@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 #
-# Copyright (C) 2016 ScyllaDB
+# Copyright (C) 2018 ScyllaDB
 #
 
 #
@@ -19,96 +19,29 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
-#
 
-import argparse, os, os.path
+import argparse
+from scylla_blocktune import *
 
-# try to write data to a sysfs path, expect problems
-def try_write(path, data):
-    try:
-        open(path, 'w').write(data)
-    except Exception:
-        print("warning: unable to tune {} to {}".format(path, data))
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
+    ap.add_argument('--set-nomerges', metavar='VAL', dest='nomerges',
+                    help='Overwrite nomerges parameter')
+    ap.add_argument('--filesystem', metavar='PATH', action='append', dest='fs', default=[],
+                    help='Tune filesystem containing PATH')
+    ap.add_argument('--dev', metavar='PATH', action='append', dest='dev', default=[],
+                    help='Tune device node PATH')
+    ap.add_argument('--config', metavar='YAML', action='append', dest='yaml', default=[],
+                    help='Process given scylla.yaml')
 
-# update a sysfs path if it does not satisfy a check
-# function (default = check that the data is already there)
-def tune_path(path, data, check=None):
-    def default_check(current):
-        return current == data
-    if check is None:
-        check = default_check
-    if not os.path.exists(path):
-        return
-    if check(open(path).read().strip()):
-        print('already tuned: {}'.format(path))
-        return
-    print('tuning: {} {}'.format(path, data))
-    try_write(path, data + '\n')
+    args = ap.parse_args()
 
-tuned_blockdevs = set()
-
-# tune a blockdevice (sysfs node); updates I/O scheduler
-# and merge behavior.  Tunes dependent devices
-def tune_blockdev(path, nomerges):
-    from os.path import join, exists, dirname, realpath
-    path = realpath(path)
-    print('tuning {}'.format(path))
-    if path in tuned_blockdevs:
-        return
-    tuned_blockdevs.add(path)
-    def check_sched(current):
-        return current == 'none' or '[noop]' in current
-    if not nomerges:
-        tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
-        tune_path(join(path, 'queue', 'nomerges'), '2')
+    if not args.yaml and not args.fs and not args.dev:
+        tune_yaml('/etc/scylla/scylla.yaml', args.nomerges)
     else:
-        tune_path(join(path, 'queue', 'nomerges'), nomerges)
-    slaves = join(path, 'slaves')
-    if exists(slaves):
-        for slave in os.listdir(slaves):
-            tune_blockdev(join(slaves, slave), nomerges)
-    if exists(join(path, 'partition')):
-        tune_blockdev(dirname(path), nomerges)
-
-# tunes a /dev/foo blockdev
-def tune_dev(path, nomerges):
-    dev = os.stat(path).st_rdev
-    devfile = '/sys/dev/block/{}:{}'.format(dev // 256, dev % 256)
-    tune_blockdev(devfile, nomerges)
-
-# tunes a filesystem
-# FIXME: btrfs
-def tune_fs(path, nomerges):
-    dev = os.stat(path).st_dev
-    devfile = '/sys/dev/block/{}:{}'.format(dev // 256, dev % 256)
-    tune_blockdev(devfile, nomerges)
-
-# tunes all filesystems referenced from a scylla.yaml
-def tune_yaml(path, nomerges):
-    import yaml
-    y = yaml.load(open(path))
-    for fs in y['data_file_directories']:
-        tune_fs(fs, nomerges)
-    tune_fs(y['commitlog_directory'], nomerges)
-
-ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
-ap.add_argument('--set-nomerges', metavar='VAL', dest='nomerges',
-                help='Overwrite nomerges parameter')
-ap.add_argument('--filesystem', metavar='PATH', action='append', dest='fs', default=[],
-                help='Tune filesystem containing PATH')
-ap.add_argument('--dev', metavar='PATH', action='append', dest='dev', default=[],
-                help='Tune device node PATH')
-ap.add_argument('--config', metavar='YAML', action='append', dest='yaml', default=[],
-                help='Process given scylla.yaml')
-
-args = ap.parse_args()
-
-if not args.yaml and not args.fs and not args.dev:
-    tune_yaml('/etc/scylla/scylla.yaml', args.nomerges)
-else:
-    for yaml in args.yaml:
-        tune_yaml(yaml, args.nomerges)
-    for fs in args.fs:
-        tune_fs(fs, args.nomerges)
-    for dev in args.dev:
-        tune_dev(dev, args.nomerges)
+        for yaml in args.yaml:
+            tune_yaml(yaml, args.nomerges)
+        for fs in args.fs:
+            tune_fs(fs, args.nomerges)
+        for dev in args.dev:
+            tune_dev(dev, args.nomerges)
