@@ -33,7 +33,7 @@ is_selinux_enabled() {
 ec2_is_supported_instance_type() {
     TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
     case $TYPE in
-           "m3"|"c3"|"i2"|"i3") echo 1;;
+           "i2"|"i3") echo 1;;
             *) echo 0;;
     esac
 }
