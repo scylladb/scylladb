@@ -1027,15 +1027,22 @@ namespace util {
 shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
             const sstring_view& cf_name,
             const sstring_view& where_clause,
-            std::vector<sstring_view> included_columns) {
+            bool select_all_columns,
+            const std::vector<column_definition>& selected_columns) {
     std::ostringstream out;
     out << "SELECT ";
-    if (included_columns.empty()) {
+    if (select_all_columns) {
         out << "*";
     } else {
-        out << join(", ", included_columns);
+        // If the column name is not entirely lowercase (or digits or _),
+        // when output to CQL it must be quoted to preserve case as well
+        // as non alphanumeric characters.
+        auto cols = boost::copy_range<std::vector<sstring>>(selected_columns
+                | boost::adaptors::transformed(std::mem_fn(&column_definition::name_as_cql_string)));
+        out << join(", ", cols);
     }
-    out << " FROM " << cf_name << " WHERE " << where_clause << " ALLOW FILTERING";
+    // Note that cf_name may need to be quoted, just like column names above.
+    out << " FROM " << util::maybe_quote(cf_name.to_string()) << " WHERE " << where_clause << " ALLOW FILTERING";
     return do_with_parser(out.str(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 
