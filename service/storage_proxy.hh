@@ -211,15 +211,15 @@ public:
     };
 
     class coordinator_query_options {
-        std::optional<clock_type::time_point> _timeout;
+        clock_type::time_point _timeout;
 
     public:
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
         stdx::optional<db::read_repair_decision> read_repair_decision;
 
-        coordinator_query_options(tracing::trace_state_ptr trace_state = nullptr,
-                std::optional<clock_type::time_point> timeout = std::nullopt,
+        coordinator_query_options(clock_type::time_point timeout,
+                tracing::trace_state_ptr trace_state = nullptr,
                 replicas_per_token_range preferred_replicas = { },
                 stdx::optional<db::read_repair_decision> read_repair_decision = { })
             : _timeout(timeout)
@@ -229,7 +229,7 @@ public:
         }
 
         clock_type::time_point timeout(storage_proxy& sp) const {
-            return _timeout ? *_timeout : sp.default_query_timeout();
+            return _timeout;
         }
     };
 
@@ -453,7 +453,7 @@ public:
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        coordinator_query_options optional_params = {});
+        coordinator_query_options optional_params);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range&,

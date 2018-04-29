@@ -205,7 +205,7 @@ protected:
                 dht::partition_range_vector keys,
                 lw_shared_ptr<query::clustering_row_ranges> ranges,
                 bool local,
-                db::consistency_level cl,
+                const query_options& options,
                 tracing::trace_state_ptr trace_state);
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>

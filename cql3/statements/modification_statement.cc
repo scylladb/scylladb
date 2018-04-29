@@ -189,7 +189,7 @@ modification_statement::make_update_parameters(
         bool local,
         int64_t now,
         tracing::trace_state_ptr trace_state) {
-    return read_required_rows(proxy, *keys, std::move(ranges), local, options.get_consistency(), std::move(trace_state)).then(
+    return read_required_rows(proxy, *keys, std::move(ranges), local, options, std::move(trace_state)).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -272,12 +272,13 @@ modification_statement::read_required_rows(
         dht::partition_range_vector keys,
         lw_shared_ptr<query::clustering_row_ranges> ranges,
         bool local,
-        db::consistency_level cl,
+        const query_options& options,
         tracing::trace_state_ptr trace_state) {
     if (!requires_read()) {
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
     }
+    auto cl = options.get_consistency();
     try {
         validate_for_read(keyspace(), cl);
     } catch (exceptions::invalid_request_exception& e) {
@@ -305,8 +306,9 @@ modification_statement::read_required_rows(
                 query::partition_slice::option::collections_as_maps>());
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
-            cl, {std::move(trace_state)}).then([this, ps] (auto qr) {
+            cl, {timeout, std::move(trace_state)}).then([this, ps] (auto qr) {
         return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
             auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
             v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
