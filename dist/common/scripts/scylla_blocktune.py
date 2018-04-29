@@ -21,7 +21,7 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import argparse, os, os.path
+import os, os.path
 
 # try to write data to a sysfs path, expect problems
 def try_write(path, data):
@@ -90,25 +90,3 @@ def tune_yaml(path, nomerges):
     for fs in y['data_file_directories']:
         tune_fs(fs, nomerges)
     tune_fs(y['commitlog_directory'], nomerges)
-
-ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
-ap.add_argument('--set-nomerges', metavar='VAL', dest='nomerges',
-                help='Overwrite nomerges parameter')
-ap.add_argument('--filesystem', metavar='PATH', action='append', dest='fs', default=[],
-                help='Tune filesystem containing PATH')
-ap.add_argument('--dev', metavar='PATH', action='append', dest='dev', default=[],
-                help='Tune device node PATH')
-ap.add_argument('--config', metavar='YAML', action='append', dest='yaml', default=[],
-                help='Process given scylla.yaml')
-
-args = ap.parse_args()
-
-if not args.yaml and not args.fs and not args.dev:
-    tune_yaml('/etc/scylla/scylla.yaml', args.nomerges)
-else:
-    for yaml in args.yaml:
-        tune_yaml(yaml, args.nomerges)
-    for fs in args.fs:
-        tune_fs(fs, args.nomerges)
-    for dev in args.dev:
-        tune_dev(dev, args.nomerges)

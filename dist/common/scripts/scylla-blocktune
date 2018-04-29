@@ -1,0 +1,47 @@
+#!/usr/bin/python3
+
+#
+# Copyright (C) 2018 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import argparse
+from scylla_blocktune import *
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser('Tune filesystems for ScyllaDB')
+    ap.add_argument('--set-nomerges', metavar='VAL', dest='nomerges',
+                    help='Overwrite nomerges parameter')
+    ap.add_argument('--filesystem', metavar='PATH', action='append', dest='fs', default=[],
+                    help='Tune filesystem containing PATH')
+    ap.add_argument('--dev', metavar='PATH', action='append', dest='dev', default=[],
+                    help='Tune device node PATH')
+    ap.add_argument('--config', metavar='YAML', action='append', dest='yaml', default=[],
+                    help='Process given scylla.yaml')
+
+    args = ap.parse_args()
+
+    if not args.yaml and not args.fs and not args.dev:
+        tune_yaml('/etc/scylla/scylla.yaml', args.nomerges)
+    else:
+        for yaml in args.yaml:
+            tune_yaml(yaml, args.nomerges)
+        for fs in args.fs:
+            tune_fs(fs, args.nomerges)
+        for dev in args.dev:
+            tune_dev(dev, args.nomerges)
