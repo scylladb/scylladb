@@ -259,9 +259,11 @@ private:
     }
 };
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
+cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service,
+        cql_server_config config)
     : _proxy(proxy)
     , _query_processor(qp)
+    , _config(config)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
     , _notifier(std::make_unique<event_notifier>())

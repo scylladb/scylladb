@@ -79,6 +79,8 @@ using token = dht::token;
 using UUID = utils::UUID;
 using inet_address = gms::inet_address;
 
+using namespace std::chrono_literals;
+
 namespace service {
 
 static logging::logger slogger("storage_service");
@@ -98,6 +100,19 @@ static const sstring ROLES_FEATURE = "ROLES";
 static const sstring LA_SSTABLE_FEATURE = "LA_SSTABLE_FORMAT";
 
 distributed<storage_service> _the_storage_service;
+
+
+timeout_config make_timeout_config(const db::config& cfg) {
+    timeout_config tc;
+    tc.read_timeout = cfg.read_request_timeout_in_ms() * 1ms;
+    tc.write_timeout = cfg.write_request_timeout_in_ms() * 1ms;
+    tc.range_read_timeout = cfg.range_request_timeout_in_ms() * 1ms;
+    tc.counter_write_timeout = cfg.counter_write_request_timeout_in_ms() * 1ms;
+    tc.truncate_timeout = cfg.truncate_request_timeout_in_ms() * 1ms;
+    tc.cas_timeout = cfg.cas_contention_timeout_in_ms() * 1ms;
+    tc.other_timeout = cfg.request_timeout_in_ms() * 1ms;
+    return tc;
+}
 
 int get_generation_number() {
     using namespace std::chrono;
@@ -2049,9 +2064,11 @@ future<> storage_service::start_native_transport() {
         auto addr = cfg.rpc_address();
         auto ceo = cfg.client_encryption_options();
         auto keepalive = cfg.rpc_keepalive();
+        cql_transport::cql_server_config cql_server_config;
+        cql_server_config.timeout_config = make_timeout_config(cfg);
         cql_transport::cql_load_balance lb = cql_transport::parse_load_balance(cfg.load_balance());
-        return seastar::net::dns::resolve_name(addr).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo)] (seastar::net::inet_address ip) {
-                return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb, std::ref(ss._auth_service)).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
+        return seastar::net::dns::resolve_name(addr).then([&ss, cserver, addr, &cfg, lb, keepalive, ceo = std::move(ceo), cql_server_config] (seastar::net::inet_address ip) {
+                return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb, std::ref(ss._auth_service), cql_server_config).then([cserver, &cfg, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
                 //    return cserver->stop();
