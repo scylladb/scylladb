@@ -81,6 +81,14 @@ shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
         bool select_all_columns,
         const std::vector<column_definition>& selected_columns);
 
+/// maybe_quote() takes an identifier - the name of a column, table or
+/// keyspace name - and transforms it to a string which can be used in CQL
+/// commands. Namely, if the identifier is not entirely lower-case (including
+/// digits and underscores), it needs to be quoted to be represented in CQL.
+/// Without this quoting, CQL folds uppercase letters to lower case, and
+/// forbids non-alpha-numeric characters in identifier names.
+/// Quoting involves wrapping the string in double-quotes ("). A double-quote
+/// character itself is quoted by doubling it.
 sstring maybe_quote(const sstring& s);
 
 } // namespace util
