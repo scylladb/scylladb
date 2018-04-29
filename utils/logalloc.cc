@@ -325,7 +325,7 @@ struct segment {
     void record_free(size_type size);
     occupancy_stats occupancy() const;
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
     static void* operator new(size_t size) = delete;
     static void* operator new(size_t, void* ptr) noexcept { return ptr; }
     static void operator delete(void* ptr) = delete;
@@ -371,7 +371,7 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 
 // Segment pool implementation for the seastar allocator.
 // Stores segment descriptors in a vector which is indexed using most significant
@@ -1481,7 +1481,7 @@ public:
 
 inline void
 region_group_binomial_group_sanity_check(const region_group::region_heap& bh) {
-#ifdef DEBUG
+#ifdef SEASTAR_DEBUG
     bool failed = false;
     size_t last =  std::numeric_limits<size_t>::max();
     for (auto b = bh.ordered_begin(); b != bh.ordered_end(); b++) {
@@ -1862,7 +1862,7 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
     return mem_released;
 }
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 
 bool segment_pool::migrate_segment(segment* src, segment* dst)
 {
@@ -2077,7 +2077,7 @@ allocating_section::guard::~guard() {
     shard_segment_pool.set_emergency_reserve_max(_prev);
 }
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 
 void allocating_section::reserve() {
     shard_segment_pool.set_emergency_reserve_max(std::max(_lsa_reserve, _minimum_lsa_emergency_reserve));

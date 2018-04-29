@@ -138,7 +138,7 @@ static void test_random_ops(size_t size, std::random_device& rd ) {
         return bv[i];
     };
     size_t limit = size * 100;
-#ifdef DEBUG
+#ifdef SEASTAR_DEBUG
     limit = std::min<size_t>(limit, 20000);
 #endif
     for (size_t i = 0; i != limit; ++i) {

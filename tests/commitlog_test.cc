@@ -513,7 +513,7 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
     });
 }
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 
 SEASTAR_TEST_CASE(test_allocation_failure){
     return cl_test([](commitlog& log) {

@@ -306,7 +306,7 @@ SEASTAR_TEST_CASE(test_merging) {
     });
 }
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_TEST_CASE(test_region_lock) {
     return seastar::async([] {
         region reg;
@@ -1094,7 +1094,7 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling_active_reclaim_no_double_r
 // Reproduces issue #2021
 SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_region_group_size) {
     return seastar::async([] {
-#ifndef DEFAULT_ALLOCATOR // Because we need memory::stats().free_memory();
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // Because we need memory::stats().free_memory();
         logging::logger_registry().set_logger_level("lsa", seastar::log_level::debug);
 
         auto free_space = memory::stats().free_memory();
@@ -1242,7 +1242,7 @@ SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
 }
 
 // No point in testing contiguous memory allocation in debug mode
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocations) {
     prime_segment_pool();  // if previous test cases muddied the pool
 

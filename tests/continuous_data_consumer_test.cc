@@ -98,7 +98,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_unsigned_vint) {
     static std::random_device rd;
     static std::mt19937 rng(rd());
     auto nr_tests =
-#ifdef DEBUG
+#ifdef SEASTAR_DEBUG
             10
 #else
             1000

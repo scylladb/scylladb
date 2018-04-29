@@ -936,7 +936,7 @@ SEASTAR_TEST_CASE(test_update) {
     });
 }
 
-#ifndef DEFAULT_ALLOCATOR
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_TEST_CASE(test_update_failure) {
     return seastar::async([] {
         auto s = make_schema();
