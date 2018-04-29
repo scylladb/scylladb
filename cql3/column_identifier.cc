@@ -22,6 +22,7 @@
 #include "cql3/column_identifier.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/selection/simple_selector.hh"
+#include "cql3/util.hh"
 
 #include <regex>
 
@@ -62,14 +63,7 @@ sstring column_identifier::to_string() const {
 }
 
 sstring column_identifier::to_cql_string() const {
-    static const std::regex unquoted_identifier_re("[a-z][a-z0-9_]*");
-    if (std::regex_match(_text.begin(), _text.end(), unquoted_identifier_re)) {
-        return _text;
-    }
-    static const std::regex double_quote_re("\"");
-    std::string result = _text;
-    std::regex_replace(result, double_quote_re, "\"\"");
-    return '"' + result + '"';
+    return util::maybe_quote(_text);
 }
 
 column_identifier::raw::raw(sstring raw_text, bool keep_case)
