@@ -34,20 +34,27 @@
 
 using namespace std::literals::chrono_literals;
 
+// CQL usually folds identifier names - keyspace, table and column names -
+// to lowercase. That is, unless the identifier is enclosed in double
+// quotation marks (") then the identifier becomes case sensitive.
+// Let's test that case-sensitive (quoted) column names can be used for
+// materialized views. Test that data can be inserted and queried, and
+// that case sensitive columns in views can be renamed.
+// This test reproduces issues #3388 and #3391.
 SEASTAR_TEST_CASE(test_case_sensitivity) {
     return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (theKey int, theClustering int, theValue int, primary key (theKey, theClustering));").get();
+        e.execute_cql("create table cf (\"theKey\" int, \"theClustering\" int, \"theValue\" int, primary key (\"theKey\", \"theClustering\"));").get();
         e.execute_cql("create materialized view mv_test as select * from cf "
-                       "where theKey is not null and theClustering is not null and theValue is not null "
-                       "primary key (theKey,theClustering)").get();
-        e.execute_cql("create materialized view mv_test2 as select theKey, theClustering, theValue from cf "
-                       "where theKey is not null and theClustering is not null and theValue is not null "
-                       "primary key (theKey,theClustering)").get();
-        e.execute_cql("insert into cf (theKey, theClustering, theValue) values (0 ,0, 0);").get();
+                       "where \"theKey\" is not null and \"theClustering\" is not null and \"theValue\" is not null "
+                       "primary key (\"theKey\",\"theClustering\")").get();
+        e.execute_cql("create materialized view mv_test2 as select \"theKey\", \"theClustering\", \"theValue\" from cf "
+                       "where \"theKey\" is not null and \"theClustering\" is not null and \"theValue\" is not null "
+                       "primary key (\"theKey\",\"theClustering\")").get();
+        e.execute_cql("insert into cf (\"theKey\", \"theClustering\", \"theValue\") values (0 ,0, 0);").get();
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select theKey, theClustering, theValue from %s ", view)).get0();
+            auto msg = e.execute_cql(sprint("select \"theKey\", \"theClustering\", \"theValue\" from %s ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -58,11 +65,11 @@ SEASTAR_TEST_CASE(test_case_sensitivity) {
             });
         }
 
-        e.execute_cql("alter table cf rename theClustering to Col;").get();
+        e.execute_cql("alter table cf rename \"theClustering\" to \"Col\";").get();
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select theKey, Col, theValue from %s ", view)).get0();
+            auto msg = e.execute_cql(sprint("select \"theKey\", \"Col\", \"theValue\" from %s ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
