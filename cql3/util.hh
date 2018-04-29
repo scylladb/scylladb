@@ -72,10 +72,14 @@ inline sstring rename_column_in_where_clause(const sstring_view& where_clause, c
     return relations_to_where_clause(std::move(new_relations));
 }
 
+/// build a CQL "select" statement with the desired parameters.
+/// If select_all_columns==true, all columns are selected and the value of
+/// selected_columns is ignored.
 shared_ptr<cql3::statements::raw::select_statement> build_select_statement(
         const sstring_view& cf_name,
         const sstring_view& where_clause,
-        std::vector<sstring_view> included_columns);
+        bool select_all_columns,
+        const std::vector<column_definition>& selected_columns);
 
 sstring maybe_quote(const sstring& s);
 
