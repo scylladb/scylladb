@@ -2014,8 +2014,10 @@ future<> storage_service::start_rpc_server() {
         auto port = cfg.rpc_port();
         auto addr = cfg.rpc_address();
         auto keepalive = cfg.rpc_keepalive();
-        return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive] (seastar::net::inet_address ip) {
-            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service)).then([tserver, port, addr, ip, keepalive] {
+        thrift_server_config tsc;
+        tsc.timeout_config = make_timeout_config(cfg);
+        return seastar::net::dns::resolve_name(addr).then([&ss, tserver, addr, port, keepalive, tsc] (seastar::net::inet_address ip) {
+            return tserver->start(std::ref(ss._db), std::ref(cql3::get_query_processor()), std::ref(ss._auth_service), tsc).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
                 //    return tserver->stop();

@@ -44,6 +44,7 @@
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
 #include "cql3/query_processor.hh"
+#include "timeout_config.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
@@ -185,6 +186,7 @@ class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     service::query_state _query_state;
+    ::timeout_config _timeout_config;
 private:
     template <typename Cob, typename Func>
     void
@@ -198,10 +200,11 @@ private:
         });
     }
 public:
-    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, ::timeout_config timeout_config)
         : _db(db)
         , _query_processor(qp)
         , _query_state(service::client_state::for_external_thrift_calls(auth_service))
+        , _timeout_config(timeout_config)
     { }
 
     const sstring& current_keyspace() const {
@@ -1889,14 +1892,15 @@ class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
     distributed<cql3::query_processor>& _query_processor;
     auth::service& _auth_service;
+    timeout_config _timeout_config;
 public:
     explicit handler_factory(distributed<database>& db,
                              distributed<cql3::query_processor>& qp,
-                             auth::service& auth_service)
-        : _db(db), _query_processor(qp), _auth_service(auth_service) {}
+                             auth::service& auth_service, ::timeout_config timeout_config)
+        : _db(db), _query_processor(qp), _auth_service(auth_service), _timeout_config(timeout_config) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db, _query_processor, _auth_service);
+        return new thrift_handler(_db, _query_processor, _auth_service, _timeout_config);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -1904,6 +1908,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service) {
-    return std::make_unique<handler_factory>(db, qp, auth_service);
+create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service& auth_service, ::timeout_config timeout_config) {
+    return std::make_unique<handler_factory>(db, qp, auth_service, timeout_config);
 }

@@ -29,6 +29,8 @@
 #include "cql3/query_processor.hh"
 #include <memory>
 
-std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&);
+struct timeout_config;
+
+std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, timeout_config);
 
 #endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */
