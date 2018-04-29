@@ -100,3 +100,27 @@ SEASTAR_TEST_CASE(test_cannot_drop_secondary_index_backing_mv) {
         assert_that_failed(e.execute_cql(sprint("drop materialized view %s_index", index_name)));
     });
 }
+
+// Issue #3210 is about searching the secondary index not working properly
+// when the *partition key* has multiple columns (a compound partition key),
+// and this is what we test here.
+SEASTAR_TEST_CASE(test_secondary_index_case_compound_partition_key) {
+    return do_with_cql_env_thread([] (auto& e) {
+        // Test case-sensitive *table* name.
+        e.execute_cql("CREATE TABLE tab (a int, b int, c int, PRIMARY KEY ((a, b)))").get();
+        e.execute_cql("CREATE INDEX ON tab (c)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c) VALUES (1, 2, 3)").get();
+        eventually([&] {
+            // We expect this search to find the single row, with the compound
+            // partition key (a, b) = (1, 2).
+            auto res = e.execute_cql("SELECT * from tab WHERE c = 3").get0();
+            assert_that(res).is_rows()
+                    .with_size(1)
+                    .with_row({
+                        {int32_type->decompose(1)},
+                        {int32_type->decompose(2)},
+                        {int32_type->decompose(3)},
+                    });
+        });
+    });
+}
