@@ -42,6 +42,7 @@
 #include "index/secondary_index_manager.hh"
 
 #include "cql3/statements/index_target.hh"
+#include "cql3/util.hh"
 #include "index/target_parser.hh"
 #include "db/query_context.hh"
 #include "schema_builder.hh"
@@ -120,7 +121,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         }
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
-    const sstring where_clause = sprint("%s IS NOT NULL", index_target_name);
+    const sstring where_clause = sprint("%s IS NOT NULL", cql3::util::maybe_quote(index_target_name));
     builder.with_view_info(*schema, false, where_clause);
     return view_ptr{builder.build()};
 }
