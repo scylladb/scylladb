@@ -66,6 +66,10 @@ sstring column_identifier::to_cql_string() const {
     return util::maybe_quote(_text);
 }
 
+sstring column_identifier::raw::to_cql_string() const {
+    return util::maybe_quote(_text);
+}
+
 column_identifier::raw::raw(sstring raw_text, bool keep_case)
     : _raw_text{raw_text}
     , _text{raw_text}
