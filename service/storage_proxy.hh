@@ -428,13 +428,6 @@ public:
      */
     future<> truncate_blocking(sstring keyspace, sstring cfname);
 
-    /**
-     * Default query timeout as defined by the configuration.
-     */
-    clock_type::time_point default_query_timeout() const {
-        return clock_type::now() + std::chrono::milliseconds(get_db().local().get_config().read_request_timeout_in_ms());
-    }
-
     /*
      * Executes data query on the whole cluster.
      *
