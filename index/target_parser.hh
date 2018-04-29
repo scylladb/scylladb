@@ -79,18 +79,6 @@ struct target_parser {
             target_type = index_target::target_type::values;
         }
 
-        // in the case of a quoted column name the name in the target string
-        // will be enclosed in quotes, which we need to unwrap. It may also
-        // include quote characters internally, escaped like so:
-        //      abc"def -> abc""def.
-        // Because the target string is stored in a CQL compatible form, we
-        // need to un-escape any such quotes to get the actual column name
-        static const sstring quote{"\""};
-        if (boost::starts_with(target, quote)) {
-            column_name = column_name.substr(1, column_name.length()-2);
-            static const std::regex two_quotes("\"\"");
-            column_name = std::regex_replace(std::string{column_name}, two_quotes, std::string{quote});
-        }
         auto column = schema->get_column_definition(utf8_type->decompose(column_name));
         if (!column) {
             return stdx::nullopt;
