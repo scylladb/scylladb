@@ -566,13 +566,14 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
         dht::partition_range_vector partition_ranges;
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
+            std::vector<bytes> pk_columns;
             for (const auto& column : row.get_columns()) {
-                auto blob = row.get_blob(column->name->to_cql_string());
-                auto pk = partition_key::from_exploded(*_schema, { blob });
-                auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
-                auto range = dht::partition_range::make_singular(dk);
-                partition_ranges.emplace_back(range);
+                pk_columns.push_back(row.get_blob(column->name->to_string()));
             }
+            auto pk = partition_key::from_exploded(*_schema, pk_columns);
+            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto range = dht::partition_range::make_singular(dk);
+            partition_ranges.emplace_back(range);
         }
         return make_ready_future<dht::partition_range_vector>(partition_ranges);
     }).finally([cmd] {});
