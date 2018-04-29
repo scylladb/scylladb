@@ -56,6 +56,8 @@ namespace statements {
 
 class authorization_statement : public raw::parsed_statement, public cql_statement_no_metadata, public ::enable_shared_from_this<authorization_statement> {
 public:
+    authorization_statement() : cql_statement_no_metadata(&timeout_config::other_timeout) {}
+
     uint32_t get_bound_terms() override;
 
     std::unique_ptr<prepared> prepare(database& db, cql_stats& stats) override;

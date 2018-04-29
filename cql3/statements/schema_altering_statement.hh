@@ -67,9 +67,9 @@ private:
     future<::shared_ptr<messages::result_message>>
     execute0(service::storage_proxy& proxy, service::query_state& state, const query_options& options, bool);
 protected:
-    schema_altering_statement();
+    explicit schema_altering_statement(timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
-    schema_altering_statement(::shared_ptr<cf_name> name);
+    schema_altering_statement(::shared_ptr<cf_name> name, timeout_config_selector timeout_selector = &timeout_config::other_timeout);
 
     /**
      * When a new database object (keyspace, table) is created, the creator needs to be granted all applicable

@@ -60,8 +60,18 @@ namespace statements {
 
 thread_local const ::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
 
+timeout_config_selector
+modification_statement_timeout(const schema& s) {
+    if (s.is_counter()) {
+        return &timeout_config::counter_write_timeout;
+    } else {
+        return &timeout_config::write_timeout;
+    }
+}
+
 modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_, uint64_t* cql_stats_counter_ptr)
-    : type{type_}
+    : cql_statement_no_metadata(modification_statement_timeout(*schema_))
+    , type{type_}
     , _bound_terms{bound_terms}
     , s{schema_}
     , attrs{std::move(attrs_)}

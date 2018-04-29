@@ -208,6 +208,15 @@ select_statement::parameters::orderings_type const& select_statement::parameters
     return _orderings;
 }
 
+timeout_config_selector
+select_timeout(const restrictions::statement_restrictions& restrictions) {
+    if (restrictions.is_key_range()) {
+        return &timeout_config::range_read_timeout;
+    } else {
+        return &timeout_config::read_timeout;
+    }
+}
+
 select_statement::select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
                                    ::shared_ptr<parameters> parameters,
@@ -217,7 +226,8 @@ select_statement::select_statement(schema_ptr schema,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
                                    cql_stats& stats)
-    : _schema(schema)
+    : cql_statement(select_timeout(*restrictions))
+    , _schema(schema)
     , _bound_terms(bound_terms)
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))

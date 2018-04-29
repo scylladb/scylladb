@@ -45,6 +45,7 @@
 #include "service/query_state.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
+#include "timeout_config.hh"
 
 namespace cql_transport {
 
@@ -62,9 +63,14 @@ class metadata;
 shared_ptr<const metadata> make_empty_metadata();
 
 class cql_statement {
+    timeout_config_selector _timeout_config_selector;
 public:
+    explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
+
     virtual ~cql_statement()
     { }
+
+    timeout_config_selector get_timeout_config_selector() const { return _timeout_config_selector; }
 
     virtual uint32_t get_bound_terms() = 0;
 
@@ -111,6 +117,7 @@ public:
 
 class cql_statement_no_metadata : public cql_statement {
 public:
+    using cql_statement::cql_statement;
     virtual shared_ptr<const metadata> get_result_metadata() const override {
         return make_empty_metadata();
     }
