@@ -51,6 +51,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/values.hh"
 #include "cql_serialization_format.hh"
+#include "timeout_config.hh"
 
 namespace cql3 {
 
@@ -70,6 +71,7 @@ public:
     };
 private:
     const db::consistency_level _consistency;
+    const timeout_config& _timeout_config;
     const std::experimental::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
@@ -103,12 +105,14 @@ public:
     query_options(const query_options&) = delete;
 
     explicit query_options(db::consistency_level consistency,
+                           const timeout_config& timeouts,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            bool skip_metadata,
                            specific_options options,
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
+                           const timeout_config& timeouts,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value> values,
                            std::vector<cql3::raw_value_view> value_views,
@@ -116,6 +120,7 @@ public:
                            specific_options options,
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
+                           const timeout_config& timeouts,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<cql3::raw_value_view> value_views,
                            bool skip_metadata,
@@ -147,10 +152,12 @@ public:
 
     // forInternalUse
     explicit query_options(std::vector<cql3::raw_value> values);
-    explicit query_options(db::consistency_level, std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
+    explicit query_options(db::consistency_level, const timeout_config& timeouts,
+            std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
     explicit query_options(std::unique_ptr<query_options>, ::shared_ptr<service::pager::paging_state> paging_state);
 
     db::consistency_level get_consistency() const;
+    const timeout_config& get_timeout_config() const { return _timeout_config; }
     cql3::raw_value_view get_value_at(size_t idx) const;
     cql3::raw_value_view make_temporary(cql3::raw_value value) const;
     size_t get_values_count() const;
@@ -188,7 +195,7 @@ query_options::query_options(query_options&& o, std::vector<OneMutationDataRange
     std::vector<query_options> tmp;
     tmp.reserve(values_ranges.size());
     std::transform(values_ranges.begin(), values_ranges.end(), std::back_inserter(tmp), [this](auto& values_range) {
-        return query_options(_consistency, {}, std::move(values_range), _skip_metadata, _options, _cql_serialization_format);
+        return query_options(_consistency, _timeout_config, {}, std::move(values_range), _skip_metadata, _options, _cql_serialization_format);
     });
     _batch_options = std::move(tmp);
 }

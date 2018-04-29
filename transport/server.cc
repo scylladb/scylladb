@@ -916,7 +916,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         std::vector<cql3::raw_value_view> values;
         read_value_view_list(buf, values);
         auto consistency = read_consistency(buf);
-        q_state->options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, values, false,
+        q_state->options = std::make_unique<cql3::query_options>(consistency, timeout_config(), std::experimental::nullopt, values, false,
                                                                  cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     } else {
         q_state->options = read_options(buf);
@@ -1445,7 +1445,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
 {
     auto consistency = read_consistency(buf);
     if (version == 1) {
-        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<cql3::raw_value_view>{},
+        return std::make_unique<cql3::query_options>(consistency, timeout_config(), std::experimental::nullopt, std::vector<cql3::raw_value_view>{},
             false, cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     }
 
@@ -1493,11 +1493,11 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
         if (!names.empty()) {
             onames = std::move(names);
         }
-        options = std::make_unique<cql3::query_options>(consistency, std::move(onames), std::move(values), skip_metadata,
+        options = std::make_unique<cql3::query_options>(consistency, timeout_config(), std::move(onames), std::move(values), skip_metadata,
             cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts},
             _cql_serialization_format);
     } else {
-        options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::move(values), skip_metadata,
+        options = std::make_unique<cql3::query_options>(consistency, timeout_config(), std::experimental::nullopt, std::move(values), skip_metadata,
             cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     }
 

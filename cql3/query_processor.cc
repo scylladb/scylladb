@@ -368,10 +368,11 @@ query_options query_processor::make_internal_options(
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
                 cl,
+                infinite_timeout_config,
                 bound_values,
                 cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
-    return query_options(cl, bound_values);
+    return query_options(cl, infinite_timeout_config, bound_values);
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
