@@ -862,17 +862,20 @@ class foreign_reader : public flat_mutation_reader::impl {
     // we don't have to wait on the remote reader filling its buffer.
     template <typename Operation, typename Result = futurize_t<std::result_of_t<Operation()>>>
     Result forward_operation(db::timeout_clock::time_point timeout, Operation op) {
-        auto read_ahead_future = _read_ahead_future ? _read_ahead_future.get() : nullptr;
-        return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(), read_ahead_future,
-                pending_next_partition = std::exchange(_pending_next_partition, 0), timeout, op = std::move(op)] () mutable {
+        return smp::submit_to(_reader.get_owner_shard(), [reader = _reader.get(),
+                read_ahead_future = std::exchange(_read_ahead_future, nullptr),
+                pending_next_partition = std::exchange(_pending_next_partition, 0),
+                timeout,
+                op = std::move(op)] () mutable {
             auto exec_op_and_read_ahead = [=] () mutable {
                 while (pending_next_partition) {
                     --pending_next_partition;
                     reader->next_partition();
                 }
                 return op().then([=] (auto... results) {
+                    auto f = reader->is_end_of_stream() ? nullptr : std::make_unique<future<>>(reader->fill_buffer(timeout));
                     return make_ready_future<foreign_unique_ptr<future<>>, decltype(results)...>(
-                                std::make_unique<future<>>(reader->fill_buffer(timeout)), std::move(results)...);
+                                make_foreign(std::move(f)), std::move(results)...);
                 });
             };
             if (read_ahead_future) {
