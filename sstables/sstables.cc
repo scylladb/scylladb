@@ -2836,8 +2836,7 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
 
 void sstable_writer_m::write_collection(file_writer& writer, const column_definition& cdef,
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
-    auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
-    auto mview = t->deserialize_mutation_form(collection);
+    auto mview = collection_type_impl::deserialize_mutation_form(collection);
     if (has_complex_deletion) {
         write_delta_deletion_time(writer, to_deletion_time(mview.tomb));
     }
