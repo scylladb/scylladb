@@ -28,8 +28,14 @@ class anchorless_list_base_hook {
     anchorless_list_base_hook<T>* _next = nullptr;
     anchorless_list_base_hook<T>* _prev = nullptr;
 public:
-    class iterator : std::iterator<std::bidirectional_iterator_tag, T> {
+    class iterator {
         anchorless_list_base_hook<T>* _position;
+    public:
+        using iterator_category = std::bidirectional_iterator_tag;
+        using value_type = T;
+        using difference_type = ssize_t;
+        using pointer = T*;
+        using reference = T&;
     public:
         explicit iterator(anchorless_list_base_hook<T>* pos) : _position(pos) { }
         T& operator*() { return *static_cast<T*>(_position); }
