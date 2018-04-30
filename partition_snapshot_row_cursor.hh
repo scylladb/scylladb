@@ -386,11 +386,16 @@ public:
     // Doesn't change logical value of mutation_partition or continuity of the snapshot.
     // The cursor doesn't have to be valid.
     // The cursor is invalid after the call.
-    // Assumes the snapshot is evictable.
+    // Assumes the snapshot is evictable and not populated by means other than ensure_entry_if_complete().
+    // Subsequent calls to ensure_entry_if_complete() must be given strictly monotonically increasing
+    // positions unless iterators are invalidated across the calls.
     stdx::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
-        prepare_heap(pos);
-        if (!_heap.empty()) {
-            recreate_current_row();
+        position_in_partition::less_compare less(_schema);
+        if (!iterators_valid() || less(position(), pos)) {
+            auto has_entry = maybe_advance_to(pos);
+            assert(has_entry); // evictable snapshots must have a dummy after all rows.
+        }
+        {
             position_in_partition::equal_compare eq(_schema);
             if (eq(position(), pos)) {
                 if (dummy()) {
