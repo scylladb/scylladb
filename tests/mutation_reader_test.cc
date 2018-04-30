@@ -37,6 +37,7 @@
 #include "tests/test_services.hh"
 #include "tests/mutation_source_test.hh"
 #include "tests/cql_test_env.hh"
+#include "tests/make_random_string.hh"
 
 #include "mutation_reader.hh"
 #include "schema_builder.hh"
@@ -1437,16 +1438,22 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
     }).get();
 }
 
-// Shards tokens such that mutations are owned by shards in a round-robin manner.
+// Shards tokens such that tokens are owned by shards in a round-robin manner.
 class dummy_partitioner : public dht::i_partitioner {
     dht::i_partitioner& _partitioner;
     std::vector<dht::token> _tokens;
 
 public:
-    dummy_partitioner(dht::i_partitioner& partitioner, const std::map<dht::token, std::vector<mutation>>& mutations_by_token)
+    // We need a container input that enforces token order by design.
+    // In addition client code will often map tokens to something, e.g. mutation
+    // they originate from or shards, etc. So, for convenience we allow any
+    // ordered associative container (std::map) that has dht::token as keys.
+    // Values will be ignored.
+    template <typename T>
+    dummy_partitioner(dht::i_partitioner& partitioner, const std::map<dht::token, T>& something_by_token)
         : i_partitioner(smp::count)
         , _partitioner(partitioner)
-        , _tokens(boost::copy_range<std::vector<dht::token>>(mutations_by_token | boost::adaptors::map_keys)) {
+        , _tokens(boost::copy_range<std::vector<dht::token>>(something_by_token | boost::adaptors::map_keys)) {
     }
 
     virtual dht::token midpoint(const dht::token& left, const dht::token& right) const override { return _partitioner.midpoint(left, right); }
@@ -1578,6 +1585,314 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
         for (unsigned i = 0; i < smp::count; ++i) {
             BOOST_REQUIRE(shards_touched.at(i));
         }
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// A reader that can supply a quasi infinite amount of fragments.
+//
+// On each fill_buffer() call:
+// * It will generate a new partition.
+// * It will generate rows until the buffer is full.
+class infinite_reader : public flat_mutation_reader::impl {
+    simple_schema _s;
+    uint32_t _pk = 0;
+
+public:
+    infinite_reader(simple_schema s)
+        : impl(s.schema())
+        , _s(std::move(s)) {
+    }
+
+    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        push_mutation_fragment(partition_start(_s.make_pkey(_pk++), {}));
+
+        auto ck = uint32_t(0);
+        while (!is_buffer_full()) {
+            push_mutation_fragment(_s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
+        }
+
+        push_mutation_fragment(partition_end());
+
+        return make_ready_future<>();
+    }
+
+    virtual void next_partition() override { }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+};
+
+// Has to be run with smp >= 3
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_create_reader) {
+    if (smp::count < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 3" << std::endl;
+        return;
+    }
+
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        class promise_wrapper {
+            promise<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> _pr;
+            bool _pending = false;
+
+        public:
+            future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>> get_future() {
+                _pending = true;
+                return _pr.get_future();
+            }
+
+            void trigger(flat_mutation_reader r) {
+                _pr.set_value(make_foreign(std::make_unique<flat_mutation_reader>(std::move(r))));
+            }
+
+            bool is_pending() const {
+                return _pending;
+            }
+        };
+
+        const auto shard_of_interest = smp::count - 1;
+        auto remote_control = smp::submit_to(shard_of_interest, [] {
+            return make_foreign(std::make_unique<promise_wrapper>());
+        }).get0();
+
+        auto s = simple_schema();
+
+        auto factory = [shard_of_interest, &s, remote_control = remote_control.get()] (unsigned shard,
+                const dht::partition_range& range,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) {
+            return smp::submit_to(shard, [shard_of_interest, gs = global_simple_schema(s), remote_control] () mutable {
+                if (engine().cpu_id() == shard_of_interest) {
+                    return remote_control->get_future();
+                } else {
+                    auto reader = engine().cpu_id() == shard_of_interest - 1 ?
+                            make_flat_mutation_reader<infinite_reader>(gs.get()) :
+                            make_empty_flat_reader(gs.get().schema());
+
+                    using foreign_reader_ptr = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
+                    return make_ready_future<foreign_reader_ptr>(make_foreign(std::make_unique<flat_mutation_reader>(std::move(reader))));
+                }
+            });
+        };
+
+        {
+            const auto mutations_by_token = std::map<dht::token, std::vector<mutation>>();
+            auto partitioner = dummy_partitioner(dht::global_partitioner(), mutations_by_token);
+            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, partitioner, std::move(factory));
+
+            reader.fill_buffer().get();
+
+            BOOST_REQUIRE(reader.is_buffer_full());
+            BOOST_REQUIRE(smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+                return remote_control->is_pending();
+            }).get0());
+        }
+
+        smp::submit_to(shard_of_interest, [gs = global_schema_ptr(s.schema()), remote_control = remote_control.get()] {
+            remote_control->trigger(make_empty_flat_reader(gs.get()));
+        }).get();
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// A reader that can controlled by it's "creator" after it's created.
+//
+// It can execute one of a set of actions on it's fill_buffer() call:
+// * fill the buffer completely with generated data
+// * block until the pupet master releases it
+//
+// It's primary purpose is to aid in testing multishard_combining_reader's
+// read-ahead related corner-cases. It allows for the test code to have
+// fine-grained control over which shard will fill the multishard reader's
+// buffer and how much read-ahead it launches and consequently when the
+// read-ahead terminates.
+class puppet_reader : public flat_mutation_reader::impl {
+public:
+    struct control {
+        promise<> buffer_filled;
+        bool destroyed = false;
+        bool pending = false;
+    };
+
+    enum class fill_buffer_action {
+        fill,
+        block
+    };
+
+private:
+    simple_schema _s;
+    control& _ctrl;
+    fill_buffer_action _action;
+    std::vector<uint32_t> _pkeys;
+    unsigned _partition_index = 0;
+
+    bool maybe_push_next_partition() {
+        if (_partition_index == _pkeys.size()) {
+            _end_of_stream = true;
+            return false;
+        }
+        push_mutation_fragment(partition_start(_s.make_pkey(_pkeys.at(_partition_index++)), {}));
+        return true;
+    }
+
+    void do_fill_buffer() {
+        auto ck = uint32_t(0);
+        while (!is_buffer_full()) {
+            push_mutation_fragment(_s.make_row(_s.make_ckey(ck++), make_random_string(2 << 5)));
+        }
+
+        push_mutation_fragment(partition_end());
+        maybe_push_next_partition();
+    }
+
+public:
+    puppet_reader(simple_schema s, control& ctrl, fill_buffer_action action, std::vector<uint32_t> pkeys)
+        : impl(s.schema())
+        , _s(std::move(s))
+        , _ctrl(ctrl)
+        , _action(action)
+        , _pkeys(std::move(pkeys)) {
+        if (maybe_push_next_partition()) {
+            push_mutation_fragment(_s.make_row(_s.make_ckey(0), make_random_string(4)));
+            push_mutation_fragment(partition_end());
+        }
+        maybe_push_next_partition();
+    }
+    ~puppet_reader() {
+        _ctrl.destroyed = true;
+    }
+
+    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        if (is_end_of_stream()) {
+            return make_ready_future<>();
+        }
+
+        _end_of_stream = true;
+
+        switch (_action) {
+        case fill_buffer_action::fill:
+            do_fill_buffer();
+            return make_ready_future<>();
+        case fill_buffer_action::block:
+            do_fill_buffer();
+            return _ctrl.buffer_filled.get_future().then([this] {
+                BOOST_REQUIRE(!_ctrl.destroyed);
+                return make_ready_future<>();
+            });
+        }
+        abort();
+    }
+    virtual void next_partition() override { }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
+};
+
+// Best run with smp >= 2
+SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        const auto shard_of_interest = (engine().cpu_id() + 1) % smp::count;
+        auto s = simple_schema();
+        auto [remote_control, remote_reader] = smp::submit_to(shard_of_interest, [gs = global_simple_schema(s)] {
+            using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
+            using reader_type = foreign_ptr<std::unique_ptr<flat_mutation_reader>>;
+
+            auto control = make_foreign(std::make_unique<puppet_reader::control>());
+            auto reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<puppet_reader>(gs.get(),
+                    *control,
+                    //std::forward_list<puppet_reader::fill_buffer_action>{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
+                    puppet_reader::fill_buffer_action::block,
+                    std::vector<uint32_t>{0, 1})));
+
+            return make_ready_future<control_type, reader_type>(std::move(control), std::move(reader));
+        }).get();
+
+        {
+            auto reader = make_foreign_reader(s.schema(), std::move(remote_reader));//, streamed_mutation::forwarding::no)
+
+            reader.fill_buffer().get();
+
+            BOOST_REQUIRE(!reader.is_buffer_empty());
+        }
+
+        BOOST_REQUIRE(!smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+            return remote_control->destroyed;
+        }).get0());
+
+        smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+            remote_control->buffer_filled.set_value();
+        }).get0();
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with smp >= 2
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
+        remote_controls.reserve(smp::count);
+        for (unsigned i = 0; i < smp::count; ++i) {
+            remote_controls.emplace_back(nullptr);
+        }
+
+        parallel_for_each(boost::irange(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+            return smp::submit_to(shard, [] {
+                return make_foreign(std::make_unique<puppet_reader::control>());
+            }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader::control>>&& ctr) mutable {
+                remote_controls[shard] = std::move(ctr);
+            });
+        }).get();
+
+        auto s = simple_schema();
+
+        // We need two tokens for each shard
+        std::map<dht::token, unsigned> pkeys_by_tokens;
+        for (unsigned i = 0; i < smp::count * 2; ++i) {
+            pkeys_by_tokens.emplace(s.make_pkey(i).token(), i);
+        }
+
+        auto shard_pkeys = std::vector<std::vector<uint32_t>>(smp::count, std::vector<uint32_t>{});
+        auto i = unsigned(0);
+        for (auto pkey : pkeys_by_tokens | boost::adaptors::map_values) {
+            shard_pkeys[i++ % smp::count].push_back(pkey);
+        }
+
+        auto partitioner = dummy_partitioner(dht::global_partitioner(), std::move(pkeys_by_tokens));
+
+        auto factory = [&s, &remote_controls, &shard_pkeys] (unsigned shard,
+                const dht::partition_range&,
+                streamed_mutation::forwarding,
+                mutation_reader::forwarding) {
+            return smp::submit_to(shard, [shard, gs = global_simple_schema(s), remote_control = remote_controls.at(shard).get(),
+                    pkeys = shard_pkeys.at(shard)] () mutable {
+                auto action = shard == 0 ? puppet_reader::fill_buffer_action::fill : puppet_reader::fill_buffer_action::block;
+                return make_foreign(std::make_unique<flat_mutation_reader>(
+                            make_flat_mutation_reader<puppet_reader>(gs.get(), *remote_control, action, std::move(pkeys))));
+            });
+        };
+
+        {
+            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, partitioner, std::move(factory));
+            reader.fill_buffer().get();
+            BOOST_REQUIRE(reader.is_buffer_full());
+        }
+
+        parallel_for_each(boost::irange(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
+            return smp::submit_to(shard, [control = remote_controls.at(shard).get()] {
+                control->buffer_filled.set_value();
+            });
+        }).get();
+
+        BOOST_REQUIRE(eventually_true([&] {
+            return map_reduce(boost::irange(0u, smp::count), [&] (unsigned shard) {
+                    return smp::submit_to(shard, [&] {
+                        return remote_controls.at(shard)->destroyed;
+                    });
+                },
+                true,
+                std::logical_and<bool>()).get0();
+        }));
 
         return make_ready_future<>();
     }).get();
