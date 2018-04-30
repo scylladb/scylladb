@@ -23,6 +23,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include <boost/range/size.hpp>
 #include <seastar/core/thread.hh>
 
 #include "partition_version.hh"
@@ -721,4 +722,64 @@ SEASTAR_TEST_CASE(test_apply_is_atomic) {
     do_test(random_mutation_generator(random_mutation_generator::generate_counters::no));
     do_test(random_mutation_generator(random_mutation_generator::generate_counters::yes));
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
+    return seastar::async([] {
+        logalloc::region r;
+        with_allocator(r.allocator(), [&] {
+            random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+            auto s = gen.schema();
+
+            mutation m1 = gen();
+            mutation m2 = gen();
+            mutation m3 = gen();
+
+            m1.partition().make_fully_continuous();
+            m2.partition().make_fully_continuous();
+            m3.partition().make_fully_continuous();
+
+            {
+                auto e = partition_entry(m1.partition());
+                auto snap1 = e.read(r, s, nullptr);
+
+                {
+                    logalloc::reclaim_lock rl(r);
+                    e.apply(*s, m2.partition(), *s);
+                }
+
+                auto snap2 = e.read(r, s, nullptr);
+
+                snap1->merge_partition_versions();
+                snap1 = {};
+
+                snap2->merge_partition_versions();
+                snap2 = {};
+
+                BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
+                assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
+            }
+
+            {
+                auto e = partition_entry(m1.partition());
+                auto snap1 = e.read(r, s, nullptr);
+
+                {
+                    logalloc::reclaim_lock rl(r);
+                    e.apply(*s, m2.partition(), *s);
+                }
+
+                auto snap2 = e.read(r, s, nullptr);
+
+                snap2->merge_partition_versions();
+                snap2 = {};
+
+                snap1->merge_partition_versions();
+                snap1 = {};
+
+                BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
+                assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
+            }
+        });
+    });
 }
