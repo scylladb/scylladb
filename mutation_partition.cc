@@ -295,9 +295,12 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
     auto p_i = p._rows.begin();
+    auto i = _rows.begin();
     while (p_i != p._rows.end()) {
         rows_entry& src_e = *p_i;
-        auto i = _rows.lower_bound(src_e, less);
+        if (i != _rows.end() && less(*i, src_e)) {
+            i = _rows.lower_bound(src_e, less);
+        }
         if (i == _rows.end() || less(src_e, *i)) {
             p_i = p._rows.erase(p_i);
             auto src_i = _rows.insert_before(i, src_e);
