@@ -1192,10 +1192,10 @@ multishard_combining_reader::multishard_combining_reader(schema_ptr s,
 future<> multishard_combining_reader::fill_buffer(db::timeout_clock::time_point timeout) {
     _crossed_shards = false;
     return do_until([this] { return is_buffer_full() || is_end_of_stream(); }, [this, timeout] {
-        if (!_shard_readers[_current_shard]) {
-            return _shard_readers[_current_shard].create_reader();
-        }
         auto& reader = _shard_readers[_current_shard];
+        if (!reader) {
+            return reader.create_reader();
+        }
 
         if (reader.is_buffer_empty()) {
             return handle_empty_reader_buffer(timeout);
