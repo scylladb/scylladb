@@ -23,8 +23,8 @@
 
 #pragma once
 
-#include "make_random_string.hh"
 #include "schema.hh"
+#include "schema_registry.hh"
 #include "keys.hh"
 #include "mutation_fragment.hh"
 #include "mutation.hh"
@@ -36,10 +36,21 @@
 //   CREATE TABLE ks.cf (pk text, ck text, v text, s1 text static, PRIMARY KEY (pk, ck));
 //
 class simple_schema {
+    friend class global_simple_schema;
+
     schema_ptr _s;
     api::timestamp_type _timestamp = api::min_timestamp;
     const column_definition& _v_def;
+
+    simple_schema(schema_ptr s, api::timestamp_type timestamp)
+        : _s(s)
+        , _timestamp(timestamp)
+        , _v_def(*_s->get_column_definition(to_bytes("v"))) {
+    }
 public:
+    api::timestamp_type current_timestamp() {
+        return _timestamp;
+    }
     api::timestamp_type new_timestamp() {
         return _timestamp++;
     }
@@ -174,5 +185,22 @@ public:
             keys.push_back(make_ckey(i));
         }
         return keys;
+    }
+};
+
+// Allows a simple_schema to be transferred to another shard.
+// Must be used in `cql_test_env`.
+class global_simple_schema {
+    global_schema_ptr _gs;
+    api::timestamp_type _timestamp;
+public:
+
+    global_simple_schema(simple_schema& s)
+        : _gs(s.schema())
+        , _timestamp(s.current_timestamp()) {
+    }
+
+    simple_schema get() const {
+        return simple_schema(_gs.get(), _timestamp);
     }
 };
