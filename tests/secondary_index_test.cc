@@ -138,3 +138,29 @@ SEASTAR_TEST_CASE(test_secondary_index_case_compound_partition_key) {
         });
     });
 }
+
+// Tests for issue #2991 - test that "IF NOT EXISTS" works as expected for
+// index creation, and "IF EXISTS" for index drop.
+SEASTAR_TEST_CASE(test_secondary_index_if_exists) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int primary key, a int)").get();
+        e.execute_cql("create index on cf (a)").get();
+        // Confirm that creating the same index again with "if not exists" is
+        // fine, but without "if not exists", it's an error.
+        e.execute_cql("create index if not exists on cf (a)").get();
+        try {
+            e.execute_cql("create index on cf (a)").get();
+            BOOST_FAIL("Exception expected");
+        } catch (exceptions::invalid_request_exception) { }
+        // Confirm that after dropping the index, dropping it again with
+        // "if exists" is fine, but an error without it.
+        e.execute_cql("drop index cf_a_idx").get();
+        e.execute_cql("drop index if exists cf_a_idx").get();
+        try {
+            e.execute_cql("drop index cf_a_idx").get();
+            // Expect exceptions::invalid_request_exception: Index 'cf_a_idx'
+            // could not be found in any of the tables of keyspace 'ks'
+            BOOST_FAIL("Exception expected");
+        } catch (exceptions::invalid_request_exception) { }
+    });
+}
