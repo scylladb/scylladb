@@ -108,6 +108,8 @@ boost_tests = [
     'cql_auth_syntax_test',
     'querier_cache',
     'limiting_data_source_test',
+    'sstable_test',
+    'sstable_3_x_test',
 ]
 
 other_tests = [
@@ -179,16 +181,21 @@ if __name__ == "__main__":
 
     print_progress = print_status_verbose if args.verbose else print_progress_succint
 
+    custom_seastar_args = {
+        "sstable_test": ['-c1'],
+        "sstable_3_x_test": ['-c1'],
+    }
+
     test_to_run = []
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         standard_args =  '--overprovisioned --unsafe-bypass-fsync 1'.split()
-        seastar_args = '-c2 -m2G'.split() + standard_args
+        seastar_args = '-c2 -m2G'.split()
         for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test), 'other', seastar_args))
+            test_to_run.append((os.path.join(prefix, test), 'other', custom_seastar_args.get(test, seastar_args) + standard_args))
         for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test), 'boost', seastar_args))
+            test_to_run.append((os.path.join(prefix, test), 'boost', custom_seastar_args.get(test, seastar_args) + standard_args))
 
     if 'release' in modes_to_run:
         test_to_run.append(('build/release/tests/lsa_async_eviction_test', 'other',
@@ -201,12 +208,7 @@ if __name__ == "__main__":
                             '-c1 -m1G --count 4000000 --standard-object-size 128'.split() + standard_args))
         test_to_run.append(('build/release/tests/row_cache_alloc_stress', 'other',
                             '-c1 -m2G'.split() + standard_args))
-        test_to_run.append(('build/release/tests/sstable_test', 'boost', ['-c1'] + standard_args))
-        test_to_run.append(('build/release/tests/sstable_3_x_test', 'boost', ['-c1'] + standard_args))
         test_to_run.append(('build/release/tests/row_cache_stress_test', 'other', '-c1 -m1G --seconds 10'.split() + standard_args))
-    if 'debug' in modes_to_run:
-        test_to_run.append(('build/debug/tests/sstable_test', 'boost', ['-c1'] + standard_args))
-        test_to_run.append(('build/debug/tests/sstable_3_x_test', 'boost', ['-c1'] + standard_args))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
