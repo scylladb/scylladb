@@ -1000,6 +1000,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         std::optional<flat_mutation_reader> _reader;
         unsigned _pending_next_partition = 0;
         std::optional<future<>> _read_ahead;
+        promise<> _reader_promise;
 
     public:
         shard_reader(multishard_combining_reader& parent, unsigned shard)
@@ -1118,6 +1119,9 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
     if (_reader) {
         return make_ready_future<>();
     }
+    if (_read_ahead) {
+        return _reader_promise.get_future();
+    }
     return _parent._reader_factory(_shard, *_parent._pr, _parent._fwd_sm, _parent._fwd_mr).then(
             [this] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
         _reader.emplace(make_foreign_reader(_parent._schema, std::move(r), _parent._fwd_sm));
@@ -1125,6 +1129,7 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
             --_pending_next_partition;
             _reader->next_partition();
         }
+        _reader_promise.set_value();
     });
 }
 
