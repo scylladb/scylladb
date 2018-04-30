@@ -1495,7 +1495,7 @@ dht::token dummy_partitioner::token_for_next_shard(const dht::token& t, shard_id
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_multishard_combined_reader_as_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
             // We need to group mutations that have the same token so they land on the same shard.
@@ -1558,7 +1558,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combined_reader_as_mutation_source) {
 }
 
 // Best run with SMP >= 2
-SEASTAR_THREAD_TEST_CASE(test_multishard_combined_reader_reading_empty_table) {
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         std::vector<bool> shards_touched(smp::count, false);
         simple_schema s;
