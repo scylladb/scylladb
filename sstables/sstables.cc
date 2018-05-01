@@ -2563,7 +2563,6 @@ private:
     std::optional<file_writer> _index_writer;
     bool _tombstone_written = false;
     bool _row_deletion_written = false;
-    uint64_t _current_partition_offset = 0;
     uint64_t _prev_row_start = 0;
     std::optional<key> _partition_key;
     stdx::optional<key> _first_key, _last_key;
@@ -2587,6 +2586,7 @@ private:
         std::optional<clustering_key_prefix> last_clustering;
         size_t desired_block_size;
     } _pi_write_m;
+    column_stats _c_stats;
 
     void init_file_writers();
     void close_data_writer();
@@ -2659,7 +2659,6 @@ public:
         _sst._correctly_serialize_non_compound_range_tombstones = _cfg.correctly_serialize_non_compound_range_tombstones;
         _index_sampling_state.summary_byte_cost = summary_byte_cost();
         prepare_summary(_sst._components->summary, estimated_partitions, _schema.min_index_interval());
-
     }
 
     ~sstable_writer_m();
@@ -2708,7 +2707,7 @@ void sstable_writer_m::close_data_writer() {
 }
 
 void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
-    _current_partition_offset = _data_writer->offset();
+    _c_stats.start_offset = _data_writer->offset();
     _prev_row_start = 0;
 
     _partition_key = key::from_partition_key(_schema, dk.key());
@@ -2749,7 +2748,14 @@ deletion_time to_deletion_time(tombstone t) {
 }
 
 void sstable_writer_m::consume(tombstone t) {
-    write(_sst.get_version(), *_data_writer, to_deletion_time(t));
+    auto dt = to_deletion_time(t);
+    write(_sst.get_version(), *_data_writer, dt);
+    if (t) {
+        _c_stats.tombstone_histogram.update(dt.local_deletion_time);
+        _c_stats.update_local_deletion_time(dt.local_deletion_time);
+        _c_stats.update_timestamp(dt.marked_for_delete_at);
+    }
+
     _pi_write_m.tomb = t;
     _tombstone_written = true;
 }
@@ -2806,6 +2812,25 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     if (has_value) {
         write_cell_value(writer, *cdef.type, cell_value);
     }
+
+    // Collect cell statistics
+    _c_stats.update_timestamp(cell.timestamp());
+    if (is_deleted) {
+        auto ldt = cell.deletion_time().time_since_epoch().count();
+        _c_stats.update_local_deletion_time(ldt);
+        _c_stats.tombstone_histogram.update(ldt);
+    } else if (is_cell_expiring) {
+        auto expiration = cell.expiry().time_since_epoch().count();
+        auto ttl = cell.ttl().count();
+        _c_stats.update_ttl(ttl);
+        _c_stats.update_local_deletion_time(expiration);
+        // tombstone histogram is updated with expiration time because if ttl is longer
+        // than gc_grace_seconds for all data, sstable will be considered fully expired
+        // when actually nothing is expired.
+        _c_stats.tombstone_histogram.update(expiration);
+    } else { // regular live cell
+        _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
+    }
 }
 
 void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker& marker) {
@@ -2814,19 +2839,25 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
     }
 
     uint64_t timestamp = marker.timestamp();
+    _c_stats.update_timestamp(timestamp);
     if (marker.is_dead(_sst._now)) {
         // the row has expired by the time of flush
         // write deletion info instead of liveness info
         deletion_time dt;
         dt.local_deletion_time = marker.deletion_time().time_since_epoch().count();
         dt.marked_for_delete_at = timestamp;
+        _c_stats.update_local_deletion_time(dt.local_deletion_time);
         write_delta_deletion_time(writer, dt);
         _row_deletion_written = true;
     } else { // marker.is_live()
         write_delta_timestamp(writer, timestamp);
         if (marker.is_expiring()) {
-            write_delta_ttl(writer, marker.ttl().count());
-            write_delta_local_deletion_time(writer, marker.expiry().time_since_epoch().count());
+            auto ttl = marker.ttl().count();
+            auto ldt = marker.expiry().time_since_epoch().count();
+            _c_stats.update_ttl(ttl);
+            _c_stats.update_local_deletion_time(ldt);
+            write_delta_ttl(writer, ttl);
+            write_delta_local_deletion_time(writer, ldt);
         }
     }
 }
@@ -2835,11 +2866,20 @@ void sstable_writer_m::write_collection(file_writer& writer, const column_defini
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
     auto mview = collection_type_impl::deserialize_mutation_form(collection);
     if (has_complex_deletion) {
-        write_delta_deletion_time(writer, to_deletion_time(mview.tomb));
+        auto dt = to_deletion_time(mview.tomb);
+        write_delta_deletion_time(writer, dt);
+        if (mview.tomb) {
+            _c_stats.update_timestamp(dt.marked_for_delete_at);
+            _c_stats.update_local_deletion_time(dt.local_deletion_time);
+        }
     }
 
     write_vint(writer, mview.cells.size());
+    if (!mview.cells.empty()) {
+        ++_c_stats.column_count;
+    }
     for (const auto& [cell_path, cell]: mview.cells) {
+        ++_c_stats.cells_count;
         write_cell(writer, cell, cdef, properties, cell_path);
     }
 }
@@ -2858,6 +2898,8 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
             return;
         }
         atomic_cell_view cell = c.as_atomic_cell();
+        ++_c_stats.cells_count;
+        ++_c_stats.column_count;
         write_cell(writer, cell, column_definition, properties);
     });
 }
@@ -2867,8 +2909,13 @@ void sstable_writer_m::write_row_body(file_writer& writer, const clustering_row&
     // write_liveness_info may end up writing deletion info for the row if the row
     // has expired by the time of writing. If this happens, _row_deletion_writen is set
     write_liveness_info(writer, row.marker());
-    if (row.tomb() && !_row_deletion_written) {
-        write_delta_deletion_time(writer, to_deletion_time(row.tomb().tomb()));
+    if (row.tomb()) {
+        auto dt = to_deletion_time(row.tomb().tomb());
+        _c_stats.update_timestamp(dt.marked_for_delete_at);
+        _c_stats.update_local_deletion_time(dt.local_deletion_time);
+        if (!_row_deletion_written) {
+            write_delta_deletion_time(writer, dt);
+        }
     }
     row_time_properties properties;
     if (!row.marker().is_missing()) {
@@ -2916,6 +2963,9 @@ void sstable_writer_m::write_static_row(const row& static_row) {
     write_vint(*_data_writer, 0); // as the static row always comes first, the previous row size is always zero
 
     write_row(*_data_writer);
+
+    // Collect statistics
+    ++_c_stats.rows_count;
 }
 
 stop_iteration sstable_writer_m::consume(static_row&& sr) {
@@ -2974,7 +3024,6 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
 
     write_clustering_prefix(*_data_writer, _schema, clustered_row.key());
 
-
     auto write_row = [this, &clustered_row, has_complex_deletion] (file_writer& writer) {
         write_row_body(writer, clustered_row, has_complex_deletion);
     };
@@ -2985,6 +3034,13 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
     write_vint(*_data_writer, prev_row_size);
 
     write_row(*_data_writer);
+
+    // Collect statistics
+    if (_schema.clustering_key_size()) {
+        column_name_helper::min_max_components(_schema, _sst.get_metadata_collector().min_column_names(),
+            _sst.get_metadata_collector().max_column_names(), clustered_row.key().components());
+    }
+    ++_c_stats.rows_count;
 }
 
 stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
@@ -3005,7 +3061,7 @@ stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
         _pi_write_m.promoted_index.push_back({
                 *_pi_write_m.first_clustering,
                 *_pi_write_m.last_clustering,
-                _pi_write_m.block_start_offset - _current_partition_offset,
+                _pi_write_m.block_start_offset - _c_stats.start_offset,
                 pos - _pi_write_m.block_start_offset});
         _pi_write_m.first_clustering.reset();
         _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
@@ -3053,7 +3109,7 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
          _pi_write_m.promoted_index.push_back({
                 *_pi_write_m.first_clustering,
                 *_pi_write_m.last_clustering,
-                _pi_write_m.block_start_offset - _current_partition_offset,
+                _pi_write_m.block_start_offset - _c_stats.start_offset,
                 _data_writer->offset() - _pi_write_m.block_start_offset});
     }
 
@@ -3069,6 +3125,16 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
     }
 
     write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
+
+    // compute size of the current row.
+    _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
+
+    maybe_log_large_partition_warning(_schema, *_partition_key, _c_stats.partition_size, _cfg.large_partition_warning_threshold_bytes);
+
+    // update is about merging column_stats with the data being stored by collector.
+    _sst.get_metadata_collector().update(_schema, std::move(_c_stats));
+    _c_stats.reset();
+
     if (!_first_key) {
         _first_key = *_partition_key;
     }
