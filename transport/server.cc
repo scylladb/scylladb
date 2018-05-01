@@ -514,7 +514,7 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(buf), std::move(client_state));
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
-    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) {
+    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) -> processing_result {
         --_server._requests_serving;
         try {
             response_type response = f.get0();
@@ -543,27 +543,27 @@ future<cql_server::connection::processing_result>
                 case auth_state::READY:
                     break;
             }
-            return make_ready_future<processing_result>(std::move(response));
+            return processing_result(std::move(response));
         } catch (const exceptions::unavailable_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_timeout_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_failure_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_failure_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::already_exists_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
         } catch (const exceptions::cassandra_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
         } catch (std::exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
         } catch (...) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
         }
     }).finally([tracing_state = client_state.get_trace_state()] {
         tracing::stop_foreground(tracing_state);
