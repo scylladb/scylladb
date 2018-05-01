@@ -601,13 +601,12 @@ future<> cql_server::connection::process()
     }).then_wrapped([this] (future<> f) {
         try {
             f.get();
-            return make_ready_future<>();
         } catch (const exceptions::cassandra_exception& ex) {
-            return write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
+            write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
         } catch (std::exception& ex) {
-            return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
         } catch (...) {
-            return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
         }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
@@ -716,7 +715,7 @@ future<> cql_server::connection::process_request() {
                     }
                 }().then([this, flags] (processing_result&& response) {
                     update_client_state(response);
-                    return write_response(std::move(response.cql_response), _compression);
+                    write_response(std::move(response.cql_response), _compression);
                 }).handle_exception([buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (std::exception_ptr ex) {
                     // Not only logging, but also keeping buf and leave alive.
                     clogger.error("request processing failed: {}", ex);
@@ -1274,7 +1273,7 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         return do_with(std::move(response), [this, compression] (auto& response) {
@@ -1283,7 +1282,6 @@ future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_serve
             });
         });
     });
-    return make_ready_future<>();
 }
 
 void cql_server::connection::check_room(bytes_view& buf, size_t n)
