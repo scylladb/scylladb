@@ -515,6 +515,9 @@ future<cql_server::connection::processing_result>
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
     }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) -> processing_result {
+        auto stop_trace = defer([&] {
+            tracing::stop_foreground(client_state.get_trace_state());
+        });
         --_server._requests_serving;
         try {
             response_type response = f.get0();
@@ -565,8 +568,6 @@ future<cql_server::connection::processing_result>
         } catch (...) {
             return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
         }
-    }).finally([tracing_state = client_state.get_trace_state()] {
-        tracing::stop_foreground(tracing_state);
     });
 }
 
