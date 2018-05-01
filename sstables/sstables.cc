@@ -2288,7 +2288,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     maybe_log_large_partition_warning(_schema, *_partition_key, _sst._c_stats.partition_size, _large_partition_warning_threshold_bytes);
 
     // update is about merging column_stats with the data being stored by collector.
-    _sst._collector.update(_schema, std::move(_sst._c_stats));
+    _sst._collector.update(std::move(_sst._c_stats));
     _sst._c_stats.reset();
 
     if (!_first_key) {
@@ -3132,7 +3132,7 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
     maybe_log_large_partition_warning(_schema, *_partition_key, _c_stats.partition_size, _cfg.large_partition_warning_threshold_bytes);
 
     // update is about merging column_stats with the data being stored by collector.
-    _sst.get_metadata_collector().update(_schema, std::move(_c_stats));
+    _sst.get_metadata_collector().update(std::move(_c_stats));
     _c_stats.reset();
 
     if (!_first_key) {

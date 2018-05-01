@@ -207,7 +207,7 @@ public:
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
 
-    void update(const schema& s, column_stats&& stats) {
+    void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
         _local_deletion_time_tracker.update(stats.local_deletion_time_tracker);
         _ttl_tracker.update(stats.ttl_tracker);
