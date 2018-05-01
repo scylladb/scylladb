@@ -72,6 +72,44 @@ SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
     });
 }
 
+// If there is a single partition key column, creating an index on this
+// column is not necessary - it is already indexed as the partition key!
+// So Scylla, as does Cassandra, forbids it. The user should just drop
+// the "create index" attempt and searches will work anyway.
+// This test verifies that this case is indeed forbidden.
+SEASTAR_TEST_CASE(test_secondary_index_single_column_partition_key) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p int primary key, a int)").get();
+        try {
+            e.execute_cql("create index on cf (p)").get();
+            // Expecting exception: "exceptions::invalid_request_exception:
+            // Cannot create secondary index on partition key column p"
+            BOOST_FAIL("Exception expected");
+        } catch (exceptions::invalid_request_exception) { }
+        // The same happens if we also have a clustering key, but still just
+        // one partition key column and we want to index it
+        e.execute_cql("create table cf2 (p int, c1 int, c2 int, a int, primary key (p, c1, c2))").get();
+        try {
+            e.execute_cql("create index on cf2 (p)").get();
+            // Expecting exception: "exceptions::invalid_request_exception:
+            // Cannot create secondary index on partition key column p"
+            BOOST_FAIL("Exception expected");
+        } catch (exceptions::invalid_request_exception) { }
+    });
+}
+
+// However, if there are multiple partition key columns (a so-called composite
+// partition key), we *should* be able to index each one of them separately.
+// It is useful, and Cassandra allows it, so should we (this was issue #3404)
+SEASTAR_TEST_CASE(test_secondary_index_multi_column_partition_key) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p1 int, p2 int, a int, primary key ((p1, p2)))").get();
+        e.execute_cql("create index on cf (a)").get();
+        e.execute_cql("create index on cf (p1)").get();
+        e.execute_cql("create index on cf (p2)").get();
+    });
+}
+
 // CQL usually folds identifier names - keyspace, table and column names -
 // to lowercase. That is, unless the identifier is enclosed in double
 // quotation marks ("). Let's test that case-sensitive (quoted) column
