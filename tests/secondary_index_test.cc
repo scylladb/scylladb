@@ -202,3 +202,45 @@ SEASTAR_TEST_CASE(test_secondary_index_if_exists) {
         } catch (exceptions::invalid_request_exception) { }
     });
 }
+
+// An index can be named, and if it isn't, the name defaults to
+// <table>_<column>_idx. There is little consequence for the name
+// chosen, but it needs to be known for dropping an index.
+SEASTAR_TEST_CASE(test_secondary_index_name) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Default name
+        e.execute_cql("create table cf (abc int primary key, xyz int)").get();
+        e.execute_cql("create index on cf (xyz)").get();
+        e.execute_cql("insert into cf (abc, xyz) VALUES (1, 2)").get();
+        e.execute_cql("select * from cf WHERE xyz = 2").get();
+        e.execute_cql("drop index cf_xyz_idx").get();
+        // Default name, both cf and column name are case-sensitive but
+        // still alphanumeric.
+        e.execute_cql("create table \"TableName\" (abc int primary key, \"FooBar\" int)").get();
+        e.execute_cql("create index on \"TableName\" (\"FooBar\")").get();
+        e.execute_cql("insert into \"TableName\" (abc, \"FooBar\") VALUES (1, 2)").get();
+        e.execute_cql("select * from \"TableName\" WHERE \"FooBar\" = 2").get();
+        e.execute_cql("drop index \"TableName_FooBar_idx\"").get();
+        // Scylla, as does Cassandra, forces table names to be alphanumeric
+        // and cannot contain weird characters such as space. But column names
+        // may! So when creating the default index name, these characters are
+        // dropped, so that the index name resembles a legal table name.
+        e.execute_cql("create table \"TableName2\" (abc int primary key, \"Foo Bar\" int)").get();
+        e.execute_cql("create index on \"TableName2\" (\"Foo Bar\")").get();
+        e.execute_cql("insert into \"TableName2\" (abc, \"Foo Bar\") VALUES (1, 2)").get();
+        e.execute_cql("select * from \"TableName2\" WHERE \"Foo Bar\" = 2").get();
+        // To be 100% compatible with Cassandra, we should drop non-alpha numeric
+        // from the default index name. But we don't, yet. This is issue #3403:
+#if 0
+        e.execute_cql("drop index \"TableName2_FooBar_idx\"").get(); // note no space
+#else
+        e.execute_cql("drop index \"TableName2_Foo Bar_idx\"").get(); // note space
+#endif
+        // User-chosen name
+        e.execute_cql("create table cf2 (abc int primary key, xyz int)").get();
+        e.execute_cql("create index \"IndexName\" on cf2 (xyz)").get();
+        e.execute_cql("insert into cf2 (abc, xyz) VALUES (1, 2)").get();
+        e.execute_cql("select * from cf2 WHERE xyz = 2").get();
+        e.execute_cql("drop index \"IndexName\"").get();
+    });
+}
