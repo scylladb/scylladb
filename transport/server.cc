@@ -699,7 +699,11 @@ future<> cql_server::connection::process_request() {
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
+            _pending_requests_gate.enter();
+            auto leave = defer([this] { _pending_requests_gate.leave(); });
+            // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
+            // Cause not understood.
+            [&] {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return [&] {
@@ -713,12 +717,12 @@ future<> cql_server::connection::process_request() {
                 }().then([this, flags] (auto&& response) {
                     update_client_state(response);
                     return this->write_response(std::move(response.cql_response), _compression);
-                }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
-                    // Keep buf alive.
+                }).then([buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] {
+                    // Keep buf and leave alive.
+                }).handle_exception([] (std::exception_ptr ex) {
+                    clogger.error("request processing failed: {}", ex);
                 });
-            }).handle_exception([] (std::exception_ptr ex) {
-                clogger.error("request processing failed: {}", ex);
-            });
+            }();
 
             return make_ready_future<>();
           });
