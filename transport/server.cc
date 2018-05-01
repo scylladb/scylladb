@@ -693,7 +693,7 @@ future<> cql_server::connection::process_request() {
         }
 
         return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
@@ -713,7 +713,7 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then_wrapped([this, flags, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
+                }().then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
                   try {
                     auto response = response_f.get0();
                     update_client_state(response);
