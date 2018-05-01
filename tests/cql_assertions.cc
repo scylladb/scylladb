@@ -128,7 +128,9 @@ result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages:
 
 rows_assertions result_msg_assertions::is_rows() {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_msg);
-    BOOST_REQUIRE(rows);
+    if (!rows) {
+        fail("Expected rows in result set");
+    }
     return rows_assertions(rows);
 }
 
