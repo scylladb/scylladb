@@ -2713,7 +2713,7 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
 
     _partition_key = key::from_partition_key(_schema, dk.key());
     _sst._components->filter->add(bytes_view(*_partition_key));
-    _sst._collector.add_key(bytes_view(*_partition_key));
+    _sst.get_metadata_collector().add_key(bytes_view(*_partition_key));
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -3080,13 +3080,13 @@ void sstable_writer_m::consume_end_of_stream() {
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
 
     if (_sst.has_component(component_type::CompressionInfo)) {
-        _sst._collector.add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
+        _sst.get_metadata_collector().add_compression_ratio(_sst._components->compression.compressed_file_length(), _sst._components->compression.uncompressed_file_length());
     }
 
     _index_writer->close().get();
     _index_writer.reset();
     _sst.set_first_and_last_keys();
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst._collector,
+    seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
             dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key());
     _cfg.monitor->on_data_write_completed();
