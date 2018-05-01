@@ -714,9 +714,9 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then([this, flags] (auto&& response) {
+                }().then([this, flags] (processing_result&& response) {
                     update_client_state(response);
-                    return this->write_response(std::move(response.cql_response), _compression);
+                    return write_response(std::move(response.cql_response), _compression);
                 }).handle_exception([buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (std::exception_ptr ex) {
                     // Not only logging, but also keeping buf and leave alive.
                     clogger.error("request processing failed: {}", ex);
