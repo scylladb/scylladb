@@ -2758,18 +2758,15 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
         const row_time_properties& properties, bytes_view cell_path) {
 
     bytes_view cell_value = cell.value();
-    bool has_value = !cell_value.empty();
     bool is_deleted = cell.is_dead(_sst._now);
-    if (is_deleted) {
-        has_value = false;
-    }
+    bool has_value = !(cell_value.empty() || is_deleted);
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
     bool is_row_expiring = properties.ttl.has_value();
-    bool is_cell_expiring = cell.is_live_and_has_ttl() || properties.ttl;
+    bool is_cell_expiring = cell.is_live_and_has_ttl();
     bool is_expiring = is_row_expiring || is_cell_expiring;
     bool use_row_ttl = is_row_expiring || (is_cell_expiring &&
                        (properties.ttl == cell.ttl().count()) &&
-                       (properties.local_deletion_time == cell.deletion_time().time_since_epoch().count()));
+                       (properties.local_deletion_time == cell.expiry().time_since_epoch().count()));
 
     cell_flags flags = cell_flags::none;
     if (!has_value) {
@@ -2795,7 +2792,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     if (!use_row_ttl) {
         if (is_deleted) {
             write_delta_local_deletion_time(writer, cell.deletion_time().time_since_epoch().count());
-        } else if (is_expiring) {
+        } else if (is_cell_expiring) {
             write_delta_local_deletion_time(writer, cell.expiry().time_since_epoch().count());
             write_delta_ttl(writer, cell.ttl().count());
         }
