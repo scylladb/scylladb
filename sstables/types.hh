@@ -303,7 +303,7 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
 
 struct stats_metadata : public metadata_base<stats_metadata> {
     utils::estimated_histogram estimated_row_size;
-    utils::estimated_histogram estimated_column_count;
+    utils::estimated_histogram estimated_cells_count;
     db::replay_position position;
     int64_t min_timestamp;
     int64_t max_timestamp;
@@ -329,7 +329,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
         case sstable_version_types::mc:
             return f(
                 estimated_row_size,
-                estimated_column_count,
+                estimated_cells_count,
                 position,
                 min_timestamp,
                 max_timestamp,
@@ -353,7 +353,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
         case sstable_version_types::la:
             return f(
                 estimated_row_size,
-                estimated_column_count,
+                estimated_cells_count,
                 position,
                 min_timestamp,
                 max_timestamp,

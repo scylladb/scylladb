@@ -1279,7 +1279,7 @@ const std::vector<nonwrapping_range<bytes_view>>& sstable::clustering_components
 
 double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_before) const {
     auto& st = get_stats_metadata();
-    auto estimated_count = st.estimated_column_count.mean() * st.estimated_column_count.count();
+    auto estimated_count = st.estimated_cells_count.mean() * st.estimated_cells_count.count();
     if (estimated_count > 0) {
         double droppable = st.estimated_tombstone_drop_time.sum(gc_before.time_since_epoch().count());
         return droppable / estimated_count;
@@ -1723,7 +1723,7 @@ void write_cell_value(file_writer& out, const abstract_type& type, bytes_view va
 
 static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type timestamp) {
     c_stats.update_timestamp(timestamp);
-    c_stats.column_count++;
+    c_stats.cells_count++;
 }
 
 // Intended to write all cell components that follow column name.
