@@ -108,6 +108,37 @@ public:
     printer pretty_printer(schema_ptr) const;
 };
 
+class reconcilable_result_builder {
+    const schema& _schema;
+    const query::partition_slice& _slice;
+
+    std::vector<partition> _result;
+    uint32_t _live_rows{};
+
+    bool _has_ck_selector{};
+    bool _static_row_is_alive{};
+    uint32_t _total_live_rows = 0;
+    query::result_memory_accounter _memory_accounter;
+    stop_iteration _stop;
+    bool _short_read_allowed;
+    stdx::optional<streamed_mutation_freezer> _mutation_consumer;
+public:
+    reconcilable_result_builder(const schema& s, const query::partition_slice& slice,
+                                query::result_memory_accounter&& accounter)
+        : _schema(s), _slice(slice)
+        , _memory_accounter(std::move(accounter))
+        , _short_read_allowed(slice.options.contains<query::partition_slice::option::allow_short_read>())
+    { }
+
+    void consume_new_partition(const dht::decorated_key& dk);
+    void consume(tombstone t);
+    stop_iteration consume(static_row&& sr, tombstone, bool is_alive);
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_alive);
+    stop_iteration consume(range_tombstone&& rt);
+    stop_iteration consume_end_of_partition();
+    reconcilable_result consume_end_of_stream();
+};
+
 query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&, uint32_t row_limit, uint32_t partition_limit, query::result_options opts = query::result_options::only_result());
 
 // Performs a query on given data source returning data in reconcilable form.
