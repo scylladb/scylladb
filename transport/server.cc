@@ -713,12 +713,14 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then([this, flags] (processing_result&& response) {
+                }().then_wrapped([this, flags, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
+                  try {
+                    auto response = response_f.get0();
                     update_client_state(response);
                     write_response(std::move(response.cql_response), _compression);
-                }).handle_exception([buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (std::exception_ptr ex) {
-                    // Not only logging, but also keeping buf and leave alive.
-                    clogger.error("request processing failed: {}", ex);
+                  } catch (...) {
+                    clogger.error("request processing failed: {}", std::current_exception());
+                  }
                 });
             }();
 
