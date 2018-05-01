@@ -109,6 +109,9 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     }
     builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
     for (auto& col : schema->partition_key_columns()) {
+        if (col == *index_target) {
+            continue;
+        }
         builder.with_column(col.name(), col.type, column_kind::clustering_key);
     }
     for (auto& col : schema->clustering_key_columns()) {
