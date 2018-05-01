@@ -470,7 +470,7 @@ future<cql_server::connection::processing_result>
         }
     }
 
-    return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
+    return futurize_apply([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
