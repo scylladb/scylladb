@@ -41,7 +41,7 @@
 
 #include <stdexcept>
 #include "index_target.hh"
-#include "db/index/secondary_index.hh"
+#include "index/secondary_index.hh"
 
 namespace cql3 {
 
