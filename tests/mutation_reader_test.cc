@@ -1800,7 +1800,6 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
             auto control = make_foreign(std::make_unique<puppet_reader::control>());
             auto reader = make_foreign(std::make_unique<flat_mutation_reader>(make_flat_mutation_reader<puppet_reader>(gs.get(),
                     *control,
-                    //std::forward_list<puppet_reader::fill_buffer_action>{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
                     puppet_reader::fill_buffer_action::block,
                     std::vector<uint32_t>{0, 1})));
 
@@ -1808,7 +1807,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
         }).get();
 
         {
-            auto reader = make_foreign_reader(s.schema(), std::move(remote_reader));//, streamed_mutation::forwarding::no)
+            auto reader = make_foreign_reader(s.schema(), std::move(remote_reader));
 
             reader.fill_buffer().get();
 
