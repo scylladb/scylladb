@@ -63,6 +63,20 @@ struct disk_array {
     utils::chunked_vector<Members> elements;
 };
 
+// A wrapper struct for integers to be written using variable-length encoding
+template <typename T>
+struct vint {
+    static_assert(std::is_integral_v<T>, "Can only wrap integral types");
+    T value;
+};
+
+// Same as disk_array but with its size serialized as variable-length integer
+template <typename Size, typename Members>
+struct disk_array_vint_size {
+    static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
+    utils::chunked_vector<Members> elements;
+};
+
 template <typename Size, typename Members>
 struct disk_array_ref {
     static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");

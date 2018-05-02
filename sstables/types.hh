@@ -372,6 +372,50 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     }
 };
 
+using bytes_array_vint_size = disk_array_vint_size<uint32_t, bytes::value_type>;
+
+struct serialization_header : public metadata_base<serialization_header> {
+    vint<uint64_t> min_timestamp;
+    vint<uint32_t> min_local_deletion_time;
+    vint<uint32_t> min_ttl;
+    bytes_array_vint_size pk_type_name;
+    disk_array_vint_size<uint32_t, bytes_array_vint_size> clustering_key_types_names;
+    struct column_desc {
+        bytes_array_vint_size name;
+        bytes_array_vint_size type_name;
+        template <typename Describer>
+        auto describe_type(sstable_version_types v, Describer f) {
+            return f(
+                name,
+                type_name
+            );
+        }
+    };
+    disk_array_vint_size<uint32_t, column_desc> static_columns;
+    disk_array_vint_size<uint32_t, column_desc> regular_columns;
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) {
+        switch (v) {
+        case sstable_version_types::mc:
+            return f(
+                min_timestamp,
+                min_local_deletion_time,
+                min_ttl,
+                pk_type_name,
+                clustering_key_types_names,
+                static_columns,
+                regular_columns
+            );
+        case sstable_version_types::ka:
+        case sstable_version_types::la:
+            throw std::runtime_error(
+                "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
+        }
+        // Should never reach here - compiler will complain if switch above does not cover all sstable versions
+        abort();
+    }
+};
+
 struct disk_token_bound {
     uint8_t exclusive; // really a boolean
     disk_string<uint16_t> token;
