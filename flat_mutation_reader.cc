@@ -618,8 +618,14 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
                         tracing::trace_state_ptr trace_state,
                         mutation_reader::forwarding fwd_mr)
 {
-    return make_flat_mutation_reader<flat_multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
-                                                             slice, pc, std::move(trace_state), fwd_mr);
+    if (ranges.empty()) {
+        return make_empty_flat_reader(std::move(s));
+    } else if (ranges.size() == 1) {
+        return source.make_reader(std::move(s), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+    } else {
+        return make_flat_mutation_reader<flat_multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
+                slice, pc, std::move(trace_state), fwd_mr);
+    }
 }
 
 flat_mutation_reader
