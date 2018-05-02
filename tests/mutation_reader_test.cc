@@ -1823,6 +1823,12 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
             remote_control->buffer_filled.set_value();
         }).get0();
 
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
+                return remote_control->destroyed;
+            }).get0();
+        }));
+
         return make_ready_future<>();
     }).get();
 }
