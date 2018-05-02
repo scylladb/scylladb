@@ -1891,7 +1891,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
 
         BOOST_REQUIRE(eventually_true([&] {
             return map_reduce(boost::irange(0u, smp::count), [&] (unsigned shard) {
-                    return smp::submit_to(shard, [&] {
+                    return smp::submit_to(shard, [&remote_controls, shard] {
                         return remote_controls.at(shard)->destroyed;
                     });
                 },
