@@ -1677,7 +1677,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             }
         };
 
-        const auto shard_of_interest = smp::count - 1;
+        const auto shard_of_interest = 2u;
         auto remote_control = smp::submit_to(shard_of_interest, [] {
             return make_foreign(std::make_unique<promise_wrapper>());
         }).get0();
