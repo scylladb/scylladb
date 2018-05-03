@@ -1623,6 +1623,33 @@ public:
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
 };
 
+// Test a background pending reader creation outliving the reader.
+//
+// The multishard reader will issue read-aheads according to its internal
+// concurrency. This concurrency starts from 1 and is increased every time
+// a remote reader blocks (buffer is empty) within the same fill_buffer() call.
+// When launching a read-ahead it is possible that the shard reader is not
+// created yet. In this case the shard reader will be created first and then the
+// read-ahead will be executed. The shard reader will be created in the
+// background and the fiber will not be synchronized with until the multishard
+// reader reaches the shard in question with the normal reading. If the
+// multishard reader is destroyed before the synchronization happens the fiber
+// is left orphaned. Test that the fiber is prepared for this possibility and
+// doesn't attempt to read any members of any destoyed objects causing memory
+// errors.
+//
+// Theory of operation:
+// 1) [shard 1] empty remote reader -> move to next shard;
+// 2) [shard 2] infinite remote reader -> increase concurrency to 2 because we
+//    traversed to another shard in the same fill_buffer() call;
+// 3) [shard 3] pending reader -> will be created in the background as part of
+//    the read ahead launched due to the increased concurrency;
+// 4) Infinite reader on shard 2 fills the buffer, reader creation is still
+//    pending in the background;
+// 4) Reader is destroyed;
+// 5) Set the reader creation promise's value -> the now orphan read-ahead
+//    fiber executes;
+//
 // Has to be run with smp >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_create_reader) {
     if (smp::count < 3) {
@@ -1788,6 +1815,23 @@ public:
     virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { throw std::bad_function_call(); }
 };
 
+// Test a background pending read-ahead outliving the reader.
+//
+// Foreign reader launches a new background read-ahead (fill_buffer()) after
+// each remote operation (fill_buffer() and fast_forward_to()) is completed.
+// This read-ahead executes on the background and is only synchronized with
+// when a next remote operation is executed. If the reader is destroyed before
+// this synchronization can happen then the remote read-ahead will outlive its
+// owner. Check that when this happens the orphan read-ahead will terminate
+// gracefully and will not cause any memory errors.
+//
+// Theory of operation:
+// 1) Call foreign_reader::fill_buffer() -> will start read-ahead in the
+//    background;
+// 2) [shard 1] puppet_reader blocks the read-ahead;
+// 3) Destroy foreign_reader;
+// 4) Unblock read-ahead -> the now orphan read-ahead fiber executes;
+//
 // Best run with smp >= 2
 SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
@@ -1832,6 +1876,28 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
     }).get();
 }
 
+// Test a background pending read-ahead outliving the reader.
+//
+// The multishard reader will issue read-aheads according to its internal
+// concurrency. This concurrency starts from 1 and is increased every time
+// a remote reader blocks (buffer is empty) within the same fill_buffer() call.
+// The read-ahead is run in the background and the fiber will not be
+// synchronized with until the multishard reader reaches the shard in question
+// with the normal reading. If the multishard reader is destroyed before the
+// synchronization happens the fiber is orphaned. Test that the fiber is
+// prepared for this possibility and doesn't attempt to read any members of any
+// destoyed objects causing memory errors.
+//
+// Theory of operation:
+// 1) First read a partition from each shard in turn;
+// 2) [shard 1] puppet reader's buffer is empty -> increase concurrency to 2
+//    because we traversed to another shard in the same fill_buffer() call;
+// 3) [shard 2] puppet reader -> read-ahead launched in the background but it's
+//    blocked;
+// 4) Reader is destroyed;
+// 5) Resume the shard 2's puppet reader -> the now orphan read-ahead fiber
+//    executes;
+//
 // Best run with smp >= 2
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
