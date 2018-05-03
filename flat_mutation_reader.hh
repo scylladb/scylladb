@@ -117,6 +117,9 @@ public:
                 _buffer.reserve(_buffer.size() * 2 + 1);
             }
         }
+        const circular_buffer<mutation_fragment>& buffer() const {
+            return _buffer;
+        }
     private:
         static flat_mutation_reader reverse_partitions(flat_mutation_reader::impl&);
     public:
