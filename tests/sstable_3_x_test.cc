@@ -321,10 +321,10 @@ SEASTAR_TEST_CASE(test_write_composite_clustering_key) {
     });
 }
 
-SEASTAR_TEST_CASE(test_write_wide_partition) {
+SEASTAR_TEST_CASE(test_write_wide_partitions) {
     return seastar::async([] {
-        sstring table_name = "wide_partition";
-        // CREATE TABLE wide_partition (pk text , ck text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
+        sstring table_name = "wide_partitions";
+        // CREATE TABLE wide_partitions (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", utf8_type}},
@@ -333,28 +333,45 @@ SEASTAR_TEST_CASE(test_write_wide_partition) {
             // regular columns
             {{"rc", utf8_type}},
             // static columns
-            {},
+            {{"st", utf8_type}},
             // regular column name type
             utf8_type,
             // comment
-            "SSTable 3.0 format write path - wide partition test"
+            "SSTable 3.0 format write path - wide partitions test"
         )));
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
         lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
-
-        auto key = make_dkey(s, {to_bytes("key")});
-        mutation mut{s, key};
-        sstring ck_base(1024, 'a');
-        sstring rc_base(1024, 'b');
-        api::timestamp_type ts = api::new_timestamp();
-        for (auto idx: boost::irange(0, 1024)) {
-            clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
-            mut.partition().apply_insert(*s, ckey, ts);
-            mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+        api::timestamp_type ts = write_timestamp;
+        {
+            auto key = make_dkey(s, {to_bytes("key1")});
+            mutation mut{s, key};
+            mut.set_static_cell("st", data_value{"hello"}, ts);
+            sstring ck_base(1024, 'a');
+            sstring rc_base(1024, 'b');
+            for (auto idx: boost::irange(0, 1024)) {
+                clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
+                mut.partition().apply_insert(*s, ckey, ts);
+                mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+                seastar::thread::yield();
+            }
             mt->apply(std::move(mut));
-            seastar::thread::yield();
+            ts += 10;
+        }
+        {
+            auto key = make_dkey(s, {to_bytes("key2")});
+            mutation mut{s, key};
+            mut.set_static_cell("st", data_value{"goodbye"}, ts);
+            sstring ck_base(1024, 'a');
+            sstring rc_base(1024, 'b');
+            for (auto idx: boost::irange(0, 1024)) {
+                clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
+                mut.partition().apply_insert(*s, ckey, ts);
+                mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+                seastar::thread::yield();
+            }
+            mt->apply(std::move(mut));
         }
 
         write_and_compare_sstables(s, mt, table_name);

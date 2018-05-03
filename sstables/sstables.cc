@@ -2632,6 +2632,10 @@ private:
     std::optional<file_writer> _index_writer;
     bool _tombstone_written = false;
     bool _row_deletion_written = false;
+    // The length of partition header (partition key, partition deletion and static row, if present)
+    // as written to the data file
+    // Used for writing promoted index
+    uint64_t _partition_header_length = 0;
     uint64_t _prev_row_start = 0;
     std::optional<key> _partition_key;
     stdx::optional<key> _first_key, _last_key;
@@ -2699,7 +2703,7 @@ private:
     void write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
     void write_clustered_row(const clustering_row& clustered_row, uint64_t prev_row_size);
-    std::vector<uint32_t> write_promoted_index(file_writer& writer);
+    void write_promoted_index(file_writer& writer);
 public:
 
     sstable_writer_m(sstable& sst, const schema& s, uint64_t estimated_partitions,
@@ -2799,6 +2803,7 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _pi_write_m.last_clustering.reset();
 
     write(_sst.get_version(), *_data_writer, p_key);
+    _partition_header_length = _data_writer->offset() - _c_stats.start_offset;
 
     _tombstone_written = false;
 }
@@ -2817,8 +2822,10 @@ deletion_time to_deletion_time(tombstone t) {
 }
 
 void sstable_writer_m::consume(tombstone t) {
+    uint64_t current_pos = _data_writer->offset();
     auto dt = to_deletion_time(t);
     write(_sst.get_version(), *_data_writer, dt);
+    _partition_header_length += (_data_writer->offset() - current_pos);
     if (t) {
         _c_stats.tombstone_histogram.update(dt.local_deletion_time);
         _c_stats.update_local_deletion_time(dt.local_deletion_time);
@@ -3013,6 +3020,7 @@ uint64_t calculate_write_size(Func&& func) {
 void sstable_writer_m::write_static_row(const row& static_row) {
     assert(_schema.is_compound());
 
+    uint64_t current_pos = _data_writer->offset();
     // Static row flag is stored in extended flags so extension_flag is always set for static rows
     row_flags flags = row_flags::extension_flag;
     if (static_row.size() == _schema.static_columns_count()) {
@@ -3032,6 +3040,8 @@ void sstable_writer_m::write_static_row(const row& static_row) {
     write_vint(*_data_writer, 0); // as the static row always comes first, the previous row size is always zero
 
     write_row(*_data_writer);
+
+    _partition_header_length += (_data_writer->offset() - current_pos);
 
     // Collect statistics
     ++_c_stats.rows_count;
@@ -3149,11 +3159,12 @@ static void write_clustering_prefix(file_writer& writer, bound_kind kind,
     write_clustering_prefix(writer, s, clustering);
 }
 
-std::vector<uint32_t> sstable_writer_m::write_promoted_index(file_writer& writer) {
+void sstable_writer_m::write_promoted_index(file_writer& writer) {
     static constexpr size_t width_base = 65536;
     if (_pi_write_m.promoted_index.empty()) {
-        return {};
+        return;
     }
+    write_vint(writer, _partition_header_length);
     write(_sst.get_version(), writer, to_deletion_time(_pi_write_m.tomb));
     write_vint(writer, _pi_write_m.promoted_index.size());
     std::vector<uint32_t> offsets;
@@ -3170,7 +3181,9 @@ std::vector<uint32_t> sstable_writer_m::write_promoted_index(file_writer& writer
         write(_sst.get_version(), writer, (std::byte)0);
     }
 
-    return offsets;
+    for (uint32_t offset: offsets) {
+        write(_sst.get_version(), writer, offset);
+    }
 }
 
 stop_iteration sstable_writer_m::consume_end_of_partition() {
@@ -3188,10 +3201,7 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
 
     uint64_t pi_size = calculate_write_size(write_pi);
     write_vint(*_index_writer, pi_size);
-    auto offsets = write_pi(*_index_writer);
-    for (uint32_t offset: offsets) {
-        write(_sst.get_version(), *_index_writer, offset);
-    }
+    write_pi(*_index_writer);
 
     write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
 
