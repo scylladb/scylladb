@@ -761,6 +761,9 @@ column_family::open_sstable(sstables::foreign_sstable_open_info info, sstring di
         dblog.debug("sstable {} not relevant for this shard, ignoring", sst->get_filename());
         return make_ready_future<sstables::shared_sstable>();
     }
+    if (!belongs_to_other_shard(info.owners)) {
+        sst->set_unshared();
+    }
     return sst->load(std::move(info)).then([sst] () mutable {
         return make_ready_future<sstables::shared_sstable>(std::move(sst));
     });
