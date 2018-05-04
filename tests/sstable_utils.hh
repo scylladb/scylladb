@@ -22,11 +22,17 @@
 #pragma once
 
 #include "sstables/sstables.hh"
+#include "memtable-sstable.hh"
 #include "dht/i_partitioner.hh"
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/map.hpp>
 
 sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts);
+
+inline future<> write_memtable_to_sstable_for_test(memtable& mt, sstables::shared_sstable sst) {
+    static db::nop_large_partition_handler nop_lp_handler;
+    return write_memtable_to_sstable(mt, sst, &nop_lp_handler);
+}
 
 //
 // Make set of keys sorted by token for current shard.
@@ -61,3 +67,5 @@ static std::vector<sstring> make_local_keys(unsigned n, const schema_ptr& s, siz
 inline sstring make_local_key(const schema_ptr& s, size_t min_key_size = 1) {
     return make_local_keys(1, s, min_key_size).front();
 }
+
+

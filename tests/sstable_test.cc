@@ -41,10 +41,11 @@
 #include "partition_slice_builder.hh"
 #include "tests/test_services.hh"
 #include "cell_locking.hh"
-#include "memtable-sstable.hh"
 #include "sstables/data_consume_context.hh"
 
 using namespace sstables;
+
+static db::nop_large_partition_handler nop_lp_handler;
 
 bytes as_bytes(const sstring& s) {
     return { reinterpret_cast<const int8_t*>(s.begin()), s.size() };
@@ -940,6 +941,7 @@ SEASTAR_TEST_CASE(reshuffle) {
             cfg.datadir = generation_dir();
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
+            cfg.large_partition_handler = &nop_lp_handler;
             auto cl_stats = make_lw_shared<cell_locker_stats>();
             auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm, *cl_stats);
             cf->start();
@@ -1254,7 +1256,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
         auto sst = make_sstable(s,
                 get_test_dir("tests-temporary", s), 100,
                 sstables::sstable::version_types::la, big);
-        return write_memtable_to_sstable(*mtp, sst).then([s] {
+        return write_memtable_to_sstable_for_test(*mtp, sst).then([s] {
             auto large_partition_file = seastar::sprint("%s/la-3-big-Index.db", get_test_dir("large_partition", s));
             return compare_files(
                     large_partition_file,

@@ -33,10 +33,10 @@
 #include "schema_builder.hh"
 #include "sstable_test.hh"
 #include "flat_mutation_reader_assertions.hh"
-#include "memtable-sstable.hh"
 #include "sstable_test.hh"
 #include "tests/test_services.hh"
 #include "tests/tmpdir.hh"
+#include "tests/sstable_utils.hh"
 
 using namespace sstables;
 
@@ -237,7 +237,7 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
-    write_memtable_to_sstable(*mt, sst).get();
+    write_memtable_to_sstable_for_test(*mt, sst).get();
 
     for (auto file_type : {component_type::Data, component_type::Index}) {
         auto orig_filename =

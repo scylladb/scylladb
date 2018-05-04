@@ -58,6 +58,7 @@
 #include "utils/phased_barrier.hh"
 #include "component_type.hh"
 #include "sstable_version.hh"
+#include "db/large_partition_handler.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -109,7 +110,7 @@ struct sstable_writer_config {
     stdx::optional<db::replay_position> replay_position;
     write_monitor* monitor = &default_write_monitor();
     bool correctly_serialize_non_compound_range_tombstones = supports_correct_non_compound_range_tombstones();
-    uint64_t large_partition_warning_threshold_bytes = std::numeric_limits<uint64_t>::max();
+    db::large_partition_handler* large_partition_handler;
 };
 
 static constexpr inline size_t default_sstable_buffer_size() {
@@ -755,7 +756,7 @@ future<> await_background_jobs_on_all_shards();
 // until all shards agree it can be deleted.
 //
 // This function only solves the second problem for now.
-future<> delete_atomically(std::vector<shared_sstable> ssts);
+future<> delete_atomically(std::vector<shared_sstable> ssts, const db::large_partition_handler& large_partition_handler);
 
 struct index_sampling_state {
     static constexpr size_t default_summary_byte_cost = 2000;
@@ -779,7 +780,7 @@ class components_writer {
     stdx::optional<key> _partition_key;
     index_sampling_state _index_sampling_state;
     range_tombstone_stream _range_tombstones;
-    uint64_t _large_partition_warning_threshold_bytes;
+    db::large_partition_handler* _large_partition_handler;
 private:
     void maybe_add_summary_entry(const dht::token& token, bytes_view key);
     uint64_t get_offset() const;
@@ -800,7 +801,7 @@ public:
             _index_needs_close(o._index_needs_close), _max_sstable_size(o._max_sstable_size), _tombstone_written(o._tombstone_written),
             _first_key(std::move(o._first_key)), _last_key(std::move(o._last_key)), _partition_key(std::move(o._partition_key)),
             _index_sampling_state(std::move(o._index_sampling_state)), _range_tombstones(std::move(o._range_tombstones)),
-            _large_partition_warning_threshold_bytes(o._large_partition_warning_threshold_bytes) {
+            _large_partition_handler(o._large_partition_handler) {
         o._index_needs_close = false;
     }
 

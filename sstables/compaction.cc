@@ -548,7 +548,7 @@ public:
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
             cfg.monitor = &_active_write_monitors.back();
-            cfg.large_partition_warning_threshold_bytes = _cf.large_partition_warning_threshold_bytes();
+            cfg.large_partition_handler = _cf.get_large_partition_handler();
             // TODO: calculate encoding_stats based on statistics of compacted sstables
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, encoding_stats{}, priority));
         }
@@ -696,6 +696,7 @@ public:
 
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
+            cfg.large_partition_handler = _cf.get_large_partition_handler();
             auto&& priority = service::get_local_compaction_priority();
             // TODO: calculate encoding_stats based on statistics of compacted sstables
             writer.emplace(sst->get_writer(*_cf.schema(), partitions_per_sstable(_shard), cfg, encoding_stats{}, priority, _shard));

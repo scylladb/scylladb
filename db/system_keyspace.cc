@@ -444,6 +444,32 @@ schema_ptr size_estimates() {
     return size_estimates;
 }
 
+/*static*/ schema_ptr large_partitions() {
+    static thread_local auto large_partitions = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, LARGE_PARTITIONS), NAME, LARGE_PARTITIONS,
+        // partition key
+        {{"keyspace_name", utf8_type}, {"table_name", utf8_type}},
+        // clustering key
+        {
+            {"sstable_name", utf8_type},
+            {"partition_size", reversed_type_impl::get_instance(long_type)},
+            {"partition_key", utf8_type}
+        }, // CLUSTERING ORDER BY (partition_size DESC)
+        // regular columns
+        {{"compaction_time", timestamp_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "partitions larger than specified threshold"
+        )));
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build(schema_builder::compact_storage::no);
+    }();
+    return large_partitions;
+}
+
 namespace v3 {
 
 schema_ptr batches() {
@@ -576,6 +602,11 @@ schema_ptr sstable_activity() {
 schema_ptr size_estimates() {
     // identical
     return db::system_keyspace::size_estimates();
+}
+
+schema_ptr large_partitions() {
+    // identical
+    return db::system_keyspace::large_partitions();
 }
 
 schema_ptr available_ranges() {
@@ -1558,7 +1589,7 @@ std::vector<schema_ptr> all_tables() {
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
-                    sstable_activity(), size_estimates(), v3::views_builds_in_progress(), v3::built_views(),
+                    sstable_activity(), size_estimates(), large_partitions(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
     });
     // legacy schema
@@ -1610,7 +1641,7 @@ void make(database& db, bool durable, bool volatile_testing_only) {
             db.add_keyspace(ks_name, std::move(_ks));
         }
         auto& ks = db.find_keyspace(ks_name);
-        auto cfg = ks.make_column_family_config(*table, db.get_config());
+        auto cfg = ks.make_column_family_config(*table, db.get_config(), db.get_large_partition_handler());
         if (maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
         }
@@ -1757,7 +1788,6 @@ future<std::vector<compaction_history_entry>> get_compaction_history() {
         });
     });
 }
-
 
 future<int> increment_and_get_generation() {
     auto req = sprint("SELECT gossip_generation FROM system.%s WHERE key='%s'", LOCAL, LOCAL);

@@ -66,6 +66,7 @@
 #include "db/extensions.hh"
 #include "unimplemented.hh"
 #include "vint-serialization.hh"
+#include "db/large_partition_handler.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -2147,7 +2148,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _max_sstable_size(cfg.max_sstable_size)
     , _tombstone_written(false)
     , _range_tombstones(s)
-    , _large_partition_warning_threshold_bytes(cfg.large_partition_warning_threshold_bytes)
+    , _large_partition_handler(cfg.large_partition_handler)
 {
     _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance());
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
@@ -2255,13 +2256,6 @@ void components_writer::write_tombstone(range_tombstone&& rt) {
     _sst.write_range_tombstone(_out, std::move(start), start_marker, std::move(end), end_marker, {}, tomb);
 }
 
-static void maybe_log_large_partition_warning(const schema& s, key& key, uint64_t row_size, uint64_t large_partition_warning_threshold_bytes) {
-    if (row_size > large_partition_warning_threshold_bytes) {
-        auto dk = dht::global_partitioner().decorate_key(s, key.to_partition_key(s));
-        sstlog.warn("Writing large row {}/{}:{} ({} bytes)", s.ks_name(), s.cf_name(), dk, row_size);
-    }
-}
-
 stop_iteration components_writer::consume_end_of_partition() {
     drain_tombstones();
 
@@ -2287,7 +2281,7 @@ stop_iteration components_writer::consume_end_of_partition() {
     // compute size of the current row.
     _sst._c_stats.row_size = _out.offset() - _sst._c_stats.start_offset;
 
-    maybe_log_large_partition_warning(_schema, *_partition_key, _sst._c_stats.row_size, _large_partition_warning_threshold_bytes);
+    _large_partition_handler->maybe_update_large_partitions(_sst, *_partition_key, _sst._c_stats.row_size);
 
     // update is about merging column_stats with the data being stored by collector.
     _sst._collector.update(_schema, std::move(_sst._c_stats));
@@ -3844,7 +3838,12 @@ delete_sstables(std::vector<sstring> tocs) {
 }
 
 future<>
-delete_atomically(std::vector<shared_sstable> ssts) {
+delete_atomically(std::vector<shared_sstable> ssts, const db::large_partition_handler& large_partition_handler) {
+    // Asynchronously issue delete operations for large partitions, do not handle their outcome.
+    // If any of the operations fail, large_partition_handler should be responsible for logging or otherwise handling it.
+    for (const auto& sst : ssts) {
+        large_partition_handler.maybe_delete_large_partitions_entry(*sst);
+    }
     auto sstables_to_delete_atomically = boost::copy_range<std::vector<sstring>>(ssts
             | boost::adaptors::transformed([] (auto&& sst) { return sst->toc_filename(); }));
 

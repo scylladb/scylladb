@@ -33,7 +33,7 @@
 #include "tmpdir.hh"
 #include "sstables/sstables.hh"
 #include "canonical_mutation.hh"
-#include "memtable-sstable.hh"
+#include "sstable_utils.hh"
 #include "test_services.hh"
 
 class size_calculator {
@@ -192,7 +192,7 @@ static sizes calculate_sizes(const mutation& m) {
         1 /* generation */,
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
-    write_memtable_to_sstable(*mt, sst).get();
+    write_memtable_to_sstable_for_test(*mt, sst).get();
     sst->load().get();
     result.sstable = sst->data_size();
 
