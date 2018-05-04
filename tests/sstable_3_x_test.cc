@@ -286,6 +286,42 @@ SEASTAR_TEST_CASE(test_write_static_row) {
     });
 }
 
+SEASTAR_TEST_CASE(test_write_composite_partition_key) {
+    return seastar::async([] {
+        sstring table_name = "composite_partition_key";
+        // CREATE TABLE composite_partition_key (a int , b text, c boolean, d int, e text, f int, g text, PRIMARY KEY ((a, b, c), d, e)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
+            // partition key
+            {{"a", int32_type}, {"b", utf8_type}, {"c", boolean_type}},
+            // clustering key
+            {{"d", int32_type}, {"e", utf8_type}},
+            // regular columns
+            {{"f", int32_type}, {"g", utf8_type}},
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "SSTable 3.0 format write path - composite partition key test"
+        )));
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // INSERT INTO composite_partition_key (a,b,c,d,e,f,g) values (1, 'hello', true, 2, 'dear', 3, 'world');
+        auto key = partition_key::from_deeply_exploded(*s, { data_value{1}, data_value{"hello"}, data_value{true} });
+        mutation mut{s, key};
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2, "dear" });
+        mut.partition().apply_insert(*s, ckey, write_timestamp);
+        mut.set_cell(ckey, "f", data_value{3}, write_timestamp);
+        mut.set_cell(ckey, "g", data_value{"world"}, write_timestamp);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
 SEASTAR_TEST_CASE(test_write_composite_clustering_key) {
     return seastar::async([] {
         sstring table_name = "composite_clustering_key";
