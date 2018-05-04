@@ -793,7 +793,7 @@ bool operator==(const schema&, const schema&);
 using schema_ptr = lw_shared_ptr<const schema>;
 
 /**
- * Wraper for schema_ptr used by functions that except an engaged view_info field.
+ * Wrapper for schema_ptr used by functions that expect an engaged view_info field.
  */
 class view_ptr final {
     schema_ptr _schema;
