@@ -2840,7 +2840,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
         const row_time_properties& properties, bytes_view cell_path) {
 
     bytes_view cell_value = cell.value();
-    bool is_deleted = cell.is_dead(_sst._now);
+    bool is_deleted = !cell.is_live();
     bool has_value = !(cell_value.empty() || is_deleted);
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
     bool is_row_expiring = properties.ttl.has_value();
@@ -2916,25 +2916,14 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
 
     uint64_t timestamp = marker.timestamp();
     _c_stats.update_timestamp(timestamp);
-    if (marker.is_dead(_sst._now)) {
-        // the row has expired by the time of flush
-        // write deletion info instead of liveness info
-        deletion_time dt;
-        dt.local_deletion_time = marker.deletion_time().time_since_epoch().count();
-        dt.marked_for_delete_at = timestamp;
-        _c_stats.update_local_deletion_time(dt.local_deletion_time);
-        write_delta_deletion_time(writer, dt);
-        _row_deletion_written = true;
-    } else { // marker.is_live()
-        write_delta_timestamp(writer, timestamp);
-        if (marker.is_expiring()) {
-            auto ttl = marker.ttl().count();
-            auto ldt = marker.expiry().time_since_epoch().count();
-            _c_stats.update_ttl(ttl);
-            _c_stats.update_local_deletion_time(ldt);
-            write_delta_ttl(writer, ttl);
-            write_delta_local_deletion_time(writer, ldt);
-        }
+    write_delta_timestamp(writer, timestamp);
+    if (marker.is_expiring()) {
+        auto ttl = marker.ttl().count();
+        auto ldt = marker.expiry().time_since_epoch().count();
+        _c_stats.update_ttl(ttl);
+        _c_stats.update_local_deletion_time(ldt);
+        write_delta_ttl(writer, ttl);
+        write_delta_local_deletion_time(writer, ldt);
     }
 }
 
@@ -2981,17 +2970,12 @@ void sstable_writer_m::write_cells(file_writer& writer, column_kind kind, const 
 }
 
 void sstable_writer_m::write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion) {
-    _row_deletion_written = false;
-    // write_liveness_info may end up writing deletion info for the row if the row
-    // has expired by the time of writing. If this happens, _row_deletion_writen is set
     write_liveness_info(writer, row.marker());
     if (row.tomb()) {
         auto dt = to_deletion_time(row.tomb().tomb());
         _c_stats.update_timestamp(dt.marked_for_delete_at);
         _c_stats.update_local_deletion_time(dt.local_deletion_time);
-        if (!_row_deletion_written) {
-            write_delta_deletion_time(writer, dt);
-        }
+        write_delta_deletion_time(writer, dt);
     }
     row_time_properties properties;
     if (!row.marker().is_missing()) {
@@ -3082,7 +3066,7 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
         }
     }
 
-    if ((!clustered_row.marker().is_missing() && clustered_row.marker().is_dead(_sst._now)) || clustered_row.tomb().tomb()) {
+    if (clustered_row.tomb().tomb()) {
         flags |= row_flags::has_deletion;
         if (clustered_row.tomb().tomb() && clustered_row.tomb().is_shadowable()) {
             ext_flags = row_extended_flags::has_shadowable_deletion;
