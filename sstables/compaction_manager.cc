@@ -239,6 +239,8 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             auto sstables = get_candidates(*cf);
             auto compacting = compacting_sstable_registration(this, sstables);
 
+            cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
+
             return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
                 return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
             }).then([compacting = std::move(compacting)] {});
