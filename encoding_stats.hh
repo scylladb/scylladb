@@ -42,7 +42,7 @@ struct encoding_stats {
     // Encoding stats are used for delta-encoding, so we want some default values
     // that are just good enough so we take some recent date in the past
     static constexpr uint32_t deletion_time_epoch = 1442880000;
-    static constexpr api::timestamp_type timestamp_epoch = deletion_time_epoch * 1000 * 1000;
+    static constexpr api::timestamp_type timestamp_epoch = api::timestamp_type(deletion_time_epoch) * 1000 * 1000;
     static constexpr uint32_t ttl_epoch = 0;
 
     api::timestamp_type min_timestamp = timestamp_epoch;

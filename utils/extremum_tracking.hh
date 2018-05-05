@@ -63,3 +63,38 @@ using min_tracker = detail::extremum_tracker<T, std::less<T>>;
 
 template <typename T>
 using max_tracker = detail::extremum_tracker<T, std::greater<T>>;
+
+template <typename T>
+class min_max_tracker {
+    min_tracker<T> _min_tracker;
+    max_tracker<T> _max_tracker;
+public:
+    min_max_tracker()
+        : _min_tracker(std::numeric_limits<T>::min())
+        , _max_tracker(std::numeric_limits<T>::max())
+    {}
+
+    min_max_tracker(T default_min, T default_max)
+        : _min_tracker(default_min)
+        , _max_tracker(default_max)
+    {}
+
+    void update(T value) {
+        _min_tracker.update(value);
+        _max_tracker.update(value);
+    }
+
+    void update(const min_max_tracker<T>& other) {
+        _min_tracker.update(other.min());
+        _max_tracker.update(other.max());
+    }
+
+    T min() const {
+        return _min_tracker.get();
+    }
+
+    T max() const {
+        return _max_tracker.get();
+    }
+};
+

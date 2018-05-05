@@ -429,7 +429,7 @@ void set_column_family(http_context& ctx, routes& r) {
         return map_reduce_cf(ctx, req->param["name"], utils::estimated_histogram(0), [](column_family& cf) {
             utils::estimated_histogram res(0);
             for (auto i: *cf.get_sstables() ) {
-                res.merge(i->get_stats_metadata().estimated_column_count);
+                res.merge(i->get_stats_metadata().estimated_cells_count);
             }
             return res;
         },
