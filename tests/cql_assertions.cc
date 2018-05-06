@@ -71,7 +71,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
             return {*this};
         }
     }
-    fail("Expected row not found");
+    fail(sprint("Expected row not found: %s not in %s\n", to_string(expected_row), _rows));
     return {*this};
 }
 

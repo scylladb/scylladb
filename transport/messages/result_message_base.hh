@@ -32,7 +32,7 @@ public:
 
     virtual ~result_message() {}
 
-    virtual void accept(visitor&) = 0;
+    virtual void accept(visitor&) const = 0;
 
     //
     // Message types:
@@ -43,6 +43,8 @@ public:
     class schema_change;
     class rows;
 };
+
+std::ostream& operator<<(std::ostream& os, const result_message& msg);
 
 }
 }
