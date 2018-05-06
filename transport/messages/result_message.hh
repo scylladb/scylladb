@@ -89,7 +89,7 @@ public:
 
 class result_message::void_message : public result_message {
 public:
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
@@ -106,7 +106,7 @@ public:
         return _keyspace;
     }
 
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
@@ -132,7 +132,7 @@ public:
         return msg_cql->get_id();
     }
 
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
@@ -149,7 +149,7 @@ public:
         return _id;
     }
 
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
@@ -166,7 +166,7 @@ public:
         return _change;
     }
 
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
@@ -181,7 +181,7 @@ public:
         return *_rs;
     }
 
-    virtual void accept(result_message::visitor& v) override {
+    virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
     }
 };
