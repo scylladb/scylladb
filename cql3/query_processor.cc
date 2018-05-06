@@ -491,7 +491,7 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         statements::prepared_statement::checked_weak_ptr p,
         const std::initializer_list<data_value>& values) {
-    query_options opts = make_internal_options(p, values);
+    query_options opts = make_internal_options(p, values, db::consistency_level::ONE);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
         return p->statement->execute_internal(
                 _proxy,

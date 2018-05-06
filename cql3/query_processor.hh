@@ -254,7 +254,7 @@ private:
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,
-            db::consistency_level = db::consistency_level::ONE,
+            db::consistency_level,
             int32_t page_size = -1);
 
     /*!
