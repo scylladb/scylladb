@@ -3214,9 +3214,9 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
                     .with_size(1)
                     .with_row({
                             {int32_type->decompose(1)},
-                            {utf8_type->decompose(data_value(bytes()))},
-                            {utf8_type->decompose(data_value(bytes()))},
-                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
                     });
         }
 
@@ -3254,8 +3254,8 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
                     .with_size(1)
                     .with_row({
                             {int32_type->decompose(1)},
-                            {utf8_type->decompose(data_value(bytes()))},
-                            {utf8_type->decompose(data_value(bytes()))},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
                             {utf8_type->decompose("a")},
                     });
         });
