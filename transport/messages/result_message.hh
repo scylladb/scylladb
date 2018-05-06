@@ -94,6 +94,8 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const result_message::void_message& msg);
+
 class result_message::set_keyspace : public result_message {
 private:
     sstring _keyspace;
@@ -111,6 +113,7 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const result_message::set_keyspace& msg);
 
 class result_message::prepared::cql : public result_message::prepared {
     bytes _id;
@@ -137,6 +140,8 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const result_message::prepared::cql& msg);
+
 class result_message::prepared::thrift : public result_message::prepared {
     int32_t _id;
 public:
@@ -153,6 +158,8 @@ public:
         v.visit(*this);
     }
 };
+
+std::ostream& operator<<(std::ostream& os, const result_message::prepared::thrift& msg);
 
 class result_message::schema_change : public result_message {
 private:
@@ -171,6 +178,8 @@ public:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const result_message::schema_change& msg);
+
 class result_message::rows : public result_message {
 private:
     std::unique_ptr<cql3::result_set> _rs;
@@ -185,6 +194,9 @@ public:
         v.visit(*this);
     }
 };
+
+std::ostream& operator<<(std::ostream& os, const result_message::rows& msg);
+
 
 }
 

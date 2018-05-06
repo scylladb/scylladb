@@ -44,5 +44,7 @@ public:
     class rows;
 };
 
+std::ostream& operator<<(std::ostream& os, const result_message& msg);
+
 }
 }
