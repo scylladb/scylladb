@@ -223,6 +223,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/scyllatop
 %{_sbindir}/scylla*
 %{_prefix}/lib/scylla/scylla-blocktune
+%{_prefix}/lib/scylla/scylla_blocktune.py
 %{_prefix}/lib/scylla/scylla-housekeeping
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
