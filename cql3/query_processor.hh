@@ -215,12 +215,14 @@ public:
     future<::shared_ptr<untyped_result_set>> process(
             const sstring& query_string,
             db::consistency_level,
+            const timeout_config& timeout_config,
             const std::initializer_list<data_value>& = { },
             bool cache = false);
 
     future<::shared_ptr<untyped_result_set>> process(
             statements::prepared_statement::checked_weak_ptr p,
             db::consistency_level,
+            const timeout_config& timeout_config,
             const std::initializer_list<data_value>& = { });
 
     /*
@@ -255,6 +257,7 @@ private:
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::initializer_list<data_value>&,
             db::consistency_level,
+            const timeout_config& timeout_config,
             int32_t page_size = -1);
 
     /*!

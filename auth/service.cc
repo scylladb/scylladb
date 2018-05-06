@@ -223,6 +223,7 @@ future<bool> service::has_existing_legacy_users() const {
     return _qp.process(
             default_user_query,
             db::consistency_level::ONE,
+            infinite_timeout_config,
             {meta::DEFAULT_SUPERUSER_NAME},
             true).then([this](auto results) {
         if (!results->empty()) {
@@ -232,6 +233,7 @@ future<bool> service::has_existing_legacy_users() const {
         return _qp.process(
                 default_user_query,
                 db::consistency_level::QUORUM,
+                infinite_timeout_config,
                 {meta::DEFAULT_SUPERUSER_NAME},
                 true).then([this](auto results) {
             if (!results->empty()) {
@@ -240,7 +242,8 @@ future<bool> service::has_existing_legacy_users() const {
 
             return _qp.process(
                     all_users_query,
-                    db::consistency_level::QUORUM).then([](auto results) {
+                    db::consistency_level::QUORUM,
+                    infinite_timeout_config).then([](auto results) {
                 return make_ready_future<bool>(!results->empty());
             });
         });
