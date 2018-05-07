@@ -831,8 +831,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // for the writes to complete.
 // FIXME: I dropped a lot of parameters the Cassandra version had,
 // we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
-future<> mutate_MV(const dht::token& base_token,
-        std::vector<mutation> mutations)
+future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
 #if 0
     Tracing.trace("Determining replicas for mutation");
@@ -875,14 +874,20 @@ future<> mutate_MV(const dht::token& base_token,
             // which case we want to do an ordinary write so the view mutation
             // is sent to them as well.
             auto my_address = utils::fb_utilities::get_broadcast_address();
-            if (*paired_endpoint == my_address && service::get_local_storage_service().is_joined()
+            bool is_endpoint_local = *paired_endpoint == my_address;
+            int64_t updates_pushed_remote = !is_endpoint_local + pending_endpoints.size();
+
+            stats.view_updates_pushed_local += is_endpoint_local;
+            stats.view_updates_pushed_remote += updates_pushed_remote;
+            if (is_endpoint_local && service::get_local_storage_service().is_joined()
                     && pending_endpoints.empty()) {
                 // Note that we start here an asynchronous apply operation, and
                 // do not wait for it to complete.
                 // Note also that mutate_locally(mut) copies mut (in
                 // frozen form) so don't need to increase its lifetime.
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([&stats] (auto ep) {
                     vlogger.error("Error applying local view update: {}", ep);
+                    stats.view_updates_failed_local++;
                     return make_exception_future<>(std::move(ep));
                 }));
             } else {
@@ -894,12 +899,17 @@ future<> mutate_MV(const dht::token& base_token,
                 // to send the update there. Currently, we do this from *each* of
                 // the base replicas, but this is probably excessive - see
                 // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
-                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
-                    vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
-                    return make_exception_future<>(std::move(ep));
-                }));
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW)
+                        .handle_exception([paired_endpoint, is_endpoint_local, updates_pushed_remote, &stats] (auto ep) {
+                            stats.view_updates_failed_local += is_endpoint_local;
+                            stats.view_updates_failed_remote += updates_pushed_remote;
+                            vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
+                            return make_exception_future<>(std::move(ep));
+                        })
+                );
             }
         } else {
+            //TODO(sarna): Add view updates stats here after hinted handoff for materialized views is implemented
 #if 0
                     //if there are no paired endpoints there are probably range movements going on,
                     //so we write to the local batchlog to replay later

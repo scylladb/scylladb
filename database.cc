@@ -1248,6 +1248,17 @@ void column_family::set_metrics() {
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
                 ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
+
+        // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
+        if (!_schema->is_view()) {
+            _metrics.add_group("column_family", {
+                    ms::make_total_operations("view_updates_pushed_remote", _view_stats.view_updates_pushed_remote, ms::description("Number of updates (mutations) pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_remote", _view_stats.view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_pushed_local", _view_stats.view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_local", _view_stats.view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"))(cf)(ks),
+            });
+        }
+
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
@@ -4341,8 +4352,8 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
                         flat_mutation_reader_from_mutations({std::move(m)}),
                         std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
         return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
-                [base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([units = std::move(units)] (auto ignored) { });
+                [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
+            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
         });
     });
 }
@@ -4506,8 +4517,8 @@ future<> column_family::populate_views(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token)] (auto&& updates) {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates));
+            { }).then([base_token = std::move(base_token), this] (auto&& updates) {
+        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
     });
 }
 

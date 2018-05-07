@@ -346,6 +346,7 @@ private:
     schema_ptr _schema;
     config _config;
     mutable stats _stats;
+    mutable db::view::stats _view_stats;
 
     uint64_t _failed_counter_applies_to_memtable = 0;
 
