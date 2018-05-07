@@ -119,7 +119,7 @@ bool querier::matches(const dht::partition_range& range) const {
         bound_eq(qr.start(), range.start()) || bound_eq(qr.end(), range.end());
 }
 
-querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const schema& s,
+querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const ::schema& s,
         const dht::partition_range& range, const query::partition_slice& slice) const {
     if (only_live != emit_only_live_rows(std::holds_alternative<lw_shared_ptr<compact_for_data_query_state>>(_compaction_state))) {
         return can_use::no_emit_only_live_rows_mismatch;
@@ -277,6 +277,13 @@ bool querier_cache::evict_one() {
         }
     }
     return false;
+}
+
+void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
+    _meta_entries.remove_if([&] (const meta_entry& me) {
+        return !me || me.get_entry().get().schema()->id() == schema_id;
+    });
+    _stats.population = _entries.size();
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)

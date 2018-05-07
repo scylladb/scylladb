@@ -207,6 +207,9 @@ public:
         return _reader.buffer_size();
     }
 
+    schema_ptr schema() const {
+        return _schema;
+    }
 };
 
 /// Special-purpose cache for saving queriers between pages.
@@ -381,6 +384,11 @@ public:
     /// Return true if a querier was evicted and false otherwise (if the cache
     /// is empty).
     bool evict_one();
+
+    /// Evict all queriers that belong to a table.
+    ///
+    /// Should be used when dropping a table.
+    void evict_all_for_table(const utils::UUID& schema_id);
 
     const stats& get_stats() const {
         return _stats;
