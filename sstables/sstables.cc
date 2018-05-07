@@ -2663,6 +2663,12 @@ private:
         }
     }
 
+    void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
+        return components_writer::maybe_add_summary_entry(
+            _sst._components->summary, token, key, _data_writer->offset(),
+            _index_writer->offset(), _index_sampling_state);
+    }
+
     void write_delta_timestamp(file_writer& writer, api::timestamp_type timestamp) {
         sstables::write_delta_timestamp(writer, timestamp, _enc_stats);
     }
@@ -2710,7 +2716,6 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
     {
-        _index_sampling_state.summary_byte_cost = summary_byte_cost();
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
         _sst.create_data().get();
@@ -2778,6 +2783,8 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _prev_row_start = 0;
 
     _partition_key = key::from_partition_key(_schema, dk.key());
+    maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
+
     _sst._components->filter->add(bytes_view(*_partition_key));
     _sst.get_metadata_collector().add_key(bytes_view(*_partition_key));
 
