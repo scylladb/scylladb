@@ -94,7 +94,8 @@ if __name__ == "__main__":
                 subprocess.check_call(["iotune",
                                        "--evaluation-directory", data_dir,
                                        "--format", "envfile",
-                                       "--options-file", "/etc/scylla.d/io.conf"] + iotune_args)
+                                       "--options-file", "/etc/scylla.d/io.conf",
+                                       "--properties-file", "/etc/scylla.d/io_properties.yaml"] + iotune_args)
             except Exception:
                 logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
                               "This is a non-supported setup, and performance is expected to be very bad.\n"
