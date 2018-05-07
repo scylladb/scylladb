@@ -63,24 +63,32 @@ row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_ke
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout) {
+row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     mylog.debug("taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
     auto i = _two_level_locks.find(pk);
     if (i == _two_level_locks.end()) {
         // Lock doesn't exist, we need to create it first
         i = _two_level_locks.emplace(pk, this).first;
     }
+    single_lock_stats &single_lock_stats = exclusive ? stats.exclusive_partition : stats.shared_partition;
+    single_lock_stats.operations_currently_waiting_for_lock++;
+    utils::latency_counter waiting_latency;
+    waiting_latency.start();
     auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
     // Note: we rely on the fact that &i->first, the pointer to a key, never
     // becomes invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
-    return f.then([this, pk = &i->first, exclusive] () {
+    return f.then([this, pk = &i->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] () mutable {
+        waiting_latency.stop();
+        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency(), single_lock_stats.operations_currently_waiting_for_lock);
+        single_lock_stats.lock_acquisitions++;
+        single_lock_stats.operations_currently_waiting_for_lock--;
         return lock_holder(this, pk, exclusive);
     });
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout) {
+row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
     mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
     auto i = _two_level_locks.find(pk);
     if (i == _two_level_locks.end()) {
@@ -108,10 +116,19 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
             });
         }
     }
+    single_lock_stats &single_lock_stats = exclusive ? stats.exclusive_row : stats.shared_row;
+    single_lock_stats.operations_currently_waiting_for_lock++;
+    utils::latency_counter waiting_latency;
+    waiting_latency.start();
     future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
-    return when_all_succeed(std::move(lock_partition), std::move(lock_row)).then([this, pk = &i->first, cpk = &j->first, exclusive] (auto lock1, auto lock2) {
+    return when_all_succeed(std::move(lock_partition), std::move(lock_row))
+    .then([this, pk = &i->first, cpk = &j->first, exclusive, &single_lock_stats, waiting_latency = std::move(waiting_latency)] (auto lock1, auto lock2) mutable {
         lock1.release();
         lock2.release();
+        waiting_latency.stop();
+        single_lock_stats.estimated_waiting_for_lock.add(waiting_latency.latency(), single_lock_stats.operations_currently_waiting_for_lock);
+        single_lock_stats.lock_acquisitions++;
+        single_lock_stats.operations_currently_waiting_for_lock--;
         return lock_holder(this, pk, cpk, exclusive);
     });
 }

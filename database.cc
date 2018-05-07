@@ -1249,6 +1249,20 @@ void column_family::set_metrics() {
                 ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
 
+        // Metrics related to row locking
+        auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats& stats, sstring stat_name) {
+            _metrics.add_group("column_family", {
+                ms::make_total_operations(sprint("row_lock_%s_acquisitions", stat_name), stats.lock_acquisitions, ms::description(sprint("Row lock acquisitions for %s lock", stat_name)))(cf)(ks),
+                ms::make_queue_length(sprint("row_lock_%s_operations_currently_waiting_for_lock", stat_name), stats.operations_currently_waiting_for_lock, ms::description(sprint("Operations currently waiting for %s lock", stat_name)))(cf)(ks),
+                ms::make_histogram(sprint("row_lock_%s_waiting_time", stat_name), ms::description(sprint("Histogram representing time that operations spent on waiting for %s lock", stat_name)),
+                        [&stats] {return stats.estimated_waiting_for_lock.get_histogram(std::chrono::microseconds(100));})(cf)(ks)
+            });
+        };
+        add_row_lock_metrics(_row_locker_stats.exclusive_row, "exclusive_row");
+        add_row_lock_metrics(_row_locker_stats.shared_row, "shared_row");
+        add_row_lock_metrics(_row_locker_stats.exclusive_partition, "exclusive_partition");
+        add_row_lock_metrics(_row_locker_stats.shared_partition, "shared_partition");
+
         // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
         if (!_schema->is_view()) {
             _metrics.add_group("column_family", {
@@ -4486,14 +4500,14 @@ column_family::local_base_lock(
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true, timeout);
+        return _row_locker.lock_pk(pk, true, timeout, _row_locker_stats);
     }
 }
 
