@@ -829,7 +829,11 @@ private:
             db::timeout_clock::time_point timeout) const;
 
     mutable row_locker _row_locker;
-    future<row_locker::lock_holder> local_base_lock(const schema_ptr& s, const dht::decorated_key& pk, const query::clustering_row_ranges& rows) const;
+    future<row_locker::lock_holder> local_base_lock(
+            const schema_ptr& s,
+            const dht::decorated_key& pk,
+            const query::clustering_row_ranges& rows,
+            db::timeout_clock::time_point timeout) const;
 
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

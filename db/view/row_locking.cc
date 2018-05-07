@@ -63,14 +63,14 @@ row_locker::lock_holder::lock_holder(row_locker* locker, const dht::decorated_ke
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive) {
+row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout) {
     mylog.debug("taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
     auto i = _two_level_locks.find(pk);
     if (i == _two_level_locks.end()) {
         // Lock doesn't exist, we need to create it first
         i = _two_level_locks.emplace(pk, this).first;
     }
-    auto f = exclusive ? i->second._partition_lock.write_lock() : i->second._partition_lock.read_lock();
+    auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
     // Note: we rely on the fact that &i->first, the pointer to a key, never
     // becomes invalid (as long as the item is actually in the hash table),
     // even in the case of rehashing.
@@ -80,19 +80,19 @@ row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive) {
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive) {
+row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout) {
     mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
     auto i = _two_level_locks.find(pk);
     if (i == _two_level_locks.end()) {
         // Not yet locked, we need to create the lock. This makes a copy of pk.
         i = _two_level_locks.emplace(pk, this).first;
     }
-    future<rwlock::holder> lock_partition = i->second._partition_lock.hold_read_lock();
+    future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
     auto j = i->second._row_locks.find(cpk);
     if (j == i->second._row_locks.end()) {
         // Not yet locked, need to create the lock. This makes a copy of cpk.
         try {
-            j = i->second._row_locks.emplace(cpk, rwlock()).first;
+            j = i->second._row_locks.emplace(cpk, lock_type()).first;
         } catch(...) {
             // If this emplace() failed, e.g., out of memory, we fail. We
             // could do nothing - the partition lock we already started
@@ -108,7 +108,7 @@ row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& c
             });
         }
     }
-    future<rwlock::holder> lock_row = exclusive ? j->second.hold_write_lock() : j->second.hold_read_lock();
+    future<lock_type::holder> lock_row = exclusive ? j->second.hold_write_lock(timeout) : j->second.hold_read_lock(timeout);
     return when_all_succeed(std::move(lock_partition), std::move(lock_row)).then([this, pk = &i->first, cpk = &j->first, exclusive] (auto lock1, auto lock2) {
         lock1.release();
         lock2.release();
@@ -166,7 +166,7 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             }
             assert(&rli->first == cpk);
             mylog.debug("releasing {} lock for row {} in partition {}", (row_exclusive ? "exclusive" : "shared"), *cpk, *pk);
-            rwlock& lock = rli->second;
+            auto& lock = rli->second;
             if (row_exclusive) {
                 lock.write_unlock();
             } else {
@@ -178,7 +178,7 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             }
         }
         mylog.debug("releasing {} lock for entire partition {}", (partition_exclusive ? "exclusive" : "shared"), *pk);
-        rwlock& lock = pli->second._partition_lock;
+        auto& lock = pli->second._partition_lock;
         if (partition_exclusive) {
             lock.write_unlock();
         } else {

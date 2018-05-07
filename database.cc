@@ -4378,7 +4378,7 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
     // Take the shard-local lock on the base-table row or partition as needed.
     // We'll return this lock to the caller, which will release it after
     // writing the base-table update.
-    future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges());
+    future<row_locker::lock_holder> lockf = local_base_lock(base, m.decorated_key(), slice.default_row_ranges(), timeout);
     return lockf.then([m = std::move(m), slice = std::move(slice), views = std::move(views), base, this, timeout] (row_locker::lock_holder lock) {
       return do_with(
         dht::partition_range::make_singular(m.decorated_key()),
@@ -4455,7 +4455,11 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
  * stricter writer lock, not a reader lock.
  */
 future<row_locker::lock_holder>
-column_family::local_base_lock(const schema_ptr& s, const dht::decorated_key& pk, const query::clustering_row_ranges& rows) const {
+column_family::local_base_lock(
+        const schema_ptr& s,
+        const dht::decorated_key& pk,
+        const query::clustering_row_ranges& rows,
+        db::timeout_clock::time_point timeout) const {
     // FIXME: Optimization:
     // Below we always pass "true" to the lock functions and take an exclusive
     // lock on the affected row or partition. But as explained above, if all
@@ -4466,14 +4470,14 @@ column_family::local_base_lock(const schema_ptr& s, const dht::decorated_key& pk
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true);
+        return _row_locker.lock_pk(pk, true, timeout);
     }
 }
 
