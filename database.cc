@@ -2650,6 +2650,7 @@ bool database::update_column_family(schema_ptr new_schema) {
 void database::remove(const column_family& cf) {
     auto s = cf.schema();
     auto& ks = find_keyspace(s->ks_name());
+    _querier_cache.evict_all_for_table(s->id());
     _column_families.erase(s->id());
     ks.metadata()->remove_column_family(s);
     _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
