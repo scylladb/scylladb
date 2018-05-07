@@ -692,6 +692,37 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     });
 }
 
+static future<> test_write_many_partitions(sstring table_name, tombstone partition_tomb) {
+    return seastar::async([table_name, partition_tomb] {
+        // CREATE TABLE <table_name> (pk int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        for (auto i : boost::irange(0, 65536)) {
+            auto key = partition_key::from_deeply_exploded(*s, {i});
+            mutation mut{s, key};
+            if (partition_tomb) {
+                mut.partition().apply(partition_tomb);
+            }
+            mt->apply(std::move(mut));
+        }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_many_live_partitions) {
+    return test_write_many_partitions("many_live_partitions", {});
+}
+
+SEASTAR_TEST_CASE(test_write_many_deleted_partitions) {
+    return test_write_many_partitions("many_deleted_partitions", {write_timestamp, write_time_point});
+}
+
 SEASTAR_TEST_CASE(test_write_multiple_rows) {
     return seastar::async([] {
         sstring table_name = "multiple_rows";
