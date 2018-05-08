@@ -107,14 +107,14 @@ public:
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override { }
-    virtual void on_data_write_completed() override { }
-    virtual void on_write_completed() override {
+    virtual void on_data_write_completed() override {
         // We need to start a flush before the current one finishes, otherwise
         // we'll have a period without significant disk activity when the current
         // SSTable is being sealed, the caches are being updated, etc. To do that,
         // we ensure the permit doesn't outlive this continuation.
         _permit = sstable_write_permit::unconditional();
     }
+    virtual void on_write_completed() override { }
     virtual void on_flush_completed() override { }
 };
 
@@ -139,6 +139,7 @@ public:
     }
 
     virtual void on_data_write_completed() override {
+        permit_monitor::on_data_write_completed();
         _progress_seen = _tracker->offset;
         _tracker = nullptr;
     }

@@ -2495,9 +2495,10 @@ static sstable_enabled_features all_features() {
 
 void sstable_writer_k_l::consume_end_of_stream()
 {
+    _monitor->on_data_write_completed();
+
     _components_writer->consume_end_of_stream();
     _components_writer = stdx::nullopt;
-    _monitor->on_data_write_completed();
     finish_file_writer();
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);
@@ -3170,6 +3171,8 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
 }
 
 void sstable_writer_m::consume_end_of_stream() {
+    _cfg.monitor->on_data_write_completed();
+
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state);
 
     if (_sst.has_component(component_type::CompressionInfo)) {
@@ -3182,7 +3185,6 @@ void sstable_writer_m::consume_end_of_stream() {
     seal_statistics(_sst.get_version(), _sst._components->statistics, _sst.get_metadata_collector(),
             dht::global_partitioner().name(), _schema.bloom_filter_fp_chance(),
             _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
-    _cfg.monitor->on_data_write_completed();
     close_data_writer();
     _sst.write_summary(_pc);
     _sst.write_filter(_pc);
