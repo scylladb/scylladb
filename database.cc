@@ -3768,7 +3768,10 @@ future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_fun
                     return f.then([this, &cf, truncated_at, low_mark, should_flush] {
                         return cf.discard_sstables(truncated_at).then([this, &cf, truncated_at, low_mark, should_flush](db::replay_position rp) {
                             // TODO: indexes.
-                            assert(low_mark <= rp);
+                            // Note: since discard_sstables was changed to only count tables owned by this shard,
+                            // we can get zero rp back. Changed assert, and ensure we save at least low_mark.
+                            assert(low_mark <= rp || rp == db::replay_position());
+                            rp = std::max(low_mark, rp);
                             return truncate_views(cf, truncated_at, should_flush).then([&cf, truncated_at, rp] {
                                 return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
                             });
