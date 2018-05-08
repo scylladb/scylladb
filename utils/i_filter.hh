@@ -79,10 +79,5 @@ struct i_filter {
      *         filter.
      */
     static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob);
-    /**
-     * @return A bloom_filter with the lowest practical false positive
-     *         probability for the given number of elements.
-     */
-    static filter_ptr get_filter(int64_t num_elements, int target_buckets_per_elem);
 };
 }
