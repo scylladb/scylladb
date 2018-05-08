@@ -239,7 +239,10 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
     write_memtable_to_sstable_for_test(*mt, sst).get();
 
-    for (auto file_type : {component_type::Data, component_type::Index, component_type::Statistics}) {
+    for (auto file_type : {component_type::Data,
+                           component_type::Index,
+                           component_type::Statistics,
+                           component_type::Filter}) {
         auto orig_filename =
                 sstable::filename("tests/sstables/3.x/uncompressed/write_" + table_name, "ks",
                                   table_name, sstables::sstable_version_types::mc, 1, big, file_type);
