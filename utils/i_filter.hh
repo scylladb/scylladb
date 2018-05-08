@@ -78,6 +78,6 @@ struct i_filter {
      *         Asserts that the given probability can be satisfied using this
      *         filter.
      */
-    static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob);
+    static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob, bool old_bf_hash_order);
 };
 }

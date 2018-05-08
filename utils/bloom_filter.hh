@@ -58,12 +58,16 @@ public:
 private:
     bitmap _bitset;
     int _hash_count;
+    bool _old_bf_hash_order;
 public:
     int num_hashes() { return _hash_count; }
     bitmap& bits() { return _bitset; }
 
-    bloom_filter(int hashes, bitmap&& bs) : _bitset(std::move(bs)), _hash_count(hashes) {
-    }
+    bloom_filter(int hashes, bitmap&& bs, bool old_bf_hash_order)
+        : _bitset(std::move(bs))
+        , _hash_count(hashes)
+        , _old_bf_hash_order(old_bf_hash_order)
+    {}
 
     virtual void add(const bytes_view& key) override;
 
@@ -84,8 +88,9 @@ public:
 
 struct murmur3_bloom_filter: public bloom_filter {
 
-    murmur3_bloom_filter(int hashes, bitmap&& bs) : bloom_filter(hashes, std::move(bs)) {}
-
+    murmur3_bloom_filter(int hashes, bitmap&& bs, bool old_bf_hash_order)
+        : bloom_filter(hashes, std::move(bs), old_bf_hash_order)
+    {}
 };
 
 struct always_present_filter: public i_filter {
@@ -109,7 +114,7 @@ struct always_present_filter: public i_filter {
     }
 };
 
-filter_ptr create_filter(int hash, large_bitset&& bitset);
-filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per);
+filter_ptr create_filter(int hash, large_bitset&& bitset, bool old_bf_hash_order);
+filter_ptr create_filter(int hash, int64_t num_elements, int buckets_per, bool old_bf_hash_order);
 }
 }
