@@ -258,7 +258,7 @@ static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} 
 SEASTAR_TEST_CASE(test_write_static_row) {
     return seastar::async([] {
         sstring table_name = "static_row";
-        // CREATE TABLE static_row (pk int, ck int, st1 int static, st2 text static, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        // CREATE TABLE static_row (pk text, ck int, st1 int static, st2 text static, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", utf8_type}},
@@ -421,7 +421,7 @@ SEASTAR_TEST_CASE(test_write_wide_partitions) {
 SEASTAR_TEST_CASE(test_write_ttled_row) {
     return seastar::async([] {
         sstring table_name = "ttled_row";
-        // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk));
+        // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", int32_type}},
@@ -457,7 +457,7 @@ SEASTAR_TEST_CASE(test_write_ttled_row) {
 SEASTAR_TEST_CASE(test_write_ttled_column) {
     return seastar::async([] {
         sstring table_name = "ttled_column";
-        // CREATE TABLE ttled_column (pk text, rc int, PRIMARY KEY (pk));
+        // CREATE TABLE ttled_column (pk text, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", utf8_type}},
@@ -498,7 +498,7 @@ SEASTAR_TEST_CASE(test_write_ttled_column) {
 SEASTAR_TEST_CASE(test_write_deleted_column) {
     return seastar::async([] {
         sstring table_name = "deleted_column";
-        // CREATE TABLE deleted_cell (int pk, int rc, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        // CREATE TABLE deleted_column (pk int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", int32_type}},
@@ -521,7 +521,6 @@ SEASTAR_TEST_CASE(test_write_deleted_column) {
         // DELETE rc FROM deleted_column WHERE pk=1;
         auto key = partition_key::from_deeply_exploded(*s, { 1 });
         mutation mut{s, key};
-        //mut.partition().apply_delete(*s, clustering_key::make_empty(), tombstone{api::new_timestamp(), gc_clock::now()});
         auto column_def = s->get_column_definition("rc");
         if (!column_def) {
             throw std::runtime_error("no column definition found");
@@ -536,7 +535,7 @@ SEASTAR_TEST_CASE(test_write_deleted_column) {
 SEASTAR_TEST_CASE(test_write_deleted_row) {
     return seastar::async([] {
         sstring table_name = "deleted_row";
-        // CREATE TABLE deleted_row (int pk, int ck, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        // CREATE TABLE deleted_row (pk int, ck int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
         schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
             // partition key
             {{"pk", int32_type}},
