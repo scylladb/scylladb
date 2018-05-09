@@ -324,14 +324,19 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
                 ty);
     };
 
+    static const thread_local auto custom_options_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
+
     static const thread_local auto metadata = ::make_shared<cql3::metadata>(
             std::vector<::shared_ptr<column_specification>>{
                     make_column_spec("role", utf8_type),
                     make_column_spec("super", boolean_type),
-                    make_column_spec("login", boolean_type)});
+                    make_column_spec("login", boolean_type),
+                    make_column_spec("options", custom_options_type)});
 
-    static const auto make_results = [](const auth::role_manager& rm, auth::role_set&& roles)
-            -> future<result_message_ptr> {
+    static const auto make_results = [](
+            const auth::role_manager& rm,
+            const auth::authenticator& a,
+            auth::role_set&& roles) -> future<result_message_ptr> {
         auto results = std::make_unique<result_set>(metadata);
 
         if (roles.empty()) {
@@ -345,14 +350,26 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
         return do_with(
                 std::move(sorted_roles),
                 std::move(results),
-                [&rm](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
-            return do_for_each(sorted_roles, [&results, &rm](const sstring& role) {
+                [&rm, &a](const std::vector<sstring>& sorted_roles, std::unique_ptr<result_set>& results) {
+            return do_for_each(sorted_roles, [&results, &rm, &a](const sstring& role) {
                 return when_all_succeed(
                         rm.can_login(role),
-                        rm.is_superuser(role)).then([&results, &role](bool login, bool super) {
+                        rm.is_superuser(role),
+                        a.query_custom_options(role)).then([&results, &role](
+                               bool login,
+                               bool super,
+                               auth::custom_options os) {
                     results->add_column_value(utf8_type->decompose(role));
                     results->add_column_value(boolean_type->decompose(super));
                     results->add_column_value(boolean_type->decompose(login));
+
+                    results->add_column_value(
+                            custom_options_type->decompose(
+                                    make_map_value(
+                                            custom_options_type,
+                                            map_type_impl::native_type(
+                                                    std::make_move_iterator(os.begin()),
+                                                    std::make_move_iterator(os.end())))));
                 });
             }).then([&results] {
                 return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(std::move(results)));
@@ -366,6 +383,7 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
 
     return auth::has_superuser(as, *user).then([this, &state, &cs, &as, user](bool super) {
         const auto& rm = as.underlying_role_manager();
+        const auto& a = as.underlying_authenticator();
         const auto query_mode = _recursive ? auth::recursive_role_query::yes : auth::recursive_role_query::no;
 
         if (!_grantee) {
@@ -373,19 +391,21 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
             // only the roles granted to them.
             return cs.check_has_permission(
                     auth::permission::DESCRIBE,
-                    auth::root_role_resource()).then([&cs, &rm, user, query_mode](bool has_describe) {
+                    auth::root_role_resource()).then([&cs, &rm, &a, user, query_mode](bool has_describe) {
                 if (has_describe) {
-                    return rm.query_all().then([&rm](auto&& roles) { return make_results(rm, std::move(roles)); });
+                    return rm.query_all().then([&rm, &a](auto&& roles) {
+                        return make_results(rm, a, std::move(roles));
+                    });
                 }
 
-                return rm.query_granted(*user->name, query_mode).then([&rm](auth::role_set roles) {
-                    return make_results(rm, std::move(roles));
+                return rm.query_granted(*user->name, query_mode).then([&rm, &a](auth::role_set roles) {
+                    return make_results(rm, a, std::move(roles));
                 });
             });
         }
 
-        return rm.query_granted(*_grantee, query_mode).then([&rm](auth::role_set roles) {
-            return make_results(rm, std::move(roles));
+        return rm.query_granted(*_grantee, query_mode).then([&rm, &a](auth::role_set roles) {
+            return make_results(rm, a, std::move(roles));
         });
     }).handle_exception_type([](const auth::nonexistant_role& e) {
         return make_exception_future<result_message_ptr>(exceptions::invalid_request_exception(e.what()));
