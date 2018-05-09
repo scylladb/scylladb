@@ -36,6 +36,7 @@
 
 #include "types.hh"
 #include "m_format_write_helpers.hh"
+#include "m_format_read_helpers.hh"
 #include "sstables.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
@@ -308,6 +309,11 @@ parse(sstable_version_types v, random_access_reader& in, T& t) {
 template <class T>
 inline void write(sstable_version_types v, file_writer& out, const vint<T>& t) {
     write_vint(out, t.value);
+}
+
+template <class T>
+future<> parse(sstable_version_types v, random_access_reader& in, vint<T>& t) {
+    return read_vint(in, t.value);
 }
 
 template <class T>
