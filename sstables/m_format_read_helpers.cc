@@ -42,6 +42,7 @@ inline future<T> read_vint_impl(random_access_reader& in) {
         temporary_buffer<char> bytes(len);
         std::copy_n(buf.begin(), 1, bytes.get_write());
         return in.read_exactly(len - 1).then([len, bytes = std::move(bytes)] (temporary_buffer<char> buf) mutable {
+            check_buf_size(buf, len - 1);
             std::copy_n(buf.begin(), len - 1, bytes.get_write() + 1);
             return vint_type::deserialize(
                 bytes_view(reinterpret_cast<bytes::value_type*>(bytes.get_write()), len)).value;
