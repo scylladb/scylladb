@@ -339,6 +339,15 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_string<Si
     });
 }
 
+template <typename Size, typename Members>
+future<> parse(sstable_version_types v, random_access_reader& in, disk_array_vint_size<Size, Members>& arr) {
+    auto len = std::make_unique<Size>();
+    auto f = read_vint(in, *len);
+    return f.then([v, &in, &arr, len = std::move(len)] {
+        return parse(v, in, *len, arr.elements);
+    });
+}
+
 template <typename Size>
 inline void write(sstable_version_types v, file_writer& out, const disk_string<Size>& s) {
     Size len = 0;
