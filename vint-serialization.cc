@@ -89,6 +89,10 @@ signed_vint::deserialized_type signed_vint::deserialize(bytes_view v) {
     return deserialized_type{decode_zigzag(un.value), un.size};
 }
 
+vint_size_type signed_vint::serialized_size_from_first_byte(bytes::value_type first_byte) {
+    return unsigned_vint::serialized_size_from_first_byte(first_byte);
+}
+
 // The number of additional bytes that we need to read.
 static vint_size_type count_extra_bytes(int8_t first_byte) {
     // Sign extension.
