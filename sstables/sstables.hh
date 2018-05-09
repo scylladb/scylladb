@@ -657,6 +657,18 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
+    const serialization_header& get_serialization_header() const {
+        auto entry = _components->statistics.contents.find(metadata_type::Serialization);
+        if (entry == _components->statistics.contents.end()) {
+            throw std::runtime_error("Serialization header metadata not available");
+        }
+        auto& p = entry->second;
+        if (!p) {
+            throw std::runtime_error("Statistics is malformed");
+        }
+        const serialization_header& s = *static_cast<serialization_header *>(p.get());
+        return s;
+    }
     const std::vector<unsigned>& get_shards_for_this_sstable() const {
         return _shards;
     }
