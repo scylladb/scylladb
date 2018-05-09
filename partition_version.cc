@@ -169,10 +169,10 @@ void merge_versions(const schema& s, mutation_partition& newer, mutation_partiti
 }
 
 void partition_snapshot::merge_partition_versions() {
-    if (_version && !_version.is_unique_owner()) {
-        auto v = &*_version;
+    partition_version_ref& v = version();
+    if (!v.is_unique_owner()) {
+        auto first_used = &*v;
         _version = { };
-        auto first_used = v;
         while (first_used->prev() && !first_used->is_referenced()) {
             first_used = first_used->prev();
         }

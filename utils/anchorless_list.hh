@@ -28,12 +28,19 @@ class anchorless_list_base_hook {
     anchorless_list_base_hook<T>* _next = nullptr;
     anchorless_list_base_hook<T>* _prev = nullptr;
 public:
-    class iterator : std::iterator<std::bidirectional_iterator_tag, T> {
+    template <typename ValueType>
+    class iterator {
         anchorless_list_base_hook<T>* _position;
     public:
+        using iterator_category = std::bidirectional_iterator_tag;
+        using value_type = ValueType;
+        using difference_type = ssize_t;
+        using pointer = ValueType*;
+        using reference = ValueType&;
+    public:
         explicit iterator(anchorless_list_base_hook<T>* pos) : _position(pos) { }
-        T& operator*() { return *static_cast<T*>(_position); }
-        T* operator->() { return static_cast<T*>(_position); }
+        ValueType& operator*() { return *static_cast<ValueType*>(_position); }
+        ValueType* operator->() { return static_cast<ValueType*>(_position); }
         iterator& operator++() {
             _position = _position->_next;
             return *this;
@@ -52,26 +59,27 @@ public:
             operator--();
             return it;
         }
-        bool operator==(const iterator& other) {
+        bool operator==(const iterator& other) const {
             return _position == other._position;
         }
-        bool operator!=(const iterator& other) {
+        bool operator!=(const iterator& other) const {
             return !(*this == other);
         }
     };
 
+    template <typename ValueType>
     class reverse_iterator {
         anchorless_list_base_hook<T>* _position;
     public:
         using iterator_category = std::forward_iterator_tag;
-        using value_type = T;
+        using value_type = ValueType;
         using difference_type = ssize_t;
-        using pointer = T*;
-        using reference = T&;
+        using pointer = ValueType*;
+        using reference = ValueType&;
     public:
         explicit reverse_iterator(anchorless_list_base_hook<T>* pos) : _position(pos) { }
-        T& operator*() { return *static_cast<T*>(_position); }
-        T* operator->() { return static_cast<T*>(_position); }
+        ValueType& operator*() { return *static_cast<ValueType*>(_position); }
+        ValueType* operator->() { return static_cast<ValueType*>(_position); }
         reverse_iterator& operator++() {
             _position = _position->_prev;
             return *this;
@@ -81,10 +89,10 @@ public:
             operator++();
             return it;
         }
-        bool operator==(const reverse_iterator& other) {
+        bool operator==(const reverse_iterator& other) const {
             return _position == other._position;
         }
-        bool operator!=(const reverse_iterator& other) {
+        bool operator!=(const reverse_iterator& other) const {
             return !(*this == other);
         }
     };
@@ -93,20 +101,28 @@ public:
         anchorless_list_base_hook<T>* _begin;
         anchorless_list_base_hook<T>* _end;
     public:
+        using iterator = anchorless_list_base_hook::iterator<T>;
+        using const_iterator = anchorless_list_base_hook::iterator<const T>;
         range(anchorless_list_base_hook<T>* b, anchorless_list_base_hook<T>* e)
             : _begin(b), _end(e) { }
         iterator begin() { return iterator(_begin); }
         iterator end() { return iterator(_end); }
+        const_iterator begin() const { return const_iterator(_begin); }
+        const_iterator end() const { return const_iterator(_end); }
     };
 
     class reversed_range {
         anchorless_list_base_hook<T>* _begin;
         anchorless_list_base_hook<T>* _end;
     public:
+        using iterator = anchorless_list_base_hook::reverse_iterator<T>;
+        using const_iterator = anchorless_list_base_hook::reverse_iterator<const T>;
         reversed_range(anchorless_list_base_hook<T>* b, anchorless_list_base_hook<T>* e)
             : _begin(b), _end(e) { }
-        reverse_iterator begin() { return reverse_iterator(_begin); }
-        reverse_iterator end() { return reverse_iterator(_end); }
+        iterator begin() { return iterator(_begin); }
+        iterator end() { return iterator(_end); }
+        const_iterator begin() const { return const_iterator(_begin); }
+        const_iterator end() const { return const_iterator(_end); }
     };
 public:
     anchorless_list_base_hook() = default;
@@ -183,8 +199,8 @@ public:
         }
         return const_cast<T*>(static_cast<const T*>(v));
     }
-    iterator iterator_to() {
-        return iterator(this);
+    iterator<T> iterator_to() {
+        return iterator<T>(this);
     }
     range all_elements() {
         auto begin = this;
