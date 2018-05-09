@@ -153,12 +153,11 @@ public:
     /// A query can have more then one querier executing parallelly for
     /// different sub-ranges on the same shard. This method helps identifying
     /// the appropriate one for the `range'.
-    /// Since ranges can be narrowed from page-to-page (as the query moves
-    /// through it) we cannot just check the two ranges for equality.
-    /// Instead we exploit the fact the a query-range will always be split into
-    /// non-overlapping sub ranges and thus each bound of a range is unique.
-    /// Thus if any of the range's bounds are equal we have a match.
-    /// For singular ranges we just check the one bound.
+    /// For the purposes of this identification it is enough to check that the
+    /// singulariness and end bound of the ranges matches. For non-singular
+    /// ranges the start bound may be adjusted from page-to-page as the query
+    /// progresses through it but since a query is guaranteed to be broken into
+    /// non-overlapping ranges just checking the end-bound is enough.
     bool matches(const dht::partition_range& range) const;
 
     /// Can the querier be used for the next page?
