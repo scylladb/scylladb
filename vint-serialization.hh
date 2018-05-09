@@ -63,4 +63,6 @@ struct signed_vint final {
     static vint_size_type serialize(value_type, bytes::iterator out);
 
     static deserialized_type deserialize(bytes_view v);
+
+    static vint_size_type serialized_size_from_first_byte(bytes::value_type first_byte);
 };
