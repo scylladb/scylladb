@@ -732,8 +732,7 @@ future<> parse(sstable_version_types v, random_access_reader& in, statistics& s)
                         throw std::runtime_error(
                             "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
                     } else {
-                        // Ignore
-                        warn(unimplemented::cause::SSTABLE_FORMAT_M);
+                        return parse<serialization_header>(v, in, s.contents[val.first]);
                     }
                     return make_ready_future<>();
                 default:
