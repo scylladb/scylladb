@@ -3285,6 +3285,7 @@ void storage_service::do_isolate_on_error(disk_error type)
 {
     if (!isolated.exchange(true)) {
         slogger.warn("Shutting down communications due to I/O errors until operator intervention");
+        slogger.warn("{} error: {}", type == disk_error::commit ? "Commitlog" : "Disk", std::current_exception());
         // isolated protect us against multiple stops
         service::get_local_storage_service().stop_transport();
     }
