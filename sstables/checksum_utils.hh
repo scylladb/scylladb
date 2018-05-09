@@ -23,23 +23,24 @@
 
 #include <zlib.h>
 
-inline uint32_t init_checksum_adler32() {
-    return adler32(0, Z_NULL, 0);
-}
+struct adler32_utils {
+    inline static uint32_t init_checksum() {
+        return adler32(0, Z_NULL, 0);
+    }
 
-inline uint32_t checksum_adler32(const char* input, size_t input_len) {
-    auto init = adler32(0, Z_NULL, 0);
-    // yuck, zlib uses unsigned char while we use char :-(
-    return adler32(init, reinterpret_cast<const unsigned char *>(input),
-            input_len);
-}
+    inline static uint32_t checksum(const char* input, size_t input_len) {
+        auto init = adler32(0, Z_NULL, 0);
+        return checksum(init, input, input_len);
+    }
 
-inline uint32_t checksum_adler32(uint32_t adler, const char* input, size_t input_len) {
-    return adler32(adler, reinterpret_cast<const unsigned char *>(input),
-            input_len);
-}
+    inline static uint32_t checksum(uint32_t prev, const char* input, size_t input_len) {
+        // yuck, zlib uses unsigned char while we use char :-(
+        return adler32(prev, reinterpret_cast<const unsigned char *>(input),
+                input_len);
+    }
 
-inline uint32_t checksum_adler32_combine(uint32_t adler1, uint32_t adler2, size_t input_len2) {
-    return adler32_combine(adler1, adler2, input_len2);
-}
+    inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
+        return adler32_combine(first, second, input_len2);
+    }
+};
 

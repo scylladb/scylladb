@@ -723,7 +723,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                 return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     assert(size > 0 && size < 4096);
                     const char* buf = bufptr.get();
-                    uint32_t adler = checksum_adler32(buf, size);
+                    uint32_t adler = adler32_utils::checksum(buf, size);
                     f.close().finally([f]{});
 
                     auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 10, big, component_type::CRC);

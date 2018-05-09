@@ -124,7 +124,7 @@ public:
     checksummed_file_writer(file f, file_output_stream_options options)
             : file_writer(make_checksummed_file_output_stream(std::move(f), _c, _full_checksum, options))
             , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), size_t(options.buffer_size)))})
-            , _full_checksum(init_checksum_adler32()) {}
+            , _full_checksum(adler32_utils::init_checksum()) {}
 
     // Since we are exposing a reference to _full_checksum, we delete the move
     // constructor.  If it is moved, the reference will refer to the old
@@ -158,10 +158,10 @@ public:
 
         for (size_t offset = 0; offset < buf.size(); offset += _c.chunk_size) {
             size_t size = std::min(size_t(_c.chunk_size), buf.size() - offset);
-            uint32_t per_chunk_checksum = init_checksum_adler32();
+            uint32_t per_chunk_checksum = adler32_utils::init_checksum();
 
-            per_chunk_checksum = checksum_adler32(per_chunk_checksum, buf.begin() + offset, size);
-            _full_checksum = checksum_adler32_combine(_full_checksum, per_chunk_checksum, size);
+            per_chunk_checksum = adler32_utils::checksum(per_chunk_checksum, buf.begin() + offset, size);
+            _full_checksum = adler32_utils::checksum_combine(_full_checksum, per_chunk_checksum, size);
             _c.checksums.push_back(per_chunk_checksum);
         }
         auto f = _out.write(buf.begin(), buf.size());

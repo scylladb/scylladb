@@ -359,10 +359,10 @@ public:
         return _full_checksum;
     }
     void init_full_checksum() {
-        _full_checksum = init_checksum_adler32();
+        _full_checksum = adler32_utils::init_checksum();
     }
     void update_full_checksum(uint32_t checksum, size_t size) {
-        _full_checksum = checksum_adler32_combine(_full_checksum, checksum, size);
+        _full_checksum = adler32_utils::checksum_combine(_full_checksum, checksum, size);
     }
 
 
