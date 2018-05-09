@@ -24,7 +24,7 @@
 #include "core/iostream.hh"
 #include "core/fstream.hh"
 #include "types.hh"
-#include "compress.hh"
+#include "checksum_utils.hh"
 #include "progress_monitor.hh"
 #include <seastar/core/byteorder.hh>
 #include "version.hh"
