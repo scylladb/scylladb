@@ -1413,7 +1413,10 @@ future<> sstable::read_filter(const io_priority_class& pc) {
         read_simple<component_type::Filter>(filter, pc).get();
         auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
         large_bitset bs(nr_bits, std::move(filter.buckets.elements));
-        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), (_version != sstable_version_types::mc));
+        utils::filter_format format = (_version == sstable_version_types::mc)
+                                      ? utils::filter_format::m_format
+                                      : utils::filter_format::k_l_format;
+        _components->filter = utils::filter::create_filter(filter.hashes, std::move(bs), format);
     });
 }
 
@@ -2177,7 +2180,7 @@ components_writer::components_writer(sstable& sst, const schema& s, file_writer&
     , _range_tombstones(s)
     , _large_partition_handler(cfg.large_partition_handler)
 {
-    _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), true);
+    _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::k_l_format);
     _sst._pi_write.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
     _sst._correctly_serialize_non_compound_range_tombstones = cfg.correctly_serialize_non_compound_range_tombstones;
     _index_sampling_state.summary_byte_cost = summary_byte_cost();
@@ -2685,7 +2688,7 @@ public:
         _sst._shards = { shard };
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
-        _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), false);
+        _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _schema.bloom_filter_fp_chance(), utils::filter_format::m_format);
         _pi_write_m.desired_block_size = cfg.promoted_index_block_size.value_or(get_config().column_index_size_in_kb() * 1024);
         _sst._correctly_serialize_non_compound_range_tombstones = _cfg.correctly_serialize_non_compound_range_tombstones;
         _index_sampling_state.summary_byte_cost = summary_byte_cost();

@@ -48,6 +48,11 @@ namespace utils {
 struct i_filter;
 using filter_ptr = std::unique_ptr<i_filter>;
 
+enum class filter_format {
+    k_l_format,
+    m_format,
+};
+
 class hashed_key {
 private:
     std::array<uint64_t, 2> _hash;
@@ -78,6 +83,6 @@ struct i_filter {
      *         Asserts that the given probability can be satisfied using this
      *         filter.
      */
-    static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob, bool old_bf_hash_order);
+    static filter_ptr get_filter(int64_t num_elements, double max_false_pos_prob, filter_format format);
 };
 }
