@@ -205,7 +205,7 @@ static void tcp_syncookies_sanity() {
 }
 
 static future<>
-verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
+verify_seastar_io_scheduler(bool has_max_io_requests, bool has_properties, bool developer_mode) {
     auto note_bad_conf = [developer_mode] (sstring cause) {
         sstring msg = "I/O Scheduler is not properly configured! This is a non-supported setup, and performance is expected to be unpredictably bad.\n Reason found: "
                     + cause + "\n"
@@ -220,14 +220,16 @@ verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
         }
     };
 
-    if (!has_max_io_requests) {
-        note_bad_conf("--max-io-requests is not set.");
+    if (!has_max_io_requests && !has_properties) {
+        note_bad_conf("none of --max-io-requests, --io-properties and --io-properties-file are set.");
     }
-    return smp::invoke_on_all([developer_mode, note_bad_conf] {
-        auto capacity = engine().get_io_queue().capacity();
-        if (capacity < 4) {
-            auto cause = sprint("I/O Queue capacity for this shard is too low (%ld, minimum 4 expected).", capacity);
-            note_bad_conf(cause);
+    return smp::invoke_on_all([developer_mode, note_bad_conf, has_max_io_requests] {
+        if (has_max_io_requests) {
+            auto capacity = engine().get_io_queue().capacity();
+            if (capacity < 4) {
+                auto cause = sprint("I/O Queue capacity for this shard is too low (%ld, minimum 4 expected).", capacity);
+                note_bad_conf(cause);
+            }
         }
     });
 }
@@ -504,7 +506,8 @@ int main(int ac, char** av) {
                         ::_exit(return_value);
                 });
             });
-            verify_seastar_io_scheduler(opts.count("max-io-requests"), db.local().get_config().developer_mode()).get();
+            verify_seastar_io_scheduler(opts.count("max-io-requests"), opts.count("io-properties") || opts.count("io-properties-file"),
+                                        db.local().get_config().developer_mode()).get();
             supervisor::notify("creating data directories");
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
             supervisor::notify("creating commitlog directory");
