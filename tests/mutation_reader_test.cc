@@ -1834,6 +1834,11 @@ public:
 //
 // Best run with smp >= 2
 SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         const auto shard_of_interest = (engine().cpu_id() + 1) % smp::count;
         auto s = simple_schema();
