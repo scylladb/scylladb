@@ -37,18 +37,24 @@ static unsigned iterations = 30;
 static unsigned parallelism = 1;
 
 future<> test_write(distributed<test_env>& dt) {
-    return dt.invoke_on_all([] (test_env &t) {
-        return t.fill_memtable();
-    }).then([&dt] {
-        return time_runs(iterations, parallelism, dt, &test_env::flush_memtable);
+    return seastar::async([&dt] {
+        storage_service_for_tests ssft;
+        dt.invoke_on_all([] (test_env &t) {
+            return t.fill_memtable();
+        }).then([&dt] {
+            return time_runs(iterations, parallelism, dt, &test_env::flush_memtable);
+        }).get();
     });
 }
 
 future<> test_compaction(distributed<test_env>& dt) {
-    return dt.invoke_on_all([] (test_env &t) {
-        return t.fill_memtable();
-    }).then([&dt] {
-        return time_runs(iterations, parallelism, dt, &test_env::compaction);
+    return seastar::async([&dt] {
+        storage_service_for_tests ssft;
+        dt.invoke_on_all([] (test_env &t) {
+            return t.fill_memtable();
+        }).then([&dt] {
+            return time_runs(iterations, parallelism, dt, &test_env::compaction);
+        }).get();
     });
 }
 

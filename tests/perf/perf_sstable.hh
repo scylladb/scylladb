@@ -134,7 +134,6 @@ public:
     // Mappers below
     future<double> flush_memtable(int idx) {
         return seastar::async([this, idx] {
-            storage_service_for_tests ssft;
             size_t partitions = _mt->partition_count();
 
             test_setup::create_empty_test_dir(dir()).get();
@@ -154,7 +153,6 @@ public:
     future<double> compaction(int idx) {
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
             return seastar::async([this, idx] {
-                storage_service_for_tests ssft;
                 auto sst_gen = [this, gen = make_lw_shared<unsigned>(idx)] () mutable {
                     return sstables::test::make_test_sstable(_cfg.buffer_size, s, dir(), (*gen)++, sstable::version_types::ka, sstable::format_types::big);
                 };
