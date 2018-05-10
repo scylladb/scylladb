@@ -69,7 +69,7 @@ class abstract_write_response_handler;
 class abstract_read_executor;
 class mutation_holder;
 
-using replicas_per_token_range = std::unordered_map<nonwrapping_range<dht::token>, std::vector<utils::UUID>>;
+using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
@@ -239,15 +239,11 @@ public:
         db::read_repair_decision read_repair_decision;
 
         coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-                replicas_per_token_range last_replicas,
-                db::read_repair_decision read_repair_decision)
+                replicas_per_token_range last_replicas = {},
+                db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
             : query_result(std::move(query_result))
             , last_replicas(std::move(last_replicas))
             , read_repair_decision(std::move(read_repair_decision)) {
-        }
-
-        coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result)
-            : query_result(std::move(query_result)) {
         }
     };
 private:

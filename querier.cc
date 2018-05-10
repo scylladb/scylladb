@@ -113,10 +113,9 @@ bool querier::matches(const dht::partition_range& range) const {
     const auto bound_eq = [&] (const stdx::optional<dht::partition_range::bound>& a, const stdx::optional<dht::partition_range::bound>& b) {
         return bool(a) == bool(b) && (!a || a->equal(*b, cmp));
     };
-
-    return qr.is_singular() ?
-        bound_eq(qr.start(), range.start()) :
-        bound_eq(qr.start(), range.start()) || bound_eq(qr.end(), range.end());
+    // For singular ranges end() == start() so they are interchangable.
+    // For non-singular ranges we check only the end().
+    return bound_eq(qr.end(), range.end());
 }
 
 querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const ::schema& s,

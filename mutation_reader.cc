@@ -1008,7 +1008,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     //   pending continuations, just "run through them".
     class shard_reader {
         struct state {
-            std::optional<flat_mutation_reader> reader;
+            flat_mutation_reader_opt reader;
             bool abandoned = false;
         };
         const multishard_combining_reader& _parent;
@@ -1060,10 +1060,10 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
         future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
         future<> create_reader();
         explicit operator bool() const {
-            return _state->reader.has_value();
+            return bool(_state->reader);
         }
         bool done() const {
-            return _state->reader.has_value() && _state->reader->is_buffer_empty() && _state->reader->is_end_of_stream();
+            return _state->reader && _state->reader->is_buffer_empty() && _state->reader->is_end_of_stream();
         }
         void read_ahead(db::timeout_clock::time_point timeout);
         bool is_read_ahead_in_progress() const {
@@ -1148,7 +1148,7 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
             return;
         }
 
-        _state->reader.emplace(make_foreign_reader(_parent._schema, std::move(r), _parent._fwd_sm));
+        _state->reader = make_foreign_reader(_parent._schema, std::move(r), _parent._fwd_sm);
         while (_pending_next_partition) {
             --_pending_next_partition;
             _state->reader->next_partition();

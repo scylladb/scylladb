@@ -100,22 +100,20 @@ private:
     };
 
     schema_ptr _schema;
-    std::unique_ptr<dht::partition_range> _range;
-    std::unique_ptr<query::partition_slice> _slice;
+    std::unique_ptr<const dht::partition_range> _range;
+    std::unique_ptr<const query::partition_slice> _slice;
     flat_mutation_reader _reader;
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> _compaction_state;
     lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
 
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> make_compaction_state(
             const schema& s,
-            uint32_t row_limit,
-            uint32_t partition_limit,
             gc_clock::time_point query_time,
             emit_only_live_rows only_live) const {
         if (only_live == emit_only_live_rows::yes) {
-            return make_lw_shared<compact_for_query_state<emit_only_live_rows::yes>>(s, query_time, *_slice, row_limit, partition_limit);
+            return make_lw_shared<compact_for_query_state<emit_only_live_rows::yes>>(s, query_time, *_slice, 0, 0);
         } else {
-            return make_lw_shared<compact_for_query_state<emit_only_live_rows::no>>(s, query_time, *_slice, row_limit, partition_limit);
+            return make_lw_shared<compact_for_query_state<emit_only_live_rows::no>>(s, query_time, *_slice, 0, 0);
         }
     }
 
@@ -128,17 +126,17 @@ private:
 public:
     querier(const mutation_source& ms,
             schema_ptr schema,
-            const dht::partition_range& range,
-            const query::partition_slice& slice,
+            dht::partition_range range,
+            query::partition_slice slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr trace_ptr,
             emit_only_live_rows only_live)
         : _schema(schema)
-        , _range(std::make_unique<dht::partition_range>(range))
-        , _slice(std::make_unique<query::partition_slice>(slice))
+        , _range(std::make_unique<dht::partition_range>(std::move(range)))
+        , _slice(std::make_unique<query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader(schema, *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        , _compaction_state(make_compaction_state(*schema, 0, 0, gc_clock::time_point{}, only_live))
+        , _compaction_state(make_compaction_state(*schema, gc_clock::time_point{}, only_live))
         , _last_ckey(make_lw_shared<std::optional<clustering_key_prefix>>()) {
     }
 
@@ -155,12 +153,11 @@ public:
     /// A query can have more then one querier executing parallelly for
     /// different sub-ranges on the same shard. This method helps identifying
     /// the appropriate one for the `range'.
-    /// Since ranges can be narrowed from page-to-page (as the query moves
-    /// through it) we cannot just check the two ranges for equality.
-    /// Instead we exploit the fact the a query-range will always be split into
-    /// non-overlapping sub ranges and thus each bound of a range is unique.
-    /// Thus if any of the range's bounds are equal we have a match.
-    /// For singular ranges we just check the one bound.
+    /// For the purposes of this identification it is enough to check that the
+    /// singulariness and end bound of the ranges matches. For non-singular
+    /// ranges the start bound may be adjusted from page-to-page as the query
+    /// progresses through it but since a query is guaranteed to be broken into
+    /// non-overlapping ranges just checking the end-bound is enough.
     bool matches(const dht::partition_range& range) const;
 
     /// Can the querier be used for the next page?

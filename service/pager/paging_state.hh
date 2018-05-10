@@ -55,7 +55,7 @@ namespace pager {
 
 class paging_state final {
 public:
-    using replicas_per_token_range = std::unordered_map<nonwrapping_range<dht::token>, std::vector<utils::UUID>>;
+    using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<utils::UUID>>;
 
 private:
     partition_key _partition_key;
