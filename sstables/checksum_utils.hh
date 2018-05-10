@@ -23,6 +23,16 @@
 
 #include <zlib.h>
 
+GCC6_CONCEPT(
+template<typename Checksum>
+concept bool ChecksumUtils = requires(const char* input, size_t size, uint32_t checksum) {
+    { Checksum::init_checksum() } -> uint32_t;
+    { Checksum::checksum(input, size) } -> uint32_t;
+    { Checksum::checksum(checksum, input, size) } -> uint32_t;
+    { Checksum::checksum_combine(checksum, checksum, size) } -> uint32_t;
+};
+)
+
 struct adler32_utils {
     inline static uint32_t init_checksum() {
         return adler32(0, Z_NULL, 0);
@@ -41,6 +51,27 @@ struct adler32_utils {
 
     inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
         return adler32_combine(first, second, input_len2);
+    }
+};
+
+struct crc32_utils {
+    inline static uint32_t init_checksum() {
+        return crc32(0, Z_NULL, 0);
+    }
+
+    inline static uint32_t checksum(const char* input, size_t input_len) {
+        auto init = crc32(0, Z_NULL, 0);
+        return checksum(init, input, input_len);
+    }
+
+    inline static uint32_t checksum(uint32_t prev, const char* input, size_t input_len) {
+        // yuck, zlib uses unsigned char while we use char :-(
+        return crc32(prev, reinterpret_cast<const unsigned char *>(input),
+                input_len);
+    }
+
+    inline static uint32_t checksum_combine(uint32_t first, uint32_t second, size_t input_len2) {
+        return crc32_combine(first, second, input_len2);
     }
 };
 

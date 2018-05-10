@@ -115,31 +115,10 @@ serialized_size(sstable_version_types v, const T& object) {
     return size;
 }
 
-output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options);
-
-class checksummed_file_writer : public file_writer {
-    checksum _c;
-    uint32_t _full_checksum;
-public:
-    checksummed_file_writer(file f, file_output_stream_options options)
-            : file_writer(make_checksummed_file_output_stream(std::move(f), _c, _full_checksum, options))
-            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), size_t(options.buffer_size)))})
-            , _full_checksum(adler32_utils::init_checksum()) {}
-
-    // Since we are exposing a reference to _full_checksum, we delete the move
-    // constructor.  If it is moved, the reference will refer to the old
-    // location.
-    checksummed_file_writer(checksummed_file_writer&&) = delete;
-    checksummed_file_writer(const checksummed_file_writer&) = default;
-
-    checksum& finalize_checksum() {
-        return _c;
-    }
-    uint32_t full_checksum() {
-        return _full_checksum;
-    }
-};
-
+template <typename ChecksumType>
+GCC6_CONCEPT(
+    requires ChecksumUtils<ChecksumType>
+)
 class checksummed_file_data_sink_impl : public data_sink_impl {
     output_stream<char> _out;
     struct checksum& _c;
@@ -158,10 +137,10 @@ public:
 
         for (size_t offset = 0; offset < buf.size(); offset += _c.chunk_size) {
             size_t size = std::min(size_t(_c.chunk_size), buf.size() - offset);
-            uint32_t per_chunk_checksum = adler32_utils::init_checksum();
+            uint32_t per_chunk_checksum = ChecksumType::init_checksum();
 
-            per_chunk_checksum = adler32_utils::checksum(per_chunk_checksum, buf.begin() + offset, size);
-            _full_checksum = adler32_utils::checksum_combine(_full_checksum, per_chunk_checksum, size);
+            per_chunk_checksum = ChecksumType::checksum(per_chunk_checksum, buf.begin() + offset, size);
+            _full_checksum = ChecksumType::checksum_combine(_full_checksum, per_chunk_checksum, size);
             _c.checksums.push_back(per_chunk_checksum);
         }
         auto f = _out.write(buf.begin(), buf.size());
@@ -174,17 +153,54 @@ public:
     }
 };
 
+template <typename ChecksumType>
+GCC6_CONCEPT(
+    requires ChecksumUtils<ChecksumType>
+)
 class checksummed_file_data_sink : public data_sink {
 public:
     checksummed_file_data_sink(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options)
-        : data_sink(std::make_unique<checksummed_file_data_sink_impl>(std::move(f), cinfo, full_file_checksum, std::move(options))) {}
+        : data_sink(std::make_unique<checksummed_file_data_sink_impl<ChecksumType>>(std::move(f), cinfo, full_file_checksum, std::move(options))) {}
 };
 
+template <typename ChecksumType>
+GCC6_CONCEPT(
+    requires ChecksumUtils<ChecksumType>
+)
 inline
 output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, file_output_stream_options options) {
     auto buffer_size = options.buffer_size;
-    return output_stream<char>(checksummed_file_data_sink(std::move(f), cinfo, full_file_checksum, std::move(options)), buffer_size, true);
+    return output_stream<char>(checksummed_file_data_sink<ChecksumType>(std::move(f), cinfo, full_file_checksum, std::move(options)), buffer_size, true);
 }
 
+template <typename ChecksumType>
+GCC6_CONCEPT(
+    requires ChecksumUtils<ChecksumType>
+)
+class checksummed_file_writer : public file_writer {
+    checksum _c;
+    uint32_t _full_checksum;
+public:
+    checksummed_file_writer(file f, file_output_stream_options options)
+            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(f), _c, _full_checksum, options))
+            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), size_t(options.buffer_size)))})
+            , _full_checksum(ChecksumType::init_checksum()) {}
+
+    // Since we are exposing a reference to _full_checksum, we delete the move
+    // constructor.  If it is moved, the reference will refer to the old
+    // location.
+    checksummed_file_writer(checksummed_file_writer&&) = delete;
+    checksummed_file_writer(const checksummed_file_writer&) = default;
+
+    checksum& finalize_checksum() {
+        return _c;
+    }
+    uint32_t full_checksum() {
+        return _full_checksum;
+    }
+};
+
+using adler32_checksummed_file_writer = checksummed_file_writer<adler32_utils>;
+using crc32_checksummed_file_writer = checksummed_file_writer<crc32_utils>;
 
 }
