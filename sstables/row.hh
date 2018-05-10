@@ -28,6 +28,7 @@
 #include "consumer.hh"
 #include "sstables/types.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "liveness_info.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -521,6 +522,7 @@ private:
 
     unfiltered_flags_m _flags{0};
     unfiltered_extended_flags_m _extended_flags{0};
+    liveness_info _liveness;
     bool _is_first_unfiltered = true;
 public:
     using consumer = consumer_m;
@@ -566,6 +568,7 @@ public:
         }
         case state::FLAGS:
         flags_label:
+            _liveness.reset();
             if (read_8(data) != read_status::ready) {
                 _state = state::FLAGS_2;
                 break;
@@ -628,7 +631,7 @@ public:
                 break;
             }
         case state::NON_STATIC_ROW_TIMESTAMP:
-            // TODO: consume timestamp
+            _liveness.set_timestamp(_u64);
             if (!_flags.has_ttl()) {
                 _state = state::NON_STATIC_ROW_DELETION;
                 goto non_static_row_deletion_label;
@@ -638,13 +641,13 @@ public:
                 break;
             }
         case state::NON_STATIC_ROW_TIMESTAMP_TTL:
-            // TODO consume ttl
+            _liveness.set_ttl(uint32_t(_u64));
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::NON_STATIC_ROW_TIMESTAMP_DELTIME;
                 break;
             }
         case state::NON_STATIC_ROW_TIMESTAMP_DELTIME:
-            // TODO consume deltime
+            _liveness.set_local_deletion_time(uint32_t(_u64));
         case state::NON_STATIC_ROW_DELETION:
         non_static_row_deletion_label:
             if (!_flags.has_deletion()) {
@@ -686,6 +689,7 @@ public:
         : continuous_data_consumer(std::move(input), start, maxlen)
         , _consumer(consumer)
         , _header(sst->get_serialization_header())
+        , _liveness(_header)
     { }
 
     void verify_end_state() {
