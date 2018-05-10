@@ -899,7 +899,7 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // to send the update there. Currently, we do this from *each* of
                 // the base replicas, but this is probably excessive - see
                 // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
-                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW)
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW, stats)
                         .handle_exception([paired_endpoint, is_endpoint_local, updates_pushed_remote, &stats] (auto ep) {
                             stats.view_updates_failed_local += is_endpoint_local;
                             stats.view_updates_failed_remote += updates_pushed_remote;

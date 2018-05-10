@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "service/storage_proxy_stats.hh"
 #include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
@@ -33,11 +34,13 @@ namespace db {
 
 namespace view {
 
-struct stats {
+struct stats : public service::storage_proxy_stats::write_stats {
     int64_t view_updates_pushed_local = 0;
     int64_t view_updates_pushed_remote = 0;
     int64_t view_updates_failed_local = 0;
     int64_t view_updates_failed_remote = 0;
+
+    stats(const sstring& category) : service::storage_proxy_stats::write_stats(category, false) { }
 };
 
 /**

@@ -207,6 +207,7 @@ column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats)
     : _schema(std::move(schema))
     , _config(std::move(config))
+    , _view_stats(sprint("%s_%s_view_replica_update", _schema->ks_name(), _schema->cf_name()))
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
