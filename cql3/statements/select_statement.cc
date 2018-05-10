@@ -652,6 +652,9 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     });
 }
 
+// Note: the partitions keys returned by this function will be sorted in
+// lexicographical order of the partition key columns (in the way that
+// clustering keys are sorted) - NOT in token order.
 future<dht::partition_range_vector>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
@@ -702,6 +705,12 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                                     cql3::selection::result_set_builder::visitor(builder, *view.schema(), *selection));
         auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
         dht::partition_range_vector partition_ranges;
+        // We are reading the list of primary keys as rows of a single
+        // partition (in the index view), so they are sorted in
+        // lexicographical order (N.B. this is NOT token order!). We need
+        // to avoid outputting the same partition key twice, but luckily in
+        // the sorted order, these will be adjacent.
+        stdx::optional<dht::decorated_key> last_dk;
         for (size_t i = 0; i < rs.size(); i++) {
             const auto& row = rs.at(i);
             std::vector<bytes> pk_columns;
@@ -710,6 +719,12 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             }
             auto pk = partition_key::from_exploded(*_schema, pk_columns);
             auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            if (last_dk && last_dk->equal(*_schema, dk)) {
+                // Another row of the same partition, no need to output the
+                // same partition key again.
+                continue;
+            }
+            last_dk = dk;
             auto range = dht::partition_range::make_singular(dk);
             partition_ranges.emplace_back(range);
         }
