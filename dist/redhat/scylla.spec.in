@@ -9,6 +9,10 @@ URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-tools-core = @@VERSION@@ scylla-kernel-conf = @@VERSION@@ scylla-libgcc73 scylla-libstdc++73
 Obsoletes:	scylla-server < 1.1
+Obsoletes:      scylla-libgcc72
+Obsoletes:      scylla-libstdc++72
+Provides:       scylla-libgcc72
+Provides:      scylla-libstdc++72
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
