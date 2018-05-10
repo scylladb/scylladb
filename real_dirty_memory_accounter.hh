@@ -30,13 +30,16 @@ class real_dirty_memory_accounter {
     dirty_memory_manager& _mgr;
     cache_tracker& _tracker;
     uint64_t _bytes;
+    uint64_t _uncommitted = 0;
 public:
     real_dirty_memory_accounter(dirty_memory_manager& mgr, cache_tracker& tracker, size_t size);
     real_dirty_memory_accounter(memtable& m, cache_tracker& tracker);
     ~real_dirty_memory_accounter();
     real_dirty_memory_accounter(real_dirty_memory_accounter&& c);
     real_dirty_memory_accounter(const real_dirty_memory_accounter& c) = delete;
-    void unpin_memory(uint64_t bytes);
+    // Needs commit() to take effect, or when this object is destroyed.
+    void unpin_memory(uint64_t bytes) { _uncommitted += bytes; }
+    void commit();
 };
 
 inline
@@ -59,12 +62,14 @@ real_dirty_memory_accounter::~real_dirty_memory_accounter() {
 
 inline
 real_dirty_memory_accounter::real_dirty_memory_accounter(real_dirty_memory_accounter&& c)
-    : _mgr(c._mgr), _tracker(c._tracker), _bytes(c._bytes) {
+    : _mgr(c._mgr), _tracker(c._tracker), _bytes(c._bytes), _uncommitted(c._uncommitted) {
     c._bytes = 0;
+    c._uncommitted = 0;
 }
 
 inline
-void real_dirty_memory_accounter::unpin_memory(uint64_t bytes) {
+void real_dirty_memory_accounter::commit() {
+    auto bytes = std::exchange(_uncommitted, 0);
     // this should never happen - if it does it is a bug. But we'll try to recover and log
     // instead of asserting. Once it happens, though, it can keep happening until the update is
     // done. So using metrics is better-suited than printing to the logs

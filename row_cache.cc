@@ -1009,6 +1009,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
                     }
                 }
             });
+            real_dirty_acc.commit();
             seastar::thread::yield();
         }
     }).finally([cleanup = std::move(cleanup)] {});
