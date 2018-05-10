@@ -259,20 +259,11 @@ SEASTAR_TEST_CASE(test_write_static_row) {
     return seastar::async([] {
         sstring table_name = "static_row";
         // CREATE TABLE static_row (pk text, ck int, st1 int static, st2 text static, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", utf8_type}},
-            // clustering key
-            {{"ck", int32_type}},
-            // regular columns
-            {},
-            // static columns
-            {{"st1", int32_type}, {"st2", utf8_type}},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - static row test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("ck", int32_type, column_kind::clustering_key);
+        builder.with_column("st1", int32_type, column_kind::static_column);
+        builder.with_column("st2", utf8_type, column_kind::static_column);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -293,20 +284,14 @@ SEASTAR_TEST_CASE(test_write_composite_partition_key) {
     return seastar::async([] {
         sstring table_name = "composite_partition_key";
         // CREATE TABLE composite_partition_key (a int , b text, c boolean, d int, e text, f int, g text, PRIMARY KEY ((a, b, c), d, e)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"a", int32_type}, {"b", utf8_type}, {"c", boolean_type}},
-            // clustering key
-            {{"d", int32_type}, {"e", utf8_type}},
-            // regular columns
-            {{"f", int32_type}, {"g", utf8_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - composite partition key test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("a", int32_type, column_kind::partition_key);
+        builder.with_column("b", utf8_type, column_kind::partition_key);
+        builder.with_column("c", boolean_type, column_kind::partition_key);
+        builder.with_column("d", int32_type, column_kind::clustering_key);
+        builder.with_column("e", utf8_type, column_kind::clustering_key);
+        builder.with_column("f", int32_type);
+        builder.with_column("g", utf8_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -329,20 +314,13 @@ SEASTAR_TEST_CASE(test_write_composite_clustering_key) {
     return seastar::async([] {
         sstring table_name = "composite_clustering_key";
         // CREATE TABLE composite_clustering_key (a int , b text, c int, d text, e int, f text, PRIMARY KEY (a, b, c, d)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"a", int32_type}},
-            // clustering key
-            {{"b", utf8_type}, {"c", int32_type}, {"d", utf8_type}},
-            // regular columns
-            {{"e", int32_type}, {"f", utf8_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - composite clustering key test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("a", int32_type, column_kind::partition_key);
+        builder.with_column("b", utf8_type, column_kind::clustering_key);
+        builder.with_column("c", int32_type, column_kind::clustering_key);
+        builder.with_column("d", utf8_type, column_kind::clustering_key);
+        builder.with_column("e", int32_type);
+        builder.with_column("f", utf8_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -365,20 +343,11 @@ SEASTAR_TEST_CASE(test_write_wide_partitions) {
     return seastar::async([] {
         sstring table_name = "wide_partitions";
         // CREATE TABLE wide_partitions (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", utf8_type}},
-            // clustering key
-            {{"ck", utf8_type}},
-            // regular columns
-            {{"rc", utf8_type}},
-            // static columns
-            {{"st", utf8_type}},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - wide partitions test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("ck", utf8_type, column_kind::clustering_key);
+        builder.with_column("st", utf8_type, column_kind::static_column);
+        builder.with_column("rc", utf8_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -422,20 +391,10 @@ SEASTAR_TEST_CASE(test_write_ttled_row) {
     return seastar::async([] {
         sstring table_name = "ttled_row";
         // CREATE TABLE ttled_row (pk int, ck int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {{"ck", int32_type}},
-            // regular columns
-            {{"rc", int32_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - TTL-ed row test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck", int32_type, column_kind::clustering_key);
+        builder.with_column("rc", int32_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -458,20 +417,9 @@ SEASTAR_TEST_CASE(test_write_ttled_column) {
     return seastar::async([] {
         sstring table_name = "ttled_column";
         // CREATE TABLE ttled_column (pk text, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", utf8_type}},
-            // clustering key
-            {},
-            // regular columns
-            {{"rc", int32_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - TTL-ed column test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("rc", int32_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -499,20 +447,9 @@ SEASTAR_TEST_CASE(test_write_deleted_column) {
     return seastar::async([] {
         sstring table_name = "deleted_column";
         // CREATE TABLE deleted_column (pk int, rc int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {},
-            // regular columns
-            {{"rc", int32_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - deleted column test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("rc", int32_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -536,20 +473,9 @@ SEASTAR_TEST_CASE(test_write_deleted_row) {
     return seastar::async([] {
         sstring table_name = "deleted_row";
         // CREATE TABLE deleted_row (pk int, ck int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {{"ck", int32_type}},
-            // regular columns
-            {},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - deleted row test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck", int32_type, column_kind::clustering_key);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -571,20 +497,9 @@ SEASTAR_TEST_CASE(test_write_collection_wide_update) {
         sstring table_name = "collection_wide_update";
         auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
         // CREATE TABLE collection_wide_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {},
-            // regular columns
-            {{"col", set_of_ints_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - collection wide update test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("col", set_of_ints_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -615,20 +530,9 @@ SEASTAR_TEST_CASE(test_write_collection_incremental_update) {
         sstring table_name = "collection_incremental_update";
         auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
         // CREATE TABLE collection_incremental_update (pk int, col set<int>, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {},
-            // regular columns
-            {{"col", set_of_ints_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - collection incremental update test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("col", set_of_ints_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -656,20 +560,11 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     return seastar::async([] {
         sstring table_name = "multiple_partitions";
         // CREATE TABLE multiple_partitions (pk int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {},
-            // regular columns
-            {{"rc1", int32_type}, {"rc2", int32_type}, {"rc3", int32_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - multiple partitions test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("rc1", int32_type);
+        builder.with_column("rc2", int32_type);
+        builder.with_column("rc3", int32_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -692,24 +587,47 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     });
 }
 
+static future<> test_write_many_partitions(sstring table_name, tombstone partition_tomb) {
+    return seastar::async([table_name, partition_tomb] {
+        // CREATE TABLE <table_name> (pk int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        for (auto i : boost::irange(0, 65536)) {
+            auto key = partition_key::from_deeply_exploded(*s, {i});
+            mutation mut{s, key};
+            if (partition_tomb) {
+                mut.partition().apply(partition_tomb);
+            }
+            mt->apply(std::move(mut));
+        }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_many_live_partitions) {
+    return test_write_many_partitions("many_live_partitions", {});
+}
+
+SEASTAR_TEST_CASE(test_write_many_deleted_partitions) {
+    return test_write_many_partitions("many_deleted_partitions", {write_timestamp, write_time_point});
+}
+
 SEASTAR_TEST_CASE(test_write_multiple_rows) {
     return seastar::async([] {
         sstring table_name = "multiple_rows";
         // CREATE TABLE multiple_rows (pk int, ck int, rc1 int, rc2 int, rc3 int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {{"ck", int32_type}},
-            // regular columns
-            {{"rc1", int32_type}, {"rc2", int32_type}, {"rc3", int32_type}},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - multiple rows test"
-        )));
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck", int32_type, column_kind::clustering_key);
+        builder.with_column("rc1", int32_type);
+        builder.with_column("rc2", int32_type);
+        builder.with_column("rc3", int32_type);
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
@@ -740,24 +658,12 @@ SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
     return seastar::async([] {
         sstring table_name = "missing_columns_large_set";
         // CREATE TABLE missing_columns_large_set (pk int, ck int, rc1 int, ..., rc64, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
-        std::vector<schema::column> regular_columns;
-        regular_columns.reserve(64);
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck", int32_type, column_kind::clustering_key);
         for (auto idx: boost::irange(1, 65)) {
-            regular_columns.push_back({to_bytes(format("rc{}", idx)), int32_type});
+            builder.with_column(to_bytes(format("rc{}", idx)), int32_type);
         }
-        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", table_name), "sst3", table_name,
-            // partition key
-            {{"pk", int32_type}},
-            // clustering key
-            {{"ck", int32_type}},
-            regular_columns,
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "SSTable 3.0 format write path - missing columns large set test"
-        )));
         builder.set_compressor_params(compression_parameters());
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 

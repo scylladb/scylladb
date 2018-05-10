@@ -213,6 +213,7 @@ private:
         }
 
         void update(const schema& s, const mutation_partition& mp) {
+            update(mp.partition_tombstone());
             update(s, mp.static_row(), column_kind::static_column);
             for (auto&& row_entry : mp.clustered_rows()) {
                 update(s, row_entry.row());
