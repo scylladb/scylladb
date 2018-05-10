@@ -363,6 +363,10 @@ future<> password_authenticator::drop(stdx::string_view name) const {
     return _qp.process(query, consistency_for_user(name), {sstring(name)}).discard_result();
 }
 
+future<custom_options> password_authenticator::query_custom_options(stdx::string_view role_name) const {
+    return make_ready_future<custom_options>();
+}
+
 const resource_set& password_authenticator::protected_resources() const {
     static const resource_set resources({make_data_resource(meta::AUTH_KS, meta::roles_table::name)});
     return resources;

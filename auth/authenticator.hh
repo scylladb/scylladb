@@ -139,6 +139,13 @@ public:
     virtual future<> drop(stdx::string_view role_name) const = 0;
 
     ///
+    /// Query for custom options (those corresponding to \ref authentication_options::options).
+    ///
+    /// If no options are set the result is an empty container.
+    ///
+    virtual future<custom_options> query_custom_options(stdx::string_view role_name) const = 0;
+
+    ///
     /// System resources used internally as part of the implementation. These are made inaccessible to users.
     ///
     virtual const resource_set& protected_resources() const = 0;
