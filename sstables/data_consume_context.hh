@@ -77,10 +77,10 @@ class data_consume_context {
     shared_sstable _sst;
     std::unique_ptr<DataConsumeRowsContext> _ctx;
 
-    // This object can only be constructed by sstable::data_consume_rows()
     template <typename Consumer>
     data_consume_context(shared_sstable sst, Consumer &consumer, input_stream<char> &&input, uint64_t start, uint64_t maxlen)
-        : _sst(std::move(sst)), _ctx(new DataConsumeRowsContext(consumer, std::move(input), start, maxlen))
+        : _sst(std::move(sst))
+        , _ctx(new DataConsumeRowsContext(_sst, consumer, std::move(input), start, maxlen))
     { }
 
     friend class sstable;

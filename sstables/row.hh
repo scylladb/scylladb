@@ -453,8 +453,9 @@ public:
         return row_consumer::proceed::yes;
     }
 
-    data_consume_rows_context(row_consumer& consumer,
-            input_stream<char> && input, uint64_t start, uint64_t maxlen)
+    data_consume_rows_context(const shared_sstable&,
+                              row_consumer& consumer,
+                              input_stream<char>&& input, uint64_t start, uint64_t maxlen)
                 : continuous_data_consumer(std::move(input), start, maxlen)
                 , _consumer(consumer) {
     }
@@ -514,6 +515,7 @@ private:
     } _state = state::PARTITION_START;
 
     consumer_m& _consumer;
+    const serialization_header& _header;
 
     temporary_buffer<char> _pk;
 
@@ -676,8 +678,14 @@ public:
         return row_consumer::proceed::yes;
     }
 
-    data_consume_rows_context_m(consumer_m& consumer, input_stream<char> && input, uint64_t start, uint64_t maxlen)
-        : continuous_data_consumer(std::move(input), start, maxlen), _consumer(consumer)
+    data_consume_rows_context_m(const shared_sstable& sst,
+                                consumer_m& consumer,
+                                input_stream<char> && input,
+                                uint64_t start,
+                                uint64_t maxlen)
+        : continuous_data_consumer(std::move(input), start, maxlen)
+        , _consumer(consumer)
+        , _header(sst->get_serialization_header())
     { }
 
     void verify_end_state() {
