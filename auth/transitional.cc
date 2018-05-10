@@ -130,6 +130,10 @@ public:
         return _authenticator->drop(role_name);
     }
 
+    virtual future<custom_options> query_custom_options(stdx::string_view role_name) const override {
+        return _authenticator->query_custom_options(role_name);
+    }
+
     virtual const resource_set& protected_resources() const override {
         return _authenticator->protected_resources();
     }

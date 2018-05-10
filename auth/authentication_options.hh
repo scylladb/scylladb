@@ -43,9 +43,11 @@ std::ostream& operator<<(std::ostream&, authentication_option);
 
 using authentication_option_set = std::unordered_set<authentication_option>;
 
+using custom_options = std::unordered_map<sstring, sstring>;
+
 struct authentication_options final {
     std::optional<sstring> password;
-    std::optional<std::unordered_map<sstring, sstring>> options;
+    std::optional<custom_options> options;
 };
 
 inline bool any_authentication_options(const authentication_options& aos) noexcept {
