@@ -468,12 +468,14 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     sstables::compression::segmented_offsets::writer _offsets;
     sstables::local_compression _compression;
     size_t _pos = 0;
+    uint32_t _full_checksum;
 public:
     compressed_file_data_sink_impl(file f, sstables::compression* cm, sstables::local_compression lc, file_output_stream_options options)
             : _out(make_file_output_stream(std::move(f), options))
             , _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_writer())
             , _compression(lc)
+            , _full_checksum(adler32_utils::init_checksum())
     {}
 
     future<> put(net::packet data) { abort(); }
@@ -499,7 +501,8 @@ public:
 
         // compute 32-bit checksum for compressed data.
         uint32_t per_chunk_checksum = adler32_utils::checksum(compressed.get(), len);
-        _compression_metadata->update_full_checksum(per_chunk_checksum, len);
+        _full_checksum = adler32_utils::checksum_combine(_full_checksum, per_chunk_checksum, len);
+        _compression_metadata->set_full_checksum(_full_checksum);
 
         // write checksum into buffer after compressed data.
         write_be<uint32_t>(compressed.get_write() + len, per_chunk_checksum);
@@ -532,7 +535,6 @@ output_stream<char> sstables::make_compressed_file_output_stream(file f, file_ou
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
     cm->options.elements.push_back({"crc_check_chance", "1.0"});
-    cm->init_full_checksum();
 
     auto outer_buffer_size = cm->uncompressed_chunk_length();
     return output_stream<char>(compressed_file_data_sink(std::move(f), cm, p, options), outer_buffer_size, true);

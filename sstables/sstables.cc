@@ -2460,7 +2460,7 @@ void sstable_writer_k_l::finish_file_writer()
         write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
         write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
     } else {
-        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.full_checksum());
+        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), _sst._components->compression.get_full_checksum());
     }
 }
 

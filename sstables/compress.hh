@@ -305,7 +305,7 @@ struct compression {
 private:
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length = 0;
-    uint32_t _full_checksum;
+    uint32_t _full_checksum = 0;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor_ptr c);
@@ -355,16 +355,13 @@ public:
         _compressed_file_length = compressed_file_length;
     }
 
-    uint32_t full_checksum() const {
+    uint32_t get_full_checksum() const {
         return _full_checksum;
     }
-    void init_full_checksum() {
-        _full_checksum = adler32_utils::init_checksum();
-    }
-    void update_full_checksum(uint32_t checksum, size_t size) {
-        _full_checksum = adler32_utils::checksum_combine(_full_checksum, checksum, size);
-    }
 
+    void set_full_checksum(uint32_t checksum) {
+        _full_checksum = checksum;
+    }
 
     friend class sstable;
 };
