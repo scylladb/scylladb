@@ -58,7 +58,6 @@ private:
     static constexpr int8_t LIVE_FLAG = 0x01;
     static constexpr int8_t EXPIRY_FLAG = 0x02; // When present, expiry field is present. Set only for live cells
     static constexpr int8_t COUNTER_UPDATE_FLAG = 0x08; // Cell is a counter update.
-    static constexpr int8_t COUNTER_IN_PLACE_REVERT = 0x10;
     static constexpr unsigned flags_size = 1;
     static constexpr unsigned timestamp_offset = flags_size;
     static constexpr unsigned timestamp_size = 8;
@@ -72,13 +71,6 @@ private:
 private:
     static bool is_counter_update(bytes_view cell) {
         return cell[0] & COUNTER_UPDATE_FLAG;
-    }
-    static bool is_counter_in_place_revert_set(bytes_view cell) {
-        return cell[0] & COUNTER_IN_PLACE_REVERT;
-    }
-    template<typename BytesContainer>
-    static void set_counter_in_place_revert(BytesContainer& cell, bool flag) {
-        cell[0] = (cell[0] & ~COUNTER_IN_PLACE_REVERT) | (flag * COUNTER_IN_PLACE_REVERT);
     }
     static bool is_live(const bytes_view& cell) {
         return cell[0] & LIVE_FLAG;
@@ -208,9 +200,6 @@ public:
     bool is_counter_update() const {
         return atomic_cell_type::is_counter_update(_data);
     }
-    bool is_counter_in_place_revert_set() const {
-        return atomic_cell_type::is_counter_in_place_revert_set(_data);
-    }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
     }
@@ -262,9 +251,6 @@ public:
     }
     bytes_view serialize() const {
         return _data;
-    }
-    void set_counter_in_place_revert(bool flag) {
-        atomic_cell_type::set_counter_in_place_revert(_data, flag);
     }
 };
 

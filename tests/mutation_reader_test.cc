@@ -1390,11 +1390,15 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
             const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
-            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &mutations] {
+            auto frozen_mutations = boost::copy_range<std::vector<frozen_mutation>>(
+                mutations
+                | boost::adaptors::transformed(freeze)
+            );
+            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
                 auto mt = make_lw_shared<memtable>(s.get());
 
-                for (auto& mut : mutations) {
-                    mt->apply(mut);
+                for (auto& mut : frozen_mutations) {
+                    mt->apply(mut, s.get());
                 }
 
                 return make_foreign(mt);

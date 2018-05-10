@@ -43,6 +43,10 @@ public:
         _delegate.free(ptr, size);
     }
 
+    virtual void free(void* ptr) override {
+        _delegate.free(ptr);
+    }
+
     virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
         return _delegate.object_memory_size_in_allocator(obj);
     }

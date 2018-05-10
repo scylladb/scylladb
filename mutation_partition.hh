@@ -340,6 +340,7 @@ public:
     cell_hash_opt cell_hash_for(column_id id) const;
 
     void prepare_hash(const schema& s, column_kind kind) const;
+    void clear_hash() const;
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 

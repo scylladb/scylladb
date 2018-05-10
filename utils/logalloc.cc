@@ -45,30 +45,76 @@ namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
 
+namespace {
+
+class migrators : public enable_lw_shared_from_this<migrators> {
+    std::vector<const migrate_fn_type*> _migrators;
+    std::deque<uint32_t> _unused_ids;
+#ifdef DEBUG_LSA_SANITIZER
+    static constexpr uint32_t offset = 0x00ab'1234;
+#else
+    static constexpr uint32_t offset = 0;
+#endif
+public:
+    uint32_t add(const migrate_fn_type* m) {
+#ifndef DEBUG_LSA_SANITIZER
+        if (!_unused_ids.empty()) {
+            auto idx = _unused_ids.front();
+            _unused_ids.pop_front();
+            _migrators[idx - offset] = m;
+            return idx;
+        }
+#endif
+        _migrators.push_back(m);
+        return _migrators.size() - 1 + offset;
+    }
+    void remove(uint32_t idx) {
+#ifdef DEBUG_LSA_SANITIZER
+        assert(idx >= offset);
+        assert(idx - offset < _migrators.size());
+        assert(_migrators[idx - offset]);
+        _migrators[idx - offset] = nullptr;
+#else
+        _unused_ids.push_back(idx);
+#endif
+    }
+    const migrate_fn_type*& operator[](uint32_t idx) {
+#ifdef DEBUG_LSA_SANITIZER
+        assert(idx >= offset);
+        assert(idx - offset < _migrators.size());
+        assert(_migrators[idx - offset]);
+#endif
+        return _migrators[idx - offset];
+    }
+};
+
 static
-std::vector<const migrate_fn_type*>&
+migrators&
 static_migrators() {
-    static std::vector<const migrate_fn_type*> obj;
-    return obj;
+    static thread_local lw_shared_ptr<migrators> obj = make_lw_shared<migrators>();
+    return *obj;
+}
+
 }
 
 namespace debug {
 
-std::vector<const migrate_fn_type*>* static_migrators = &::static_migrators();
+thread_local migrators* static_migrators = &::static_migrators();
 
 }
 
 
 uint32_t
-migrate_fn_type::register_migrator(const migrate_fn_type* m) {
-    static_migrators().push_back(m);
-    return static_migrators().size() - 1;
+migrate_fn_type::register_migrator(migrate_fn_type* m) {
+    auto& migrators = static_migrators();
+    auto idx = migrators.add(m);
+    m->_migrators = migrators.shared_from_this();
+    return idx;
 }
 
 void
 migrate_fn_type::unregister_migrator(uint32_t index) {
-    static_migrators()[index] = nullptr;
-    // reuse freed slots? no need now
+    static_migrators().remove(index);
 }
 
 namespace logalloc {
@@ -1127,7 +1173,7 @@ private:
             auto size = desc->live_size(obj);
             auto dst = alloc_small(desc->migrator(), size, desc->alignment());
             _sanitizer.on_migrate(obj, size, dst);
-            desc->migrator()->migrate(obj, dst);
+            desc->migrator()->migrate(obj, dst, size);
         });
 
         free_segment(seg, desc);
@@ -1264,18 +1310,37 @@ public:
         }
     }
 
+private:
+    void on_non_lsa_free(void* obj) noexcept {
+        auto allocated_size = malloc_usable_size(obj);
+        _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
+        if (_group) {
+            _evictable_space -= allocated_size;
+            _group->decrease_usage(_heap_handle, allocated_size);
+        }
+        shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
+    }
+public:
+    virtual void free(void* obj) noexcept override {
+        compaction_lock _(*this);
+        segment* seg = shard_segment_pool.containing_segment(obj);
+        if (!seg) {
+            on_non_lsa_free(obj);
+            standard_allocator().free(obj);
+            return;
+        }
+
+        auto pos = reinterpret_cast<const char*>(obj);
+        auto desc = object_descriptor::decode_backwards(pos);
+        free(obj, desc.live_size(obj));
+    }
+
     virtual void free(void* obj, size_t size) noexcept override {
         compaction_lock _(*this);
         segment* seg = shard_segment_pool.containing_segment(obj);
 
         if (!seg) {
-            auto allocated_size = malloc_usable_size(obj);
-            _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
-            if (_group) {
-                 _evictable_space -= allocated_size;
-                _group->decrease_usage(_heap_handle, allocated_size);
-            }
-            shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
+            on_non_lsa_free(obj);
             standard_allocator().free(obj, size);
             return;
         }
@@ -1417,7 +1482,7 @@ public:
                 auto size = desc.live_size(pos);
                 offset += size;
                 _sanitizer.on_migrate(pos, size, dpos);
-                desc.migrator()->migrate(const_cast<char*>(pos), dpos);
+                desc.migrator()->migrate(const_cast<char*>(pos), dpos, size);
             } else {
                 offset += desc.dead_size();
             }

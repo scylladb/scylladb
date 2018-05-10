@@ -2467,7 +2467,7 @@ bool map_type_impl::references_duration() const {
     return _keys->references_duration() || _values->references_duration();
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
+auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) const -> mutation_view {
     auto&& in = cm.data;
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);

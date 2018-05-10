@@ -180,7 +180,7 @@ public:
             auto& alctr = current_allocator();
             auto maxseg = max_seg(alctr);
             auto now = std::min(size_t(size), maxseg);
-            void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
+            void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
                 sizeof(blob_storage) + now, alignof(blob_storage));
             auto first = new (p) blob_storage(&_u.ptr, size, now);
             auto last = first;
@@ -188,7 +188,7 @@ public:
             try {
                 while (size) {
                     auto now = std::min(size_t(size), maxseg);
-                    void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
+                    void* p = alctr.alloc(&get_standard_migrator<blob_storage>(),
                         sizeof(blob_storage) + now, alignof(blob_storage));
                     last = new (p) blob_storage(&last->next, 0, now);
                     size -= now;

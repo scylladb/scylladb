@@ -124,6 +124,12 @@ public:
         return mutation_fragment(std::move(row));
     }
 
+    mutation_fragment make_row_from_serialized_value(const clustering_key& key, bytes_view v) {
+        auto row = clustering_row(key);
+        row.cells().apply(_v_def, atomic_cell::make_live(new_timestamp(), v));
+        return mutation_fragment(std::move(row));
+    }
+
     api::timestamp_type add_static_row(mutation& m, sstring s1, api::timestamp_type t = api::missing_timestamp) {
         if (t == api::missing_timestamp) {
             t = new_timestamp();

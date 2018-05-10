@@ -141,7 +141,7 @@ class build_progress_virtual_reader {
                                 scylla_in_progress_rt.end_kind,
                                 scylla_in_progress_rt.tomb);
                     }
-                    push_mutation_fragment(mf);
+                    push_mutation_fragment(std::move(mf));
                 }
             });
         }

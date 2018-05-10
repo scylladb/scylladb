@@ -2799,9 +2799,8 @@ void sstable_writer_m::consume(tombstone t) {
 void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, const column_definition& cdef,
         const row_time_properties& properties, bytes_view cell_path) {
 
-    bytes_view cell_value = cell.value();
     bool is_deleted = !cell.is_live();
-    bool has_value = !(cell_value.empty() || is_deleted);
+    bool has_value = !is_deleted && !cell.value().empty();
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
     bool is_row_expiring = properties.ttl.has_value();
     bool is_cell_expiring = cell.is_live_and_has_ttl();
@@ -2846,7 +2845,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     }
 
     if (has_value) {
-        write_cell_value(writer, *cdef.type, cell_value);
+        write_cell_value(writer, *cdef.type, cell.value());
     }
 
     // Collect cell statistics
@@ -2889,7 +2888,8 @@ void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker
 
 void sstable_writer_m::write_collection(file_writer& writer, const column_definition& cdef,
         collection_mutation_view collection, const row_time_properties& properties, bool has_complex_deletion) {
-    auto mview = collection_type_impl::deserialize_mutation_form(collection);
+    auto& ctype = *static_pointer_cast<const collection_type_impl>(cdef.type);
+    auto mview = ctype.deserialize_mutation_form(collection);
     if (has_complex_deletion) {
         auto dt = to_deletion_time(mview.tomb);
         write_delta_deletion_time(writer, dt);
