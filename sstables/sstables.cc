@@ -2446,7 +2446,8 @@ void sstable_writer_k_l::prepare_file_writer()
     if (!_compression_enabled) {
         _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(_sst._data_file), std::move(options));
     } else {
-        _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
+        _writer = std::make_unique<file_writer>(make_compressed_file_k_l_format_output_stream(
+                std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
     }
 }
 
@@ -3562,9 +3563,8 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
     input_stream<char> stream;
     if (_components->compression) {
-        return make_compressed_file_input_stream(f, &_components->compression,
-                pos, len, std::move(options));
-
+        return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
+            pos, len, std::move(options));
     }
 
     return make_file_input_stream(f, pos, len, std::move(options));

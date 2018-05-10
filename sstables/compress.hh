@@ -38,7 +38,7 @@
 // LZ4. Each compressor is an implementation of the "compressor" class.
 //
 // Each compressed chunk is followed by a 4-byte checksum of the compressed
-// data, using the Adler32 algorithm. In Cassandra, there is a parameter
+// data, using the Adler32 or CRC32 algorithm. In Cassandra, there is a parameter
 // "crc_check_chance" (defaulting to 1.0) which determines the probability
 // of us verifying the checksum of each chunk we read.
 //
@@ -371,13 +371,23 @@ public:
 // are open streams on it. This should happen naturally on a higher level -
 // as long as we have *sstables* work in progress, we need to keep the whole
 // sstable alive, and the compression metadata is only a part of it.
-input_stream<char> make_compressed_file_input_stream(file f,
-                sstables::compression *cm, uint64_t offset, size_t len,
+input_stream<char> make_compressed_file_k_l_format_input_stream(file f,
+                sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options);
 
-output_stream<char> make_compressed_file_output_stream(file f,
-                file_output_stream_options options, sstables::compression* cm,
-                const compression_parameters&);
+output_stream<char> make_compressed_file_k_l_format_output_stream(file f,
+                file_output_stream_options options,
+                sstables::compression* cm,
+                const compression_parameters& cp);
+
+input_stream<char> make_compressed_file_m_format_input_stream(file f,
+                sstables::compression* cm, uint64_t offset, size_t len,
+                class file_input_stream_options options);
+
+output_stream<char> make_compressed_file_m_format_output_stream(file f,
+                file_output_stream_options options,
+                sstables::compression* cm,
+                const compression_parameters& cp);
 
 }
 
