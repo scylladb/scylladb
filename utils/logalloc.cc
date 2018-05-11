@@ -1387,7 +1387,7 @@ public:
         _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
         segment* seg = shard_segment_pool.segment_from(desc);
-        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg->occupancy());
+        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), desc.occupancy());
         compact(seg, desc);
         shard_segment_pool.on_segment_compaction();
     }
