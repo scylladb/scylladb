@@ -734,4 +734,7 @@ public:
 // allocated so segregated allocation can work)
 void prime_segment_pool();
 
+uint64_t memory_allocated();
+uint64_t memory_compacted();
+
 }

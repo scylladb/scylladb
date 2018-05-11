@@ -469,13 +469,16 @@ public:
     struct stats {
         size_t segments_migrated;
         size_t segments_compacted;
+        uint64_t memory_allocated;
+        uint64_t memory_compacted;
     };
 private:
     stats _stats{};
 public:
     const stats& statistics() const { return _stats; }
     void on_segment_migration() { _stats.segments_migrated++; }
-    void on_segment_compaction() { _stats.segments_compacted++; }
+    void on_segment_compaction(size_t used_size);
+    void on_memory_allocation(size_t size);
     size_t unreserved_free_segments() const { return _free_segments - std::min(_free_segments, _emergency_reserve_max); }
     size_t free_segments() const { return _free_segments; }
 };
@@ -807,19 +810,31 @@ public:
     struct stats {
         size_t segments_migrated;
         size_t segments_compacted;
+        uint64_t memory_allocated;
+        uint64_t memory_compacted;
     };
 private:
     stats _stats{};
 public:
     const stats& statistics() const { return _stats; }
     void on_segment_migration() { _stats.segments_migrated++; }
-    void on_segment_compaction() { _stats.segments_compacted++; }
+    void on_segment_compaction(size_t used_space);
+    void on_memory_allocation(size_t size);
     size_t free_segments() const { return 0; }
 public:
     class reservation_goal;
 };
 
 #endif
+
+void segment_pool::on_segment_compaction(size_t used_size) {
+    _stats.segments_compacted++;
+    _stats.memory_compacted += used_size;
+}
+
+void segment_pool::on_memory_allocation(size_t size) {
+    _stats.memory_allocated += size;
+}
 
 // RAII wrapper to maintain segment_pool::current_emergency_reserve_goal()
 class segment_pool::reservation_goal {
@@ -1251,6 +1266,7 @@ public:
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
         compaction_lock _(*this);
         memory::on_alloc_point();
+        shard_segment_pool.on_memory_allocation(size);
         if (size > max_managed_object_size) {
             auto ptr = standard_allocator().alloc(migrator, size, alignment);
             // This isn't very acurrate, the correct free_space value would be
@@ -1388,9 +1404,10 @@ public:
         _segment_descs.pop_one_of_largest();
         _closed_occupancy -= desc.occupancy();
         segment* seg = shard_segment_pool.segment_from(desc);
-        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), desc.occupancy());
+        auto seg_occupancy = desc.occupancy();
+        llogger.debug("Compacting segment {} from region {}, {}", seg, id(), seg_occupancy);
         compact(seg, desc);
-        shard_segment_pool.on_segment_compaction();
+        shard_segment_pool.on_segment_compaction(seg_occupancy.used_space());
     }
 
     // Compacts a single segment
@@ -1957,6 +1974,12 @@ tracker::impl::impl() {
 
         sm::make_derive("segments_compacted", [this] { return shard_segment_pool.statistics().segments_compacted; },
                         sm::description("Counts a number of compacted segments.")),
+
+        sm::make_derive("memory_compacted", [this] { return shard_segment_pool.statistics().memory_compacted; },
+                        sm::description("Counts number of bytes which were copied as part of segment compaction.")),
+
+        sm::make_derive("memory_allocated", [this] { return shard_segment_pool.statistics().memory_allocated; },
+                        sm::description("Counts number of bytes which were requested from LSA allocator.")),
     });
 }
 
@@ -2154,6 +2177,14 @@ void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_func
 
 void prime_segment_pool() {
     shard_segment_pool.prime();
+}
+
+uint64_t memory_allocated() {
+    return shard_segment_pool.statistics().memory_allocated;
+}
+
+uint64_t memory_compacted() {
+    return shard_segment_pool.statistics().memory_compacted;
 }
 
 }
