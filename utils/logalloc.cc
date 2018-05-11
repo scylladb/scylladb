@@ -405,6 +405,8 @@ class segment_pool {
     //     - clear everywhere
 private:
     segment* allocate_segment(size_t reserve);
+    // reclamation_step is in segment units
+    segment* allocate_segment(size_t reserve, size_t reclamation_step);
     void deallocate_segment(segment* seg);
     friend void* segment::operator new(size_t);
     friend void segment::operator delete(void*);
@@ -531,7 +533,11 @@ size_t segment_pool::reclaim_segments(size_t target) {
     return reclaimed_segments;
 }
 
-segment* segment_pool::allocate_segment(size_t reserve)
+segment* segment_pool::allocate_segment(size_t reserve) {
+    return allocate_segment(reserve, shard_tracker().reclamation_step());
+}
+
+segment* segment_pool::allocate_segment(size_t reserve, size_t reclamation_step)
 {
     //
     // When allocating a segment we want to avoid:
@@ -565,7 +571,7 @@ segment* segment_pool::allocate_segment(size_t reserve)
             _lsa_owned_segments_bitmap.set(idx);
             return seg;
         }
-    } while (shard_tracker().get_impl().compact_and_evict(shard_tracker().reclamation_step() * segment::size));
+    } while (shard_tracker().get_impl().compact_and_evict(reclamation_step * segment::size));
     if (shard_tracker().should_abort_on_bad_alloc()) {
         llogger.error("Aborting due to segment allocation failure");
         abort();
@@ -582,7 +588,7 @@ void segment_pool::deallocate_segment(segment* seg)
 
 void segment_pool::refill_emergency_reserve() {
     while (_free_segments < _emergency_reserve_max) {
-        auto seg = allocate_segment(_emergency_reserve_max);
+        auto seg = allocate_segment(_emergency_reserve_max, _emergency_reserve_max - _free_segments);
         if (!seg) {
             throw std::bad_alloc();
         }
