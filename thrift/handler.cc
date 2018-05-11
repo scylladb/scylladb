@@ -999,9 +999,17 @@ public:
 
     void execute_prepared_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const int32_t itemId, const std::vector<std::string> & values, const ConsistencyLevel::type consistency) {
         with_exn_cob(std::move(exn_cob), [&] {
-            auto prepared = _query_processor.local().get_prepared(cql3::prepared_cache_key_type(itemId));
+            cql3::prepared_cache_key_type cache_key(itemId);
+            bool needs_authorization = false;
+
+            auto prepared = _query_processor.local().get_prepared(_query_state.get_client_state().user().get(), cache_key);
             if (!prepared) {
-                throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
+                needs_authorization = true;
+
+                prepared = _query_processor.local().get_prepared(cache_key);
+                if (!prepared) {
+                    throw make_exception<InvalidRequestException>("Prepared query with id %d not found", itemId);
+                }
             }
             auto stmt = prepared->statement;
             if (stmt->get_bound_terms() != values.size()) {
@@ -1013,7 +1021,7 @@ public:
             });
             auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), _timeout_config, stdx::nullopt, std::move(bytes_values),
                             false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
-            auto f = _query_processor.local().process_statement(stmt, _query_state, *opts);
+            auto f = _query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), _query_state, *opts, needs_authorization);
             return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
                 cql3_result_visitor visitor;
                 ret->accept(visitor);

@@ -910,7 +910,16 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
 {
     cql3::prepared_cache_key_type cache_key(read_short_bytes(buf));
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
-    auto prepared = _server._query_processor.local().get_prepared(cache_key);
+    bool needs_authorization = false;
+
+    // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+    // look for the prepared statement and then authorize it.
+    auto prepared = _server._query_processor.local().get_prepared(client_state.user().get(), cache_key);
+    if (!prepared) {
+        needs_authorization = true;
+        prepared = _server._query_processor.local().get_prepared(cache_key);
+    }
+
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
@@ -945,7 +954,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
+    return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {

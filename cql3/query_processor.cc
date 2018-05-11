@@ -58,12 +58,14 @@ using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
 logging::logger prep_cache_log("prepared_statements_cache");
+logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
 
 distributed<query_processor> _the_query_processor;
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
+const std::chrono::minutes authorized_prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 class query_processor::internal_state {
     service::query_state _qs;
@@ -96,7 +98,8 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
         , _proxy(proxy)
         , _db(db)
         , _internal_state(new internal_state())
-        , _prepared_cache(prep_cache_log) {
+        , _prepared_cache(prep_cache_log)
+        , _authorized_prepared_cache(std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()), authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(
@@ -199,7 +202,23 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
                     sm::make_derive(
                             "secondary_index_rows_read",
                             _cql_stats.secondary_index_rows_read,
-                            sm::description("Counts a total number of rows read during CQL requests performed using secondary indexes."))
+                            sm::description("Counts a total number of rows read during CQL requests performed using secondary indexes.")),
+
+                    sm::make_derive(
+                            "authorized_prepared_statements_cache_evictions",
+                            [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
+                            sm::description("Counts a number of authenticated prepared statements cache entries evictions.")),
+
+                    sm::make_gauge(
+                            "authorized_prepared_statements_cache_size",
+                            [this] { return _authorized_prepared_cache.size(); },
+                            sm::description("A number of entries in the authenticated prepared statements cache.")),
+
+                    sm::make_gauge(
+                            "user_prepared_auth_cache_footprint",
+                            [this] { return _authorized_prepared_cache.memory_footprint(); },
+                            sm::description("Size (in bytes) of the authenticated prepared statements cache."))
+
             });
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
@@ -210,7 +229,7 @@ query_processor::~query_processor() {
 
 future<> query_processor::stop() {
     service::get_local_migration_manager().unregister_listener(_migration_subscriber.get());
-    return _prepared_cache.stop();
+    return _authorized_prepared_cache.stop().finally([this] { return _prepared_cache.stop(); });
 }
 
 future<::shared_ptr<result_message>>
@@ -230,33 +249,60 @@ query_processor::process(const sstring_view& query_string, service::query_state&
             metrics.regularStatementsExecuted.inc();
 #endif
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return process_statement(std::move(cql_statement), query_state, options);
+    return process_statement_unprepared(std::move(cql_statement), query_state, options);
 }
 
 future<::shared_ptr<result_message>>
-query_processor::process_statement(
+query_processor::process_statement_unprepared(
         ::shared_ptr<cql_statement> statement,
         service::query_state& query_state,
         const query_options& options) {
-    return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options]() {
-        auto& client_state = query_state.get_client_state();
+    return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options] () mutable {
+        return process_authorized_statement(std::move(statement), query_state, options);
+    });
+}
 
-        statement->validate(_proxy, client_state);
+future<::shared_ptr<result_message>>
+query_processor::process_statement_prepared(
+        statements::prepared_statement::checked_weak_ptr prepared,
+        cql3::prepared_cache_key_type cache_key,
+        service::query_state& query_state,
+        const query_options& options,
+        bool needs_authorization) {
 
-        auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
-        if (client_state.is_internal()) {
-            fut = statement->execute_internal(_proxy, query_state, options);
-        } else  {
-            fut = statement->execute(_proxy, query_state, options);
-        }
-
-        return fut.then([statement] (auto msg) {
-            if (msg) {
-                return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
-            }
-            return make_ready_future<::shared_ptr<result_message>>(
-                ::make_shared<result_message::void_message>());
+    ::shared_ptr<cql_statement> statement = prepared->statement;
+    future<> fut = make_ready_future<>();
+    if (needs_authorization) {
+        fut = statement->check_access(query_state.get_client_state()).then([this, &query_state, prepared = std::move(prepared), cache_key = std::move(cache_key)] () mutable {
+            return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), std::move(cache_key), std::move(prepared)).handle_exception([this] (auto eptr) {
+                log.error("failed to cache the entry", eptr);
+            });
         });
+    }
+
+    return fut.then([this, statement = std::move(statement), &query_state, &options] () mutable {
+        return process_authorized_statement(std::move(statement), query_state, options);
+    });
+}
+
+future<::shared_ptr<result_message>>
+query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options) {
+    auto& client_state = query_state.get_client_state();
+
+    statement->validate(_proxy, client_state);
+
+    auto fut = make_ready_future<::shared_ptr<cql_transport::messages::result_message>>();
+    if (client_state.is_internal()) {
+        fut = statement->execute_internal(_proxy, query_state, options);
+    } else  {
+        fut = statement->execute(_proxy, query_state, options);
+    }
+
+    return fut.then([statement] (auto msg) {
+        if (msg) {
+            return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
+        }
+        return make_ready_future<::shared_ptr<result_message>>(::make_shared<result_message::void_message>());
     });
 }
 
