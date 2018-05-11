@@ -333,7 +333,8 @@ struct segment {
 };
 
 static constexpr size_t max_managed_object_size = segment_size * 0.1;
-static constexpr size_t max_used_space_for_compaction = segment_size * 0.85;
+static constexpr auto max_used_space_ratio_for_compaction = 0.85;
+static constexpr size_t max_used_space_for_compaction = segment_size * max_used_space_ratio_for_compaction;
 static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
 
 static_assert(min_free_space_for_compaction >= max_managed_object_size,
@@ -1660,10 +1661,16 @@ static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
         if (used == 0) {
             break;
         }
-        auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
+        // Before attempting segment compaction, try to evict at least deficit and one segment more so that
+        // for workloads in which eviction order matches allocation order we will reclaim full segments
+        // without needing to perform expensive compaction.
+        auto used_target = used - std::min(used, deficit + segment::size);
         llogger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
         while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
             if (r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
+                if (r.is_compactible()) { // Need to make forward progress in case there is nothing to evict.
+                    break;
+                }
                 llogger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
@@ -1840,7 +1847,15 @@ size_t tracker::impl::compact_and_evict_locked(size_t memory_to_release) {
             break;
         }
 
-        r->compact();
+        // Prefer evicting if average occupancy ratio is above the compaction threshold to avoid
+        // overhead of compaction in workloads where allocation order matches eviction order, where
+        // we can reclaim memory by eviction only. In some cases the cost of compaction on allocation
+        // would be higher than the cost of repopulating the region with evicted items.
+        if (r->is_evictable() && r->occupancy().used_space() >= max_used_space_ratio_for_compaction * r->occupancy().total_space()) {
+            reclaim_from_evictable(*r, target_mem);
+        } else {
+            r->compact();
+        }
 
         boost::range::push_heap(_regions, cmp);
     }
