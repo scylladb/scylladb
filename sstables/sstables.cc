@@ -2593,6 +2593,7 @@ private:
     sstable_writer_config _cfg;
     encoding_stats _enc_stats;
     shard_id _shard; // Specifies which shard the new SStable will belong to.
+    bool _compression_enabled = false;
     std::unique_ptr<file_writer> _data_writer;
     std::optional<file_writer> _index_writer;
     bool _tombstone_written = false;
@@ -2636,8 +2637,17 @@ private:
 
     void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
         return components_writer::maybe_add_summary_entry(
-            _sst._components->summary, token, key, _data_writer->offset(),
+            _sst._components->summary, token, key, get_data_offset(),
             _index_writer->offset(), _index_sampling_state);
+    }
+
+    uint64_t get_data_offset() const {
+        if (_sst.has_component(component_type::CompressionInfo)) {
+            // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
+            return _sst._components->compression.compressed_file_length();
+        } else {
+            return _data_writer->offset();
+        }
     }
 
     void write_delta_timestamp(file_writer& writer, api::timestamp_type timestamp) {
@@ -2690,9 +2700,7 @@ public:
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
         _sst.create_data().get();
-        if (!_sst.has_component(component_type::CRC)) {
-            throw std::runtime_error("Compression is not yet implemented for SSTables 3.0 yet");
-        }
+        _compression_enabled = !_sst.has_component(component_type::CRC);
         init_file_writers();
         _sst._shards = { shard };
 
@@ -2737,16 +2745,34 @@ void sstable_writer_m::init_file_writers() {
     options.buffer_size = _sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(_sst._data_file), options);
+    if (!_compression_enabled) {
+        _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(_sst._data_file), options);
+    } else {
+        _data_writer = std::make_unique<file_writer>(
+            make_compressed_file_m_format_output_stream(
+                    std::move(_sst._data_file),
+                    options,
+                    &_sst._components->compression,
+                    _schema.get_compressor_params()));
+    }
     _index_writer.emplace(std::move(_sst._index_file), options);
 }
 
 void sstable_writer_m::close_data_writer() {
     auto writer = std::move(_data_writer);
     writer->close().get();
-    auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
-    write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
-    write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+
+    if (!_compression_enabled) {
+        auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
+        write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
+        write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
+    } else {
+        write_digest(
+            _sst.get_version(),
+            _sst._write_error_handler,
+            _sst.filename(component_type::Digest),
+            _sst._components->compression.get_full_checksum());
+    }
 }
 
 void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
@@ -3183,7 +3209,7 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
         _first_key = *_partition_key;
     }
     _last_key = std::move(*_partition_key);
-    return stop_iteration::no;
+    return get_data_offset() < _cfg.max_sstable_size ? stop_iteration::no : stop_iteration::yes;
 }
 
 void sstable_writer_m::consume_end_of_stream() {
@@ -3563,8 +3589,13 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_prior
 
     input_stream<char> stream;
     if (_components->compression) {
-        return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
-            pos, len, std::move(options));
+        if (_version == sstable_version_types::mc) {
+             return make_compressed_file_m_format_input_stream(f, &_components->compression,
+                pos, len, std::move(options));
+        } else {
+            return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
+                pos, len, std::move(options));
+        }
     }
 
     return make_file_input_stream(f, pos, len, std::move(options));
