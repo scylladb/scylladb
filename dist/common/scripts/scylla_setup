@@ -113,7 +113,7 @@ run_setup_script() {
     shift 1
     $* &&:
     if [ $? -ne 0 ] && [ $INTERACTIVE -eq 1 ]; then
-        printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
+        printf "${RED}$name setup failed. Press any key to continue...${NO_COLOR}\n"
         read
         return 1
     else
@@ -259,7 +259,7 @@ printf "${GREEN}Skip any of the following steps by answering 'no'${NO_COLOR}\n"
 
 if is_ec2; then
     if [ $INTERACTIVE -eq 1 ]; then
-        interactive_ask_service "Do you want to run Amazon EC2 configuration check?" "Answer yes to have this script verify that current instance configuration is optimized for running Scylla; answer no to skip this check." "yes" &&:
+        interactive_ask_service "Do you want to run Amazon EC2 configuration check?" "Yes - runs a script to verify that this instance is optimized for running Scylls. No - skips the configuration check." "yes" &&:
         EC2_CHECK=$?
     fi
     if [ $EC2_CHECK -eq 1 ]; then
@@ -268,7 +268,7 @@ if is_ec2; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to run kernel version check?" "Answer yes to have this script verify that the currently installed kernel is qualified to run Scylla; answer no to skip this check." "yes" &&:
+    interactive_ask_service "Do you want to run check your kernel version?" "Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check." "yes" &&:
     KERNEL_CHECK=$?
 fi
 if [ $KERNEL_CHECK -eq 1 ]; then
@@ -276,7 +276,7 @@ if [ $KERNEL_CHECK -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to verify ScyllaDB packages installed?" "Answer yes to have this script check that ScyllaDB is already installed; answer no to skip this check." "yes" &&:
+    interactive_ask_service "Do you want to verify the ScyllaDB packages are installed?" "Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check." "yes" &&:
     VERIFY_PACKAGE=$?
 fi
 
@@ -286,7 +286,7 @@ if [ $VERIFY_PACKAGE -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable ScyllaDB services?" "Answer yes to automatically start Scylla when the node boots; answer no to skip this step." "yes" &&:
+    interactive_ask_service "Do you want the Scylla server service to automatically start when the Scylla node boots?" "Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually." "yes" &&:
     ENABLE_SERVICE=$?
 fi
 
@@ -300,7 +300,7 @@ if [ $ENABLE_SERVICE -eq 1 ]; then
         rc-update add collectd default
     fi
     if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
-        interactive_ask_service "Do you want to enable ScyllaDB version check?" "Answer yes to automatically start Scylla-housekeeping service that checks for a newer version periodically; answer no to skip this step." "yes" &&:
+        interactive_ask_service "Do you want to enable Scylla to check if there is a newer version of Scylla available?" "Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step." "yes" &&:
         ENABLE_CHECK_VERSION=$?
     fi
     if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
@@ -340,7 +340,7 @@ else
     else
         NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/yum.repos.d/scylla*.repo' version --version unknown --mode u` || true
     fi
-    echo "Scylla executable is not found, check your installation" $NEW_VERSION
+    echo "A Scylla executable was not found, please check your installation" $NEW_VERSION
 fi
 
 # scylla_selinux_setup only supports Red Hat variants
@@ -349,7 +349,7 @@ if is_debian_variant || is_gentoo_variant; then
 else
     if ! is_selinux_enabled; then
         if [ $INTERACTIVE -eq 1 ]; then
-            interactive_ask_service "Do you want to disable SELinux?" "Answer yes to disable SELinux and improve performance; answer no to keep it activated." "yes" &&:
+            interactive_ask_service "Do you want to disable SELinux?" "Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated." "yes" &&:
             SELINUX_SETUP=$?
         fi
         if [ $SELINUX_SETUP -eq 1 ]; then
@@ -363,7 +363,7 @@ fi
 
 if [ $AMI -eq 1 ]; then
     if [ $INTERACTIVE -eq 1 ]; then
-        interactive_ask_service "Do you want to setup bootloader options?" "Answer yes to enable hugepages at boot time and improve performance. Answer no to skip this step." "yes" &&:
+        interactive_ask_service "Do you want add hugepages capability to the bootloader options?" "Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step." "yes" &&:
         BOOTPARAM_SETUP=$?
     fi
     if [ $BOOTPARAM_SETUP -eq 1 ]; then
@@ -372,7 +372,7 @@ if [ $AMI -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup NTP?" "Answer yes to enable time synchronization at boot time. This keeps time right on the node. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?" "Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step." "yes" &&:
     NTP_SETUP=$?
 fi
 if [ $NTP_SETUP -eq 1 ]; then
@@ -384,9 +384,9 @@ if [ $NTP_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup RAID and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompt to choose which unmounted disks to use for Scylla data. Selected disks will be formatted in the process." "yes" &&:
+    interactive_ask_service "Do you want to setup RAID0 and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process." "Yes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step." "yes" &&:
     if [ $? -eq 1 ]; then
-        interactive_ask_service "Are you sure you want to setup RAID and XFS?" "If you choose Yes, selected drive will be reformated, erasing existing data in the process." "yes" &&:
+        interactive_ask_service "Are you sure you want to setup RAID0 and XFS?" "If you choose Yes, the selected drive will be reformated, erasing all existing data in the process." "yes" &&:
         RAID_SETUP=$?
     else
         RAID_SETUP=0
@@ -394,7 +394,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     if [ $RAID_SETUP -eq 1 ]; then
         DEVS=`get_unused_disks`
         if [ "$DEVS" = "" ]; then
-            echo "No free disks detected, abort RAID/XFS setup."
+            echo "No free disks were detected, abort RAID/XFS setup. Disks must be unmounted before proceeding."
             echo
             RAID_SETUP=0
         else
@@ -435,7 +435,7 @@ if [ $RAID_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup coredump?" "Answer yes to enable core dumps; this allows to do post-mortem analysis of Scylla state after a crash. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to enable coredumps?" "Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step." "yes" &&:
     COREDUMP_SETUP=$?
 fi
 if [ $COREDUMP_SETUP -eq 1 ]; then
@@ -447,18 +447,18 @@ if [ $COREDUMP_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup sysconfig?" "Answer yes to do system wide configuration customized for Scylla. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to setup a system-wide customized configuration for Scylla?" "Yes - setup the sysconfig file. No - skips this step." "yes" &&:
     SYSCONFIG_SETUP=$?
     if [ $SYSCONFIG_SETUP -eq 1 ]; then
         NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
         NR_NICS=`echo $NICS|wc -w`
         if [ $NR_NICS -eq 0 ]; then
-            echo "NIC not found."
+            echo "A NIC was not found."
             exit 1
         elif [ $NR_NICS -eq 1 ]; then
             NIC=$NICS
         else
-            echo "Please select NIC from following list: "
+            echo "Please select a NIC from the following list: "
             while true; do
                 echo $NICS
                 echo -n "> "
@@ -468,7 +468,7 @@ if [ $INTERACTIVE -eq 1 ]; then
                 fi
             done
         fi
-        interactive_ask_service "Do you want to optimize NIC queue settings?" "Answer yes to enable network card optimization and improve performance. Answer no to skip this optimization." "yes" &&:
+        interactive_ask_service "Do you want to enable Network Interface Card (NIC) optimization?" "Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step." "yes" &&:
         SET_NIC=$?
     fi
 fi
@@ -481,7 +481,7 @@ if [ $SYSCONFIG_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup IO configuration?" "Answer yes to let iotune study what are your disks IO profile and adapt Scylla to it. Answer no to skip this action." "yes" &&:
+    interactive_ask_service "Do you want iotune to study your disks IO profile and adapt Scylla to it?" "Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step." "yes" &&:
     IO_SETUP=$?
 fi
 
@@ -490,7 +490,7 @@ if [ $IO_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to install node exporter and export Prometheus data from the node?" "Answer yes to install it; answer no to skip this installation." "yes" &&:
+    interactive_ask_service "Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data" "Yes - install node exporter. No - skip this  step." "yes" &&:
     NODE_EXPORTER=$?
 fi
 
@@ -503,7 +503,7 @@ if [ $DEV_MODE -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup CPU scaling governor?" "Answer yes to  set CPU scaling governor to performance at boot time. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to set the CPU scaling governor to Performance level on boot?" "Yes - sets the CPU scaling governor to performance level. No - skip this step." "yes" &&:
     CPUSCALING_SETUP=$?
 fi
 if [ $CPUSCALING_SETUP -eq 1 ]; then
@@ -511,7 +511,7 @@ if [ $CPUSCALING_SETUP -eq 1 ]; then
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable fstrim service?" "Answer yes to run fstrim on your SSD. Answer no to do nothing." "yes" &&:
+    interactive_ask_service "Do you want to enable fstrim service?" "Yes - runs fstrim on your SSD. No - skip this step." "yes" &&:
     FSTRIM_SETUP=$?
 fi
 if [ $FSTRIM_SETUP -eq 1 ]; then
@@ -520,6 +520,6 @@ fi
 
 echo "ScyllaDB setup finished."
 if [ $SELINUX_REBOOT_REQUIRED -eq 1 ]; then
-    echo "Please restart machine before using ScyllaDB, since you have disabled"
+    echo "Please restart your machine before using ScyllaDB, as you have disabled"
     echo " SELinux."
 fi
