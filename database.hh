@@ -87,6 +87,7 @@
 #include "querier.hh"
 #include "mutation_query.hh"
 #include "db/large_partition_handler.hh"
+#include <unordered_set>
 
 class cell_locker;
 class cell_locker_stats;
@@ -740,6 +741,13 @@ public:
     void set_incremental_backups(bool val) {
         _config.enable_incremental_backups = val;
     }
+
+    /*!
+     * \brief get sstables by key
+     * Return a set of the sstables names that contain the given
+     * partition key in nodetool format
+     */
+    future<std::unordered_set<sstring>> get_sstables_by_partition_key(const sstring& key) const;
 
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<sstable_list> get_sstables() const;
