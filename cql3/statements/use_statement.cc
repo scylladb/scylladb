@@ -49,7 +49,8 @@ namespace cql3 {
 namespace statements {
 
 use_statement::use_statement(sstring keyspace)
-    : _keyspace(keyspace)
+        : cql_statement_no_metadata(&timeout_config::other_timeout)
+        , _keyspace(keyspace)
 {
 }
 

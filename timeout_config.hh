@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2014 ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
+ *
  */
 
 /*
@@ -19,18 +20,20 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef APPS_SEASTAR_THRIFT_HANDLER_HH_
-#define APPS_SEASTAR_THRIFT_HANDLER_HH_
+#pragma once
 
-#include "Cassandra.h"
-#include "auth/service.hh"
-#include "database.hh"
-#include "core/distributed.hh"
-#include "cql3/query_processor.hh"
-#include <memory>
+#include "db/timeout_clock.hh"
 
-struct timeout_config;
+struct timeout_config {
+    db::timeout_clock::duration read_timeout;
+    db::timeout_clock::duration write_timeout;
+    db::timeout_clock::duration range_read_timeout;
+    db::timeout_clock::duration counter_write_timeout;
+    db::timeout_clock::duration truncate_timeout;
+    db::timeout_clock::duration cas_timeout;
+    db::timeout_clock::duration other_timeout;
+};
 
-std::unique_ptr<::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, timeout_config);
+using timeout_config_selector = db::timeout_clock::duration (timeout_config::*);
 
-#endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */
+extern const timeout_config infinite_timeout_config;

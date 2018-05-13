@@ -53,6 +53,7 @@ public:
     impl(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
+                    db::timeout_clock::duration timeout,
                     lw_shared_ptr<query::read_command> cmd,
                     dht::partition_range_vector ranges)
                     : _has_clustering_keys(has_clustering_keys(*s, *cmd))
@@ -61,6 +62,7 @@ public:
                     , _selection(selection)
                     , _state(state)
                     , _options(options)
+                    , _timeout(timeout)
                     , _cmd(std::move(cmd))
                     , _ranges(std::move(ranges))
     {}
@@ -215,11 +217,12 @@ private:
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
+        auto this_timeout = db::timeout_clock::now() + _timeout;
         return get_local_storage_proxy().query(_schema,
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {_state.get_trace_state(), {}, std::move(_last_replicas), _query_read_repair_decision}).then(
+                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision}).then(
                 [this, &builder, page_size, now](service::storage_proxy::coordinator_query_result qr) {
                     _last_replicas = std::move(qr.last_replicas);
                     _query_read_repair_decision = qr.read_repair_decision;
@@ -334,6 +337,7 @@ private:
     ::shared_ptr<cql3::selection::selection> _selection;
     service::query_state& _state;
     const cql3::query_options& _options;
+    db::timeout_clock::duration _timeout;
     lw_shared_ptr<query::read_command> _cmd;
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
@@ -372,9 +376,10 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
 ::shared_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
         schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
+        db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges) {
     return ::make_shared<impl>(std::move(s), std::move(selection), state,
-            options, std::move(cmd), std::move(ranges));
+            options, timeout, std::move(cmd), std::move(ranges));
 }
 

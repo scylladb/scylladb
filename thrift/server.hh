@@ -25,6 +25,7 @@
 #include "core/reactor.hh"
 #include "core/distributed.hh"
 #include "cql3/query_processor.hh"
+#include "timeout_config.hh"
 #include <seastar/core/gate.hh>
 #include <memory>
 #include <cstdint>
@@ -66,6 +67,10 @@ namespace auth {
 class service;
 }
 
+struct thrift_server_config {
+    ::timeout_config timeout_config;
+};
+
 class thrift_server {
     class connection : public boost::intrusive::list_base_hook<> {
         struct fake_transport;
@@ -101,10 +106,11 @@ private:
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    thrift_server_config _config;
     boost::intrusive::list<connection> _connections_list;
     seastar::gate _stop_gate;
 public:
-    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp, auth::service&, thrift_server_config config);
     ~thrift_server();
     future<> listen(ipv4_addr addr, bool keepalive);
     future<> stop();

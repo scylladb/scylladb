@@ -67,11 +67,19 @@ namespace statements {
 
 logging::logger batch_statement::_logger("BatchStatement");
 
+timeout_config_selector
+timeout_for_type(batch_statement::type t) {
+    return t == batch_statement::type::COUNTER
+            ? &timeout_config::counter_write_timeout
+            : &timeout_config::write_timeout;
+}
+
 batch_statement::batch_statement(int bound_terms, type type_,
                                  std::vector<shared_ptr<modification_statement>> statements,
                                  std::unique_ptr<attributes> attrs,
                                  cql_stats& stats)
-    : _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
+    : cql_statement_no_metadata(timeout_for_type(type_))
+    , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
     , _has_conditions(boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::has_conditions)))
     , _stats(stats)

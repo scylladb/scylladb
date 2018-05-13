@@ -30,6 +30,7 @@
 #include "cql3/values.hh"
 #include "auth/authenticator.hh"
 #include "core/distributed.hh"
+#include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
 #include <memory>
 #include <boost/intrusive/list.hpp>
@@ -99,6 +100,10 @@ struct cql_query_state {
     { }
 };
 
+struct cql_server_config {
+    ::timeout_config timeout_config;
+};
+
 class cql_server {
 private:
     class event_notifier;
@@ -108,6 +113,7 @@ private:
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
+    cql_server_config _config;
     size_t _max_request_size;
     semaphore _memory_available;
     seastar::metrics::metric_groups _metrics;
@@ -122,7 +128,8 @@ private:
     cql_load_balance _lb;
     auth::service& _auth_service;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
+    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&,
+            cql_server_config config);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();
@@ -174,6 +181,7 @@ private:
         future<> process_request();
         future<> shutdown();
     private:
+        const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         friend class process_request_executor;
         future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
@@ -252,6 +260,7 @@ private:
             _all_connections_stopped.set_value();
         }
     }
+    const ::timeout_config& timeout_config() { return _config.timeout_config; }
 };
 
 class cql_server::event_notifier : public service::migration_listener,

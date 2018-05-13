@@ -208,6 +208,15 @@ select_statement::parameters::orderings_type const& select_statement::parameters
     return _orderings;
 }
 
+timeout_config_selector
+select_timeout(const restrictions::statement_restrictions& restrictions) {
+    if (restrictions.is_key_range()) {
+        return &timeout_config::range_read_timeout;
+    } else {
+        return &timeout_config::read_timeout;
+    }
+}
+
 select_statement::select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
                                    ::shared_ptr<parameters> parameters,
@@ -217,7 +226,8 @@ select_statement::select_statement(schema_ptr schema,
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
                                    cql_stats& stats)
-    : _schema(schema)
+    : cql_statement(select_timeout(*restrictions))
+    , _schema(schema)
     , _bound_terms(bound_terms)
     , _parameters(std::move(parameters))
     , _selection(std::move(selection))
@@ -391,8 +401,9 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
+    auto timeout = options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, command, std::move(key_ranges));
+            state, options, timeout, command, std::move(key_ranges));
 
     if (aggregate) {
         return do_with(
@@ -443,18 +454,19 @@ select_statement::execute(service::storage_proxy& proxy,
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     if (needs_post_query_ordering() && _limit) {
-        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd](auto prs) {
+        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto prs) {
             assert(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);
-            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd] (auto pr) {
+            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd, timeout] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 return proxy.query(_schema,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                        {timeout, state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
             }, std::move(merger));
@@ -462,7 +474,7 @@ select_statement::execute(service::storage_proxy& proxy,
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {state.get_trace_state()})
+        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_trace_state()})
             .then([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             });
@@ -495,8 +507,8 @@ select_statement::execute_internal(service::storage_proxy& proxy,
             return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
                 dht::partition_range_vector prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
-                return proxy.query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {state.get_trace_state(),
-                        db::no_timeout}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                return proxy.query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {db::no_timeout, state.get_trace_state(),
+                        }).then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
             }, std::move(merger));
@@ -504,7 +516,7 @@ select_statement::execute_internal(service::storage_proxy& proxy,
             return this->process_results(std::move(result), command, options, now);
         }).finally([command] { });
     } else {
-        auto query = proxy.query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {state.get_trace_state(), db::no_timeout});
+        auto query = proxy.query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {db::no_timeout, state.get_trace_state()});
         return query.then([command, this, &options, now] (service::storage_proxy::coordinator_query_result qr) {
             return this->process_results(std::move(qr.query_result), command, options, now);
         }).finally([command] {});
@@ -672,11 +684,12 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             query::max_partitions,
             utils::UUID(),
             options.get_timestamp(state));
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return proxy.query(view.schema(),
             cmd,
             std::move(partition_ranges),
             options.get_consistency(),
-            {state.get_trace_state()}).then(
+            {timeout, state.get_trace_state()}).then(
                     [cmd, this, &options, now, &view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
