@@ -217,7 +217,7 @@ private:
         shared_ptr<cql_server::response> make_auth_success(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
         shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
 
-        future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
+        void write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
 
         void check_room(bytes_view& buf, size_t n);
         void validate_utf8(sstring_view s);

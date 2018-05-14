@@ -470,7 +470,7 @@ future<cql_server::connection::processing_result>
         }
     }
 
-    return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
+    return futurize_apply([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -514,7 +514,10 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(buf), std::move(client_state));
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
-    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) {
+    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) -> processing_result {
+        auto stop_trace = defer([&] {
+            tracing::stop_foreground(client_state.get_trace_state());
+        });
         --_server._requests_serving;
         try {
             response_type response = f.get0();
@@ -543,30 +546,28 @@ future<cql_server::connection::processing_result>
                 case auth_state::READY:
                     break;
             }
-            return make_ready_future<processing_result>(std::move(response));
+            return processing_result(std::move(response));
         } catch (const exceptions::unavailable_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_timeout_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::read_failure_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::mutation_write_failure_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, client_state.get_trace_state()), client_state));
         } catch (const exceptions::already_exists_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, client_state.get_trace_state()), client_state));
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, client_state.get_trace_state()), client_state));
         } catch (const exceptions::cassandra_exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, ex.code(), ex.what(), client_state.get_trace_state()), client_state));
         } catch (std::exception& ex) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what(), client_state.get_trace_state()), client_state));
         } catch (...) {
-            return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
+            return processing_result(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
         }
-    }).finally([tracing_state = client_state.get_trace_state()] {
-        tracing::stop_foreground(tracing_state);
     });
 }
 
@@ -600,13 +601,12 @@ future<> cql_server::connection::process()
     }).then_wrapped([this] (future<> f) {
         try {
             f.get();
-            return make_ready_future<>();
         } catch (const exceptions::cassandra_exception& ex) {
-            return write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
+            write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
         } catch (std::exception& ex) {
-            return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
         } catch (...) {
-            return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
+            write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
         }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
@@ -693,12 +693,16 @@ future<> cql_server::connection::process_request() {
         }
 
         return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
+            _pending_requests_gate.enter();
+            auto leave = defer([this] { _pending_requests_gate.leave(); });
+            // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
+            // Cause not understood.
+            [&] {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return [&] {
@@ -709,15 +713,16 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then([this, flags] (auto&& response) {
+                }().then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
+                  try {
+                    auto response = response_f.get0();
                     update_client_state(response);
-                    return this->write_response(std::move(response.cql_response), _compression);
-                }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
-                    // Keep buf alive.
+                    write_response(std::move(response.cql_response), _compression);
+                  } catch (...) {
+                    clogger.error("request processing failed: {}", std::current_exception());
+                  }
                 });
-            }).handle_exception([] (std::exception_ptr ex) {
-                clogger.error("request processing failed: {}", ex);
-            });
+            }();
 
             return make_ready_future<>();
           });
@@ -1270,7 +1275,7 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         return do_with(std::move(response), [this, compression] (auto& response) {
@@ -1279,7 +1284,6 @@ future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_serve
             });
         });
     });
-    return make_ready_future<>();
 }
 
 void cql_server::connection::check_room(bytes_view& buf, size_t n)
