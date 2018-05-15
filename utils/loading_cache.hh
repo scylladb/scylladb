@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/reactor.hh>
 #include <seastar/core/timer.hh>
@@ -79,6 +80,10 @@ public:
     value_type& value() noexcept { return _value; }
     const value_type& value() const noexcept { return _value; }
 
+    static const timestamped_val& container_of(const value_type& value) {
+        return *bi::get_parent_from_member(&value, &timestamped_val::_value);
+    }
+
     loading_cache_clock_type::time_point last_read() const noexcept {
         return _last_read;
     }
@@ -92,6 +97,10 @@ public:
     }
 
     bool ready() const noexcept {
+        return _lru_entry_ptr;
+    }
+
+    lru_entry* lru_entry_ptr() const noexcept {
         return _lru_entry_ptr;
     }
 
@@ -386,6 +395,24 @@ public:
         }, [this] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
         });
+    }
+
+    void remove(const Key& k) {
+        auto it = set_find(k);
+        if (it == set_end()) {
+            return;
+        }
+
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*it->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+    }
+
+    void remove(iterator it) {
+        if (it == end()) {
+            return;
+        }
+
+        const ts_value_type& val = ts_value_type::container_of(*it);
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*val.lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
     }
 
     size_t size() const {
