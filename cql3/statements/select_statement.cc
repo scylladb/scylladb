@@ -283,6 +283,7 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                             }
                     ).then([&builder] {
                                 auto rs = builder.build();
+                                update_stats_rows_read(rs->size());
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
                                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
                             });
@@ -302,6 +303,7 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
                     rs->get_metadata().set_has_more_pages(p->state());
                 }
 
+                update_stats_rows_read(rs->size());
                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
             });
@@ -407,6 +409,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         }
         rs->trim(cmd->row_limit);
     }
+    update_stats_rows_read(rs->size());
     return ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
 }
 
@@ -498,6 +501,7 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
     auto now = gc_clock::now();
 
     ++_stats.reads;
+    ++_stats.secondary_index_reads;
 
     assert(_restrictions->uses_secondary_indexing());
     return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges) {

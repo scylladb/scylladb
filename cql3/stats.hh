@@ -35,6 +35,12 @@ struct cql_stats {
     uint64_t batches_pure_logged = 0;
     uint64_t batches_pure_unlogged = 0;
     uint64_t batches_unlogged_from_logged = 0;
+    uint64_t rows_read = 0;
+
+    int64_t secondary_index_creates = 0;
+    int64_t secondary_index_drops = 0;
+    int64_t secondary_index_reads = 0;
+    int64_t secondary_index_rows_read = 0;
 };
 
 }
