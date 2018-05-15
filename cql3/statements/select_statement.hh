@@ -138,6 +138,9 @@ public:
 protected:
     int32_t get_limit(const query_options& options) const;
     bool needs_post_query_ordering() const;
+    virtual void update_stats_rows_read(int64_t rows_read) {
+        _stats.rows_read += rows_read;
+    }
 };
 
 class primary_key_select_statement : public select_statement {
@@ -189,6 +192,11 @@ private:
     future<dht::partition_range_vector> find_index_partition_ranges(service::storage_proxy& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
+
+    virtual void update_stats_rows_read(int64_t rows_read) override {
+        _stats.rows_read += rows_read;
+        _stats.secondary_index_rows_read += rows_read;
+    }
 };
 
 }

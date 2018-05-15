@@ -56,6 +56,7 @@ namespace statements {
 class drop_index_statement : public schema_altering_statement {
     sstring _index_name;
     bool _if_exists;
+    cql_stats* _cql_stats = nullptr;
 public:
     drop_index_statement(::shared_ptr<index_name> index_name, bool if_exists);
 

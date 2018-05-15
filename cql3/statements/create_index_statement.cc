@@ -252,6 +252,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
                     sprint("Index %s is a duplicate of existing index %s", index.name(), existing_index.value().name()));
         }
     }
+    ++_cql_stats->secondary_index_creates;
     schema_builder builder{schema};
     builder.with_index(index);
     return service::get_local_migration_manager().announce_column_family_update(
@@ -267,6 +268,7 @@ create_index_statement::announce_migration(service::storage_proxy& proxy, bool i
 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_index_statement::prepare(database& db, cql_stats& stats) {
+    _cql_stats = &stats;
     return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 

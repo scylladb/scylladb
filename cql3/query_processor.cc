@@ -177,7 +177,30 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
                     sm::make_gauge(
                             "prepared_cache_memory_footprint",
                             [this] { return _prepared_cache.memory_footprint(); },
-                            sm::description("Size (in bytes) of the prepared statements cache."))});
+                            sm::description("Size (in bytes) of the prepared statements cache.")),
+
+                    sm::make_derive(
+                            "secondary_index_creates",
+                            _cql_stats.secondary_index_creates,
+                            sm::description("Counts a total number of CQL CREATE INDEX requests.")),
+
+                    sm::make_derive(
+                            "secondary_index_drops",
+                            _cql_stats.secondary_index_drops,
+                            sm::description("Counts a total number of CQL DROP INDEX requests.")),
+
+                    // secondary_index_reads total count is also included in all cql reads
+                    sm::make_derive(
+                            "secondary_index_reads",
+                            _cql_stats.secondary_index_reads,
+                            sm::description("Counts a total number of CQL read requests performed using secondary indexes.")),
+
+                    // secondary_index_rows_read total count is also included in all cql rows read
+                    sm::make_derive(
+                            "secondary_index_rows_read",
+                            _cql_stats.secondary_index_rows_read,
+                            sm::description("Counts a total number of rows read during CQL requests performed using secondary indexes."))
+            });
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
