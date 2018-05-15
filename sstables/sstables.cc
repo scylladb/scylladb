@@ -2437,7 +2437,7 @@ void sstable_writer_k_l::prepare_file_writer()
     options.write_behind = 10;
 
     if (!_compression_enabled) {
-        _writer = std::make_unique<checksummed_file_writer>(std::move(_sst._data_file), std::move(options), true);
+        _writer = std::make_unique<adler32_checksummed_file_writer>(std::move(_sst._data_file), std::move(options));
     } else {
         _writer = std::make_unique<file_writer>(make_compressed_file_output_stream(std::move(_sst._data_file), std::move(options), &_sst._components->compression, _schema.get_compressor_params()));
     }
@@ -2449,7 +2449,7 @@ void sstable_writer_k_l::finish_file_writer()
     writer->close().get();
 
     if (!_compression_enabled) {
-        auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
+        auto chksum_wr = static_cast<adler32_checksummed_file_writer*>(writer.get());
         write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
         write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
     } else {
@@ -2729,14 +2729,14 @@ void sstable_writer_m::init_file_writers() {
     options.buffer_size = _sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    _data_writer = std::make_unique<checksummed_file_writer>(std::move(_sst._data_file), options, true);
+    _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(_sst._data_file), options);
     _index_writer.emplace(std::move(_sst._index_file), options);
 }
 
 void sstable_writer_m::close_data_writer() {
     auto writer = std::move(_data_writer);
     writer->close().get();
-    auto chksum_wr = static_cast<checksummed_file_writer*>(writer.get());
+    auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
     write_digest(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::Digest), chksum_wr->full_checksum());
     write_crc(_sst.get_version(), _sst._write_error_handler, _sst.filename(component_type::CRC), chksum_wr->finalize_checksum());
 }

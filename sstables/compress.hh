@@ -49,7 +49,6 @@
 #include <vector>
 #include <cstdint>
 #include <iterator>
-#include <zlib.h>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/reactor.hh>
@@ -57,27 +56,8 @@
 #include <seastar/core/fstream.hh>
 
 #include "types.hh"
+#include "checksum_utils.hh"
 #include "../compress.hh"
-
-inline uint32_t init_checksum_adler32() {
-    return adler32(0, Z_NULL, 0);
-}
-
-inline uint32_t checksum_adler32(const char* input, size_t input_len) {
-    auto init = adler32(0, Z_NULL, 0);
-    // yuck, zlib uses unsigned char while we use char :-(
-    return adler32(init, reinterpret_cast<const unsigned char *>(input),
-            input_len);
-}
-
-inline uint32_t checksum_adler32(uint32_t adler, const char* input, size_t input_len) {
-    return adler32(adler, reinterpret_cast<const unsigned char *>(input),
-            input_len);
-}
-
-inline uint32_t checksum_adler32_combine(uint32_t adler1, uint32_t adler2, size_t input_len2) {
-    return adler32_combine(adler1, adler2, input_len2);
-}
 
 class compression_parameters;
 class compressor;
@@ -379,10 +359,10 @@ public:
         return _full_checksum;
     }
     void init_full_checksum() {
-        _full_checksum = init_checksum_adler32();
+        _full_checksum = adler32_utils::init_checksum();
     }
     void update_full_checksum(uint32_t checksum, size_t size) {
-        _full_checksum = checksum_adler32_combine(_full_checksum, checksum, size);
+        _full_checksum = adler32_utils::checksum_combine(_full_checksum, checksum, size);
     }
 
 

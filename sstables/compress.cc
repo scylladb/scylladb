@@ -396,7 +396,7 @@ public:
                 // FIXME: Do not always calculate checksum - Cassandra has a
                 // probability (defaulting to 1.0, but still...)
                 auto checksum = read_be<uint32_t>(buf.get() + compressed_len);
-                if (checksum != checksum_adler32(buf.get(), compressed_len)) {
+                if (checksum != adler32_utils::checksum(buf.get(), compressed_len)) {
                     throw std::runtime_error("compressed chunk failed checksum");
                 }
 
@@ -498,7 +498,7 @@ public:
         _compression_metadata->set_compressed_file_length(_pos);
 
         // compute 32-bit checksum for compressed data.
-        uint32_t per_chunk_checksum = checksum_adler32(compressed.get(), len);
+        uint32_t per_chunk_checksum = adler32_utils::checksum(compressed.get(), len);
         _compression_metadata->update_full_checksum(per_chunk_checksum, len);
 
         // write checksum into buffer after compressed data.
