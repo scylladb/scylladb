@@ -53,7 +53,7 @@ public:
     }
 
     size_t memory_size() const {
-        return _storage.size() * sizeof(int_type);
+        return _storage.memory_size();
     }
 
     bool test(size_t idx) const {

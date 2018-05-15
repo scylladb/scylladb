@@ -165,6 +165,10 @@ public:
             make_room(n);
         }
     }
+
+    size_t memory_size() const {
+        return _capacity * sizeof(T);
+    }
 public:
     template <class ValueType>
     class iterator_type {
