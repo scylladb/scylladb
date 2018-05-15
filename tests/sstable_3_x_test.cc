@@ -30,6 +30,7 @@
 
 #include "sstables/sstables.hh"
 #include "compress.hh"
+#include "counters.hh"
 #include "schema_builder.hh"
 #include "sstable_test.hh"
 #include "flat_mutation_reader_assertions.hh"
@@ -693,6 +694,55 @@ SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
             mut.set_cell(ckey, to_bytes(format("rc64", 63)), data_value{64}, ts);
             mt->apply(std::move(mut));
         }
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
+SEASTAR_TEST_CASE(test_write_counter_table) {
+    return seastar::async([] {
+        sstring table_name = "counter_table";
+        // CREATE TABLE counter_table (pk text, ck text, rc1 counter, rc2 counter, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("ck", utf8_type, column_kind::clustering_key);
+        builder.with_column("rc1", counter_type);
+        builder.with_column("rc2", counter_type);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key")});
+        mutation mut{s, key};
+
+        // Keep counter ids fixed to produce the same binary output on each run
+        std::vector<counter_id> ids = {
+            counter_id{utils::UUID{"19478feb-8e7c-4729-9a78-9b476552f13d"}},
+            counter_id{utils::UUID{"e079a6fe-eb79-4bdf-97ca-c87a2c387d5c"}},
+            counter_id{utils::UUID{"bbba5897-78b6-4cdc-9a0d-ea9e9a3b833f"}},
+        };
+        boost::range::sort(ids);
+
+        const column_definition& cdef1 = *s->get_column_definition("rc1");
+        const column_definition& cdef2 = *s->get_column_definition("rc2");
+
+        auto ckey1 = clustering_key::from_exploded(*s, {to_bytes("ck1")});
+
+        counter_cell_builder b1;
+        b1.add_shard(counter_shard(ids[0], 5, 1));
+        b1.add_shard(counter_shard(ids[1], -4, 1));
+        b1.add_shard(counter_shard(ids[2], 9, 1));
+        mut.set_clustered_cell(ckey1, cdef1, b1.build(write_timestamp));
+
+        counter_cell_builder b2;
+        b2.add_shard(counter_shard(ids[1], -1, 1));
+        b2.add_shard(counter_shard(ids[2], 2, 1));
+        mut.set_clustered_cell(ckey1, cdef2, b2.build(write_timestamp));
+
+        auto ckey2 = clustering_key::from_exploded(*s, {to_bytes("ck2")});
+        mut.set_clustered_cell(ckey2, cdef1, atomic_cell::make_dead(write_timestamp, write_time_point));
+
+        mt->apply(mut);
 
         write_and_compare_sstables(s, mt, table_name);
     });
