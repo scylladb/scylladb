@@ -503,15 +503,15 @@ private:
         FLAGS_2,
         EXTENDED_FLAGS,
         STATIC_ROW,
-        NON_STATIC_ROW,
-        NON_STATIC_ROW_SIZE,
-        NON_STATIC_ROW_PREV_SIZE,
-        NON_STATIC_ROW_TIMESTAMP,
-        NON_STATIC_ROW_TIMESTAMP_TTL,
-        NON_STATIC_ROW_TIMESTAMP_DELTIME,
-        NON_STATIC_ROW_DELETION,
-        NON_STATIC_ROW_DELETION_2,
-        NON_STATIC_ROW_DELETION_3,
+        ROW_BODY,
+        ROW_BODY_SIZE,
+        ROW_BODY_PREV_SIZE,
+        ROW_BODY_TIMESTAMP,
+        ROW_BODY_TIMESTAMP_TTL,
+        ROW_BODY_TIMESTAMP_DELTIME,
+        ROW_BODY_DELETION,
+        ROW_BODY_DELETION_2,
+        ROW_BODY_DELETION_3,
         RANGE_TOMBSTONE_MARKER,
     } _state = state::PARTITION_START;
 
@@ -530,8 +530,8 @@ public:
         return (_state == state::DELETION_TIME_3
                 || _state == state::FLAGS_2
                 || _state == state::EXTENDED_FLAGS
-                || _state == state::NON_STATIC_ROW_TIMESTAMP_DELTIME
-                || _state == state::NON_STATIC_ROW_DELETION_3) && (_prestate == prestate::NONE);
+                || _state == state::ROW_BODY_TIMESTAMP_DELTIME
+                || _state == state::ROW_BODY_DELETION_3) && (_prestate == prestate::NONE);
     }
 
     data_consumer::processing_result process_state(temporary_buffer<char>& data) {
@@ -587,8 +587,8 @@ public:
                 goto range_tombstone_marker_label;
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
-                _state = state::NON_STATIC_ROW;
-                goto non_static_row_label;
+                _state = state::ROW_BODY;
+                goto row_body_label;
             }
             if (read_8(data) != read_status::ready) {
                 _state = state::EXTENDED_FLAGS;
@@ -604,67 +604,67 @@ public:
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
-        case state::NON_STATIC_ROW:
-        non_static_row_label:
+        case state::ROW_BODY:
+        row_body_label:
             _is_first_unfiltered = false;
             // Clustering blocks should be read here but serialization header is needed for that.
             // Table with just partition key does not have any so it's ok for the first version.
 
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_SIZE;
+                _state = state::ROW_BODY_SIZE;
                 break;
             }
-        case state::NON_STATIC_ROW_SIZE:
+        case state::ROW_BODY_SIZE:
             // Ignore the result
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_PREV_SIZE;
+                _state = state::ROW_BODY_PREV_SIZE;
                 break;
             }
-        case state::NON_STATIC_ROW_PREV_SIZE:
+        case state::ROW_BODY_PREV_SIZE:
             // Ignore the result
             if (!_flags.has_timestamp()) {
-                _state = state::NON_STATIC_ROW_DELETION;
-                goto non_static_row_deletion_label;
+                _state = state::ROW_BODY_DELETION;
+                goto row_body_deletion_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_TIMESTAMP;
+                _state = state::ROW_BODY_TIMESTAMP;
                 break;
             }
-        case state::NON_STATIC_ROW_TIMESTAMP:
+        case state::ROW_BODY_TIMESTAMP:
             _liveness.set_timestamp(_u64);
             if (!_flags.has_ttl()) {
-                _state = state::NON_STATIC_ROW_DELETION;
-                goto non_static_row_deletion_label;
+                _state = state::ROW_BODY_DELETION;
+                goto row_body_deletion_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_TIMESTAMP_TTL;
+                _state = state::ROW_BODY_TIMESTAMP_TTL;
                 break;
             }
-        case state::NON_STATIC_ROW_TIMESTAMP_TTL:
+        case state::ROW_BODY_TIMESTAMP_TTL:
             _liveness.set_ttl(uint32_t(_u64));
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_TIMESTAMP_DELTIME;
+                _state = state::ROW_BODY_TIMESTAMP_DELTIME;
                 break;
             }
-        case state::NON_STATIC_ROW_TIMESTAMP_DELTIME:
+        case state::ROW_BODY_TIMESTAMP_DELTIME:
             _liveness.set_local_deletion_time(uint32_t(_u64));
-        case state::NON_STATIC_ROW_DELETION:
-        non_static_row_deletion_label:
+        case state::ROW_BODY_DELETION:
+        row_body_deletion_label:
             if (!_flags.has_deletion()) {
                 _state = state::FLAGS;
                 goto flags_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_DELETION_2;
+                _state = state::ROW_BODY_DELETION_2;
                 break;
             }
-        case state::NON_STATIC_ROW_DELETION_2:
+        case state::ROW_BODY_DELETION_2:
             // TODO consume mark_for_deleted_at
             if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::NON_STATIC_ROW_DELETION_3;
+                _state = state::ROW_BODY_DELETION_3;
                 break;
             }
-        case state::NON_STATIC_ROW_DELETION_3:
+        case state::ROW_BODY_DELETION_3:
             // TODO consume local_deletion_time
             _state = state::FLAGS;
             goto flags_label;
