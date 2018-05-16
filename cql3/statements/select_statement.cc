@@ -276,12 +276,12 @@ select_statement::do_execute(distributed<service::storage_proxy>& proxy,
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format()),
-                [p, page_size, now](auto& builder) {
+                [this, p, page_size, now](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now] {
                                 return p->fetch_page(builder, page_size, now);
                             }
-                    ).then([&builder] {
+                    ).then([this, &builder] {
                                 auto rs = builder.build();
                                 update_stats_rows_read(rs->size());
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
