@@ -20,6 +20,7 @@
  */
 
 #include "compaction_manager.hh"
+#include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
@@ -215,6 +216,18 @@ void compaction_manager::deregister_compacting_sstables(const std::vector<sstabl
     }
 }
 
+class user_initiated_backlog_tracker final : public compaction_backlog_tracker::impl {
+public:
+    explicit user_initiated_backlog_tracker(float added_backlog) : _added_backlog(added_backlog) {}
+private:
+    float _added_backlog;
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+        return _added_backlog * memory::stats().total_memory();
+    }
+    virtual void add_sstable(sstables::shared_sstable sst)  override { }
+    virtual void remove_sstable(sstables::shared_sstable sst)  override { }
+};
+
 future<> compaction_manager::submit_major_compaction(column_family* cf) {
     if (_stopped) {
         return make_ready_future<>();
@@ -241,9 +254,12 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             auto compacting = compacting_sstable_registration(this, sstables);
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
-
-            return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
-                return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+            return do_with(std::move(user_initiated), [this, cf, sstables = std::move(sstables)] (compaction_backlog_tracker& bt) mutable {
+                register_backlog_tracker(bt);
+                return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
+                    return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+                });
             }).then([compacting = std::move(compacting)] {});
         });
     }).then_wrapped([this, task] (future<> f) {
@@ -548,8 +564,11 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
-        return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-            return cf.cleanup_sstables(std::move(descriptor));
+        compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
+            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
+                return cf.cleanup_sstables(std::move(descriptor));
+            });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             _stats.active_tasks--;
             if (!can_proceed(task)) {
