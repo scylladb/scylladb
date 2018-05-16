@@ -1702,6 +1702,35 @@ static inline void update_cell_stats(column_stats& c_stats, api::timestamp_type 
     c_stats.cells_count++;
 }
 
+template <typename WriteLengthFunc>
+static void write_counter_value(counter_cell_view ccv, file_writer& out, sstable_version_types v, WriteLengthFunc&& write_len_func) {
+    auto shard_count = ccv.shard_count();
+    static constexpr auto header_entry_size = sizeof(int16_t);
+    static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
+    auto total_size = sizeof(int16_t) + shard_count * (header_entry_size + counter_shard_size);
+
+    write_len_func(out, uint32_t(total_size));
+    write(v, out, int16_t(shard_count));
+    for (auto i = 0u; i < shard_count; i++) {
+        write<int16_t>(v, out, std::numeric_limits<int16_t>::min() + i);
+    }
+    auto write_shard = [&] (auto&& s) {
+        auto uuid = s.id().to_uuid();
+        write(v, out, int64_t(uuid.get_most_significant_bits()),
+              int64_t(uuid.get_least_significant_bits()),
+              int64_t(s.logical_clock()), int64_t(s.value()));
+    };
+    if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
+        for (auto&& s : ccv.shards()) {
+            write_shard(s);
+        }
+    } else {
+        for (auto&& s : ccv.shards_compatible_with_1_7_4()) {
+            write_shard(s);
+        }
+    }
+}
+
 // Intended to write all cell components that follow column name.
 void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_definition& cdef) {
     api::timestamp_type timestamp = cell.timestamp();
@@ -1727,31 +1756,9 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         write(_version, out, mask, int64_t(0), timestamp);
 
         counter_cell_view ccv(cell);
-        auto shard_count = ccv.shard_count();
-
-        static constexpr auto header_entry_size = sizeof(int16_t);
-        static constexpr auto counter_shard_size = 32u; // counter_id: 16 + clock: 8 + value: 8
-        auto total_size = sizeof(int16_t) + shard_count * (header_entry_size + counter_shard_size);
-
-        write(_version, out, int32_t(total_size), int16_t(shard_count));
-        for (auto i = 0u; i < shard_count; i++) {
-            write<int16_t>(_version, out, std::numeric_limits<int16_t>::min() + i);
-        }
-        auto write_shard = [&] (auto&& s) {
-            auto uuid = s.id().to_uuid();
-            write(_version, out, int64_t(uuid.get_most_significant_bits()),
-                  int64_t(uuid.get_least_significant_bits()),
-                  int64_t(s.logical_clock()), int64_t(s.value()));
-        };
-        if (service::get_local_storage_service().cluster_supports_correct_counter_order()) {
-            for (auto&& s : ccv.shards()) {
-                write_shard(s);
-            }
-        } else {
-            for (auto&& s : ccv.shards_compatible_with_1_7_4()) {
-                write_shard(s);
-            }
-        }
+        write_counter_value(ccv, out, _version, [v = _version] (file_writer& out, uint32_t value) {
+            return write(v, out, value);
+        });
 
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     } else if (cell.is_live_and_has_ttl()) {
@@ -2849,7 +2856,15 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     }
 
     if (has_value) {
-        write_cell_value(writer, *cdef.type, cell.value());
+        if (cdef.is_counter()) {
+            assert(!cell.is_counter_update());
+            counter_cell_view ccv(cell);
+            write_counter_value(ccv, writer, sstable_version_types::mc, [] (file_writer& out, uint32_t value) {
+                return write_vint(out, value);
+            });
+        } else {
+            write_cell_value(writer, *cdef.type, cell.value());
+        }
     }
 
     // Collect cell statistics
