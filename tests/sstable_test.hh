@@ -31,6 +31,8 @@
 #include "core/thread.hh"
 #include "sstables/index_reader.hh"
 #include "tests/test_services.hh"
+#include "tmpdir.hh"
+#include <boost/filesystem.hpp>
 #include <array>
 
 static auto la = sstables::sstable::version_types::la;
@@ -369,10 +371,6 @@ inline sstring uncompressed_dir() {
     return get_test_dir("uncompressed", uncompressed_schema());
 }
 
-inline sstring generation_dir() {
-    return get_test_dir("generation", uncompressed_schema());
-}
-
 inline schema_ptr complex_schema() {
     static thread_local auto s = [] {
         auto my_list_type = list_type_impl::get_instance(bytes_type, true);
@@ -685,6 +683,28 @@ public:
             test_setup::empty_test_dir(p).get();
             // FIXME: this removes only the last component in the path that often contains: `test-name/ks/cf-uuid'
             engine().remove_file(p).get();
+        });
+    }
+
+    static future<> do_with_tmp_directory(std::function<future<> (sstring tmpdir_path)>&& fut) {
+        return seastar::async([fut = std::move(fut)] {
+            storage_service_for_tests ssft;
+            auto tmp = make_lw_shared<tmpdir>();
+            fut(tmp->path).get();
+        });
+    }
+
+    static future<> do_with_cloned_tmp_directory(sstring src, std::function<future<> (sstring srcdir_path, sstring destdir_path)>&& fut) {
+        return seastar::async([fut = std::move(fut), src = std::move(src)] {
+            storage_service_for_tests ssft;
+            auto src_dir = make_lw_shared<tmpdir>();
+            auto dest_dir = make_lw_shared<tmpdir>();
+            for (const auto& entry : boost::filesystem::directory_iterator(src.c_str())) {
+                boost::filesystem::copy(entry.path(), boost::filesystem::path(src_dir->path)/entry.path().filename());
+            }
+            auto dest_path = boost::filesystem::path(dest_dir->path)/src.c_str();
+            boost::filesystem::create_directories(dest_path);
+            fut(src_dir->path, dest_path.string()).get();
         });
     }
 };
