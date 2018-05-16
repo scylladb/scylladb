@@ -125,6 +125,7 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
             fwd_reader.consume(consumer(m.schema(), builder)).get0();
         }
         mutation_opt fwd_m = builder->consume_end_of_stream();
+        BOOST_REQUIRE(bool(fwd_m));
 
         mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get0();
         BOOST_REQUIRE(bool(sliced_m));
