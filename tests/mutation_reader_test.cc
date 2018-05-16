@@ -1582,7 +1582,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[shard] = true;
-            return smp::submit_to(shard, [gs = global_schema_ptr(s.schema())] () mutable {
+            return smp::submit_to(shard, [gs = global_schema_ptr(s)] () mutable {
                 return make_foreign(std::make_unique<flat_mutation_reader>(make_empty_flat_reader(gs.get())));
             });
         };

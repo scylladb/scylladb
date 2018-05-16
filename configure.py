@@ -315,7 +315,7 @@ scylla_tests = [
     'tests/fragmented_temporary_buffer_test',
     'tests/json_test',
     'tests/auth_passwords_test',
-
+    'tests/multishard_mutation_query_test',
 ]
 
 perf_tests = [
