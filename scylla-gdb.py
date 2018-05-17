@@ -690,7 +690,7 @@ class scylla_ptr(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
-        if desc['_lsa_managed']:
+        if desc['_region']:
             msg += ', LSA-managed'
 
         gdb.write(msg + '\n')
@@ -704,7 +704,7 @@ class scylla_segment_descs(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
-            if desc['_lsa_managed']:
+            if desc['_region']:
                 gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], int(desc['_region']), int(desc['_zone'])))
             else:
                 gdb.write('0x%x: std\n' % (addr))
