@@ -106,7 +106,7 @@ thread_local migrators* static_migrators = &::static_migrators();
 
 uint32_t
 migrate_fn_type::register_migrator(migrate_fn_type* m) {
-    auto& migrators = static_migrators();
+    auto& migrators = *debug::static_migrators;
     auto idx = migrators.add(m);
     m->_migrators = migrators.shared_from_this();
     return idx;
