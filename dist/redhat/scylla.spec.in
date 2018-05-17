@@ -93,6 +93,7 @@ fi
 cflags="--cflags=${defines[*]}"
 
 %define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
+%define install_housekeeping %( if @@HOUSEKEEPING_CONF@@; then echo -e "--housekeeping"; fi )
 %if 0%{?fedora}
 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags"
 %endif
@@ -101,73 +102,9 @@ cflags="--cflags=${defines[*]}"
 python3.4 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
 %endif
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
-cp dist/common/systemd/scylla-server.service.in build/scylla-server.service
-sed -i -e "s#@@SYSCONFDIR@@#/etc/sysconfig#g" build/scylla-server.service
-cp dist/common/systemd/scylla-housekeeping-restart.service.in build/scylla-housekeeping-restart.service
-sed -i -e "s#@@REPOFILES@@#'/etc/yum.repos.d/scylla*.repo'#g" build/scylla-housekeeping-restart.service
-cp dist/common/systemd/scylla-housekeeping-daily.service.in build/scylla-housekeeping-daily.service
-sed -i -e "s#@@REPOFILES@@#'/etc/yum.repos.d/scylla*.repo'#g" build/scylla-housekeeping-daily.service
 
 %install
-rm -rf $RPM_BUILD_ROOT
-mkdir -p $RPM_BUILD_ROOT%{_bindir}
-mkdir -p $RPM_BUILD_ROOT%{_sbindir}
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
-mkdir -p $RPM_BUILD_ROOT%{_sysctldir}/
-mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
-mkdir -p $RPM_BUILD_ROOT%{_unitdir}
-mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-
-install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
-install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
-install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
-install -m644 dist/common/scylla.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
-install -m644 dist/common/sysctl.d/*.conf $RPM_BUILD_ROOT%{_sysctldir}/
-install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
-install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
-install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
-install -m644 build/*.service $RPM_BUILD_ROOT%{_unitdir}/
-install -m644 dist/common/systemd/*.service  $RPM_BUILD_ROOT%{_unitdir}/
-install -m644 dist/common/systemd/*.timer $RPM_BUILD_ROOT%{_unitdir}/
-install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 seastar/scripts/perftune.py  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 seastar/dpdk/usertools/dpdk-devbind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
-install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
-install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
-install -m644 dist/common/scripts/scylla_blocktune.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 dist/common/scripts/scylla-blocktune $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-install -m755 scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-if @@HOUSEKEEPING_CONF@@; then
-    install -m644 conf/housekeeping.cfg $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
-fi
-install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
-install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
-install -m644 README-DPDK.md $RPM_BUILD_ROOT%{_docdir}/scylla/
-install -m644 NOTICE.txt $RPM_BUILD_ROOT%{_docdir}/scylla/
-install -m644 ORIGIN $RPM_BUILD_ROOT%{_docdir}/scylla/
-install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
-install -m644 licenses/* $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/coredump
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla-housekeeping
-install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
-cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
-install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
-cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
-cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
-cp -r scylla-housekeeping $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scylla-housekeeping
-cp -P dist/common/sbin/*  $RPM_BUILD_ROOT%{_sbindir}/
-%if 0%{?fedora} >= 27
-install -m755 scylla-gdb.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
-%endif
+./install.sh --root "$RPM_BUILD_ROOT" %{install_housekeeping}
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
