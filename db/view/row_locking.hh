@@ -38,7 +38,6 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/future.hh>
 
-#include "db/timeout_clock.hh"
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
@@ -70,9 +69,8 @@ public:
     };
 private:
     schema_ptr _schema;
-    using lock_type = basic_rwlock<db::timeout_clock>;
     struct two_level_lock {
-        lock_type _partition_lock;
+        rwlock _partition_lock;
         struct clustering_key_prefix_less {
             // Since the schema object may change, we need to use the
             // row_locker's current schema every time.
@@ -82,7 +80,7 @@ private:
                 return clustering_key_prefix::less_compare(*locker->_schema)(k1, k2);
             }
         };
-        std::map<clustering_key_prefix, lock_type, clustering_key_prefix_less> _row_locks;
+        std::map<clustering_key_prefix, rwlock, clustering_key_prefix_less> _row_locks;
         two_level_lock(row_locker* locker)
             : _row_locks(locker) { }
     };
@@ -116,14 +114,14 @@ public:
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout);
+    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive);
 
     // Lock a clustering row with a shared or exclusive lock.
     // Also, first, takes a shared lock on the partition.
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout);
+    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive);
 
     bool empty() const { return _two_level_locks.empty(); }
 };
