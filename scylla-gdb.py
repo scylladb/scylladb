@@ -792,6 +792,10 @@ class lsa_object_descriptor(object):
         static_migrators = gdb.parse_and_eval("'::debug::static_migrators'")
         migrator = static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
         return migrator.dereference()
+    def migrator_str(self):
+        mig = str(self.migrator())
+        m = re.match(self.mig_re, mig)
+        return m.group(1)
     def live_size(self):
         mig = str(self.migrator())
         m = re.match(self.mig_re, mig)
@@ -823,7 +827,7 @@ class lsa_object_descriptor(object):
             return self.desc_pos + self.dead_size()
     def __str__(self):
         if self.is_live():
-            return '0x%x: live %s @ 0x%x' % (int(self.desc_pos), self.migrator(),
+            return '0x%x: live %s @ 0x%x' % (int(self.desc_pos), self.migrator_str(),
                                              int(self.obj_pos))
         else:
             return '0x%x: dead size=%d' % (int(self.desc_pos), self.dead_size())
