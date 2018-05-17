@@ -587,11 +587,9 @@ private:
         return _column_ids.front();
     }
     std::optional<uint32_t> get_column_value_length() {
-        static const thread_local std::string int32_type_name("org.apache.cassandra.db.marshal.Int32Type");
-        if (boost::equal(_column_descs.front().type_name.value, int32_type_name)) {
-            return uint32_t{4};
-        }
-        return { };
+        auto type = abstract_type::parse_type(sstring(std::cbegin(_column_descs.front().type_name.value),
+                                                      std::cend(_column_descs.front().type_name.value)));
+        return type->value_length_if_fixed();
     }
 public:
     using consumer = consumer_m;
