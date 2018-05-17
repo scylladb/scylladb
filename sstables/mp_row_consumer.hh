@@ -25,6 +25,8 @@
 
 #include "timestamp.hh"
 #include "gc_clock.hh"
+#include "mutation_fragment.hh"
+#include "schema.hh"
 
 namespace sstables {
 
@@ -817,6 +819,13 @@ class mp_row_consumer_m : public consumer_m {
     position_in_partition _fwd_end = position_in_partition::after_all_clustered_rows(); // Restricts the stream on top of _ck_ranges_walker.
     streamed_mutation::forwarding _fwd;
 
+    clustering_row _in_progress_row{clustering_key_prefix::make_empty()};
+    struct cell {
+        column_id id;
+        atomic_cell_or_collection val;
+    };
+    std::vector<cell> _cells;
+
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
         _ck_ranges_walker = clustering_ranges_walker(*_schema, _ck_ranges->ranges(), _schema->has_static_columns());
@@ -837,7 +846,9 @@ public:
         , _schema(schema)
         , _slice(slice)
         , _fwd(fwd)
-    { }
+    {
+        _cells.reserve(std::max(_schema->static_columns_count(), _schema->regular_columns_count()));
+    }
 
     mp_row_consumer_m(mp_row_consumer_reader* reader,
                         const schema_ptr schema,
@@ -918,6 +929,50 @@ public:
         _mutation = new_mutation{partition_key::from_exploded(key.explode(*_schema)), tombstone(deltime)};
         setup_for_partition(_mutation->key);
         return proceed::no;
+    }
+
+    virtual proceed consume_row_start(bytes_view ck) override {
+        _in_progress_row = clustering_row(clustering_key_prefix::from_bytes(ck));
+        _cells.clear();
+        return proceed::yes;
+    }
+
+    virtual proceed consume_column(stdx::optional<column_id> column_id,
+                                   bytes_view value,
+                                   api::timestamp_type timestamp,
+                                   gc_clock::duration ttl,
+                                   gc_clock::time_point local_deletion_time) override {
+        if (!column_id) {
+            return proceed::yes;
+        }
+        const column_definition& column_def = _schema->column_at(column_kind::regular_column, *column_id);
+        if (timestamp <= column_def.dropped_at()) {
+            return proceed::yes;
+        }
+        auto ac = make_atomic_cell(timestamp, value, ttl, local_deletion_time);
+        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        return proceed::yes;
+    }
+
+    virtual proceed consume_row_end(const liveness_info& liveness_info) override {
+        if (_cells.empty()) {
+            if (liveness_info.timestamp() != api::missing_timestamp) {
+                row_marker rm(liveness_info.timestamp(),
+                              liveness_info.ttl(),
+                              liveness_info.local_deletion_time());
+                _in_progress_row.apply(std::move(rm));
+            }
+        } else {
+            auto max_id = boost::max_element(_cells, [] (auto&& a, auto&& b) {
+                return a.id < b.id;
+            });
+            _in_progress_row.cells().reserve(max_id->id);
+            for (auto &&c : _cells) {
+                _in_progress_row.set_cell(_schema->column_at(column_kind::regular_column, c.id), std::move(c.val));
+            }
+        }
+        _reader->push_mutation_fragment(std::move(_in_progress_row));
+        return proceed(!_reader->is_buffer_full());
     }
 
     virtual proceed consume_partition_end() override {

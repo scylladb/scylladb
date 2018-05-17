@@ -29,6 +29,10 @@
 #include "sstables/types.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "liveness_info.hh"
+#include "utils/chunked_vector.hh"
+#include "gc_clock.hh"
+#include "timestamp.hh"
+
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -139,6 +143,16 @@ public:
     // Returns a flag saying whether the sstable consumer should stop now, or
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
+
+    virtual proceed consume_row_start(bytes_view ck) = 0;
+
+    virtual proceed consume_column(stdx::optional<column_id> column_id,
+                                   bytes_view value,
+                                   api::timestamp_type timestamp,
+                                   gc_clock::duration ttl,
+                                   gc_clock::time_point local_deletion_time) = 0;
+
+    virtual proceed consume_row_end(const sstables::liveness_info&) = 0;
 
     // Called when the reader is fast forwarded to given element.
     virtual void reset(sstables::indexable_element) = 0;
