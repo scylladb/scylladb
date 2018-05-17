@@ -1571,9 +1571,11 @@ future<> storage_proxy::send_to_endpoint(
     utils::latency_counter lc;
     lc.start();
 
+    // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update
+    db::consistency_level cl = (type == db::write_type::VIEW) ? db::consistency_level::ANY : db::consistency_level::ONE;
     std::unordered_set<gms::inet_address> targets(pending_endpoints.begin(), pending_endpoints.end());
     targets.insert(std::move(target));
-    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, type,
+    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, cl, type,
         [this, targets = std::move(targets), pending_endpoints = std::move(pending_endpoints)] (
                 const mutation& m,
                 db::consistency_level cl,
@@ -1588,8 +1590,8 @@ future<> storage_proxy::send_to_endpoint(
                     pending_endpoints,
                     { },
                     nullptr);
-        }).then([this] (std::vector<unique_response_handler> ids) {
-            return mutate_begin(std::move(ids), db::consistency_level::ONE);
+        }).then([this, cl] (std::vector<unique_response_handler> ids) {
+            return mutate_begin(std::move(ids), cl);
         }).then_wrapped([p = shared_from_this(), lc] (future<>&& f) {
             return p->mutate_end(std::move(f), lc, nullptr);
         });
