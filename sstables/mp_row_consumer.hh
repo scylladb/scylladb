@@ -23,6 +23,9 @@
 #pragma once
 
 
+#include "timestamp.hh"
+#include "gc_clock.hh"
+
 namespace sstables {
 
 static inline bytes_view pop_back(std::vector<bytes_view>& vec) {
@@ -43,6 +46,17 @@ struct new_mutation {
     partition_key key;
     tombstone tomb;
 };
+
+inline atomic_cell make_atomic_cell(api::timestamp_type timestamp,
+                                    bytes_view value,
+                                    gc_clock::duration ttl,
+                                    gc_clock::time_point expiration) {
+    if (ttl != gc_clock::duration::zero()) {
+        return atomic_cell::make_live(timestamp, value, expiration, ttl);
+    } else {
+        return atomic_cell::make_live(timestamp, value);
+    }
+}
 
 class mp_row_consumer_k_l : public row_consumer {
 private:
@@ -507,18 +521,12 @@ public:
         });
     }
 
-    atomic_cell make_atomic_cell(uint64_t timestamp, bytes_view value, uint32_t ttl, uint32_t expiration) {
-        if (ttl) {
-            return atomic_cell::make_live(timestamp, value,
-                                          gc_clock::time_point(gc_clock::duration(expiration)), gc_clock::duration(ttl));
-        } else {
-            return atomic_cell::make_live(timestamp, value);
-        }
-    }
-
     virtual proceed consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         return do_consume_cell(col_name, timestamp, ttl, expiration, [&] (auto&& col) {
-            auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
+            auto ac = make_atomic_cell(api::timestamp_type(timestamp),
+                                       value,
+                                       gc_clock::duration(ttl),
+                                       gc_clock::time_point(gc_clock::duration(expiration)));
 
             bool is_multi_cell = col.collection_extra_data.size();
             if (is_multi_cell != col.cdef->is_multi_cell()) {
