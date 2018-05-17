@@ -690,7 +690,7 @@ class scylla_ptr(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment\'::size'))
         index = gdb.parse_and_eval('(%d - \'logalloc::shard_segment_pool\'._segments_base) / \'logalloc::segment\'::size' % (ptr))
         desc = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._segments._M_impl._M_start[%d]' % (index))
-        if desc['_lsa_managed']:
+        if desc['_region']:
             msg += ', LSA-managed'
 
         gdb.write(msg + '\n')
@@ -704,8 +704,11 @@ class scylla_segment_descs(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc\'::segment::size'))
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
-            if desc['_lsa_managed']:
-                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], int(desc['_region']), int(desc['_zone'])))
+            if desc['_region']:
+                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc['_free_space'],
+                                                                        segment_size - int(desc['_free_space']),
+                                                                        float(segment_size - int(desc['_free_space'])) * 100 / segment_size,
+                                                                        int(desc['_region'])))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size
@@ -746,30 +749,6 @@ class scylla_lsa(gdb.Command):
                     r_unused=int(region['_closed_occupancy']['_free_space'])))
             region = region + 1
 
-def lsa_zone_tree(node):
-    if node:
-        zone = node.cast(gdb.lookup_type('::logalloc::segment_zone').pointer())
-
-        for x in lsa_zone_tree(node['left_']):
-            yield x
-
-        yield zone
-
-        for x in lsa_zone_tree(node['right_']):
-            yield x
-
-class scylla_lsa_zones(gdb.Command):
-    def __init__(self):
-        gdb.Command.__init__(self, 'scylla lsa_zones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
-    def invoke(self, arg, from_tty):
-        gdb.write('LSA zones:\n')
-        all_zones = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._all_zones')
-        for zone in lsa_zone_tree(all_zones['holder']['root']['parent_']):
-            gdb.write('    Zone:\n      - base: {z_base:08X}\n      - size: {z_size:>12}\n'
-                '      - used: {z_used:>12}\n'
-                .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
-                    z_used=int(zone['_used_segment_count'])));
-
 names = {} # addr (int) -> name (str)
 def resolve(addr):
     if addr in names:
@@ -802,7 +781,7 @@ class lsa_object_descriptor(object):
             b = next()
             value |= (b & 0x3f) << shift
         return lsa_object_descriptor(value, start_pos, pos)
-    mig_re = re.compile(r'.*<standard_migrator<(.*)>::object>')
+    mig_re = re.compile(r'.* standard_migrator<(.*)>\+16>,')
     vec_ext_re = re.compile(r'managed_vector<(.*), (.*u), (.*)>::external')
     def __init__(self, value, desc_pos, obj_pos):
         self.value = value
@@ -813,9 +792,13 @@ class lsa_object_descriptor(object):
     def dead_size(self):
         return self.value / 2
     def migrator(self):
-        static_migrators = gdb.parse_and_eval("&'::debug::static_migrators'")
-        migrator = static_migrators['_M_impl']['_M_start'][self.value >> 1]
-        return migrator
+        static_migrators = gdb.parse_and_eval("'::debug::static_migrators'")
+        migrator = static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
+        return migrator.dereference()
+    def migrator_str(self):
+        mig = str(self.migrator())
+        m = re.match(self.mig_re, mig)
+        return m.group(1)
     def live_size(self):
         mig = str(self.migrator())
         m = re.match(self.mig_re, mig)
@@ -847,8 +830,8 @@ class lsa_object_descriptor(object):
             return self.desc_pos + self.dead_size()
     def __str__(self):
         if self.is_live():
-            return '0x%x: live %s @ 0x%x' % (int(self.desc_pos), self.migrator(),
-                                             int(self.obj_pos))
+            return '0x%x: live %s @ 0x%x size=%d' % (int(self.desc_pos), self.migrator(),
+                                             int(self.obj_pos), self.live_size())
         else:
             return '0x%x: dead size=%d' % (int(self.desc_pos), self.dead_size())
 
@@ -1230,7 +1213,6 @@ scylla_mem_ranges()
 scylla_mem_range()
 scylla_heapprof()
 scylla_lsa()
-scylla_lsa_zones()
 scylla_lsa_segment()
 scylla_segment_descs()
 scylla_timers()
