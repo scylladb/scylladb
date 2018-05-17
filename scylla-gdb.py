@@ -705,7 +705,7 @@ class scylla_segment_descs(gdb.Command):
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
             if desc['_region']:
-                gdb.write('0x%x: lsa free=%d region=0x%x zone=0x%x\n' % (addr, desc['_free_space'], int(desc['_region']), int(desc['_zone'])))
+                gdb.write('0x%x: lsa free=%d region=0x%x\n' % (addr, desc['_free_space'], int(desc['_region'])))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size
@@ -745,30 +745,6 @@ class scylla_lsa(gdb.Command):
                     r_lsa=int(region['_closed_occupancy']['_total_space']),
                     r_unused=int(region['_closed_occupancy']['_free_space'])))
             region = region + 1
-
-def lsa_zone_tree(node):
-    if node:
-        zone = node.cast(gdb.lookup_type('::logalloc::segment_zone').pointer())
-
-        for x in lsa_zone_tree(node['left_']):
-            yield x
-
-        yield zone
-
-        for x in lsa_zone_tree(node['right_']):
-            yield x
-
-class scylla_lsa_zones(gdb.Command):
-    def __init__(self):
-        gdb.Command.__init__(self, 'scylla lsa_zones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
-    def invoke(self, arg, from_tty):
-        gdb.write('LSA zones:\n')
-        all_zones = gdb.parse_and_eval('\'logalloc::shard_segment_pool\'._all_zones')
-        for zone in lsa_zone_tree(all_zones['holder']['root']['parent_']):
-            gdb.write('    Zone:\n      - base: {z_base:08X}\n      - size: {z_size:>12}\n'
-                '      - used: {z_used:>12}\n'
-                .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
-                    z_used=int(zone['_used_segment_count'])));
 
 names = {} # addr (int) -> name (str)
 def resolve(addr):
@@ -1230,7 +1206,6 @@ scylla_mem_ranges()
 scylla_mem_range()
 scylla_heapprof()
 scylla_lsa()
-scylla_lsa_zones()
 scylla_lsa_segment()
 scylla_segment_descs()
 scylla_timers()
