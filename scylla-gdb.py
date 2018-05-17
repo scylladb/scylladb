@@ -705,7 +705,10 @@ class scylla_segment_descs(gdb.Command):
         addr = base
         for desc in std_vector(gdb.parse_and_eval('\'logalloc\'::shard_segment_pool._segments')):
             if desc['_region']:
-                gdb.write('0x%x: lsa free=%d region=0x%x\n' % (addr, desc['_free_space'], int(desc['_region'])))
+                gdb.write('0x%x: lsa free=%-6d used=%-6d %6.2f%% region=0x%x\n' % (addr, desc['_free_space'],
+                                                                        segment_size - int(desc['_free_space']),
+                                                                        float(segment_size - int(desc['_free_space'])) * 100 / segment_size,
+                                                                        int(desc['_region'])))
             else:
                 gdb.write('0x%x: std\n' % (addr))
             addr += segment_size
