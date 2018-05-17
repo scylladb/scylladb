@@ -973,7 +973,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     const auto type = read_byte(buf);
     const unsigned n = read_short(buf);
 
-    std::vector<shared_ptr<cql3::statements::modification_statement>> modifications;
+    std::vector<cql3::statements::batch_statement::single_statement> modifications;
     std::vector<std::vector<cql3::raw_value_view>> values;
 
     modifications.reserve(n);
