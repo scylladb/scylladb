@@ -38,6 +38,8 @@
 #include "tests/test_services.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
+#include "sstables/types.hh"
+#include "keys.hh"
 
 using namespace sstables;
 
@@ -148,6 +150,62 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
             .produces_partition_end()
             .produces_partition_start(to_key(3))
             .produces_row_with_key(clustering_key_prefix::make_empty())
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_with_value
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, val INT, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, val) VALUES(1, 101);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(2, 102);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(3, 103);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(4, 104);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(5, 105);
+
+static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH =
+    "tests/sstables/3.x/uncompressed/partition_key_with_value";
+static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA,
+                               UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, pk);
+        };
+
+        auto cdef = UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(cdef);
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(105))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(101))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(102))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(104))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(103))}})
             .produces_partition_end()
             .produces_end_of_stream();
     });
