@@ -135,14 +135,19 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
         };
         assert_that(sst.read_rows_flat())
             .produces_partition_start(to_key(5))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(1))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(2))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(4))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(3))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_end_of_stream();
     });
