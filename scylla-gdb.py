@@ -778,7 +778,7 @@ class lsa_object_descriptor(object):
             b = next()
             value |= (b & 0x3f) << shift
         return lsa_object_descriptor(value, start_pos, pos)
-    mig_re = re.compile(r'.*<standard_migrator<(.*)>::object>')
+    mig_re = re.compile(r'.* standard_migrator<(.*)>\+16>,')
     vec_ext_re = re.compile(r'managed_vector<(.*), (.*u), (.*)>::external')
     def __init__(self, value, desc_pos, obj_pos):
         self.value = value
@@ -789,9 +789,9 @@ class lsa_object_descriptor(object):
     def dead_size(self):
         return self.value / 2
     def migrator(self):
-        static_migrators = gdb.parse_and_eval("&'::debug::static_migrators'")
-        migrator = static_migrators['_M_impl']['_M_start'][self.value >> 1]
-        return migrator
+        static_migrators = gdb.parse_and_eval("'::debug::static_migrators'")
+        migrator = static_migrators['_migrators']['_M_impl']['_M_start'][self.value >> 1]
+        return migrator.dereference()
     def live_size(self):
         mig = str(self.migrator())
         m = re.match(self.mig_re, mig)
