@@ -830,8 +830,8 @@ class lsa_object_descriptor(object):
             return self.desc_pos + self.dead_size()
     def __str__(self):
         if self.is_live():
-            return '0x%x: live %s @ 0x%x' % (int(self.desc_pos), self.migrator_str(),
-                                             int(self.obj_pos))
+            return '0x%x: live %s @ 0x%x size=%d' % (int(self.desc_pos), self.migrator(),
+                                             int(self.obj_pos), self.live_size())
         else:
             return '0x%x: dead size=%d' % (int(self.desc_pos), self.dead_size())
 
