@@ -728,7 +728,7 @@ public:
          */
         auto me = shared_from_this();
         auto fp = _file_pos;
-        return _pending_ops.wait_for_pending(timeout).then([me = std::move(me), fp, timeout] {
+        return _pending_ops.wait_for_pending(timeout).then([me, fp, timeout] {
             if (fp != me->_file_pos) {
                 // some other request already wrote this buffer.
                 // If so, wait for the operation at our intended file offset
