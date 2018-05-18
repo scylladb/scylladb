@@ -161,6 +161,10 @@ public:
     api::timestamp_type maximum_timestamp() const override {
         return _maximum_timestamp;
     }
+
+    unsigned level() const override {
+        return 0;
+    }
 };
 
 static const std::unordered_set<sstring> system_keyspaces = {
