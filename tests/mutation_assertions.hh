@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <boost/test/unit_test.hpp>
+
 #include "mutation.hh"
 
 class mutation_partition_assertion {
