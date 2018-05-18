@@ -26,6 +26,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "shared_sstable.hh"
 #include "sstables/progress_monitor.hh"
+#include "timestamp.hh"
 
 class compaction_backlog_manager;
 class compaction_controller;
@@ -55,6 +56,7 @@ class compaction_controller;
 // will certainly be gone by then.
 struct backlog_write_progress_manager {
     virtual uint64_t written() const = 0;
+    virtual api::timestamp_type maximum_timestamp() const = 0;
     virtual ~backlog_write_progress_manager() {}
 };
 

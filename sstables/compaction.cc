@@ -220,10 +220,13 @@ class compaction_write_monitor final : public sstables::write_monitor, public ba
     column_family& _cf;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
+    api::timestamp_type _maximum_timestamp;
 public:
-    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf)
+    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf, api::timestamp_type max_timestamp)
         : _sst(sst)
-        , _cf(cf) {}
+        , _cf(cf)
+        , _maximum_timestamp(max_timestamp)
+    {}
 
     ~compaction_write_monitor() {
         if (_sst) {
@@ -253,6 +256,10 @@ public:
     void add_sstable() {
         _cf.get_compaction_strategy().get_backlog_tracker().add_sstable(_sst);
         _sst = {};
+    }
+
+    api::timestamp_type maximum_timestamp() const override {
+        return _maximum_timestamp;
     }
 
     virtual void on_write_completed() override { }
@@ -326,6 +333,13 @@ protected:
         writer = stdx::nullopt;
         sst->open_data().get0();
         _info->end_size += sst->bytes_on_disk();
+    }
+
+    api::timestamp_type maximum_timestamp() const {
+        auto m = std::max_element(_sstables.begin(), _sstables.end(), [] (const shared_sstable& sst1, const shared_sstable& sst2) {
+            return sst1->get_stats_metadata().max_timestamp < sst2->get_stats_metadata().max_timestamp;
+        });
+        return (*m)->get_stats_metadata().max_timestamp;
     }
 public:
     compaction& operator=(const compaction&) = delete;
@@ -543,7 +557,7 @@ public:
             _sst = _creator();
             setup_new_sstable(_sst);
 
-            _active_write_monitors.emplace_back(_sst, _cf);
+            _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp());
             auto&& priority = service::get_local_compaction_priority();
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;
