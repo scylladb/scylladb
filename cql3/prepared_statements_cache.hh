@@ -68,6 +68,14 @@ public:
     static thrift_prepared_id_type thrift_id(const prepared_cache_key_type& key) {
         return key.key().second;
     }
+
+    bool operator==(const prepared_cache_key_type& other) const {
+        return _key == other._key;
+    }
+
+    bool operator!=(const prepared_cache_key_type& other) const {
+        return !(*this == other);
+    }
 };
 
 class prepared_statements_cache {
@@ -172,4 +180,11 @@ inline std::ostream& operator<<(std::ostream& os, const cql3::prepared_cache_key
     os << p.key();
     return os;
 }
+
+template<>
+struct hash<cql3::prepared_cache_key_type> final {
+    size_t operator()(const cql3::prepared_cache_key_type& k) const {
+        return utils::tuple_hash()(k.key());
+    }
+};
 }

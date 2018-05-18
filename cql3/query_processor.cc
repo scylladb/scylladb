@@ -604,11 +604,18 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 query_processor::process_batch(
         ::shared_ptr<statements::batch_statement> batch,
         service::query_state& query_state,
-        query_options& options) {
-    return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch] {
-        batch->validate();
-        batch->validate(_proxy, query_state.get_client_state());
-        return batch->execute(_proxy, query_state, options);
+        query_options& options,
+        std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries) {
+    return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch, pending_authorization_entries = std::move(pending_authorization_entries)] () mutable {
+        return parallel_for_each(pending_authorization_entries, [this, &query_state] (auto& e) {
+            return _authorized_prepared_cache.insert(*query_state.get_client_state().user(), e.first, std::move(e.second)).handle_exception([this] (auto eptr) {
+                log.error("failed to cache the entry", eptr);
+            });
+        }).then([this, &query_state, &options, batch] {
+            batch->validate();
+            batch->validate(_proxy, query_state.get_client_state());
+            return batch->execute(_proxy, query_state, options);
+        });
     });
 }
 

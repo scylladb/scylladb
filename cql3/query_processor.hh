@@ -267,7 +267,11 @@ public:
     future<> stop();
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    process_batch(::shared_ptr<statements::batch_statement>, service::query_state& query_state, query_options& options);
+    process_batch(
+            ::shared_ptr<statements::batch_statement>,
+            service::query_state& query_state,
+            query_options& options,
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::experimental::string_view& query,
