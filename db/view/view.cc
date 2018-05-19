@@ -840,15 +840,6 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
 
     try
     {
-        // if we haven't joined the ring, write everything to batchlog because paired replicas may be stale
-        final UUID batchUUID = UUIDGen.getTimeUUID();
-
-        if (StorageService.instance.isStarting() || StorageService.instance.isJoining() || StorageService.instance.isMoving())
-        {
-            BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(),
-                                                    mutations), writeCommitLog);
-        }
-        else
         {
             List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
             List<Mutation> nonPairedMutations = new LinkedList<>();
@@ -879,8 +870,8 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
 
             stats.view_updates_pushed_local += is_endpoint_local;
             stats.view_updates_pushed_remote += updates_pushed_remote;
-            if (is_endpoint_local && service::get_local_storage_service().is_joined()
-                    && pending_endpoints.empty()) {
+
+            if (is_endpoint_local && pending_endpoints.empty()) {
                 // Note that we start here an asynchronous apply operation, and
                 // do not wait for it to complete.
                 // Note also that mutate_locally(mut) copies mut (in
