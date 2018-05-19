@@ -234,7 +234,7 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
-static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name) {
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
@@ -243,10 +243,11 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Statistics,
+                           component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
-                sstable::filename("tests/sstables/3.x/uncompressed/write_" + table_name, "ks",
-                                  table_name, sstables::sstable_version_types::mc, 1, big, file_type);
+                sstable::filename(format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un",table_name),
+                                  "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
                 sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         compare_files(orig_filename, result_filename);
@@ -588,12 +589,12 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     });
 }
 
-static future<> test_write_many_partitions(sstring table_name, tombstone partition_tomb) {
-    return seastar::async([table_name, partition_tomb] {
+static future<> test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
+    return seastar::async([table_name, partition_tomb, cp] {
         // CREATE TABLE <table_name> (pk int, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
         schema_builder builder("sst3", table_name);
         builder.with_column("pk", int32_type, column_kind::partition_key);
-        builder.set_compressor_params(compression_parameters());
+        builder.set_compressor_params(cp);
         schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
         lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
@@ -607,16 +608,43 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
             mt->apply(std::move(mut));
         }
 
-        write_and_compare_sstables(s, mt, table_name);
+        write_and_compare_sstables(s, mt, table_name, cp != compression_parameters{});
     });
 }
 
 SEASTAR_TEST_CASE(test_write_many_live_partitions) {
-    return test_write_many_partitions("many_live_partitions", {});
+    return test_write_many_partitions(
+            "many_live_partitions",
+            tombstone{},
+            compression_parameters{});
 }
 
 SEASTAR_TEST_CASE(test_write_many_deleted_partitions) {
-    return test_write_many_partitions("many_deleted_partitions", {write_timestamp, write_time_point});
+    return test_write_many_partitions(
+            "many_deleted_partitions",
+            tombstone{write_timestamp, write_time_point},
+            compression_parameters{});
+}
+
+SEASTAR_TEST_CASE(test_write_many_partitions_lz4) {
+    return test_write_many_partitions(
+            "many_partitions_lz4",
+            tombstone{},
+            compression_parameters{compressor::lz4});
+}
+
+SEASTAR_TEST_CASE(test_write_many_partitions_snappy) {
+    return test_write_many_partitions(
+            "many_partitions_snappy",
+            tombstone{},
+            compression_parameters{compressor::snappy});
+}
+
+SEASTAR_TEST_CASE(test_write_many_partitions_deflate) {
+    return test_write_many_partitions(
+            "many_partitions_deflate",
+            tombstone{},
+            compression_parameters{compressor::deflate});
 }
 
 SEASTAR_TEST_CASE(test_write_multiple_rows) {
