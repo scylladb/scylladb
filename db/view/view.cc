@@ -908,20 +908,29 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                         })
                 );
             }
-        } else {
-            //TODO(sarna): Add view updates stats here after hinted handoff for materialized views is implemented
-#if 0
-                    //if there are no paired endpoints there are probably range movements going on,
-                    //so we write to the local batchlog to replay later
-                    if (pendingEndpoints.isEmpty())
-                        vlogger.warn("Received base materialized view mutation for key {} that does not belong " +
-                                    "to this node. There is probably a range movement happening (move or decommission)," +
-                                    "but this node hasn't updated its ring metadata yet. Adding mutation to " +
-                                    "local batchlog to be replayed later.",
-                                    mutation.key());
-                    nonPairedMutations.add(mutation);
-                }
-#endif
+        } else if (!pending_endpoints.empty()) {
+            // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
+            // such that this base replica is gaining new token ranges. The current node is thus a pending_endpoint
+            // from the POV of the coordinator that sent the request. Since we only look at natural endpoints to
+            // determine base-to-view pairings, the current node won't appear in the list of base replicas. Sending
+            // view updates to the view replica this base will eventually be paired with only makes a difference when
+            // the base update didn't make it to the node which is currently being decommissioned or moved-from. Also,
+            // if HH is enabled at the coordinator, the update will either make it there before the range movement
+            // finishes, or later to this node when it becomes a natural endpoint for the token. We still ensure we
+            // send to any pending view endpoints though.
+            auto updates_pushed_remote = pending_endpoints.size();
+            stats.view_updates_pushed_remote += updates_pushed_remote;
+            auto target = pending_endpoints.back();
+            pending_endpoints.pop_back();
+            fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
+                    std::move(mut),
+                    target,
+                    std::move(pending_endpoints),
+                    db::write_type::VIEW).handle_exception([target, updates_pushed_remote, &stats] (auto ep) {
+                stats.view_updates_failed_remote += updates_pushed_remote;
+                vlogger.error("Error applying view update to {}: {}", target, ep);
+                return make_exception_future<>(std::move(ep));
+            }));
         }
     }
 #if 0
