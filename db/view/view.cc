@@ -833,26 +833,6 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
 future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
-#if 0
-    Tracing.trace("Determining replicas for mutation");
-    final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
-    long startTime = System.nanoTime();
-
-    try
-    {
-        {
-            List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
-            List<Mutation> nonPairedMutations = new LinkedList<>();
-            Token baseToken = StorageService.instance.getTokenMetadata().partitioner.getToken(dataKey);
-
-            ConsistencyLevel consistencyLevel = ConsistencyLevel.ONE;
-
-            //Since the base -> view replication is 1:1 we only need to store the BL locally
-            final Collection<InetAddress> batchlogEndpoints = Collections.singleton(FBUtilities.getBroadcastAddress());
-            BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
-                                                                                                          () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
-            // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
-#endif
     auto fs = std::make_unique<std::vector<future<>>>();
     for (auto& mut : mutations) {
         auto view_token = mut.token();
@@ -924,32 +904,6 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
             }));
         }
     }
-#if 0
-            if (!wrappers.isEmpty())
-            {
-                // Apply to local batchlog memtable in this thread
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), Lists.transform(wrappers, w -> w.mutation)),
-                                      writeCommitLog);
-
-                    // now actually perform the writes and wait for them to complete
-                asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.VIEW_MUTATION);
-            }
-#endif
-#if 0
-            if (!nonPairedMutations.isEmpty())
-            {
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), nonPairedMutations),
-                                      writeCommitLog);
-            }
-        }
-#endif
-#if 0
-    }
-    finally
-    {
-        viewWriteMetrics.addNano(System.nanoTime() - startTime);
-    }
-#endif
     auto f = seastar::when_all_succeed(fs->begin(), fs->end());
     return f.finally([fs = std::move(fs)] { });
 }
