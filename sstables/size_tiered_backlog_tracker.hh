@@ -77,7 +77,6 @@
 // to do is keep track of them too, and add the current estimate to the static part of (4).
 class size_tiered_backlog_tracker final : public compaction_backlog_tracker::impl {
     uint64_t _total_bytes = 0;
-    uint64_t _sstables_compacted_total_bytes = 0;
     double _sstables_backlog_contribution = 0.0f;
 
     struct inflight_component {
