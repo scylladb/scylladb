@@ -76,11 +76,11 @@
 // certain point in time, whose size is the amount of bytes currently written. So all we need
 // to do is keep track of them too, and add the current estimate to the static part of (4).
 class size_tiered_backlog_tracker final : public compaction_backlog_tracker::impl {
-    uint64_t _total_bytes = 0;
+    int64_t _total_bytes = 0;
     double _sstables_backlog_contribution = 0.0f;
 
     struct inflight_component {
-        uint64_t total_bytes = 0;
+        int64_t total_bytes = 0;
         double contribution = 0;
     };
 
@@ -115,11 +115,12 @@ public:
         inflight_component compacted = compacted_backlog(oc);
 
         auto total_bytes = _total_bytes + partial.total_bytes - compacted.total_bytes;
-        if ((total_bytes == 0)) {
+        if ((total_bytes <= 0)) {
             return 0;
         }
         auto sstables_contribution = _sstables_backlog_contribution + partial.contribution - compacted.contribution;
-        return (total_bytes * log4(total_bytes)) - sstables_contribution;
+        auto b = (total_bytes * log4(total_bytes)) - sstables_contribution;
+        return b > 0 ? b : 0;
     }
 
     virtual void add_sstable(sstables::shared_sstable sst)  override {
