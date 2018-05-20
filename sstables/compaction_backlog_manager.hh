@@ -28,6 +28,7 @@
 #include "sstables/progress_monitor.hh"
 
 class compaction_backlog_manager;
+class compaction_controller;
 
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not
@@ -112,9 +113,11 @@ private:
 class compaction_backlog_manager {
     std::unordered_set<compaction_backlog_tracker*> _backlog_trackers;
     void remove_backlog_tracker(compaction_backlog_tracker* tracker);
+    compaction_controller* _compaction_controller;
     friend class compaction_backlog_tracker;
 public:
     ~compaction_backlog_manager();
+    compaction_backlog_manager(compaction_controller& controller) : _compaction_controller(&controller) {}
     double backlog() const;
     void register_backlog_tracker(compaction_backlog_tracker& tracker);
 };

@@ -339,11 +339,13 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
         }
         return b;
     })
+    , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
 {}
 
 compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares)
     : _compaction_controller(sg, iop, shares)
+    , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
 {}
 
@@ -703,12 +705,16 @@ void compaction_backlog_manager::remove_backlog_tracker(compaction_backlog_track
 }
 
 double compaction_backlog_manager::backlog() const {
-    double backlog = 0;
+    try {
+        double backlog = 0;
 
-    for (auto& tracker: _backlog_trackers) {
-        backlog += tracker->backlog();
+        for (auto& tracker: _backlog_trackers) {
+            backlog += tracker->backlog();
+        }
+        return backlog;
+    } catch (...) {
+        return _compaction_controller->backlog_of_shares(1000);
     }
-    return backlog;
 }
 
 void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker) {
