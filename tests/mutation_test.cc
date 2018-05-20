@@ -1189,6 +1189,34 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
+    auto make_builder = [] {
+        return schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck", bytes_type, column_kind::clustering_key);
+    };
+
+    auto s1 = make_builder()
+            .with_column("v1", int32_type)
+            .build();
+
+    auto s2 = make_builder()
+            .with_column("v1", bytes_type)
+            .build();
+
+    auto pk = partition_key::from_singular(*s1, data_value(bytes("key1")));
+    auto ck1 = clustering_key::from_singular(*s1, data_value(bytes("A")));
+
+    mutation m(s1, pk);
+    m.set_clustered_cell(ck1, "v1", data_value(int32_t(0x1234abcd)), 1);
+    m.upgrade(s2);
+
+    mutation m2(s2, pk);
+    m2.set_clustered_cell(ck1, "v1", data_value(from_hex("1234abcd")), 1);
+
+    assert_that(m).is_equal_to(m2);
+}
+
 SEASTAR_TEST_CASE(test_querying_expired_cells) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")
