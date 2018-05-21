@@ -1,6 +1,7 @@
 [Unit]
 Description=Scylla Server
-After=network-online.target
+After=local-fs.target network-online.target
+Requires=local-fs.target network-online.target
 Wants=scylla-jmx.service
 Wants=scylla-housekeeping-restart.timer
 Wants=scylla-housekeeping-daily.timer
