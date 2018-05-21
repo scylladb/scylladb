@@ -23,6 +23,7 @@
 
 #include "partition_version.hh"
 #include "row_cache.hh"
+#include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 class partition_snapshot_row_cursor;
@@ -127,9 +128,9 @@ class partition_snapshot_row_cursor final {
 
     const schema& _schema;
     partition_snapshot& _snp;
-    std::vector<position_in_version> _heap;
-    std::vector<mutation_partition::rows_type::iterator> _iterators;
-    std::vector<position_in_version> _current_row;
+    utils::small_vector<position_in_version, 2> _heap;
+    utils::small_vector<mutation_partition::rows_type::iterator, 2> _iterators;
+    utils::small_vector<position_in_version, 2> _current_row;
     bool _continuous;
     bool _dummy;
     const bool _unique_owner;
