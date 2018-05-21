@@ -1439,7 +1439,7 @@ row::cell_entry::cell_entry(cell_entry&& o) noexcept
 const atomic_cell_or_collection& row::cell_at(column_id id) const {
     auto&& cell = find_cell(id);
     if (!cell) {
-        throw std::out_of_range(sprint("Column not found for id = %d", id));
+        throw_with_backtrace<std::out_of_range>(sprint("Column not found for id = %d", id));
     }
     return *cell;
 }
