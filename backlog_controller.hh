@@ -96,6 +96,8 @@ protected:
     }
 
     virtual ~backlog_controller() {}
+public:
+    float backlog_of_shares(float shares) const;
 };
 
 // memtable flush CPU controller.

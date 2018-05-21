@@ -2165,6 +2165,22 @@ void backlog_controller::adjust() {
     update_controller(result);
 }
 
+float backlog_controller::backlog_of_shares(float shares) const {
+    size_t idx = 1;
+    while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
+        idx++;
+    }
+    const control_point& cp = _control_points[idx];
+    const control_point& last = _control_points[idx - 1];
+    // Compute the inverse function of the backlog in the interpolation interval that we fall
+    // into.
+    //
+    // The formula for the backlog inside an interpolation point is y = a + bx, so the inverse
+    // function is x = (y - a) / b
+
+    return last.input + (shares - last.output) * (cp.input - last.input) / (cp.output - last.output);
+}
+
 void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
     if (!_inflight_update.available()) {
