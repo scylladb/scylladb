@@ -307,12 +307,14 @@ public:
                 cfg->data_file_directories() = {data_dir.path};
             }
             cfg->commitlog_directory() = data_dir.path + "/commitlog.dir";
+            cfg->hints_directory() = data_dir.path + "/hints.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
             cfg->experimental() = true;
             cfg->shutdown_announce_in_ms() = 0;
             boost::filesystem::create_directories((data_dir.path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
+            boost::filesystem::create_directories(cfg->hints_directory().c_str());
 
             const gms::inet_address listen("127.0.0.1");
             auto& ms = netw::get_messaging_service();
