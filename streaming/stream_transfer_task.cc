@@ -65,31 +65,41 @@ stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, U
 
 stream_transfer_task::~stream_transfer_task() = default;
 
+dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges) {
+    dht::partition_range_vector prs;
+    prs.reserve(ranges.size());
+    for (auto& range : ranges) {
+        prs.push_back(dht::to_partition_range(range));
+    }
+    return prs;
+}
+
 struct send_info {
     database& db;
     utils::UUID plan_id;
     utils::UUID cf_id;
-    dht::partition_range_vector prs;
     netw::messaging_service::msg_addr id;
     uint32_t dst_cpu_id;
     size_t mutations_nr{0};
     semaphore mutations_done{0};
     bool error_logged = false;
+    column_family& cf;
+    dht::token_range_vector ranges;
+    dht::partition_range_vector prs;
     flat_mutation_reader reader;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
-              dht::partition_range_vector prs_, netw::messaging_service::msg_addr id_,
+              dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
         : db(db_)
         , plan_id(plan_id_)
         , cf_id(cf_id_)
-        , prs(std::move(prs_))
         , id(id_)
         , dst_cpu_id(dst_cpu_id_)
-        , reader([&] {
-            auto& cf = db.find_column_family(cf_id);
-            return cf.make_streaming_reader(cf.schema(), prs);
-        }())
-    { }
+        , cf(db.find_column_family(cf_id))
+        , ranges(std::move(ranges_))
+        , prs(to_partition_ranges(ranges))
+        , reader(cf.make_streaming_reader(cf.schema(), prs)) {
+    }
 };
 
 future<stop_iteration> do_send_mutations(lw_shared_ptr<send_info> si, frozen_mutation fm, bool fragmented) {
@@ -136,18 +146,12 @@ future<> stream_transfer_task::execute() {
     auto plan_id = session->plan_id();
     auto cf_id = this->cf_id;
     auto dst_cpu_id = session->dst_cpu_id;
-    auto& schema = session->get_local_db().find_column_family(cf_id).schema();
     auto id = netw::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
     sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
     sort_and_merge_ranges();
-    _shard_ranges = dht::split_ranges_to_shards(_ranges, *schema);
-    return parallel_for_each(_shard_ranges, [this, dst_cpu_id, plan_id, cf_id, id] (auto& item) {
-        auto& shard = item.first;
-        auto& prs = item.second;
-        return session->get_db().invoke_on(shard, [plan_id, cf_id, id, dst_cpu_id, prs = std::move(prs)] (database& db) mutable {
-            auto si = make_lw_shared<send_info>(db, plan_id, cf_id, prs, id, dst_cpu_id);
-            return send_mutations(std::move(si));
-        });
+    return session->get_db().invoke_on_all([plan_id, cf_id, id, dst_cpu_id, ranges=this->_ranges] (database& db) {
+        auto si = make_lw_shared<send_info>(db, plan_id, cf_id, std::move(ranges), id, dst_cpu_id);
+        return send_mutations(std::move(si));
     }).then([this, plan_id, cf_id, id] {
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
         return session->ms().send_stream_mutation_done(id, plan_id, _ranges,
