@@ -26,7 +26,8 @@
 //
 // std::deque would be a good fit, except the backing array can grow quite large.
 
-#include <boost/container/small_vector.hpp>
+#include "utils/small_vector.hh"
+
 #include <boost/range/algorithm/equal.hpp>
 #include <boost/algorithm/clamp.hpp>
 #include <boost/version.hpp>
@@ -39,23 +40,6 @@
 
 namespace utils {
 
-namespace internal {
-
-#if BOOST_VERSION >= 106000
-
-template <typename T, size_t N>
-using boost_small_vector = boost::container::small_vector<T, N>;
-
-#else
-
-// Older versions of boost have a double-free bug, so use std::vector instead.
-template <typename T, size_t N>
-using boost_small_vector = std::vector<T>;
-
-#endif
-
-}
-
 struct chunked_vector_free_deleter {
     void operator()(void* x) const { ::free(x); }
 };
@@ -65,7 +49,7 @@ class chunked_vector {
     static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     using chunk_ptr = std::unique_ptr<T[], chunked_vector_free_deleter>;
     // Each chunk holds max_chunk_capacity() items, except possibly the last
-    internal::boost_small_vector<chunk_ptr, 1> _chunks;
+    utils::small_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
 private:

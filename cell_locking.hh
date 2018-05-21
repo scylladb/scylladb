@@ -23,21 +23,7 @@
 
 #include <boost/intrusive/unordered_set.hpp>
 
-#if __has_include(<boost/container/small_vector.hpp>)
-
-#include <boost/container/small_vector.hpp>
-
-template <typename T, size_t N>
-using small_vector = boost::container::small_vector<T, N>;
-
-#else
-
-#include <vector>
-template <typename T, size_t N>
-using small_vector = std::vector<T>;
-
-#endif
-
+#include "utils/small_vector.hh"
 #include "fnv1a_hasher.hh"
 #include "mutation_fragment.hh"
 #include "mutation_partition.hh"
@@ -45,7 +31,7 @@ using small_vector = std::vector<T>;
 #include "db/timeout_clock.hh"
 
 class cells_range {
-    using ids_vector_type = small_vector<column_id, 5>;
+    using ids_vector_type = utils::small_vector<column_id, 5>;
 
     position_in_partition_view _position;
     ids_vector_type _ids;
