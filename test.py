@@ -278,16 +278,16 @@ if __name__ == "__main__":
         test_path, test_args, success, out = future.result()
         cookie = print_progress(test_path, test_args, success, cookie)
         if not success:
-            failed_tests.append((test_path, out))
+            failed_tests.append((test_path, test_args, out))
 
     if not failed_tests:
         print('\nOK.')
     else:
         print('\n\nOutput of the failed tests:')
-        for test, out in failed_tests:
-            print("Test {} failed:\n{}".format(test, out))
+        for test, args, out in failed_tests:
+            print("Test {} {} failed:\n{}".format(test, ' '.join(args), out))
         print('\n\nThe following test(s) have failed:')
-        for test, out in failed_tests:
-            print('  {}'.format(test))
+        for test, args, _ in failed_tests:
+            print('  {} {}'.format(test, ' '.join(args)))
         print('\nSummary: {} of the total {} tests failed'.format(len(failed_tests), len(test_to_run)))
         sys.exit(1)
