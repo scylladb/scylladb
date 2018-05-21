@@ -80,7 +80,7 @@ class data_consume_context {
     template <typename Consumer>
     data_consume_context(shared_sstable sst, Consumer &consumer, input_stream<char> &&input, uint64_t start, uint64_t maxlen)
         : _sst(std::move(sst))
-        , _ctx(new DataConsumeRowsContext(_sst, consumer, std::move(input), start, maxlen))
+        , _ctx(std::make_unique<DataConsumeRowsContext>(_sst, consumer, std::move(input), start, maxlen))
     { }
 
     friend class sstable;
