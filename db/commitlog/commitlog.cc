@@ -203,6 +203,7 @@ public:
 
     stdx::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::unordered_map<sstring, descriptor> _files_to_delete;
+    std::vector<file> _files_to_close;
 
     void account_memory_usage(size_t size) {
         _request_controller.consume(size);
@@ -282,6 +283,8 @@ public:
     future<> orphan_all();
 
     void add_file_to_delete(sstring, descriptor);
+    void add_file_to_close(file);
+
     future<> do_pending_deletes();
 
     future<> delete_segments(std::vector<sstring>);
@@ -452,6 +455,9 @@ public:
         clogger.debug("Created new {} segment {}", active ? "active" : "reserve", *this);
     }
     ~segment() {
+        if (!_closed) {
+            _segment_manager->add_file_to_close(std::move(_file));
+        }
         if (is_clean()) {
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
@@ -1390,6 +1396,10 @@ void db::commitlog::segment_manager::add_file_to_delete(sstring filename, descri
     _files_to_delete.emplace(std::move(filename), std::move(d));
 }
 
+void db::commitlog::segment_manager::add_file_to_close(file f) {
+    _files_to_close.emplace_back(std::move(f));
+}
+
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
     auto i = files.begin();
     auto e = files.end();
@@ -1412,7 +1422,14 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
 }
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
-    return delete_segments(boost::copy_range<std::vector<sstring>>(std::exchange(_files_to_delete, {}) | boost::adaptors::map_keys));
+    auto ftc = std::exchange(_files_to_close, {});
+    auto i = ftc.begin();
+    auto e = ftc.end();
+    return parallel_for_each(i, e, [](file & f) {
+        return f.close();
+    }).then([this, ftc = std::move(ftc)] {
+        return delete_segments(boost::copy_range<std::vector<sstring>>(std::exchange(_files_to_delete, {}) | boost::adaptors::map_keys));
+    });
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
@@ -1584,11 +1601,8 @@ db::commitlog::commitlog(commitlog&& v) noexcept
         : _segment_manager(std::move(v._segment_manager)) {
 }
 
-db::commitlog::~commitlog() {
-    if (_segment_manager != nullptr) {
-        _segment_manager->orphan_all();
-    }
-}
+db::commitlog::~commitlog()
+{}
 
 future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     commitlog c(std::move(cfg));
