@@ -374,6 +374,11 @@ public:
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
     }
 
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        return boost::make_transform_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)), _value_extractor_fn);
+    };
+
     iterator find(const Key& k) noexcept {
         return boost::make_transform_iterator(set_find(k), _value_extractor_fn);
     }
@@ -425,14 +430,24 @@ public:
     }
 
 private:
-    set_iterator set_find(const Key& k) noexcept {
-        set_iterator it = _loading_values.find(k);
+    set_iterator ready_entry_iterator(set_iterator it) {
         set_iterator end_it = set_end();
 
         if (it == end_it || !it->ready()) {
             return end_it;
         }
         return it;
+    }
+
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    set_iterator set_find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        return ready_entry_iterator(_loading_values.find(key, std::move(key_hasher_func), std::move(key_equal_func)));
+    }
+
+    // keep the default non-templated overloads to ease on the compiler for specifications
+    // that do not require the templated find().
+    set_iterator set_find(const Key& key) noexcept {
+        return ready_entry_iterator(_loading_values.find(key));
     }
 
     set_iterator set_end() noexcept {
