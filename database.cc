@@ -2085,12 +2085,12 @@ make_flush_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_
 }
 
 inline
-compaction_controller
-make_compaction_controller(db::config& cfg, seastar::scheduling_group sg, const ::io_priority_class& iop, std::function<double()> fn) {
+std::unique_ptr<compaction_manager>
+make_compaction_manager(db::config& cfg, database_config& dbcfg) {
     if (cfg.compaction_static_shares() > 0) {
-        return compaction_controller(sg, iop, cfg.compaction_static_shares());
+        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), cfg.compaction_static_shares());
     }
-    return compaction_controller(sg, iop, 250ms, std::move(fn));
+    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority());
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -2127,19 +2127,8 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _data_query_stage("data_query", _dbcfg.statement_scheduling_group, &column_family::query)
     , _mutation_query_stage(_dbcfg.statement_scheduling_group)
     , _version(empty_version)
-    , _compaction_manager(std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group))
+    , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))
     , _enable_incremental_backups(cfg.incremental_backups())
-    , _compaction_controller(make_compaction_controller(*_cfg, dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), [this] () -> float {
-        auto backlog = _compaction_manager->backlog();
-        // This means we are using an unimplemented strategy
-        if (std::isinf(backlog)) {
-            // returning the normalization factor means that we'll return the maximum
-            // output in the _control_points. We can get rid of this when we implement
-            // all strategies.
-            return compaction_controller::normalization_factor;
-        }
-        return _compaction_manager->backlog() / memory::stats().total_memory();
-    }))
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
@@ -3720,8 +3709,6 @@ database::stop() {
         return _streaming_dirty_memory_manager.shutdown();
     }).then([this] {
         return _memtable_controller.shutdown();
-    }).then([this] {
-        return _compaction_controller.shutdown();
     });
 }
 

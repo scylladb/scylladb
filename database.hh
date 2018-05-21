@@ -1171,8 +1171,6 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
-    compaction_controller _compaction_controller;
-
     querier_cache _querier_cache;
 
     std::unique_ptr<db::large_partition_handler> _large_partition_handler;

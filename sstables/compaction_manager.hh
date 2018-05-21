@@ -37,6 +37,7 @@
 #include "sstables/compaction.hh"
 #include "compaction_weight_registration.hh"
 #include "compaction_backlog_manager.hh"
+#include "backlog_controller.hh"
 
 class column_family;
 class compacting_sstable_registration;
@@ -137,10 +138,13 @@ private:
     // similar-sized compaction.
     void postpone_compaction_for_column_family(column_family* cf);
 
+    compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     seastar::scheduling_group _scheduling_group;
 public:
-    compaction_manager(seastar::scheduling_group sg = default_scheduling_group());
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop);
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares);
+    compaction_manager();
     ~compaction_manager();
 
     void register_metrics();

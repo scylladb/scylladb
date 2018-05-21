@@ -97,7 +97,11 @@ protected:
 
     virtual ~backlog_controller() {}
 public:
+    backlog_controller(backlog_controller&&) = default;
     float backlog_of_shares(float shares) const;
+    seastar::scheduling_group sg() {
+        return _scheduling_group;
+    }
 };
 
 // memtable flush CPU controller.

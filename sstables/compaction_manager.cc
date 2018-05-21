@@ -29,6 +29,7 @@
 #include <boost/range/algorithm/count_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
+using namespace std::chrono_literals;
 
 class compacting_sstable_registration {
     compaction_manager* _cm;
@@ -310,8 +311,29 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
     });
 }
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg)
-    : _scheduling_group(sg) {}
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop)
+    : _compaction_controller(sg, iop, 250ms, [this] () -> float {
+        auto b = backlog();
+        // This means we are using an unimplemented strategy
+        if (std::isinf(b)) {
+            // returning the normalization factor means that we'll return the maximum
+            // output in the _control_points. We can get rid of this when we implement
+            // all strategies.
+            return compaction_controller::normalization_factor;
+        }
+        return b / memory::stats().total_memory();
+    })
+    , _scheduling_group(_compaction_controller.sg())
+{}
+
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares)
+    : _compaction_controller(sg, iop, shares)
+    , _scheduling_group(_compaction_controller.sg())
+{}
+
+compaction_manager::compaction_manager()
+    : compaction_manager(seastar::default_scheduling_group(), default_priority_class(), 1)
+{}
 
 compaction_manager::~compaction_manager() {
     // Assert that compaction manager was explicitly stopped, if started.
@@ -397,7 +419,7 @@ future<> compaction_manager::stop() {
         _weight_tracker.clear();
         _compaction_submission_timer.cancel();
         cmlog.info("Stopped");
-        return make_ready_future<>();
+        return _compaction_controller.shutdown();
     });
 }
 
