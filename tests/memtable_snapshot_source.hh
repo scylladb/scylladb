@@ -73,6 +73,7 @@ private:
                  streamed_mutation::forwarding::no,
                  mutation_reader::forwarding::yes));
         }
+        _memtables.push_back(new_memtable());
         auto&& rd = make_combined_reader(new_mt->schema(), std::move(readers));
         consume_partitions(rd, [&] (mutation&& m) {
             new_mt->apply(std::move(m));
