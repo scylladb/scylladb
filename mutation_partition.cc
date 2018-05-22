@@ -1160,7 +1160,8 @@ row::find_cell_and_hash(column_id id) const {
 
 const atomic_cell_or_collection*
 row::find_cell(column_id id) const {
-    return &find_cell_and_hash(id)->cell;
+    auto c_a_h = find_cell_and_hash(id);
+    return c_a_h ? &c_a_h->cell : nullptr;
 }
 
 size_t row::external_memory_usage() const {
