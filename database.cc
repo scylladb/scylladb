@@ -207,6 +207,7 @@ column_family::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
 column_family::column_family(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats)
     : _schema(std::move(schema))
     , _config(std::move(config))
+    , _view_stats(sprint("%s_%s_view_replica_update", _schema->ks_name(), _schema->cf_name()))
     , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
     , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
@@ -1248,6 +1249,31 @@ void column_family::set_metrics() {
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
                 ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
+
+        // Metrics related to row locking
+        auto add_row_lock_metrics = [this, ks, cf] (row_locker::single_lock_stats& stats, sstring stat_name) {
+            _metrics.add_group("column_family", {
+                ms::make_total_operations(sprint("row_lock_%s_acquisitions", stat_name), stats.lock_acquisitions, ms::description(sprint("Row lock acquisitions for %s lock", stat_name)))(cf)(ks),
+                ms::make_queue_length(sprint("row_lock_%s_operations_currently_waiting_for_lock", stat_name), stats.operations_currently_waiting_for_lock, ms::description(sprint("Operations currently waiting for %s lock", stat_name)))(cf)(ks),
+                ms::make_histogram(sprint("row_lock_%s_waiting_time", stat_name), ms::description(sprint("Histogram representing time that operations spent on waiting for %s lock", stat_name)),
+                        [&stats] {return stats.estimated_waiting_for_lock.get_histogram(std::chrono::microseconds(100));})(cf)(ks)
+            });
+        };
+        add_row_lock_metrics(_row_locker_stats.exclusive_row, "exclusive_row");
+        add_row_lock_metrics(_row_locker_stats.shared_row, "shared_row");
+        add_row_lock_metrics(_row_locker_stats.exclusive_partition, "exclusive_partition");
+        add_row_lock_metrics(_row_locker_stats.shared_partition, "shared_partition");
+
+        // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
+        if (!_schema->is_view()) {
+            _metrics.add_group("column_family", {
+                    ms::make_total_operations("view_updates_pushed_remote", _view_stats.view_updates_pushed_remote, ms::description("Number of updates (mutations) pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_remote", _view_stats.view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_pushed_local", _view_stats.view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_local", _view_stats.view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"))(cf)(ks),
+            });
+        }
+
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
@@ -4344,8 +4370,8 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
                         flat_mutation_reader_from_mutations({std::move(m)}),
                         std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
         return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
-                [base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([units = std::move(units)] (auto ignored) { });
+                [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
+            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
         });
     });
 }
@@ -4478,14 +4504,14 @@ column_family::local_base_lock(
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true, timeout);
+        return _row_locker.lock_pk(pk, true, timeout, _row_locker_stats);
     }
 }
 
@@ -4509,8 +4535,8 @@ future<> column_family::populate_views(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token)] (auto&& updates) {
-        return db::view::mutate_MV(std::move(base_token), std::move(updates));
+            { }).then([base_token = std::move(base_token), this] (auto&& updates) {
+        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
     });
 }
 

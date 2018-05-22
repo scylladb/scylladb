@@ -56,6 +56,7 @@
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
 #include "db/config.hh"
+#include "storage_proxy_stats.hh"
 
 namespace compat {
 
@@ -93,122 +94,12 @@ private:
         response_id_type release();
     };
 
+public:
     static const sstring COORDINATOR_STATS_CATEGORY;
     static const sstring REPLICA_STATS_CATEGORY;
 
-public:
-    // split statistics counters
-    struct split_stats {
-        static seastar::metrics::label datacenter_label;
-        static seastar::metrics::label op_type_label;
-    private:
-        struct stats_counter {
-            uint64_t val = 0;
-        };
-
-        // counter of operations performed on a local Node
-        stats_counter _local;
-        // counters of operations performed on external Nodes aggregated per Nodes' DCs
-        std::unordered_map<sstring, stats_counter> _dc_stats;
-        // collectd registrations container
-        seastar::metrics::metric_groups _metrics;
-        // a prefix string that will be used for a collecd counters' description
-        sstring _short_description_prefix;
-        sstring _long_description_prefix;
-        // a statistics category, e.g. "client" or "replica"
-        sstring _category;
-        // type of operation (data/digest/mutation_data)
-        sstring _op_type;
-
-    public:
-        /**
-         * @param category a statistics category, e.g. "client" or "replica"
-         * @param short_description_prefix a short description prefix
-         * @param long_description_prefix a long description prefix
-         */
-        split_stats(const sstring& category, const sstring& short_description_prefix, const sstring& long_description_prefix, const sstring& op_type);
-
-        /**
-         * Get a reference to the statistics counter corresponding to the given
-         * destination.
-         *
-         * @param ep address of a destination
-         *
-         * @return a reference to the requested counter
-         */
-        uint64_t& get_ep_stat(gms::inet_address ep);
-    };
-
-    struct stats {
-        utils::timed_rate_moving_average read_timeouts;
-        utils::timed_rate_moving_average read_unavailables;
-        utils::timed_rate_moving_average range_slice_timeouts;
-        utils::timed_rate_moving_average range_slice_unavailables;
-        utils::timed_rate_moving_average write_timeouts;
-        utils::timed_rate_moving_average write_unavailables;
-
-        // total write attempts
-        split_stats writes_attempts;
-        split_stats writes_errors;
-
-        // write attempts due to Read Repair logic
-        split_stats read_repair_write_attempts;
-
-        uint64_t read_repair_attempts = 0;
-        uint64_t read_repair_repaired_blocking = 0;
-        uint64_t read_repair_repaired_background = 0;
-        uint64_t global_read_repairs_canceled_due_to_concurrent_write = 0;
-
-        // number of mutations received as a coordinator
-        uint64_t received_mutations = 0;
-
-        // number of counter updates received as a leader
-        uint64_t received_counter_updates = 0;
-
-        // number of forwarded mutations
-        uint64_t forwarded_mutations = 0;
-        uint64_t forwarding_errors = 0;
-
-        // number of read requests received as a replica
-        uint64_t replica_data_reads = 0;
-        uint64_t replica_digest_reads = 0;
-        uint64_t replica_mutation_data_reads = 0;
-
-        utils::timed_rate_moving_average_and_histogram read;
-        utils::timed_rate_moving_average_and_histogram write;
-        utils::timed_rate_moving_average_and_histogram range;
-        utils::estimated_histogram estimated_read;
-        utils::estimated_histogram estimated_write;
-        utils::estimated_histogram estimated_range;
-        uint64_t writes = 0;
-        uint64_t background_writes = 0; // client no longer waits for the write
-        uint64_t background_write_bytes = 0;
-        uint64_t queued_write_bytes = 0;
-        uint64_t reads = 0;
-        uint64_t background_reads = 0; // client no longer waits for the read
-        uint64_t read_retries = 0; // read is retried with new limit
-        uint64_t throttled_writes = 0; // total number of writes ever delayed due to throttling
-        uint64_t speculative_digest_reads = 0;
-        uint64_t speculative_data_reads = 0;
-
-        // Data read attempts
-        split_stats data_read_attempts;
-        split_stats data_read_completed;
-        split_stats data_read_errors;
-
-        // Digest read attempts
-        split_stats digest_read_attempts;
-        split_stats digest_read_completed;
-        split_stats digest_read_errors;
-
-        // Mutation data read attempts
-        split_stats mutation_data_read_attempts;
-        split_stats mutation_data_read_completed;
-        split_stats mutation_data_read_errors;
-
-    public:
-        stats();
-    };
+    using write_stats = storage_proxy_stats::write_stats;
+    using stats = storage_proxy_stats::stats;
 
     class coordinator_query_options {
         clock_type::time_point _timeout;
@@ -282,7 +173,7 @@ private:
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
+    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout, write_stats& stats);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
@@ -330,8 +221,8 @@ private:
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, stdx::optional<clock_type::time_point> timeout_opt = { });
-    future<> mutate_end(future<> mutate_result, utils::latency_counter, tracing::trace_state_ptr trace_state);
+    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, write_stats& stats, stdx::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_end(future<> mutate_result, utils::latency_counter, write_stats& stats, tracing::trace_state_ptr trace_state);
     future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     bool need_throttle_writes() const;
     void unthrottle();
@@ -416,6 +307,7 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
+    future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
     future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
 
     /**

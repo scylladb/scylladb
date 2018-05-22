@@ -42,9 +42,23 @@
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
 #include "query-request.hh"
+#include "utils/estimated_histogram.hh"
+#include "utils/histogram.hh"
+#include "utils/latency.hh"
 
 class row_locker {
 public:
+    struct single_lock_stats {
+        uint64_t lock_acquisitions = 0;
+        uint64_t operations_currently_waiting_for_lock = 0;
+        utils::estimated_histogram estimated_waiting_for_lock;
+    };
+    struct stats {
+        single_lock_stats exclusive_row;
+        single_lock_stats shared_row;
+        single_lock_stats exclusive_partition;
+        single_lock_stats shared_partition;
+    };
     // row_locker's locking functions lock_pk(), lock_ck() return a
     // "lock_holder" object. When the caller destroys the object it received,
     // the lock is released. The same type "lock_holder" is used regardless
@@ -116,14 +130,14 @@ public:
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout);
+    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats);
 
     // Lock a clustering row with a shared or exclusive lock.
     // Also, first, takes a shared lock on the partition.
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout);
+    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout, stats& stats);
 
     bool empty() const { return _two_level_locks.empty(); }
 };

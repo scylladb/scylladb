@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "service/storage_proxy_stats.hh"
 #include "dht/i_partitioner.hh"
 #include "gc_clock.hh"
 #include "query-request.hh"
@@ -32,6 +33,15 @@
 namespace db {
 
 namespace view {
+
+struct stats : public service::storage_proxy_stats::write_stats {
+    int64_t view_updates_pushed_local = 0;
+    int64_t view_updates_pushed_remote = 0;
+    int64_t view_updates_failed_local = 0;
+    int64_t view_updates_failed_remote = 0;
+
+    stats(const sstring& category) : service::storage_proxy_stats::write_stats(category, false) { }
+};
 
 /**
  * Whether the view filter considers the specified partition key.
@@ -92,8 +102,7 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
         const mutation_partition& mp,
         const std::vector<view_ptr>& views);
 
-future<> mutate_MV(const dht::token& base_token,
-        std::vector<mutation> mutations);
+future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats);
 
 }
 
