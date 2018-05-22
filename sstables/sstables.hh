@@ -152,7 +152,7 @@ public:
     // The function returns a future which completes after all the data has
     // been fed into the consumer. The caller needs to ensure the "consumer"
     // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
+    future<> data_consume_rows_at_once(const schema& s, row_consumer& consumer, uint64_t pos, uint64_t end);
 
     // disk_read_range describes a byte ranges covering part of an sstable
     // row that we need to read from disk. Usually this is the whole byte
@@ -721,13 +721,13 @@ public:
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_single_partition(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
+    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
 };
 
 struct entry_descriptor {

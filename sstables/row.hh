@@ -468,7 +468,8 @@ public:
         return row_consumer::proceed::yes;
     }
 
-    data_consume_rows_context(const shared_sstable&,
+    data_consume_rows_context(const schema&,
+                              const shared_sstable&,
                               row_consumer& consumer,
                               input_stream<char>&& input, uint64_t start, uint64_t maxlen)
                 : continuous_data_consumer(std::move(input), start, maxlen)
@@ -695,7 +696,8 @@ public:
         return row_consumer::proceed::yes;
     }
 
-    data_consume_rows_context_m(const shared_sstable& sst,
+    data_consume_rows_context_m(const schema& s,
+                                const shared_sstable& sst,
                                 consumer_m& consumer,
                                 input_stream<char> && input,
                                 uint64_t start,

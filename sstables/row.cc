@@ -25,12 +25,12 @@
 
 namespace sstables {
 
-future<> sstable::data_consume_rows_at_once(row_consumer& consumer,
+future<> sstable::data_consume_rows_at_once(const schema& s, row_consumer& consumer,
         uint64_t start, uint64_t end) {
-    return data_read(start, end - start, consumer.io_priority()).then([this, &consumer]
+    return data_read(start, end - start, consumer.io_priority()).then([this, &consumer, &s]
                                                (temporary_buffer<char> buf) {
         shared_sstable sst = shared_from_this();
-        data_consume_rows_context ctx(sst, consumer, input_stream<char>(), 0, -1);
+        data_consume_rows_context ctx(s, sst, consumer, input_stream<char>(), 0, -1);
         ctx.process(buf);
         ctx.verify_end_state();
     });
