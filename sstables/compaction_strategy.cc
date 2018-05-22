@@ -524,33 +524,6 @@ public:
     }
 };
 
-//
-// Major compaction strategy is about compacting all available sstables into one.
-//
-class major_compaction_strategy : public compaction_strategy_impl {
-    static constexpr size_t min_compact_threshold = 2;
-public:
-    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
-        // At least, two sstables must be available for compaction to take place.
-        if (cfs.sstables_count() < min_compact_threshold) {
-            return sstables::compaction_descriptor();
-        }
-        return sstables::compaction_descriptor(std::move(candidates));
-    }
-
-    virtual int64_t estimated_pending_compactions(column_family& cf) const override {
-        return (cf.sstables_count() < min_compact_threshold) ? 0 : 1;
-    }
-
-    virtual compaction_strategy_type type() const {
-        return compaction_strategy_type::major;
-    }
-
-    virtual compaction_backlog_tracker& get_backlog_tracker() override {
-        return get_null_backlog_tracker();
-    }
-};
-
 leveled_compaction_strategy::leveled_compaction_strategy(const std::map<sstring, sstring>& options)
         : compaction_strategy_impl(options)
         , _stcs_options(options)
@@ -669,9 +642,6 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
     switch(strategy) {
     case compaction_strategy_type::null:
         impl = make_shared<null_compaction_strategy>(null_compaction_strategy());
-        break;
-    case compaction_strategy_type::major:
-        impl = make_shared<major_compaction_strategy>(major_compaction_strategy());
         break;
     case compaction_strategy_type::size_tiered:
         impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy(options));
