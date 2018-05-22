@@ -116,6 +116,9 @@ run_setup_script() {
         printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
         read
         return 1
+    else
+        printf "$name setup failed.\n"
+        exit 1
     fi
     return 0
 }
