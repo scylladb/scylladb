@@ -20,6 +20,7 @@
  */
 
 #include "compaction_manager.hh"
+#include "compaction_strategy.hh"
 #include "compaction_backlog_manager.hh"
 #include "sstables/sstables.hh"
 #include "database.hh"
@@ -29,6 +30,7 @@
 #include <boost/range/algorithm/count_if.hpp>
 
 static logging::logger cmlog("compaction_manager");
+using namespace std::chrono_literals;
 
 class compacting_sstable_registration {
     compaction_manager* _cm;
@@ -214,6 +216,18 @@ void compaction_manager::deregister_compacting_sstables(const std::vector<sstabl
     }
 }
 
+class user_initiated_backlog_tracker final : public compaction_backlog_tracker::impl {
+public:
+    explicit user_initiated_backlog_tracker(float added_backlog) : _added_backlog(added_backlog) {}
+private:
+    float _added_backlog;
+    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+        return _added_backlog * memory::stats().total_memory();
+    }
+    virtual void add_sstable(sstables::shared_sstable sst)  override { }
+    virtual void remove_sstable(sstables::shared_sstable sst)  override { }
+};
+
 future<> compaction_manager::submit_major_compaction(column_family* cf) {
     if (_stopped) {
         return make_ready_future<>();
@@ -240,9 +254,12 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             auto compacting = compacting_sstable_registration(this, sstables);
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
-
-            return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
-                return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+            return do_with(std::move(user_initiated), [this, cf, sstables = std::move(sstables)] (compaction_backlog_tracker& bt) mutable {
+                register_backlog_tracker(bt);
+                return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
+                    return cf->compact_sstables(sstables::compaction_descriptor(std::move(sstables)));
+                });
             }).then([compacting = std::move(compacting)] {});
         });
     }).then_wrapped([this, task] (future<> f) {
@@ -310,8 +327,31 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
     });
 }
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg)
-    : _scheduling_group(sg) {}
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop)
+    : _compaction_controller(sg, iop, 250ms, [this] () -> float {
+        auto b = backlog() / memory::stats().total_memory();
+        // This means we are using an unimplemented strategy
+        if (compaction_controller::backlog_disabled(b)) {
+            // returning the normalization factor means that we'll return the maximum
+            // output in the _control_points. We can get rid of this when we implement
+            // all strategies.
+            return compaction_controller::normalization_factor;
+        }
+        return b;
+    })
+    , _backlog_manager(_compaction_controller)
+    , _scheduling_group(_compaction_controller.sg())
+{}
+
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares)
+    : _compaction_controller(sg, iop, shares)
+    , _backlog_manager(_compaction_controller)
+    , _scheduling_group(_compaction_controller.sg())
+{}
+
+compaction_manager::compaction_manager()
+    : compaction_manager(seastar::default_scheduling_group(), default_priority_class(), 1)
+{}
 
 compaction_manager::~compaction_manager() {
     // Assert that compaction manager was explicitly stopped, if started.
@@ -397,7 +437,7 @@ future<> compaction_manager::stop() {
         _weight_tracker.clear();
         _compaction_submission_timer.cancel();
         cmlog.info("Stopped");
-        return make_ready_future<>();
+        return _compaction_controller.shutdown();
     });
 }
 
@@ -526,8 +566,11 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
-        return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
-            return cf.cleanup_sstables(std::move(descriptor));
+        compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+        return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
+            return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
+                return cf.cleanup_sstables(std::move(descriptor));
+            });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
             _stats.active_tasks--;
             if (!can_proceed(task)) {
@@ -611,25 +654,61 @@ void compaction_manager::on_compaction_complete(compaction_weight_registration& 
 }
 
 double compaction_backlog_tracker::backlog() const {
-    return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    return _disabled ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 
 void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
+    if (_disabled) {
+        return;
+    }
     _ongoing_writes.erase(sst);
-    _impl->add_sstable(std::move(sst));
+    try {
+        _impl->add_sstable(std::move(sst));
+    } catch (...) {
+        cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
+        disable();
+    }
 }
 
 void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
+    if (_disabled) {
+        return;
+    }
+
     _ongoing_compactions.erase(sst);
-    _impl->remove_sstable(std::move(sst));
+    try {
+        _impl->remove_sstable(std::move(sst));
+    } catch (...) {
+        cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
+        disable();
+    }
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
-    _ongoing_writes.emplace(sst, &wp);
+    if (_disabled) {
+        return;
+    }
+    try {
+        _ongoing_writes.emplace(sst, &wp);
+    } catch (...) {
+        // We can potentially recover from adding ongoing compactions or writes when the process
+        // ends. The backlog will just be temporarily wrong. If we are are suffering from something
+        // more serious like memory exhaustion we will soon fail again in either add / remove and
+        // then we'll disable the tracker. For now, try our best.
+        cmlog.warn("backlog tracker couldn't register partially written SSTable to exception {}", std::current_exception());
+    }
 }
 
 void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
-    _ongoing_compactions.emplace(sst, &rp);
+    if (_disabled) {
+        return;
+    }
+
+    try {
+        _ongoing_compactions.emplace(sst, &rp);
+    } catch (...) {
+        cmlog.warn("backlog tracker couldn't register partially compacting SSTable to exception {}", std::current_exception());
+    }
 }
 
 void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) {
@@ -662,12 +741,20 @@ void compaction_backlog_manager::remove_backlog_tracker(compaction_backlog_track
 }
 
 double compaction_backlog_manager::backlog() const {
-    double backlog = 0;
+    try {
+        double backlog = 0;
 
-    for (auto& tracker: _backlog_trackers) {
-        backlog += tracker->backlog();
+        for (auto& tracker: _backlog_trackers) {
+            backlog += tracker->backlog();
+        }
+        if (compaction_controller::backlog_disabled(backlog)) {
+            return compaction_controller::disable_backlog;
+        } else {
+            return backlog;
+        }
+    } catch (...) {
+        return _compaction_controller->backlog_of_shares(1000);
     }
-    return backlog;
 }
 
 void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker) {
