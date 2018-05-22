@@ -517,18 +517,15 @@ int main(int ac, char** av) {
                     db.local().get_config().data_file_directories().cend());
             directories.insert(db.local().get_config().commitlog_directory());
 
-            if (hinted_handoff_enabled) {
-                supervisor::notify("creating hints directories");
-                using namespace boost::filesystem;
+            supervisor::notify("creating hints directories");
 
-                path hints_base_dir(db.local().get_config().hints_directory());
-                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
-                directories.insert(db.local().get_config().hints_directory());
-                for (unsigned i = 0; i < smp::count; ++i) {
-                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
-                    dirs.touch_and_lock(shard_dir).get();
-                    directories.insert(std::move(shard_dir));
-                }
+            boost::filesystem::path hints_base_dir(db.local().get_config().hints_directory());
+            dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
+            directories.insert(db.local().get_config().hints_directory());
+            for (unsigned i = 0; i < smp::count; ++i) {
+                sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+                dirs.touch_and_lock(shard_dir).get();
+                directories.insert(std::move(shard_dir));
             }
 
             supervisor::notify("verifying directories");
@@ -702,13 +699,11 @@ int main(int ac, char** av) {
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 
-            if (hinted_handoff_enabled) {
-                supervisor::notify("starting hinted handoff manager");
-                db::hints::manager::rebalance().get();
-                proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
-                    local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());
-                }).get();
-            }
+            supervisor::notify("starting hinted handoff manager");
+            db::hints::manager::rebalance().get();
+            proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
+                local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());
+            }).get();
 
             static sharded<db::view::view_builder> view_builder;
             if (cfg->view_building()) {
