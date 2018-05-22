@@ -606,5 +606,34 @@ public:
         return check_flag(IS_STATIC);
     }
 };
+
+class column_flags_m final {
+    static const uint8_t IS_DELETED = 0x01u;
+    static const uint8_t IS_EXPIRING = 0x02u;
+    static const uint8_t HAS_EMPTY_VALUE = 0x04u;
+    static const uint8_t USE_ROW_TIMESTAMP = 0x08u;
+    static const uint8_t USE_ROW_TTL = 0x10u;
+    uint8_t _flags;
+    bool check_flag(const uint8_t flag) const {
+        return (_flags & flag) != 0u;
+    }
+public:
+    explicit column_flags_m(uint8_t flags) : _flags(flags) { }
+    bool use_row_timestamp() const {
+        return check_flag(USE_ROW_TIMESTAMP);
+    }
+    bool use_row_ttl() const {
+        return check_flag(USE_ROW_TTL);
+    }
+    bool is_deleted() const {
+        return check_flag(IS_DELETED);
+    }
+    bool is_expiring() const {
+        return check_flag(IS_EXPIRING);
+    }
+    bool has_value() const {
+        return !check_flag(HAS_EMPTY_VALUE);
+    }
+};
 }
 
