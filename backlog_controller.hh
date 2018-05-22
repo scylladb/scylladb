@@ -134,6 +134,8 @@ public:
 class compaction_controller : public backlog_controller {
 public:
     static constexpr unsigned normalization_factor = 10;
+    static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
+    static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
     compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, float static_shares) : backlog_controller(sg, iop, static_shares) {}
     compaction_controller(seastar::scheduling_group sg, const ::io_priority_class& iop, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(sg, iop, std::move(interval),

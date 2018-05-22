@@ -479,7 +479,7 @@ public:
 
 struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
-        return std::numeric_limits<double>::infinity();
+        return compaction_controller::disable_backlog;
     }
     virtual void add_sstable(sstables::shared_sstable sst) override { }
     virtual void remove_sstable(sstables::shared_sstable sst) override { }

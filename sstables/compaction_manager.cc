@@ -313,15 +313,15 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
 
 compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop)
     : _compaction_controller(sg, iop, 250ms, [this] () -> float {
-        auto b = backlog();
+        auto b = backlog() / memory::stats().total_memory();
         // This means we are using an unimplemented strategy
-        if (std::isinf(b)) {
+        if (compaction_controller::backlog_disabled(b)) {
             // returning the normalization factor means that we'll return the maximum
             // output in the _control_points. We can get rid of this when we implement
             // all strategies.
             return compaction_controller::normalization_factor;
         }
-        return b / memory::stats().total_memory();
+        return b;
     })
     , _scheduling_group(_compaction_controller.sg())
 {}
