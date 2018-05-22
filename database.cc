@@ -196,14 +196,11 @@ column_family::make_memtable_list() {
 
 lw_shared_ptr<memtable_list>
 column_family::make_streaming_memtable_list() {
-    auto seal_immediate = [this] (flush_permit&& permit) {
+    auto seal = [this] (flush_permit&& permit) {
         return seal_active_streaming_memtable_immediate(std::move(permit));
     };
-    auto seal_delayed = [this] {
-        return seal_active_streaming_memtable_delayed();
-    };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal_immediate), std::move(seal_delayed), std::move(get_schema), _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
 }
 
 lw_shared_ptr<memtable_list>
@@ -843,34 +840,6 @@ column_family::update_cache(lw_shared_ptr<memtable> m, sstables::shared_sstable 
     }
 }
 
-// FIXME: because we are coalescing, it could be that mutations belonging to the same
-// range end up in two different tables. Technically, we should wait for both. However,
-// the only way we have to make this happen now is to wait on all previous writes. This
-// certainly is an overkill, so we won't do it. We can fix this longer term by looking
-// at the PREPARE messages, and then noting what is the minimum future we should be
-// waiting for.
-future<>
-column_family::seal_active_streaming_memtable_delayed() {
-    auto old = _streaming_memtables->back();
-    if (old->empty()) {
-        return make_ready_future<>();
-    }
-
-    if (!_delayed_streaming_flush.armed()) {
-            // We don't want to wait for too long, because the incoming mutations will not be available
-            // until we flush them to SSTables. On top of that, if the sender ran out of messages, it won't
-            // send more until we respond to some - which depends on these futures resolving. Sure enough,
-            // the real fix for that second one is to have better communication between sender and receiver,
-            // but that's not realistic ATM. If we did have better negotiation here, we would not need a timer
-            // at all.
-            _delayed_streaming_flush.arm(2s);
-    }
-
-    return with_gate(_streaming_flush_gate, [this, old] {
-        return _waiting_streaming_flushes.get_shared_future();
-    });
-}
-
 future<>
 column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
   return with_scheduling_group(_config.streaming_scheduling_group, [this, permit = std::move(permit)] () mutable {
@@ -885,11 +854,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
 
     auto guard = _streaming_flush_phaser.start();
     return with_gate(_streaming_flush_gate, [this, old, permit = std::move(permit)] () mutable {
-        _delayed_streaming_flush.cancel();
-        auto current_waiters = std::exchange(_waiting_streaming_flushes, shared_promise<>());
-        auto f = current_waiters.get_shared_future(); // for this seal
-
-        with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
+        return with_lock(_sstables_lock.for_read(), [this, old, permit = std::move(permit)] () mutable {
             auto newtab = sstables::make_sstable(_schema,
                 _config.datadir, calculate_generation_for_new_table(),
                 get_highest_supported_format(),
@@ -936,15 +901,7 @@ column_family::seal_active_streaming_memtable_immediate(flush_permit&& permit) {
             });
             // We will also not have any retry logic. If we fail here, we'll fail the streaming and let
             // the upper layers know. They can then apply any logic they want here.
-        }).then_wrapped([this, current_waiters = std::move(current_waiters)] (future <> f) mutable {
-            if (f.failed()) {
-                current_waiters.set_exception(f.get_exception());
-            } else {
-                current_waiters.set_value();
-            }
         });
-
-        return f;
     }).finally([guard = std::move(guard)] { });
   });
 }
