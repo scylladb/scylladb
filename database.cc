@@ -2676,6 +2676,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto uuid = find_uuid(ks_name, cf_name);
     auto cf = _column_families.at(uuid);
     remove(*cf);
+    cf->clear_views();
     auto& ks = find_keyspace(ks_name);
     return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
         return cf->stop();
@@ -4311,6 +4312,10 @@ void column_family::remove_view(view_ptr v) {
     if (existing != _views.end()) {
         _views.erase(existing);
     }
+}
+
+void column_family::clear_views() {
+    _views.clear();
 }
 
 const std::vector<view_ptr>& column_family::views() const {
