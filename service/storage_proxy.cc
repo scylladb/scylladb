@@ -457,7 +457,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(shared_
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
-            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets(), e.handler->get_trace_state());
+            auto hints = hint_to_dead_endpoints(e.handler->_mutation_holder, e.handler->get_targets(), e.handler->_type, e.handler->get_trace_state());
             e.handler->signal(hints);
             if (e.handler->_cl == db::consistency_level::ANY && hints) {
                 slogger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
@@ -665,15 +665,17 @@ storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vect
 
     });
 
-    if (hinted_handoff_enabled) {
-        supervisor::notify("creating hints manager");
-        slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
-
-        const db::config& cfg = _db.local().get_config();
-        // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
-        db::hints::manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
-        _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _db);
+    _hints_enabled_for_user_writes = bool(hinted_handoff_enabled);
+    if (!hinted_handoff_enabled) {
+        hinted_handoff_enabled.emplace();
     }
+    supervisor::notify("creating hints manager");
+    slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
+
+    const db::config& cfg = _db.local().get_config();
+    // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
+    db::hints::manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
+    _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _db);
 }
 
 storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
@@ -1158,7 +1160,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 
     auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
-    if (std::find_if(all.begin(), all.end(), std::bind1st(std::mem_fn(&storage_proxy::cannot_hint), this)) != all.end()) {
+    if (cannot_hint(all, type)) {
         // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
         // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
         // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
@@ -1202,7 +1204,7 @@ void
 storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
     auto& h = *get_write_response_handler(id);
 
-    size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints(), h.get_trace_state());
+    size_t hints = hint_to_dead_endpoints(h._mutation_holder, h.get_dead_endpoints(), h._type, h.get_trace_state());
 
     if (cl == db::consistency_level::ANY) {
         // for cl==ANY hints are counted towards consistency
@@ -1558,9 +1560,10 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     });
 }
 
-bool storage_proxy::cannot_hint(gms::inet_address target) {
+template<typename Range>
+bool storage_proxy::cannot_hint(const Range& targets, db::write_type type) {
     // if hints are disabled we "can always hint" since there's going to be no hint generated in this case
-    return hints_enabled() && _hints_manager->too_many_in_flight_hints_for(target);
+    return hints_enabled(type) && boost::algorithm::any_of(targets, std::bind(&db::hints::manager::too_many_in_flight_hints_for, &*_hints_manager, std::placeholders::_1));
 }
 
 future<> storage_proxy::send_to_endpoint(
@@ -1571,9 +1574,11 @@ future<> storage_proxy::send_to_endpoint(
     utils::latency_counter lc;
     lc.start();
 
+    // View updates use consistency level ANY in order to fall back to hinted handoff in case of a failed update
+    db::consistency_level cl = (type == db::write_type::VIEW) ? db::consistency_level::ANY : db::consistency_level::ONE;
     std::unordered_set<gms::inet_address> targets(pending_endpoints.begin(), pending_endpoints.end());
     targets.insert(std::move(target));
-    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, type,
+    return mutate_prepare(std::array<mutation, 1>{std::move(m)}, cl, type,
         [this, targets = std::move(targets), pending_endpoints = std::move(pending_endpoints)] (
                 const mutation& m,
                 db::consistency_level cl,
@@ -1588,8 +1593,8 @@ future<> storage_proxy::send_to_endpoint(
                     pending_endpoints,
                     { },
                     nullptr);
-        }).then([this] (std::vector<unique_response_handler> ids) {
-            return mutate_begin(std::move(ids), db::consistency_level::ONE);
+        }).then([this, cl] (std::vector<unique_response_handler> ids) {
+            return mutate_begin(std::move(ids), cl);
         }).then_wrapped([p = shared_from_this(), lc] (future<>&& f) {
             return p->mutate_end(std::move(f), lc, nullptr);
         });
@@ -1710,9 +1715,9 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
 // returns number of hints stored
 template<typename Range>
-size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, tracing::trace_state_ptr tr_state) noexcept
+size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept
 {
-    if (hints_enabled()) {
+    if (hints_enabled(type)) {
         return boost::count_if(targets, [this, &mh, tr_state = std::move(tr_state)] (gms::inet_address target) mutable -> bool {
             return _hints_manager->store_hint(target, mh->schema(), mh->get_mutation_for(target), tr_state);
         });
@@ -3562,8 +3567,8 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partiti
     return ranges;
 }
 
-bool storage_proxy::hints_enabled() noexcept {
-    return bool(_hints_manager);
+bool storage_proxy::hints_enabled(db::write_type type) noexcept {
+    return _hints_enabled_for_user_writes || (type == db::write_type::VIEW && bool(_hints_manager));
 }
 
 future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
