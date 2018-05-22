@@ -261,6 +261,7 @@ public:
 
     schema_builder& with_index(const index_metadata& im);
     schema_builder& without_index(const sstring& name);
+    schema_builder& without_indexes();
 
     default_names get_default_names() const {
         return default_names(_raw);
