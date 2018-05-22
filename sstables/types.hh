@@ -372,7 +372,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     }
 };
 
-using bytes_array_vint_size = disk_array_vint_size<bytes::value_type>;
+using bytes_array_vint_size = disk_string_vint_size;
 
 struct serialization_header : public metadata_base<serialization_header> {
     vint<uint64_t> min_timestamp;

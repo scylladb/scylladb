@@ -2054,11 +2054,15 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
     return sm;
 }
 
-template <typename T>
-static bytes_array_vint_size to_bytes_array_vint_size(const T& t) {
-    static_assert(sizeof(typename T::value_type) == 1, "Only single-byte char types are allowed");
+static bytes_array_vint_size to_bytes_array_vint_size(bytes b) {
     bytes_array_vint_size result;
-    boost::copy(t, std::back_inserter(result.elements));
+    result.value = std::move(b);
+    return result;
+}
+
+static bytes_array_vint_size to_bytes_array_vint_size(const sstring& s) {
+    bytes_array_vint_size result;
+    result.value = to_bytes(s);
     return result;
 }
 
