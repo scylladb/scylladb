@@ -59,6 +59,7 @@
 #include "component_type.hh"
 #include "sstable_version.hh"
 #include "db/large_partition_handler.hh"
+#include "column_translation.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -407,6 +408,7 @@ private:
     std::vector<sstring> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
+    column_translation _column_translation;
     bool _shared = true;  // across shards; safe default
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -668,6 +670,9 @@ public:
         }
         const serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
+    }
+    column_translation get_column_translation(const schema& s, const serialization_header& h) {
+        return _column_translation.get_for_schema(s, h);
     }
     const std::vector<unsigned>& get_shards_for_this_sstable() const {
         return _shards;

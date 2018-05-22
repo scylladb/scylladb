@@ -32,7 +32,7 @@
 #include "utils/chunked_vector.hh"
 #include "gc_clock.hh"
 #include "timestamp.hh"
-
+#include "column_translation.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -532,6 +532,7 @@ private:
 
     consumer_m& _consumer;
     const serialization_header& _header;
+    column_translation _column_translation;
 
     temporary_buffer<char> _pk;
 
@@ -705,6 +706,7 @@ public:
         : continuous_data_consumer(std::move(input), start, maxlen)
         , _consumer(consumer)
         , _header(sst->get_serialization_header())
+        , _column_translation(sst->get_column_translation(s, _header))
         , _liveness(_header)
     { }
 
