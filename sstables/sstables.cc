@@ -339,9 +339,17 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_string<Si
     });
 }
 
+future<> parse(sstable_version_types v, random_access_reader& in, disk_string_vint_size& s) {
+    auto len = std::make_unique<uint64_t>();
+    auto f = read_vint(in, *len);
+    return f.then([v, &in, &s, len = std::move(len)] {
+        return parse(v, in, *len, s.value);
+    });
+}
+
 template <typename Members>
 future<> parse(sstable_version_types v, random_access_reader& in, disk_array_vint_size<Members>& arr) {
-    auto len = std::make_unique<uint32_t>();
+    auto len = std::make_unique<uint64_t>();
     auto f = read_vint(in, *len);
     return f.then([v, &in, &arr, len = std::move(len)] {
         return parse(v, in, *len, arr.elements);
@@ -353,6 +361,13 @@ inline void write(sstable_version_types v, file_writer& out, const disk_string<S
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
     write(v, out, len);
+    write(v, out, s.value);
+}
+
+inline void write(sstable_version_types v, file_writer& out, const disk_string_vint_size& s) {
+    uint64_t len = 0;
+    check_truncate_and_assign(len, s.value.size());
+    write_vint(out, len);
     write(v, out, s.value);
 }
 
