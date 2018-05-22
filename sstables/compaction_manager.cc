@@ -654,25 +654,61 @@ void compaction_manager::on_compaction_complete(compaction_weight_registration& 
 }
 
 double compaction_backlog_tracker::backlog() const {
-    return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+    return _disabled ? compaction_controller::disable_backlog : _impl->backlog(_ongoing_writes, _ongoing_compactions);
 }
 
 void compaction_backlog_tracker::add_sstable(sstables::shared_sstable sst) {
+    if (_disabled) {
+        return;
+    }
     _ongoing_writes.erase(sst);
-    _impl->add_sstable(std::move(sst));
+    try {
+        _impl->add_sstable(std::move(sst));
+    } catch (...) {
+        cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
+        disable();
+    }
 }
 
 void compaction_backlog_tracker::remove_sstable(sstables::shared_sstable sst) {
+    if (_disabled) {
+        return;
+    }
+
     _ongoing_compactions.erase(sst);
-    _impl->remove_sstable(std::move(sst));
+    try {
+        _impl->remove_sstable(std::move(sst));
+    } catch (...) {
+        cmlog.warn("Disabling backlog tracker due to exception {}", std::current_exception());
+        disable();
+    }
 }
 
 void compaction_backlog_tracker::register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp) {
-    _ongoing_writes.emplace(sst, &wp);
+    if (_disabled) {
+        return;
+    }
+    try {
+        _ongoing_writes.emplace(sst, &wp);
+    } catch (...) {
+        // We can potentially recover from adding ongoing compactions or writes when the process
+        // ends. The backlog will just be temporarily wrong. If we are are suffering from something
+        // more serious like memory exhaustion we will soon fail again in either add / remove and
+        // then we'll disable the tracker. For now, try our best.
+        cmlog.warn("backlog tracker couldn't register partially written SSTable to exception {}", std::current_exception());
+    }
 }
 
 void compaction_backlog_tracker::register_compacting_sstable(sstables::shared_sstable sst, backlog_read_progress_manager& rp) {
-    _ongoing_compactions.emplace(sst, &rp);
+    if (_disabled) {
+        return;
+    }
+
+    try {
+        _ongoing_compactions.emplace(sst, &rp);
+    } catch (...) {
+        cmlog.warn("backlog tracker couldn't register partially compacting SSTable to exception {}", std::current_exception());
+    }
 }
 
 void compaction_backlog_tracker::transfer_ongoing_charges(compaction_backlog_tracker& new_bt, bool move_read_charges) {
@@ -711,7 +747,11 @@ double compaction_backlog_manager::backlog() const {
         for (auto& tracker: _backlog_trackers) {
             backlog += tracker->backlog();
         }
-        return backlog;
+        if (compaction_controller::backlog_disabled(backlog)) {
+            return compaction_controller::disable_backlog;
+        } else {
+            return backlog;
+        }
     } catch (...) {
         return _compaction_controller->backlog_of_shares(1000);
     }
