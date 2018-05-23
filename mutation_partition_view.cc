@@ -28,6 +28,7 @@
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
 #include "counters.hh"
+#include "frozen_mutation.hh"
 
 #include "utils/UUID.hh"
 #include "serializer.hh"
@@ -230,4 +231,64 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
 mutation_partition_view mutation_partition_view::from_view(ser::mutation_partition_view v)
 {
     return { v.v };
+}
+
+mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
+{
+    auto in = ser::as_input_stream(_bytes);
+    auto view = ser::deserialize(in, boost::type<ser::mutation_fragment_view>());
+    return seastar::visit(view.fragment(),
+        [&] (ser::clustering_row_view crv) {
+            class clustering_row_builder {
+                mutation_fragment _mf;
+            public:
+                clustering_row_builder(clustering_key key, row_tombstone t, row_marker m)
+                    : _mf(mutation_fragment::clustering_row_tag_t(), std::move(key), std::move(t), std::move(m), row()) { }
+                void accept_atomic_cell(column_id id, const atomic_cell& ac) {
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(ac));
+                }
+                void accept_collection(column_id id, const collection_mutation& cm) {
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                }
+                mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
+            };
+
+            auto cr = crv.row();
+            auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+            clustering_row_builder builder(cr.key(), std::move(t), read_row_marker(cr.marker()));
+            read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
+            return std::move(builder).get_mutation_fragment();
+        },
+        [&] (ser::static_row_view sr) {
+            class static_row_builder {
+                mutation_fragment _mf;
+            public:
+                static_row_builder() : _mf(static_row()) { }
+                void accept_atomic_cell(column_id id, const atomic_cell& ac) {
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(ac));
+                }
+                void accept_collection(column_id id, const collection_mutation& cm) {
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                }
+                mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
+            };
+
+            static_row_builder builder;
+            read_and_visit_row(sr.cells(), s.get_column_mapping(), column_kind::static_column, builder);
+            return std::move(builder).get_mutation_fragment();
+        },
+        [&] (ser::range_tombstone_view rt) {
+            return mutation_fragment(range_tombstone(rt));
+        },
+        [&] (ser::partition_start_view ps) {
+            auto dkey = dht::global_partitioner().decorate_key(s, ps.key());
+            return mutation_fragment(partition_start(std::move(dkey), ps.partition_tombstone()));
+        },
+        [] (partition_end) {
+            return mutation_fragment(partition_end());
+        },
+        [] (ser::unknown_variant_type) -> mutation_fragment {
+            throw std::runtime_error("Trying to deserialize unknown mutation fragment type");
+        }
+    );
 }
