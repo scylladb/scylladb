@@ -372,14 +372,14 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     }
 };
 
-using bytes_array_vint_size = disk_array_vint_size<uint32_t, bytes::value_type>;
+using bytes_array_vint_size = disk_array_vint_size<bytes::value_type>;
 
 struct serialization_header : public metadata_base<serialization_header> {
     vint<uint64_t> min_timestamp;
     vint<uint32_t> min_local_deletion_time;
     vint<uint32_t> min_ttl;
     bytes_array_vint_size pk_type_name;
-    disk_array_vint_size<uint32_t, bytes_array_vint_size> clustering_key_types_names;
+    disk_array_vint_size<bytes_array_vint_size> clustering_key_types_names;
     struct column_desc {
         bytes_array_vint_size name;
         bytes_array_vint_size type_name;
@@ -391,8 +391,8 @@ struct serialization_header : public metadata_base<serialization_header> {
             );
         }
     };
-    disk_array_vint_size<uint32_t, column_desc> static_columns;
-    disk_array_vint_size<uint32_t, column_desc> regular_columns;
+    disk_array_vint_size<column_desc> static_columns;
+    disk_array_vint_size<column_desc> regular_columns;
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
