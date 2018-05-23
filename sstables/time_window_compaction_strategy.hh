@@ -55,6 +55,8 @@ extern logging::logger clogger;
 
 using namespace std::chrono_literals;
 
+class time_window_backlog_tracker;
+
 class time_window_compaction_strategy_options {
 public:
     static constexpr std::chrono::seconds DEFAULT_COMPACTION_WINDOW_UNIT(int window_size) { return window_size * 86400s; }
@@ -124,6 +126,7 @@ public:
     std::chrono::seconds get_sstable_window_size() const { return sstable_window_size; }
 
     friend class time_window_compaction_strategy;
+    friend class time_window_backlog_tracker;
 };
 
 using timestamp_type = api::timestamp_type;
@@ -305,6 +308,8 @@ private:
         }
         _estimated_remaining_tasks = n;
     }
+
+    friend class time_window_backlog_tracker;
 public:
     virtual int64_t estimated_pending_compactions(column_family& cf) const override {
         return _estimated_remaining_tasks;

@@ -138,4 +138,7 @@ public:
             _sstables_backlog_contribution -= sst->data_size() * log4(sst->data_size());
         }
     }
+    int64_t total_bytes() const {
+        return _total_bytes;
+    }
 };
