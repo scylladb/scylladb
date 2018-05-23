@@ -898,7 +898,11 @@ $template
 template <typename Input>
 $name$temp_param serializer<$name$temp_param>::read(Input& buf) {
  return seastar::with_serialized_stream(buf, [] (auto& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
-    if not is_final:
+    if not cls["members"]:
+        if not is_final:
+            fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
+  buf.skip(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
+    elif not is_final:
         fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
   auto in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
     else:
