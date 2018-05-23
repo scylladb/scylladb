@@ -110,7 +110,9 @@ class partition_snapshot_row_cursor final {
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
         mutation_partition::rows_type::iterator end;
+        mutation_partition::rows_type* rows;
         int version_no;
+        bool unique_owner;
 
         struct less_compare {
             rows_entry::tri_compare _cmp;
@@ -130,6 +132,7 @@ class partition_snapshot_row_cursor final {
     std::vector<position_in_version> _current_row;
     bool _continuous;
     bool _dummy;
+    const bool _unique_owner;
     position_in_partition _position;
     partition_snapshot::change_mark _change_mark;
 
@@ -165,22 +168,27 @@ class partition_snapshot_row_cursor final {
         _current_row.clear();
         _iterators.clear();
         int version_no = 0;
+        bool unique_owner = _unique_owner;
+        bool first = true;
         for (auto&& v : _snp.versions()) {
+            unique_owner = unique_owner && (first || !v.is_referenced());
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, less);
             auto end = rows.end();
             _iterators.push_back(pos);
             if (pos != end) {
-                _heap.push_back({pos, end, version_no});
+                _heap.push_back({pos, end, &rows, version_no, unique_owner});
             }
             ++version_no;
+            first = false;
         }
         boost::range::make_heap(_heap, heap_less);
     }
 public:
-    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false)
         : _schema(s)
         , _snp(snp)
+        , _unique_owner(unique_owner)
         , _position(position_in_partition::static_row_tag_t{})
     { }
 
@@ -337,7 +345,11 @@ public:
     template <typename Consumer>
     void consume_row(Consumer&& consumer) {
         for (position_in_version& v : _current_row) {
-            consumer(deletable_row(v.it->row())); // FIXME: pass as an r-value if unused
+            if (v.unique_owner) {
+                consumer(std::move(v.it->row()));
+            } else {
+                consumer(deletable_row(v.it->row()));
+            }
         }
     }
 

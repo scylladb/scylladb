@@ -461,7 +461,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
     return coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
             merge_dst_snp = std::move(merge_dst_snp), // needs to go away last so that dst_snp is not owned by anyone else
             cur = partition_snapshot_row_cursor(s, *dst_snp),
-            src_cur = partition_snapshot_row_cursor(s, *src_snp),
+            src_cur = partition_snapshot_row_cursor(s, *src_snp, can_move),
             dst_snp = std::move(dst_snp),
             prev_snp = std::move(prev_snp),
             src_snp = std::move(src_snp),
