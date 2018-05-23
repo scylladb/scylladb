@@ -22,3 +22,7 @@
 class frozen_mutation final {
     bytes representation();
 };
+
+class frozen_mutation_fragment final {
+    bytes representation();
+};
