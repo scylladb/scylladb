@@ -112,6 +112,10 @@ struct vectors_of_compounds {
     wrapped_vector second;
 };
 
+struct empty_struct { };
+
+struct empty_final_struct { };
+
 #include "serialization_visitors.hh"
 #include "idl/idl_test.dist.hh"
 #include "serializer_impl.hh"
@@ -343,4 +347,19 @@ BOOST_AUTO_TEST_CASE(test_skip_does_not_deserialize)
 
         BOOST_REQUIRE(prev == final_composite_test_object::construction_count);
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_empty_struct)
+{
+    bytes_ostream buf1;
+    ser::serialize(buf1, empty_struct());
+
+    auto in1 = ser::as_input_stream(buf1.linearize());
+    ser::deserialize(in1, boost::type<empty_struct>());
+
+    bytes_ostream buf2;
+    ser::serialize(buf2, empty_final_struct());
+
+    auto in2 = ser::as_input_stream(buf2.linearize());
+    ser::deserialize(in2, boost::type<empty_final_struct>());
 }

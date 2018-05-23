@@ -78,3 +78,7 @@ class non_final_composite_test_object {
 class final_composite_test_object final {
     simple_compound x();
 };
+
+struct empty_struct { };
+
+struct empty_final_struct final { };
