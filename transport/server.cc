@@ -910,7 +910,16 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
 {
     cql3::prepared_cache_key_type cache_key(read_short_bytes(buf));
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
-    auto prepared = _server._query_processor.local().get_prepared(cache_key);
+    bool needs_authorization = false;
+
+    // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+    // look for the prepared statement and then authorize it.
+    auto prepared = _server._query_processor.local().get_prepared(client_state.user().get(), cache_key);
+    if (!prepared) {
+        needs_authorization = true;
+        prepared = _server._query_processor.local().get_prepared(cache_key);
+    }
+
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
@@ -945,7 +954,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
-    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
+    return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
@@ -964,8 +973,9 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     const auto type = read_byte(buf);
     const unsigned n = read_short(buf);
 
-    std::vector<shared_ptr<cql3::statements::modification_statement>> modifications;
+    std::vector<cql3::statements::batch_statement::single_statement> modifications;
     std::vector<std::vector<cql3::raw_value_view>> values;
+    std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> pending_authorization_entries;
 
     modifications.reserve(n);
     values.reserve(n);
@@ -977,6 +987,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
         std::unique_ptr<cql3::statements::prepared_statement> stmt_ptr;
         cql3::statements::prepared_statement::checked_weak_ptr ps;
+        bool needs_authorization(kind == 0);
 
         switch (kind) {
         case 0: {
@@ -988,10 +999,19 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
         case 1: {
             cql3::prepared_cache_key_type cache_key(read_short_bytes(buf));
             auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
-            ps = _server._query_processor.local().get_prepared(cache_key);
+
+            // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
+            // look for the prepared statement and then authorize it.
+            ps = _server._query_processor.local().get_prepared(client_state.user().get(), cache_key);
             if (!ps) {
-                throw exceptions::prepared_query_not_found_exception(id);
+                ps = _server._query_processor.local().get_prepared(cache_key);
+                if (!ps) {
+                    throw exceptions::prepared_query_not_found_exception(id);
+                }
+                // authorize a particular prepared statement only once
+                needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
             }
+
             break;
         }
         default:
@@ -1007,7 +1027,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
 
-        modifications.emplace_back(std::move(modif_statement_ptr));
+        modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
 
         std::vector<cql3::raw_value_view> tmp;
         read_value_view_list(buf, tmp);
@@ -1031,7 +1051,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     tracing::trace(client_state.get_trace_state(), "Creating a batch statement");
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
-    return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch, &query_state] (auto msg) {
+    return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries)).then([this, stream, batch, &query_state] (auto msg) {
         return this->make_result(stream, msg, query_state.get_trace_state());
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */

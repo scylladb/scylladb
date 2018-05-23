@@ -66,10 +66,24 @@ class batch_statement : public cql_statement_no_metadata {
     static logging::logger _logger;
 public:
     using type = raw::batch_statement::type;
+
+    struct single_statement {
+        shared_ptr<modification_statement> statement;
+        bool needs_authorization = true;
+
+    public:
+        single_statement(shared_ptr<modification_statement> s)
+            : statement(std::move(s))
+        {}
+        single_statement(shared_ptr<modification_statement> s, bool na)
+            : statement(std::move(s))
+            , needs_authorization(na)
+        {}
+    };
 private:
     int _bound_terms;
     type _type;
-    std::vector<shared_ptr<modification_statement>> _statements;
+    std::vector<single_statement> _statements;
     std::unique_ptr<attributes> _attrs;
     bool _has_conditions;
     cql_stats& _stats;
@@ -83,12 +97,12 @@ public:
      * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
      */
     batch_statement(int bound_terms, type type_,
-                    std::vector<shared_ptr<modification_statement>> statements,
+                    std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
     batch_statement(type type_,
-                    std::vector<shared_ptr<modification_statement>> statements,
+                    std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
                     cql_stats& stats);
 
@@ -109,7 +123,7 @@ public:
     //   or in QueryProcessor.processBatch() - for native protocol batches.
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override;
 
-    const std::vector<shared_ptr<modification_statement>>& get_statements();
+    const std::vector<single_statement>& get_statements();
 private:
     future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, bool local, api::timestamp_type now, tracing::trace_state_ptr trace_state);
 

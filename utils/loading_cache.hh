@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/unordered_set.hpp>
+#include <boost/intrusive/parent_from_member.hpp>
 
 #include <seastar/core/reactor.hh>
 #include <seastar/core/timer.hh>
@@ -79,6 +80,10 @@ public:
     value_type& value() noexcept { return _value; }
     const value_type& value() const noexcept { return _value; }
 
+    static const timestamped_val& container_of(const value_type& value) {
+        return *bi::get_parent_from_member(&value, &timestamped_val::_value);
+    }
+
     loading_cache_clock_type::time_point last_read() const noexcept {
         return _last_read;
     }
@@ -92,6 +97,10 @@ public:
     }
 
     bool ready() const noexcept {
+        return _lru_entry_ptr;
+    }
+
+    lru_entry* lru_entry_ptr() const noexcept {
         return _lru_entry_ptr;
     }
 
@@ -365,6 +374,11 @@ public:
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
     }
 
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        return boost::make_transform_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)), _value_extractor_fn);
+    };
+
     iterator find(const Key& k) noexcept {
         return boost::make_transform_iterator(set_find(k), _value_extractor_fn);
     }
@@ -388,6 +402,24 @@ public:
         });
     }
 
+    void remove(const Key& k) {
+        auto it = set_find(k);
+        if (it == set_end()) {
+            return;
+        }
+
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*it->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+    }
+
+    void remove(iterator it) {
+        if (it == end()) {
+            return;
+        }
+
+        const ts_value_type& val = ts_value_type::container_of(*it);
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*val.lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
+    }
+
     size_t size() const {
         return _loading_values.size();
     }
@@ -398,14 +430,24 @@ public:
     }
 
 private:
-    set_iterator set_find(const Key& k) noexcept {
-        set_iterator it = _loading_values.find(k);
+    set_iterator ready_entry_iterator(set_iterator it) {
         set_iterator end_it = set_end();
 
         if (it == end_it || !it->ready()) {
             return end_it;
         }
         return it;
+    }
+
+    template<typename KeyType, typename KeyHasher, typename KeyEqual>
+    set_iterator set_find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
+        return ready_entry_iterator(_loading_values.find(key, std::move(key_hasher_func), std::move(key_equal_func)));
+    }
+
+    // keep the default non-templated overloads to ease on the compiler for specifications
+    // that do not require the templated find().
+    set_iterator set_find(const Key& key) noexcept {
+        return ready_entry_iterator(_loading_values.find(key));
     }
 
     set_iterator set_end() noexcept {

@@ -75,19 +75,19 @@ timeout_for_type(batch_statement::type t) {
 }
 
 batch_statement::batch_statement(int bound_terms, type type_,
-                                 std::vector<shared_ptr<modification_statement>> statements,
+                                 std::vector<single_statement> statements,
                                  std::unique_ptr<attributes> attrs,
                                  cql_stats& stats)
     : cql_statement_no_metadata(timeout_for_type(type_))
     , _bound_terms(bound_terms), _type(type_), _statements(std::move(statements))
     , _attrs(std::move(attrs))
-    , _has_conditions(boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::has_conditions)))
+    , _has_conditions(boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->has_conditions(); }))
     , _stats(stats)
 {
 }
 
 batch_statement::batch_statement(type type_,
-                                 std::vector<shared_ptr<modification_statement>> statements,
+                                 std::vector<single_statement> statements,
                                  std::unique_ptr<attributes> attrs,
                                  cql_stats& stats)
     : batch_statement(-1, type_, std::move(statements), std::move(attrs), stats)
@@ -97,7 +97,7 @@ batch_statement::batch_statement(type type_,
 bool batch_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
 {
     return _attrs->uses_function(ks_name, function_name)
-            || boost::algorithm::any_of(_statements, [&] (auto&& s) { return s->uses_function(ks_name, function_name); });
+            || boost::algorithm::any_of(_statements, [&] (auto&& s) { return s.statement->uses_function(ks_name, function_name); });
 }
 
 bool batch_statement::depends_on_keyspace(const sstring& ks_name) const
@@ -118,7 +118,11 @@ uint32_t batch_statement::get_bound_terms()
 future<> batch_statement::check_access(const service::client_state& state)
 {
     return parallel_for_each(_statements.begin(), _statements.end(), [&state](auto&& s) {
-        return s->check_access(state);
+        if (s.needs_authorization) {
+            return s.statement->check_access(state);
+        } else {
+            return make_ready_future<>();
+        }
     });
 }
 
@@ -138,12 +142,12 @@ void batch_statement::validate()
         }
     }
 
-    bool has_counters = boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::is_counter));
-    bool has_non_counters = !boost::algorithm::all_of(_statements, std::mem_fn(&modification_statement::is_counter));
+    bool has_counters = boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_non_counters = !boost::algorithm::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
     if (timestamp_set && has_counters) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for a BATCH containing counters");
     }
-    if (timestamp_set && boost::algorithm::any_of(_statements, std::mem_fn(&modification_statement::is_timestamp_set))) {
+    if (timestamp_set && boost::algorithm::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
         throw exceptions::invalid_request_exception("Timestamp must be set either on BATCH or individual statements");
     }
     if (_type == type::COUNTER && has_non_counters) {
@@ -159,30 +163,30 @@ void batch_statement::validate()
     if (_has_conditions
             && !_statements.empty()
             && (boost::distance(_statements
-                            | boost::adaptors::transformed(std::mem_fn(&modification_statement::keyspace))
+                            | boost::adaptors::transformed([] (auto&& s) { return s.statement->keyspace(); })
                             | boost::adaptors::uniqued) != 1
                 || (boost::distance(_statements
-                        | boost::adaptors::transformed(std::mem_fn(&modification_statement::column_family))
+                        | boost::adaptors::transformed([] (auto&& s) { return s.statement->column_family(); })
                         | boost::adaptors::uniqued) != 1))) {
         throw exceptions::invalid_request_exception("Batch with conditions cannot span multiple tables");
     }
     std::experimental::optional<bool> raw_counter;
     for (auto& s : _statements) {
-        if (raw_counter && s->is_raw_counter_shard_write() != *raw_counter) {
+        if (raw_counter && s.statement->is_raw_counter_shard_write() != *raw_counter) {
             throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
         }
-        raw_counter = s->is_raw_counter_shard_write();
+        raw_counter = s.statement->is_raw_counter_shard_write();
     }
 }
 
 void batch_statement::validate(service::storage_proxy& proxy, const service::client_state& state)
 {
     for (auto&& s : _statements) {
-        s->validate(proxy, state);
+        s.statement->validate(proxy, state);
     }
 }
 
-const std::vector<shared_ptr<modification_statement>>& batch_statement::get_statements()
+const std::vector<batch_statement::single_statement>& batch_statement::get_statements()
 {
     return _statements;
 }
@@ -196,7 +200,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(service::storage_pr
         return do_for_each(boost::make_counting_iterator<size_t>(0),
                            boost::make_counting_iterator<size_t>(_statements.size()),
                            [this, &storage, &options, now, local, &result, trace_state] (size_t i) {
-            auto&& statement = _statements[i];
+            auto&& statement = _statements[i].statement;
             statement->inc_cql_stats();
             auto&& statement_options = options.for_statement(i);
             auto timestamp = _attrs->get_timestamp(now, statement_options);
@@ -426,7 +430,9 @@ batch_statement::prepare(database& db, cql_stats& stats) {
     stdx::optional<sstring> first_cf;
     bool have_multiple_cfs = false;
 
-    std::vector<shared_ptr<cql3::statements::modification_statement>> statements;
+    std::vector<cql3::statements::batch_statement::single_statement> statements;
+    statements.reserve(_parsed_statements.size());
+
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
             first_ks = parsed->keyspace();
@@ -434,7 +440,7 @@ batch_statement::prepare(database& db, cql_stats& stats) {
         } else {
             have_multiple_cfs = first_ks.value() != parsed->keyspace() || first_cf.value() != parsed->column_family();
         }
-        statements.push_back(parsed->prepare(db, bound_names, stats));
+        statements.emplace_back(parsed->prepare(db, bound_names, stats));
     }
 
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
@@ -445,7 +451,7 @@ batch_statement::prepare(database& db, cql_stats& stats) {
 
     std::vector<uint16_t> partition_key_bind_indices;
     if (!have_multiple_cfs && batch_statement_.get_statements().size() > 0) {
-        partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(batch_statement_.get_statements()[0]->s);
+        partition_key_bind_indices = bound_names->get_partition_key_bind_indexes(batch_statement_.get_statements()[0].statement->s);
     }
     return std::make_unique<prepared>(make_shared(std::move(batch_statement_)),
                                                      bound_names->get_specifications(),

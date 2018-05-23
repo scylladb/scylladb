@@ -49,6 +49,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/prepared_statements_cache.hh"
+#include "cql3/authorized_prepared_statements_cache.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
@@ -117,6 +118,7 @@ private:
     std::unique_ptr<internal_state> _internal_state;
 
     prepared_statements_cache _prepared_cache;
+    authorized_prepared_statements_cache _authorized_prepared_cache;
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we
     // don't bother with expiration on those.
@@ -151,6 +153,21 @@ public:
         return _cql_stats;
     }
 
+    statements::prepared_statement::checked_weak_ptr get_prepared(const auth::authenticated_user* user_ptr, const prepared_cache_key_type& key) {
+        if (user_ptr) {
+            auto it = _authorized_prepared_cache.find(*user_ptr, key);
+            if (it != _authorized_prepared_cache.end()) {
+                try {
+                    return it->get()->checked_weak_from_this();
+                } catch (seastar::checked_ptr_is_null_exception&) {
+                    // If the prepared statement got invalidated - remove the corresponding authorized_prepared_statements_cache entry as well.
+                    _authorized_prepared_cache.remove(*user_ptr, key);
+                }
+            }
+        }
+        return statements::prepared_statement::checked_weak_ptr();
+    }
+
     statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
         auto it = _prepared_cache.find(key);
         if (it == _prepared_cache.end()) {
@@ -160,10 +177,18 @@ public:
     }
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    process_statement(
+    process_statement_unprepared(
             ::shared_ptr<cql_statement> statement,
             service::query_state& query_state,
             const query_options& options);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    process_statement_prepared(
+            statements::prepared_statement::checked_weak_ptr statement,
+            cql3::prepared_cache_key_type cache_key,
+            service::query_state& query_state,
+            const query_options& options,
+            bool needs_authorization);
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process(
@@ -242,7 +267,11 @@ public:
     future<> stop();
 
     future<::shared_ptr<cql_transport::messages::result_message>>
-    process_batch(::shared_ptr<statements::batch_statement>, service::query_state& query_state, query_options& options);
+    process_batch(
+            ::shared_ptr<statements::batch_statement>,
+            service::query_state& query_state,
+            query_options& options,
+            std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
     std::unique_ptr<statements::prepared_statement> get_statement(
             const std::experimental::string_view& query,
@@ -256,6 +285,9 @@ private:
             const std::initializer_list<data_value>&,
             db::consistency_level = db::consistency_level::ONE,
             int32_t page_size = -1);
+
+    future<::shared_ptr<cql_transport::messages::result_message>>
+    process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);
 
     /*!
      * \brief created a state object for paging
