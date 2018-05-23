@@ -524,7 +524,7 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
                             tracker.on_row_dropped_from_memtable();
                         }
                     }
-                    auto has_next = src_cur.next();
+                    auto has_next = src_cur.erase_and_advance();
                     acc.unpin_memory(size);
                     if (!has_next) {
                         return stop_iteration::yes;

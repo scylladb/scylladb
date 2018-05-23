@@ -316,6 +316,34 @@ public:
         return true;
     }
 
+    // Advances the cursor to the next row, erasing entries under the cursor which
+    // are owned by the cursor.
+    // If there is no next row, returns false and the cursor is no longer pointing at a row.
+    // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
+    bool erase_and_advance() {
+        memory::on_alloc_point();
+        position_in_version::less_compare heap_less(_schema);
+        for (auto&& curr : _current_row) {
+            if (curr.unique_owner) {
+                curr.it = curr.rows->erase_and_dispose(curr.it, current_deleter<rows_entry>());
+            } else {
+                ++curr.it;
+            }
+            _iterators[curr.version_no] = curr.it;
+            if (curr.it != curr.end) {
+                _heap.push_back(curr);
+                boost::range::push_heap(_heap, heap_less);
+            }
+        }
+        _current_row.clear();
+        if (_heap.empty()) {
+            return false;
+        }
+        recreate_current_row();
+        return true;
+    }
+
     // Can be called when cursor is pointing at a row.
     bool continuous() const { return _continuous; }
 
