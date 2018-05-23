@@ -521,8 +521,8 @@ private:
         FLAGS_2,
         EXTENDED_FLAGS,
         STATIC_ROW,
+        CLUSTERING_ROW,
         ROW_BODY,
-        ROW_BODY_2,
         ROW_BODY_SIZE,
         ROW_BODY_PREV_SIZE,
         ROW_BODY_TIMESTAMP,
@@ -662,9 +662,9 @@ public:
                 goto range_tombstone_marker_label;
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
-                _state = state::ROW_BODY;
+                _state = state::CLUSTERING_ROW;
                 setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
-                goto row_body_label;
+                goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
                 _state = state::EXTENDED_FLAGS;
@@ -682,8 +682,8 @@ public:
                 }
             }
             setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
-        case state::ROW_BODY:
-        row_body_label:
+        case state::CLUSTERING_ROW:
+        clustering_row_label:
             {
                 _is_first_unfiltered = false;
                 // Clustering blocks should be read here but serialization header is needed for that.
@@ -693,12 +693,12 @@ public:
                 // after calling the consume function, we can release the
                 // buffers we held for it.
                 _row_key.release();
-                _state = state::ROW_BODY_2;
+                _state = state::ROW_BODY;
                 if (ret == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
             }
-        case state::ROW_BODY_2:
+        case state::ROW_BODY:
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_SIZE;
                 break;
