@@ -413,8 +413,9 @@ def vector_add_method(current, base_state):
 def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index = None, root_node = False):
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) +")"
+    create_variant_state = Template("auto state = state_of_${base_state}__$name<Output> { start_frame(_out), std::move(_state) };").substitute(locals()) if var_index and root_node else ""
     set_varient_index = "serialize(_out, " + var_index +");\n" if var_index is not None else ""
-    set_command = "_state.f.end(_out);" if var_type is not "" else ""
+    set_command = ("_state.f.end(_out);" if not root_node else "state.f.end(_out);") if var_type is not "" else ""
     return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
 
     if typ in ['bytes', 'sstring']:
@@ -424,6 +425,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
 
     return Template(reindent(4, """
         after_${base_state}__$name<Output> write_$name$var_type($typ t) && {
+            $create_variant_state
             $set_varient_index
             serialize(_out, t);
             $set_command
@@ -434,11 +436,14 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
     var_type1 = "_" + var_type if var_type != "" else ""
     if isinstance(var_index, Number):
         var_index = "uint32_t(" + str(var_index) +")"
+    create_variant_state = Template("auto state = state_of_${base_state}__$name<Output> { start_frame(_out), std::move(_state) };").substitute(locals()) if var_index and root_node else ""
     set_varient_index = "serialize(_out, " + var_index +");\n" if var_index is not None else ""
+    state = "std::move(_state)" if not var_index or not root_node else "std::move(state)"
     ret = Template(reindent(4,"""
         ${base_state}__${name}$var_type1<Output> start_${name}$var_type() && {
+            $create_variant_state
             $set_varient_index
-            return { _out, std::move(_state) };
+            return { _out, $state };
         }
     """)).substitute(locals())
     if not is_stub(typ) and is_local_type(typ):
