@@ -82,3 +82,7 @@ class final_composite_test_object final {
 struct empty_struct { };
 
 struct empty_final_struct final { };
+
+struct just_a_variant stub [[writable]] {
+    boost::variant<writable_simple_compound, simple_compound> variant;
+};
