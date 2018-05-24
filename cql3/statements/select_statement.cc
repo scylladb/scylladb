@@ -456,10 +456,10 @@ select_statement::execute(service::storage_proxy& proxy,
     // doing post-query ordering.
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     if (needs_post_query_ordering() && _limit) {
-        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto prs) {
+        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &proxy, &state, &options, cmd, timeout](auto& prs) {
             assert(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->row_limit * prs.size(), query::max_partitions);
-            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd, timeout] (auto pr) {
+            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, &options, cmd, timeout] (auto& pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 return proxy.query(_schema,
@@ -501,10 +501,10 @@ select_statement::execute_internal(service::storage_proxy& proxy,
     ++_stats.reads;
 
     if (needs_post_query_ordering() && _limit) {
-        return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto prs) {
+        return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto& prs) {
             assert(command->partition_limit == query::max_partitions);
             query::result_merger merger(command->row_limit * prs.size(), query::max_partitions);
-            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto pr) {
+            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto& pr) {
                 dht::partition_range_vector prange { pr };
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
                 return proxy.query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {db::no_timeout, state.get_trace_state(),
