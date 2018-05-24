@@ -232,3 +232,90 @@ SEASTAR_TEST_CASE(test_secondary_index_name) {
         e.execute_cql("drop index \"IndexName\"").get();
     });
 }
+
+// Test that if we have multiple columns of all types - multiple regular
+// columns, multiple clustering columns, and multiple partition columns,
+// we can index *all* of these columns at the same time, and all the indexes
+// can be used to find the correct rows.
+// This reproduced issue #3405 as we have here multiple clustering columns.
+SEASTAR_TEST_CASE(test_many_columns) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (a int, b int, c int, d int, e int, f int, PRIMARY KEY ((a, b), c, d))").get();
+        e.execute_cql("CREATE INDEX ON tab (a)").get();
+        e.execute_cql("CREATE INDEX ON tab (b)").get();
+        e.execute_cql("CREATE INDEX ON tab (c)").get();
+        e.execute_cql("CREATE INDEX ON tab (d)").get();
+        e.execute_cql("CREATE INDEX ON tab (e)").get();
+        e.execute_cql("CREATE INDEX ON tab (f)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (1, 2, 3, 4, 5, 6)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (1, 0, 0, 0, 0, 0)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 2, 0, 0, 0, 0)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 0, 3, 0, 0, 0)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 0, 0, 4, 0, 0)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 0, 0, 0, 5, 0)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 0, 0, 7, 0, 6)").get();
+        e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (1, 2, 3, 7, 5, 0)").get();
+        // We expect each search below to find two or three of the rows that
+        // we inserted above. NOTE: the order of the partitions we test below
+        // is the order which Scylla return today. We may need to change it
+        // in the future (see issue #3423).
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE a = 1").get0();
+            assert_that(res).is_rows().with_size(3)
+                .with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+            });
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE b = 2").get0();
+            assert_that(res).is_rows().with_size(3)
+                .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+            });
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE c = 3").get0();
+            assert_that(res).is_rows().with_size(3)
+                .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(3)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+            });
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE d = 4").get0();
+            assert_that(res).is_rows().with_size(2)
+                .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(4)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+            });
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE e = 5").get0();
+            assert_that(res).is_rows().with_size(3)
+                .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+            });
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * from tab WHERE f = 6").get0();
+            assert_that(res).is_rows().with_size(2)
+                .with_rows({
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(7)}, {int32_type->decompose(0)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+            });
+        });
+    });
+}
