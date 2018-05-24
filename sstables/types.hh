@@ -372,14 +372,14 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     }
 };
 
-using bytes_array_vint_size = disk_array_vint_size<uint32_t, bytes::value_type>;
+using bytes_array_vint_size = disk_string_vint_size;
 
 struct serialization_header : public metadata_base<serialization_header> {
     vint<uint64_t> min_timestamp;
     vint<uint32_t> min_local_deletion_time;
     vint<uint32_t> min_ttl;
     bytes_array_vint_size pk_type_name;
-    disk_array_vint_size<uint32_t, bytes_array_vint_size> clustering_key_types_names;
+    disk_array_vint_size<bytes_array_vint_size> clustering_key_types_names;
     struct column_desc {
         bytes_array_vint_size name;
         bytes_array_vint_size type_name;
@@ -391,8 +391,8 @@ struct serialization_header : public metadata_base<serialization_header> {
             );
         }
     };
-    disk_array_vint_size<uint32_t, column_desc> static_columns;
-    disk_array_vint_size<uint32_t, column_desc> regular_columns;
+    disk_array_vint_size<column_desc> static_columns;
+    disk_array_vint_size<column_desc> regular_columns;
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
@@ -563,6 +563,7 @@ class unfiltered_flags_m final {
     static const uint8_t HAS_TIMESTAMP = 0x04u;
     static const uint8_t HAS_TTL = 0x08u;
     static const uint8_t HAS_DELETION = 0x10u;
+    static const uint8_t HAS_ALL_COLUMNS = 0x20;
     static const uint8_t HAS_EXTENDED_FLAGS = 0x80u;
     uint8_t _flags;
     bool check_flag(const uint8_t flag) const {
@@ -588,6 +589,9 @@ public:
     bool has_deletion() const {
         return check_flag(HAS_DELETION);
     }
+    bool has_all_columns() const {
+        return check_flag(HAS_ALL_COLUMNS);
+    }
 };
 
 class unfiltered_extended_flags_m final {
@@ -600,6 +604,35 @@ public:
     explicit unfiltered_extended_flags_m(uint8_t flags) : _flags(flags) { }
     bool is_static() const {
         return check_flag(IS_STATIC);
+    }
+};
+
+class column_flags_m final {
+    static const uint8_t IS_DELETED = 0x01u;
+    static const uint8_t IS_EXPIRING = 0x02u;
+    static const uint8_t HAS_EMPTY_VALUE = 0x04u;
+    static const uint8_t USE_ROW_TIMESTAMP = 0x08u;
+    static const uint8_t USE_ROW_TTL = 0x10u;
+    uint8_t _flags;
+    bool check_flag(const uint8_t flag) const {
+        return (_flags & flag) != 0u;
+    }
+public:
+    explicit column_flags_m(uint8_t flags) : _flags(flags) { }
+    bool use_row_timestamp() const {
+        return check_flag(USE_ROW_TIMESTAMP);
+    }
+    bool use_row_ttl() const {
+        return check_flag(USE_ROW_TTL);
+    }
+    bool is_deleted() const {
+        return check_flag(IS_DELETED);
+    }
+    bool is_expiring() const {
+        return check_flag(IS_EXPIRING);
+    }
+    bool has_value() const {
+        return !check_flag(HAS_EMPTY_VALUE);
     }
 };
 }

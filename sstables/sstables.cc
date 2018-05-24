@@ -339,9 +339,17 @@ future<> parse(sstable_version_types v, random_access_reader& in, disk_string<Si
     });
 }
 
-template <typename Size, typename Members>
-future<> parse(sstable_version_types v, random_access_reader& in, disk_array_vint_size<Size, Members>& arr) {
-    auto len = std::make_unique<Size>();
+future<> parse(sstable_version_types v, random_access_reader& in, disk_string_vint_size& s) {
+    auto len = std::make_unique<uint64_t>();
+    auto f = read_vint(in, *len);
+    return f.then([v, &in, &s, len = std::move(len)] {
+        return parse(v, in, *len, s.value);
+    });
+}
+
+template <typename Members>
+future<> parse(sstable_version_types v, random_access_reader& in, disk_array_vint_size<Members>& arr) {
+    auto len = std::make_unique<uint64_t>();
     auto f = read_vint(in, *len);
     return f.then([v, &in, &arr, len = std::move(len)] {
         return parse(v, in, *len, arr.elements);
@@ -353,6 +361,13 @@ inline void write(sstable_version_types v, file_writer& out, const disk_string<S
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
     write(v, out, len);
+    write(v, out, s.value);
+}
+
+inline void write(sstable_version_types v, file_writer& out, const disk_string_vint_size& s) {
+    uint64_t len = 0;
+    check_truncate_and_assign(len, s.value.size());
+    write_vint(out, len);
     write(v, out, s.value);
 }
 
@@ -453,9 +468,9 @@ inline void write(sstable_version_types v, file_writer& out, const disk_array<Si
     write(v, out, arr.elements);
 }
 
-template <typename Size, typename Members>
-inline void write(sstable_version_types v, file_writer& out, const disk_array_vint_size<Size, Members>& arr) {
-    Size len = 0;
+template <typename Members>
+inline void write(sstable_version_types v, file_writer& out, const disk_array_vint_size<Members>& arr) {
+    uint64_t len = 0;
     check_truncate_and_assign(len, arr.elements.size());
     write_vint(out, len);
     write(v, out, arr.elements);
@@ -2039,11 +2054,15 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
     return sm;
 }
 
-template <typename T>
-static bytes_array_vint_size to_bytes_array_vint_size(const T& t) {
-    static_assert(sizeof(typename T::value_type) == 1, "Only single-byte char types are allowed");
+static bytes_array_vint_size to_bytes_array_vint_size(bytes b) {
     bytes_array_vint_size result;
-    boost::copy(t, std::back_inserter(result.elements));
+    result.value = std::move(b);
+    return result;
+}
+
+static bytes_array_vint_size to_bytes_array_vint_size(const sstring& s) {
+    bytes_array_vint_size result;
+    result.value = to_bytes(s);
     return result;
 }
 

@@ -21,8 +21,13 @@
 
 #pragma once
 
+#include <limits>
 #include <type_traits>
 #include <seastar/core/future.hh>
+#include "gc_clock.hh"
+#include "timestamp.hh"
+#include "sstables/types.hh"
+#include "sstables/exceptions.hh"
 
 namespace sstables {
 
@@ -49,6 +54,42 @@ inline future<> read_vint(random_access_reader& in, T& value) {
             value = res;
         });
     }
+}
+
+inline api::timestamp_type parse_timestamp(uint64_t value) {
+    if (value > api::max_timestamp) {
+        throw malformed_sstable_exception("Too big timestamp: " + value);
+    }
+    return static_cast<api::timestamp_type >(value);
+}
+
+inline api::timestamp_type parse_timestamp(const serialization_header& header,
+                                           uint64_t delta) {
+    return parse_timestamp(header.min_timestamp.value + delta);
+}
+
+inline gc_clock::duration parse_ttl(uint32_t value) {
+    if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
+        throw malformed_sstable_exception("Too big ttl: " + value);
+    }
+    return gc_clock::duration(value);
+}
+
+inline gc_clock::duration parse_ttl(const serialization_header& header,
+                                    uint32_t delta) {
+    return parse_ttl(header.min_ttl.value + delta);
+}
+
+inline gc_clock::time_point parse_expiry(uint32_t value) {
+    if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
+        throw malformed_sstable_exception("Too big expiry: " + value);
+    }
+    return gc_clock::time_point(gc_clock::duration(value));
+}
+
+inline gc_clock::time_point parse_expiry(const serialization_header& header,
+                                   uint32_t delta) {
+    return parse_expiry(header.min_local_deletion_time.value + delta);
 }
 
 };   // namespace sstables

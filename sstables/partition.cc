@@ -42,27 +42,27 @@ namespace sstables {
 
 template
 data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range, uint64_t);
+data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range, uint64_t);
 
 template
 data_consume_context<data_consume_rows_context>
-data_consume_single_partition<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range);
+data_consume_single_partition<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&, sstable::disk_read_range);
 
 template
 data_consume_context<data_consume_rows_context>
-data_consume_rows<data_consume_rows_context>(shared_sstable, data_consume_rows_context::consumer&);
+data_consume_rows<data_consume_rows_context>(const schema& s, shared_sstable, data_consume_rows_context::consumer&);
 
 template
 data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range, uint64_t);
+data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range, uint64_t);
 
 template
 data_consume_context<data_consume_rows_context_m>
-data_consume_single_partition<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range);
+data_consume_single_partition<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&, sstable::disk_read_range);
 
 template
 data_consume_context<data_consume_rows_context_m>
-data_consume_rows<data_consume_rows_context_m>(shared_sstable, data_consume_rows_context_m::consumer&);
+data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&);
 
 
 static
@@ -122,7 +122,7 @@ public:
         , _sst(std::move(sst))
         , _consumer(this, _schema, _schema->full_slice(), pc, std::move(resource_tracker), fwd, _sst)
         , _initialize([this] {
-            _context = data_consume_rows<DataConsumeRowsContext>(_sst, _consumer);
+            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer);
             _monitor.on_read_started(_context->reader_position());
             return make_ready_future<>();
         })
@@ -148,7 +148,7 @@ public:
                 sstable::disk_read_range drr{begin, *end};
                 auto last_end = fwd_mr ? _sst->data_size() : drr.end;
                 _read_enabled = bool(drr);
-                _context = data_consume_rows<DataConsumeRowsContext>(_sst, _consumer, std::move(drr), last_end);
+                _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end);
                 _monitor.on_read_started(_context->reader_position());
                 _index_in_current_partition = true;
                 _will_likely_slice = will_likely_slice(slice);
@@ -184,7 +184,7 @@ public:
                     auto [start, end] = _index_reader->data_file_positions();
                     assert(end);
                     _read_enabled = (start != *end);
-                    _context = data_consume_single_partition<DataConsumeRowsContext>(_sst, _consumer,
+                    _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
                             { start, *end });
                     _monitor.on_read_started(_context->reader_position());
                     _will_likely_slice = will_likely_slice(slice);

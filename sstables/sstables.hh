@@ -59,6 +59,7 @@
 #include "component_type.hh"
 #include "sstable_version.hh"
 #include "db/large_partition_handler.hh"
+#include "column_translation.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -152,7 +153,7 @@ public:
     // The function returns a future which completes after all the data has
     // been fed into the consumer. The caller needs to ensure the "consumer"
     // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
+    future<> data_consume_rows_at_once(const schema& s, row_consumer& consumer, uint64_t pos, uint64_t end);
 
     // disk_read_range describes a byte ranges covering part of an sstable
     // row that we need to read from disk. Usually this is the whole byte
@@ -407,6 +408,7 @@ private:
     std::vector<sstring> _unrecognized_components;
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
+    column_translation _column_translation;
     bool _shared = true;  // across shards; safe default
     // NOTE: _collector and _c_stats are used to generation of statistics file
     // when writing a new sstable.
@@ -669,6 +671,9 @@ public:
         const serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
     }
+    column_translation get_column_translation(const schema& s, const serialization_header& h) {
+        return _column_translation.get_for_schema(s, h);
+    }
     const std::vector<unsigned>& get_shards_for_this_sstable() const {
         return _shards;
     }
@@ -721,13 +726,13 @@ public:
     friend class index_reader;
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_single_partition(shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
+    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range);
     template <typename DataConsumeRowsContext>
     friend data_consume_context<DataConsumeRowsContext>
-    data_consume_rows(shared_sstable, typename DataConsumeRowsContext::consumer&);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&);
 };
 
 struct entry_descriptor {

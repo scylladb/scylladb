@@ -38,6 +38,9 @@
 #include "tests/test_services.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
+#include "sstables/types.hh"
+#include "keys.hh"
+#include "types.hh"
 
 using namespace sstables;
 
@@ -135,14 +138,227 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_read) {
         };
         assert_that(sst.read_rows_flat())
             .produces_partition_start(to_key(5))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(1))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(2))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(4))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
             .produces_partition_end()
             .produces_partition_start(to_key(3))
+            .produces_row_with_key(clustering_key_prefix::make_empty())
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_with_value
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, val INT, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, val) VALUES(1, 101);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(2, 102);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(3, 103);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(4, 104);
+// INSERT INTO test_ks.test_table(pk, val) VALUES(5, 105);
+
+static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH =
+    "tests/sstables/3.x/uncompressed/partition_key_with_value";
+static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA,
+                               UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA, pk);
+        };
+
+        auto cdef = UNCOMPRESSED_PARTITION_KEY_WITH_VALUE_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(cdef);
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(105))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(101))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(102))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(104))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key_prefix::make_empty(), {{cdef, int32_type->decompose(int32_t(103))}})
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_with_value_of_different_types
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   bool_val BOOLEAN,
+//                                   double_val DOUBLE,
+//                                   float_val FLOAT,
+//                                   int_val INT,
+//                                   long_val BIGINT,
+//                                   timestamp_val TIMESTAMP,
+//                                   timeuuid_val TIMEUUID,
+//                                   uuid_val UUID,
+//                                   text_val TEXT,
+//                                   PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(1, true, 0.11, 0.1, 1, 11, '2015-05-01 09:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 1');
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(2, false, 0.22, 0.2, 2, 22, '2015-05-02 10:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 2');
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(3, true, 0.33, 0.3, 3, 33, '2015-05-03 11:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 3');
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(4, false, 0.44, 0.4, 4, 44, '2015-05-04 12:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 4');
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(5, true, 0.55, 0.5, 5, 55, '2015-05-05 13:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 5');
+
+static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
+static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("bool_val", boolean_type)
+        .with_column("double_val", double_type)
+        .with_column("float_val", float_type)
+        .with_column("int_val", int32_type)
+        .with_column("long_val", long_type)
+        .with_column("timestamp_val", timestamp_type)
+        .with_column("timeuuid_val", timeuuid_type)
+        .with_column("uuid_val", uuid_type)
+        .with_column("text_val", utf8_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA,
+                               UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, pk);
+        };
+
+        auto bool_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("bool_val"));
+        BOOST_REQUIRE(bool_cdef);
+        auto double_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("double_val"));
+        BOOST_REQUIRE(double_cdef);
+        auto float_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("float_val"));
+        BOOST_REQUIRE(float_cdef);
+        auto int_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("int_val"));
+        BOOST_REQUIRE(int_cdef);
+        auto long_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("long_val"));
+        BOOST_REQUIRE(long_cdef);
+        auto timestamp_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timestamp_val"));
+        BOOST_REQUIRE(timestamp_cdef);
+        auto timeuuid_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timeuuid_val"));
+        BOOST_REQUIRE(timeuuid_cdef);
+        auto uuid_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("uuid_val"));
+        BOOST_REQUIRE(uuid_cdef);
+        auto text_cdef =
+            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("text_val"));
+        BOOST_REQUIRE(text_cdef);
+
+        auto generate = [&] (bool bool_val, double double_val, float float_val, int int_val, long long_val,
+                             sstring_view timestamp_val, sstring_view timeuuid_val, sstring_view uuid_val,
+                             sstring_view text_val) {
+            std::vector<flat_reader_assertions::expected_column> columns;
+
+            columns.push_back({bool_cdef, boolean_type->decompose(bool_val)});
+            columns.push_back({double_cdef, double_type->decompose(double_val)});
+            columns.push_back({float_cdef, float_type->decompose(float_val)});
+            columns.push_back({int_cdef, int32_type->decompose(int_val)});
+            columns.push_back({long_cdef, long_type->decompose(long_val)});
+            columns.push_back({timestamp_cdef, timestamp_type->from_string(timestamp_val)});
+            columns.push_back({timeuuid_cdef, timeuuid_type->from_string(timeuuid_val)});
+            columns.push_back({uuid_cdef, uuid_type->from_string(uuid_val)});
+            columns.push_back({text_cdef, utf8_type->from_string(text_val)});
+
+            return std::move(columns);
+        };
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(true, 0.55, 0.5, 5, 55, "2015-05-05 13:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 5"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(true, 0.11, 0.1, 1, 11, "2015-05-01 09:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 1"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(false, 0.22, 0.2, 2, 22, "2015-05-02 10:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 2"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(false, 0.44, 0.4, 4, 44, "2015-05-04 12:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 4"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(true, 0.33, 0.3, 3, 33, "2015-05-03 11:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 3"))
             .produces_partition_end()
             .produces_end_of_stream();
     });

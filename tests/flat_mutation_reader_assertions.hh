@@ -86,6 +86,50 @@ public:
         return *this;
     }
 
+    struct expected_column {
+        column_id id;
+        const sstring& name;
+        bytes value;
+        expected_column(const column_definition* cdef, bytes value)
+            : id(cdef->id)
+            , name(cdef->name_as_text())
+            , value(std::move(value))
+        { }
+    };
+
+    flat_reader_assertions& produces_row(const clustering_key& ck, const std::vector<expected_column>& columns) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", ck));
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
+        }
+        if (!mfopt->is_clustering_row()) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
+        }
+        auto& actual = mfopt->as_clustering_row().key();
+        if (!actual.equal(*_reader.schema(), ck)) {
+            BOOST_FAIL(sprint("Expected row with key %s, but key is %s", ck, actual));
+        }
+        auto& cells = mfopt->as_clustering_row().cells();
+        if (cells.size() != columns.size()) {
+            BOOST_FAIL(sprint("Expected row with %s columns, but has %s", columns.size(), cells.size()));
+        }
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const atomic_cell_or_collection* cell = cells.find_cell(columns[i].id);
+            if (!cell) {
+                BOOST_FAIL(sprint("Expected row with column %s, but it is not present", columns[i].name));
+            }
+            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell().value());
+            if (cmp != 0) {
+                BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
+                                  columns[i].name,
+                                  columns[i].value,
+                                  cell->as_atomic_cell().value()));
+            }
+        }
+        return *this;
+    }
+
     // If ck_ranges is passed, verifies only that information relevant for ck_ranges matches.
     flat_reader_assertions& produces_range_tombstone(const range_tombstone& rt, const query::clustering_row_ranges& ck_ranges = {}) {
         BOOST_TEST_MESSAGE(sprint("Expect %s", rt));
