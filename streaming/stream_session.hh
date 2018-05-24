@@ -151,7 +151,7 @@ public:
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
     inet_address peer;
-    unsigned dst_cpu_id;
+    unsigned dst_cpu_id = 0;
 private:
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
@@ -174,6 +174,7 @@ private:
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
+    bool _received_failed_complete_message = false;
 
     // If the session is idle for 10 minutes, close the session
     std::chrono::seconds _keep_alive_timeout{60 * 10};
@@ -230,6 +231,8 @@ public:
     void init(shared_ptr<stream_result_future> stream_result_);
 
     void start();
+
+    bool is_initialized() const;
 
     /**
      * Request data fetch task to this session.
@@ -298,6 +301,10 @@ public:
      * @param e thrown exception
      */
     void on_error();
+
+    void abort();
+
+    void received_failed_complete_message();
 
     /**
      * Prepare this session for sending/receiving files.
