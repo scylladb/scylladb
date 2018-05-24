@@ -147,7 +147,7 @@ public:
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
 
-    virtual proceed consume_row_start(bytes_view ck) = 0;
+    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
     virtual proceed consume_column(stdx::optional<column_id> column_id,
                                    bytes_view value,
@@ -560,7 +560,7 @@ private:
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
-    temporary_buffer<char> _row_key;
+    std::vector<bytes> _row_key;
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<utils::chunked_vector<serialization_header::column_desc>::const_iterator> _column_descs;
@@ -688,11 +688,8 @@ public:
                 _is_first_unfiltered = false;
                 // Clustering blocks should be read here but serialization header is needed for that.
                 // Table with just partition key does not have any so it's ok for the first version.
-                _row_key = temporary_buffer<char>();
-                auto ret = _consumer.consume_row_start(to_bytes_view(_row_key));
-                // after calling the consume function, we can release the
-                // buffers we held for it.
-                _row_key.release();
+                _row_key = std::vector<bytes>();
+                auto ret = _consumer.consume_row_start(std::move(_row_key));
                 _state = state::ROW_BODY;
                 if (ret == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
