@@ -129,6 +129,14 @@ public:
         clustering_key_prefix clustering;
     };
 
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(
+            service::storage_proxy& proxy,
+            lw_shared_ptr<query::read_command> cmd,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now);
+
     shared_ptr<cql_transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now);
 

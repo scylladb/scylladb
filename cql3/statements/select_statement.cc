@@ -481,6 +481,57 @@ select_statement::execute(service::storage_proxy& proxy,
     }
 }
 
+// Function for fetching the selected columns from a list of clustering rows.
+// It is currently used only in our Secondary Index implementation - ordinary
+// CQL SELECT statements do not have the syntax to request a list of rows.
+// FIXME: The current implementation is very inefficient - it requests each
+// row separately (and all in parallel). Even multiple rows from a single
+// partition are requested separately. This last case can be easily improved,
+// but to implement the general case (multiple rows from multiple partitions)
+// efficiently, we will need more support from other layers.
+// Note that currently we do not make any assumptions on the order of the keys
+// given to this function, for more efficient implementation with a large
+// list, we should probably require that the keys be ordered in token order
+// (see also issue #3423).
+future<shared_ptr<cql_transport::messages::result_message>>
+select_statement::execute(service::storage_proxy& proxy,
+                          lw_shared_ptr<query::read_command> cmd,
+                          std::vector<primary_key>&& primary_keys,
+                          service::query_state& state,
+                          const query_options& options,
+                          gc_clock::time_point now)
+{
+    // FIXME: pass the timeout from caller. The query has already started
+    // earlier (with read_posting_list()), not now.
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    return do_with(std::move(primary_keys), [this, &proxy, &state, &options, cmd, timeout] (auto& keys) {
+        assert(cmd->partition_limit == query::max_partitions);
+        query::result_merger merger(cmd->row_limit, query::max_partitions);
+        // there is no point to produce rows beyond the first row_limit:
+        auto end = keys.size() <= cmd->row_limit ? keys.end() : keys.begin() + cmd->row_limit;
+        return map_reduce(keys.begin(), end, [this, &proxy, &state, &options, cmd, timeout] (auto& key) {
+            auto command = ::make_lw_shared<query::read_command>(*cmd);
+            // for each partition, read just one clustering row (TODO: can
+            // get all needed rows of one partition at once.)
+            command->slice._row_ranges.clear();
+            if (key.clustering) {
+                command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
+            }
+            return proxy.query(_schema,
+                    command,
+                    {dht::partition_range::make_singular(key.partition)},
+                    options.get_consistency(),
+                    {timeout, state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                return std::move(qr.query_result);
+            });
+        }, std::move(merger));
+    }).then([this, &options, now, cmd] (auto result) {
+        // note that cmd here still has the garbage clustering range in slice,
+        // but process_results() ignores this part of the slice setting.
+        return this->process_results(std::move(result), cmd, options, now);
+    });
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_internal(service::storage_proxy& proxy,
                                    service::query_state& state,
