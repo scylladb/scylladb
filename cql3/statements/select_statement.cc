@@ -552,8 +552,44 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
     ++_stats.secondary_index_reads;
 
     assert(_restrictions->uses_secondary_indexing());
-    return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges) {
-        auto command = ::make_lw_shared<query::read_command>(
+
+    // Secondary index search has two steps: 1. use the index table to find a
+    // list of primary keys matching the query. 2. read the rows matching
+    // these primary keys from the base table and return the selected columns.
+    // In "whole_partitions" case, we can do the above in whole partition
+    // granularity. "partition_slices" is similar, but we fetch the same
+    // clustering prefix (make_partition_slice()) from a list of partitions.
+    // In other cases we need to list, and retrieve, individual rows and
+    // not entire partitions. See issue #3405 for more details.
+    bool whole_partitions = false;
+    bool partition_slices = false;
+    if (_schema->clustering_key_size() == 0) {
+        // Obviously, if there are no clustering columns, then we can work at
+        // the granularity of whole partitions.
+        whole_partitions = true;
+    } else {
+        if (_index.depends_on(*(_schema->clustering_key_columns().begin()))) {
+            // Searching on the *first* clustering column means in each of
+            // matching partition, we can take the same contiguous clustering
+            // slice (clustering prefix).
+            partition_slices = true;
+        } else {
+            // Search on any partition column means that either all rows
+            // match or all don't, so we can work with whole partitions.
+            for (auto& cdef : _schema->partition_key_columns()) {
+                if (_index.depends_on(cdef)) {
+                    whole_partitions = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (whole_partitions || partition_slices) {
+        // In this case, can use our normal query machinery, which retrieves
+        // entire partitions or the same slice for many partitions.
+        return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges) {
+            auto command = ::make_lw_shared<query::read_command>(
                 _schema->id(),
                 _schema->version(),
                 make_partition_slice(options),
@@ -563,8 +599,27 @@ indexed_table_select_statement::do_execute(distributed<service::storage_proxy>& 
                 query::max_partitions,
                 utils::UUID(),
                 options.get_timestamp(state));
-        return this->execute(proxy, command, std::move(partition_ranges), state, options, now);
-    });
+            return this->execute(proxy, command, std::move(partition_ranges), state, options, now);
+        });
+    } else {
+        // In this case, we need to retrieve a list of rows (not entire
+        // partitions) and then retrieve those specific rows.
+        return find_index_clustering_rows(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys) {
+            auto command = ::make_lw_shared<query::read_command>(
+                _schema->id(),
+                _schema->version(),
+                // Note: the "clustering bounds" set in make_partition_slice()
+                // here is garbage, and will be overridden by execute() anyway
+                make_partition_slice(options),
+                limit,
+                now,
+                tracing::make_trace_info(state.get_trace_state()),
+                query::max_partitions,
+                utils::UUID(),
+                options.get_timestamp(state));
+            return this->execute(proxy, command, std::move(primary_keys), state, options, now);
+        });
+    }
 }
 
 // Utility function for getting the schema of the materialized view used for
