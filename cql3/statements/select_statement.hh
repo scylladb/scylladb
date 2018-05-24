@@ -124,6 +124,11 @@ public:
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now);
 
+    struct primary_key {
+        dht::decorated_key partition;
+        clustering_key_prefix clustering;
+    };
+
     shared_ptr<cql_transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now);
 
@@ -192,6 +197,10 @@ private:
     future<dht::partition_range_vector> find_index_partition_ranges(distributed<service::storage_proxy>& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
+
+    future<std::vector<primary_key>> find_index_clustering_rows(service::storage_proxy& proxy,
+                                                                service::query_state& state,
+                                                                const query_options& options);
 
     virtual void update_stats_rows_read(int64_t rows_read) override {
         _stats.rows_read += rows_read;

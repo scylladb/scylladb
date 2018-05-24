@@ -628,6 +628,53 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
     });
 }
 
+
+// Note: the partitions keys returned by this function will be sorted in
+// lexicographical order of the partition key columns (in the way that
+// clustering keys are sorted) - NOT in token order. See issue #3423.
+future<std::vector<indexed_table_select_statement::primary_key>>
+indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
+{
+    schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
+    auto now = gc_clock::now();
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+            [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
+        std::vector<const column_definition*> columns;
+        for (const column_definition& cdef : _schema->partition_key_columns()) {
+            columns.emplace_back(view->get_column_definition(cdef.name()));
+        }
+        for (const column_definition& cdef : _schema->clustering_key_columns()) {
+            columns.emplace_back(view->get_column_definition(cdef.name()));
+        }
+        auto selection = selection::selection::for_columns(view, columns);
+        cql3::selection::result_set_builder builder(*selection, now, options.get_cql_serialization_format());
+        // FIXME: read_posting_list already asks to read primary keys only.
+        // why do we need to specify this again?
+        auto slice = partition_slice_builder(*view).build();
+        query::result_view::consume(*qr.query_result,
+                                    slice,
+                                    cql3::selection::result_set_builder::visitor(builder, *view, *selection));
+        auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
+        std::vector<primary_key> primary_keys;
+        primary_keys.reserve(rs.size());
+        for (size_t i = 0; i < rs.size(); i++) {
+            const auto& row = rs.at(i);
+            auto pk_columns = _schema->partition_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
+                return row.get_blob(cdef.name_as_text());
+            });
+            auto pk = partition_key::from_range(pk_columns);
+            auto dk = dht::global_partitioner().decorate_key(*_schema, pk);
+            auto ck_columns = _schema->clustering_key_columns() | boost::adaptors::transformed([&] (auto& cdef) {
+                return row.get_blob(cdef.name_as_text());
+            });
+            auto ck = clustering_key::from_range(ck_columns);
+            primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
+        }
+        return primary_keys;
+    });
+}
+
 namespace raw {
 
 select_statement::select_statement(::shared_ptr<cf_name> cf_name,
