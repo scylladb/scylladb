@@ -653,34 +653,47 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     });
 }
 
-// Note: the partitions keys returned by this function will be sorted in
-// lexicographical order of the partition key columns (in the way that
-// clustering keys are sorted) - NOT in token order.
-future<dht::partition_range_vector>
-indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
-                                             service::query_state& state,
-                                             const query_options& options)
+// Utility function for getting the schema of the materialized view used for
+// the secondary index implementation.
+static schema_ptr
+get_index_schema(service::storage_proxy& proxy,
+                const secondary_index::index& index,
+                const schema_ptr& schema,
+                tracing::trace_state_ptr& trace_state)
 {
-    const auto& im = _index.metadata();
-    sstring index_table_name = sprint("%s_index", im.name());
-    tracing::add_table_name(state.get_trace_state(), keyspace(), index_table_name);
-    auto& db = proxy.get_db().local();
-    const auto& view = db.find_column_family(_schema->ks_name(), index_table_name);
+    const auto& im = index.metadata();
+    sstring index_table_name = im.name() + "_index";
+    tracing::add_table_name(trace_state, schema->ks_name(), index_table_name);
+    return proxy.get_db().local().find_schema(schema->ks_name(), index_table_name);
+}
+
+// Utility function for reading from the index view (get_index_view()))
+// the posting-list for a particular value of the indexed column.
+// Remember a secondary index can only be created on a single column.
+static future<service::storage_proxy::coordinator_query_result>
+read_posting_list(service::storage_proxy& proxy,
+                  schema_ptr view_schema,
+                  const std::vector<::shared_ptr<restrictions::restrictions>>& index_restrictions,
+                  const query_options& options,
+                  int32_t limit,
+                  service::query_state& state,
+                  gc_clock::time_point now,
+                  db::timeout_clock::time_point timeout)
+{
     dht::partition_range_vector partition_ranges;
-    for (const auto& restriction : _restrictions->index_restrictions()) {
-        auto pk = partition_key::from_optional_exploded(*view.schema(), restriction->values(options));
-        auto dk = dht::global_partitioner().decorate_key(*view.schema(), pk);
+    // FIXME: there should be only one index restriction for this index!
+    // Perhaps even one index restriction entirely (do we support
+    // intersection queries?).
+    for (const auto& restriction : index_restrictions) {
+        auto pk = partition_key::from_optional_exploded(*view_schema, restriction->values(options));
+        auto dk = dht::global_partitioner().decorate_key(*view_schema, pk);
         auto range = dht::partition_range::make_singular(dk);
         partition_ranges.emplace_back(range);
     }
-
-    auto now = gc_clock::now();
-    int32_t limit = get_limit(options);
-
-    partition_slice_builder partition_slice_builder{*view.schema()};
+    partition_slice_builder partition_slice_builder{*view_schema};
     auto cmd = ::make_lw_shared<query::read_command>(
-            view.schema()->id(),
-            view.schema()->version(),
+            view_schema->id(),
+            view_schema->version(),
             partition_slice_builder.build(),
             limit,
             now,
@@ -688,24 +701,41 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             query::max_partitions,
             utils::UUID(),
             options.get_timestamp(state));
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return proxy.query(view.schema(),
+    return proxy.query(view_schema,
             cmd,
             std::move(partition_ranges),
             options.get_consistency(),
-            {timeout, state.get_trace_state()}).then(
-                    [cmd, this, &options, now, &view] (service::storage_proxy::coordinator_query_result qr) {
+            {timeout, state.get_trace_state()});
+}
+
+// Note: the partitions keys returned by this function will be sorted in
+// lexicographical order of the partition key columns (in the way that
+// clustering keys are sorted) - NOT in token order. See issue #3423.
+future<dht::partition_range_vector>
+indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
+                                             service::query_state& state,
+                                             const query_options& options)
+{
+    schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
+    auto now = gc_clock::now();
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+            [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
-            columns.emplace_back(view.schema()->get_column_definition(cdef.name()));
+            columns.emplace_back(view->get_column_definition(cdef.name()));
         }
-        auto selection = selection::selection::for_columns(view.schema(), columns);
+        auto selection = selection::selection::for_columns(view, columns);
         cql3::selection::result_set_builder builder(*selection, now, options.get_cql_serialization_format());
+        // FIXME: read_posting_list already asks to read primary keys only.
+        // why do we need to specify this again?
+        auto slice = partition_slice_builder(*view).build();
         query::result_view::consume(*qr.query_result,
-                                    cmd->slice,
-                                    cql3::selection::result_set_builder::visitor(builder, *view.schema(), *selection));
+                                    slice,
+                                    cql3::selection::result_set_builder::visitor(builder, *view, *selection));
         auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
         dht::partition_range_vector partition_ranges;
+        partition_ranges.reserve(rs.size());
         // We are reading the list of primary keys as rows of a single
         // partition (in the index view), so they are sorted in
         // lexicographical order (N.B. this is NOT token order!). We need
@@ -729,8 +759,8 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             auto range = dht::partition_range::make_singular(dk);
             partition_ranges.emplace_back(range);
         }
-        return make_ready_future<dht::partition_range_vector>(partition_ranges);
-    }).finally([cmd] {});
+        return partition_ranges;
+    });
 }
 
 namespace raw {
