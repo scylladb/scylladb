@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=2.0.4
+VERSION=2.0.5
 
 if test -f version
 then
