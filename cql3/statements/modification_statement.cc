@@ -207,7 +207,7 @@ class prefetch_data_builder {
     schema_ptr _schema;
     std::experimental::optional<partition_key> _pkey;
 private:
-    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::experimental::optional<bytes_view>& cell) {
+    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::experimental::optional<query::result_bytes_view>& cell) {
         if (cell) {
             auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             if (!ctype->is_multi_cell()) {
@@ -216,11 +216,13 @@ private:
             auto map_type = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
             update_parameters::prefetch_data::cell_list list;
             // FIXME: Iterate over a range instead of fully exploded collection
-            auto dv = map_type->deserialize(*cell);
+          cell->with_linearized([&] (bytes_view cell_view) {
+            auto dv = map_type->deserialize(cell_view);
             for (auto&& el : value_cast<map_type_impl::native_type>(dv)) {
                 list.emplace_back(update_parameters::prefetch_data::cell{el.first.serialize(), el.second.serialize()});
             }
             cells.emplace(def.id, std::move(list));
+          });
         }
     };
 public:

@@ -169,6 +169,17 @@ std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
 
+std::string bytes_to_string(query::result_bytes_view v) {
+    std::string str;
+    str.reserve(v.size_bytes());
+    using boost::range::for_each;
+    for_each(v, [&] (bytes_view fragment) {
+        auto view = std::string_view(reinterpret_cast<const char*>(fragment.data()), fragment.size());
+        str.insert(str.end(), view.begin(), view.end());
+    });
+    return str;
+}
+
 namespace thrift {
 GCC6_CONCEPT(
 template<typename T>
@@ -1518,7 +1529,9 @@ private:
     static CounterColumn make_counter_column(const bytes& col, const query::result_atomic_cell_view& cell) {
         CounterColumn ret;
         ret.__set_name(bytes_to_string(col));
-        ret.__set_value(value_cast<int64_t>(long_type->deserialize_value(cell.value())));
+        cell.value().with_linearized([&] (bytes_view value_view) {
+            ret.__set_value(value_cast<int64_t>(long_type->deserialize_value(value_view)));
+        });
         return ret;
     }
     static ColumnOrSuperColumn counter_column_to_column_or_supercolumn(CounterColumn&& col) {

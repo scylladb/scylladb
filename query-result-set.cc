@@ -167,8 +167,9 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
         if (col.is_atomic()) {
             auto cell = i.next_atomic_cell();
             if (cell) {
-                auto view = cell.value();
-                cells.emplace(col.name_as_text(), col.type->deserialize_value(view.value()));
+                cell->value().with_linearized([&] (bytes_view value_view) {
+                    cells.emplace(col.name_as_text(), col.type->deserialize_value(value_view));
+                });
             }
         } else {
             auto cell = i.next_collection_cell();
@@ -177,7 +178,9 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
                 if (_slice.options.contains<partition_slice::option::collections_as_maps>()) {
                     ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
                 }
-                cells.emplace(col.name_as_text(), ctype->deserialize_value(*cell, _slice.cql_format()));
+                cell->with_linearized([&] (bytes_view value_view) {
+                    cells.emplace(col.name_as_text(), ctype->deserialize_value(value_view, _slice.cql_format()));
+                });
             }
         }
     }

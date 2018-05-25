@@ -342,7 +342,7 @@ void result_set_builder::visitor::add_value(const column_definition& def,
             _builder.add_empty();
             return;
         }
-        _builder.add_collection(def, *cell);
+        _builder.add_collection(def, cell->linearize());
     } else {
         auto cell = i.next_atomic_cell();
         if (!cell) {
@@ -426,7 +426,7 @@ int32_t result_set_builder::ttl_of(size_t idx) {
 }
 
 bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {
-    return {to_bytes(c.value())};
+    return {c.value().linearize()};
 }
 
 }
