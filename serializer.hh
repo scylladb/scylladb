@@ -34,7 +34,122 @@
 #include "utils/input_stream.hh"
 #include "utils/fragment_range.hh"
 
+#include <boost/range/algorithm/for_each.hpp>
+
 namespace ser {
+
+/// A fragmented view of an opaque buffer in a stream of serialised data
+///
+/// This class allows reading large, fragmented blobs serialised by the IDL
+/// infrastructure without linearising or copying them. The view remains valid
+/// as long as the underlying IDL-serialised buffer is alive.
+///
+/// Satisfies FragmentRange concept.
+template<typename FragmentIterator>
+class buffer_view {
+    bytes_view _first;
+    size_t _total_size;
+    FragmentIterator _next;
+public:
+    using fragment_type = bytes_view;
+    
+    class iterator {
+        bytes_view _current;
+        size_t _left = 0;
+        FragmentIterator _next;
+    public:
+        using iterator_category	= std::input_iterator_tag;
+        using value_type = bytes_view;
+        using pointer = const bytes_view*;
+        using reference = const bytes_view&;
+        using difference_type = std::ptrdiff_t;
+
+        iterator() = default;
+        iterator(bytes_view current, size_t left, FragmentIterator next)
+            : _current(current), _left(left), _next(next) { }
+
+        bytes_view operator*() const {
+            return _current;
+        }
+        const bytes_view* operator->() const {
+            return &_current;
+        }
+
+        iterator& operator++() {
+            _left -= _current.size();
+            if (_left) {
+                auto next_view = *_next;
+                auto next_size = std::min(_left, next_view.size());
+                _current = bytes_view(next_view.data(), next_size);
+                ++_next;
+            }
+            return *this;
+        }
+        iterator operator++(int) {
+            iterator it(*this);
+            operator++();
+            return it;
+        }
+
+        bool operator==(const iterator& other) const {
+            return _left == other._left;
+        }
+        bool operator!=(const iterator& other) const {
+            return !(*this == other);
+        }
+    };
+    using const_iterator = iterator;
+
+    explicit buffer_view(bytes_view current)
+        : _first(current), _total_size(current.size()) { }
+
+    buffer_view(bytes_view current, size_t size, FragmentIterator it)
+        : _first(current), _total_size(size), _next(it)
+    {
+        if (_first.size() > _total_size) {
+            _first.remove_suffix(_first.size() - _total_size);
+        }
+    }
+
+    iterator begin() const {
+        return iterator(_first, _total_size, _next);
+    }
+    iterator end() const {
+        return iterator();
+    }
+
+    size_t size_bytes() const {
+        return _total_size;
+    }
+    bool empty() const {
+        return !_total_size;
+    }
+
+    bytes linearize() const {
+        bytes b(bytes::initialized_later(), size_bytes());
+        using boost::range::for_each;
+        auto dst = b.begin();
+        for_each(*this, [&] (bytes_view fragment) {
+            dst = std::copy(fragment.begin(), fragment.end(), dst);
+        });
+        return b;
+    }
+
+    template<typename Function>
+    decltype(auto) with_linearized(Function&& fn) const
+    {
+        bytes b;
+        bytes_view bv;
+        if (_first.size() != _total_size) {
+            b = linearize();
+            bv = b;
+        } else {
+            bv = _first;
+        }
+        return fn(bv);
+    }
+};
+
 using size_type = uint32_t;
 
 template<typename T, typename Input>
