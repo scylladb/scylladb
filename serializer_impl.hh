@@ -313,6 +313,21 @@ public:
     explicit deserialized_bytes_proxy(seastar::memory_input_stream<Iterator> stream)
         : _stream(std::move(stream)) { }
 
+    buffer_view<Iterator> view() const {
+        GCC6_CONCEPT(static_assert(FragmentRange<buffer_view<Iterator>>));
+        return seastar::with_serialized_stream(_stream, seastar::make_visitor(
+            [&] (typename seastar::memory_input_stream<Iterator>::simple stream) {
+                return buffer_view<Iterator>(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()),
+                                                        stream.size()));
+            },
+            [&] (typename seastar::memory_input_stream<Iterator>::fragmented stream) {
+                return buffer_view<Iterator>(bytes_view(reinterpret_cast<const int8_t*>(stream.first_fragment_data()),
+                                                        stream.first_fragment_size()),
+                                             stream.size(), stream.fragment_iterator());
+            }
+        ));
+    }
+
     [[gnu::always_inline]]
     operator bytes() && {
         bytes v(bytes::initialized_later(), _stream.size());
