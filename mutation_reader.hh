@@ -397,6 +397,12 @@ using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::uniqu
         streamed_mutation::forwarding,
         mutation_reader::forwarding)>;
 
+struct stopped_foreign_reader {
+    foreign_ptr<std::unique_ptr<flat_mutation_reader>> remote_reader;
+    circular_buffer<mutation_fragment> unconsumed_fragments;
+};
+using foreign_reader_dismantler = noncopyable_function<void(shard_id, future<stopped_foreign_reader>)>;
+
 /// Make a multishard_combining_reader.
 ///
 /// multishard_combining_reader takes care of reading a range from all shards
@@ -414,6 +420,13 @@ using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::uniqu
 /// needs to move to them they have the data ready.
 /// For dense tables (where we rarely cross shards) we rely on the
 /// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
+///
+/// Optionally a dismantler function can be passed to the multishard
+/// reader. When the multishard reader is destroyed it will invoke the
+/// dismantler functor for each of its foreign (shard) readers, passing a future
+/// to a `stopped_foreign_reader`. The future becomes available when the foreign
+/// reader has stopped, that is, it finished all of its in-progress read aheads
+/// and/or any pending `next_partition()` calls.
 flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
@@ -422,4 +435,5 @@ flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
         remote_reader_factory reader_factory,
         tracing::trace_state_ptr trace_state = nullptr,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
-        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
+        mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
+        foreign_reader_dismantler reader_dismantler = {});
