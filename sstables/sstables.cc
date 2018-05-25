@@ -2660,6 +2660,10 @@ private:
             _index_writer->offset(), _index_sampling_state);
     }
 
+    void maybe_set_pi_first_clustering(const clustering_key_prefix& clustering);
+    void maybe_add_pi_block();
+    void add_pi_block();
+
     uint64_t get_data_offset() const {
         if (_sst.has_component(component_type::CompressionInfo)) {
             // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
@@ -2756,6 +2760,32 @@ sstable_writer_m::~sstable_writer_m() {
     };
     close_writer(_index_writer);
     close_writer(_data_writer);
+}
+
+void sstable_writer_m::maybe_set_pi_first_clustering(const clustering_key_prefix& clustering) {
+    uint64_t pos = _data_writer->offset();
+    if (!_pi_write_m.first_clustering) {
+        _pi_write_m.first_clustering = clustering;
+        _pi_write_m.block_start_offset = pos;
+        _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
+    }
+}
+
+void sstable_writer_m::add_pi_block() {
+    _pi_write_m.promoted_index.push_back({
+        *_pi_write_m.first_clustering,
+        *_pi_write_m.last_clustering,
+        _pi_write_m.block_start_offset - _c_stats.start_offset,
+        _data_writer->offset() - _pi_write_m.block_start_offset});
+}
+
+void sstable_writer_m::maybe_add_pi_block() {
+    uint64_t pos = _data_writer->offset();
+    if (pos >= _pi_write_m.block_next_start_offset) {
+        add_pi_block();
+        _pi_write_m.first_clustering.reset();
+        _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
+    }
 }
 
 void sstable_writer_m::init_file_writers() {
@@ -3133,27 +3163,13 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
 
 stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
     ensure_tombstone_is_written();
-    uint64_t pos = _data_writer->offset();
-    if (!_pi_write_m.first_clustering) {
-        _pi_write_m.first_clustering = cr.key();
-        _pi_write_m.block_start_offset = pos;
-        _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
-    }
-    write_clustered_row(cr, pos - _prev_row_start);
+    maybe_set_pi_first_clustering(cr.key());
+    write_clustered_row(cr, _data_writer->offset() - _prev_row_start);
 
     _pi_write_m.last_clustering = cr.key();
 
-    pos = _data_writer->offset();
-    _prev_row_start = pos;
-    if (pos >= _pi_write_m.block_next_start_offset) {
-        _pi_write_m.promoted_index.push_back({
-                *_pi_write_m.first_clustering,
-                *_pi_write_m.last_clustering,
-                _pi_write_m.block_start_offset - _c_stats.start_offset,
-                pos - _pi_write_m.block_start_offset});
-        _pi_write_m.first_clustering.reset();
-        _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
-    }
+    _prev_row_start = _data_writer->offset();
+    maybe_add_pi_block();
     return stop_iteration::no;
 }
 
@@ -3198,11 +3214,7 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
 stop_iteration sstable_writer_m::consume_end_of_partition() {
     ensure_tombstone_is_written();
     if (!_pi_write_m.promoted_index.empty() && _pi_write_m.first_clustering) {
-         _pi_write_m.promoted_index.push_back({
-                *_pi_write_m.first_clustering,
-                *_pi_write_m.last_clustering,
-                _pi_write_m.block_start_offset - _c_stats.start_offset,
-                _data_writer->offset() - _pi_write_m.block_start_offset});
+        add_pi_block();
     }
 
     auto write_pi = [this] (file_writer& writer) {
