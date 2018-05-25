@@ -1703,7 +1703,7 @@ void sstable::maybe_flush_pi_block(file_writer& out,
 
 void write_cell_value(file_writer& out, const abstract_type& type, bytes_view value) {
     if (!value.empty()) {
-        if (type.is_fixed_length()) {
+        if (type.value_length_if_fixed()) {
             write(sstable_version_types::mc, out, value);
         } else {
             write_vint(out, value.size());
