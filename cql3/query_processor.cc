@@ -414,6 +414,7 @@ query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
         const std::initializer_list<data_value>& values,
         db::consistency_level cl,
+        const timeout_config& timeout_config,
         int32_t page_size) {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(
@@ -437,11 +438,11 @@ query_options query_processor::make_internal_options(
         api::timestamp_type ts = api::missing_timestamp;
         return query_options(
                 cl,
-                infinite_timeout_config,
+                timeout_config,
                 bound_values,
                 cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
     }
-    return query_options(cl, infinite_timeout_config, bound_values);
+    return query_options(cl, timeout_config, bound_values);
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
@@ -472,7 +473,7 @@ struct internal_query_state {
 ::shared_ptr<internal_query_state> query_processor::create_paged_state(const sstring& query_string,
         const std::initializer_list<data_value>& values, int32_t page_size) {
     auto p = prepare_internal(query_string);
-    auto opts = make_internal_options(p, values, db::consistency_level::ONE, page_size);
+    auto opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config, page_size);
     ::shared_ptr<internal_query_state> res = ::make_shared<internal_query_state>(
             internal_query_state{
                     query_string,
@@ -560,7 +561,7 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
         statements::prepared_statement::checked_weak_ptr p,
         const std::initializer_list<data_value>& values) {
-    query_options opts = make_internal_options(p, values);
+    query_options opts = make_internal_options(p, values, db::consistency_level::ONE, infinite_timeout_config);
     return do_with(std::move(opts), [this, p = std::move(p)](auto& opts) {
         return p->statement->execute_internal(
                 _proxy,
@@ -575,15 +576,16 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::process(
         const sstring& query_string,
         db::consistency_level cl,
+        const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values,
         bool cache) {
     if (cache) {
-        return process(prepare_internal(query_string), cl, values);
+        return process(prepare_internal(query_string), cl, timeout_config, values);
     } else {
         auto p = parse_statement(query_string)->prepare(_db.local(), _cql_stats);
         p->statement->validate(_proxy, *_internal_state);
         auto checked_weak_ptr = p->checked_weak_from_this();
-        return process(std::move(checked_weak_ptr), cl, values).finally([p = std::move(p)] {});
+        return process(std::move(checked_weak_ptr), cl, timeout_config, values).finally([p = std::move(p)] {});
     }
 }
 
@@ -591,8 +593,9 @@ future<::shared_ptr<untyped_result_set>>
 query_processor::process(
         statements::prepared_statement::checked_weak_ptr p,
         db::consistency_level cl,
+        const timeout_config& timeout_config,
         const std::initializer_list<data_value>& values) {
-    auto opts = make_internal_options(p, values, cl);
+    auto opts = make_internal_options(p, values, cl, timeout_config);
     return do_with(std::move(opts), [this, p = std::move(p)](auto & opts) {
         return p->statement->execute(_proxy, *_internal_state, opts).then([](auto msg) {
             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));

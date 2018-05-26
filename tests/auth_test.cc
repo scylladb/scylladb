@@ -167,6 +167,7 @@ SEASTAR_TEST_CASE(test_cassandra_hash) {
         // This is extremely whitebox. We'll just go right ahead and know
         // what the tables etc are called. Oy wei...
         auto f = env.local_qp().process("INSERT into system_auth.roles (role, salted_hash) values (?, ?)", db::consistency_level::ONE,
+                        infinite_timeout_config,
                         { username, salted_hash }).discard_result();
 
         return f.then([=, &env] {

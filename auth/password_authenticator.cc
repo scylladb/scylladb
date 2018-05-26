@@ -183,7 +183,8 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 
     return _qp.process(
             query,
-            db::consistency_level::QUORUM).then([this](::shared_ptr<cql3::untyped_result_set> results) {
+            db::consistency_level::QUORUM,
+            infinite_timeout_config).then([this](::shared_ptr<cql3::untyped_result_set> results) {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
@@ -191,6 +192,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
             return _qp.process(
                     update_row_query,
                     consistency_for_user(username),
+                    infinite_timeout_config,
                     {std::move(salted_hash), username}).discard_result();
         }).finally([results] {});
     }).then([] {
@@ -207,6 +209,7 @@ future<> password_authenticator::create_default_if_missing() const {
             return _qp.process(
                     update_row_query,
                     db::consistency_level::QUORUM,
+                    infinite_timeout_config,
                     {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
                 plogger.info("Created default superuser authentication record.");
             });
@@ -306,6 +309,7 @@ future<authenticated_user> password_authenticator::authenticate(
         return _qp.process(
                 query,
                 consistency_for_user(username),
+                infinite_timeout_config,
                 {username},
                 true);
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
@@ -333,6 +337,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
     return _qp.process(
             update_row_query,
             consistency_for_user(role_name),
+            infinite_timeout_config,
             {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
@@ -350,6 +355,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
     return _qp.process(
             query,
             consistency_for_user(role_name),
+            infinite_timeout_config,
             {hashpw(*options.password), sstring(role_name)}).discard_result();
 }
 
@@ -360,7 +366,7 @@ future<> password_authenticator::drop(stdx::string_view name) const {
             meta::roles_table::qualified_name(),
             meta::roles_table::role_col_name);
 
-    return _qp.process(query, consistency_for_user(name), {sstring(name)}).discard_result();
+    return _qp.process(query, consistency_for_user(name), infinite_timeout_config, {sstring(name)}).discard_result();
 }
 
 future<custom_options> password_authenticator::query_custom_options(stdx::string_view role_name) const {
