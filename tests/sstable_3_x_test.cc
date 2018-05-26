@@ -992,3 +992,75 @@ SEASTAR_TEST_CASE(test_write_counter_table) {
     });
 }
 
+SEASTAR_TEST_CASE(test_write_different_types) {
+    return seastar::async([] {
+        sstring table_name = "different_types";
+        // CREATE TABLE different_types (pk text, asciival ascii, bigintval bigint,
+        // blobval blob, boolval boolean, dateval date, decimalval decimal,
+        // doubleval double, floatval float, inetval inet, intval int,
+        // smallintval smallint, timeval time, tsval timestamp, timeuuidval timeuuid,
+        // tinyintval tinyint,  uuidval uuid, varcharval varchar, varintval varint,
+        // durationval duration, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", utf8_type, column_kind::partition_key);
+        builder.with_column("asciival", ascii_type);
+        builder.with_column("bigintval", long_type);
+        builder.with_column("blobval", bytes_type);
+        builder.with_column("boolval", boolean_type);
+        builder.with_column("dateval", simple_date_type);
+        builder.with_column("decimalval", decimal_type);
+        builder.with_column("doubleval", double_type);
+        builder.with_column("floatval", float_type);
+        builder.with_column("inetval", inet_addr_type);
+        builder.with_column("intval", int32_type);
+        builder.with_column("smallintval", short_type);
+        builder.with_column("timeval", time_type);
+        builder.with_column("tsval", timestamp_type);
+        builder.with_column("timeuuidval", timeuuid_type);
+        builder.with_column("tinyintval", byte_type);
+        builder.with_column("uuidval", uuid_type);
+        builder.with_column("varcharval", utf8_type);
+        builder.with_column("varintval", varint_type);
+        builder.with_column("durationval", duration_type);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        // INSERT INTO different_types (pk, asciival, bigintval, blobval, boolval,
+        // dateval, decimalval, doubleval, floatval, inetval, intval, smallintval,
+        // timeval, tsval, timeuuidval, tinyintval, uuidval, varcharval, varintval,
+        // durationval) VALUES ('key', 'hello', 9223372036854775807,
+        // textAsBlob('great'), true, '2017-05-05',
+        // 5.45, 36.6, 7.62, '192.168.0.110', -2147483648, 32767, '19:45:05.090',
+        // '2015-05-01 09:30:54.234+0000', 50554d6e-29bb-11e5-b345-feff819cdc9f, 127,
+        // 01234567-0123-0123-0123-0123456789ab, 'привет', 123, 1h4m48s20ms);
+        auto key = make_dkey(s, {to_bytes("key")});
+        mutation mut{s, key};
+        clustering_key ckey = clustering_key::make_empty();
+        mut.partition().apply_insert(*s, ckey, write_timestamp);
+        mut.set_cell(ckey, "asciival", data_value{"hello"}, write_timestamp);
+        mut.set_cell(ckey, "bigintval", data_value{std::numeric_limits<int64_t>::max()}, write_timestamp);
+        mut.set_cell(ckey, "blobval", data_value{bytes{'g', 'r', 'e', 'a', 't'}}, write_timestamp);
+        mut.set_cell(ckey, "boolval", data_value{true}, write_timestamp);
+        mut.set_cell(ckey, "dateval", simple_date_type->deserialize(simple_date_type->from_string("2017-05-05")), write_timestamp);
+        mut.set_cell(ckey, "decimalval", decimal_type->deserialize(decimal_type->from_string("5.45")), write_timestamp);
+        mut.set_cell(ckey, "doubleval", data_value{36.6}, write_timestamp);
+        mut.set_cell(ckey, "floatval", data_value{7.62f}, write_timestamp);
+        mut.set_cell(ckey, "inetval", inet_addr_type->deserialize(inet_addr_type->from_string("192.168.0.110")), write_timestamp);
+        mut.set_cell(ckey, "intval", data_value{std::numeric_limits<int32_t>::min()}, write_timestamp);
+        mut.set_cell(ckey, "smallintval", data_value{int16_t(32767)}, write_timestamp);
+        mut.set_cell(ckey, "timeval", time_type->deserialize(time_type->from_string("19:45:05.090")), write_timestamp);
+        mut.set_cell(ckey, "tsval", timestamp_type->deserialize(timestamp_type->from_string("2015-05-01 09:30:54.234+0000")), write_timestamp);
+        mut.set_cell(ckey, "timeuuidval", timeuuid_type->deserialize(timeuuid_type->from_string("50554d6e-29bb-11e5-b345-feff819cdc9f")), write_timestamp);
+        mut.set_cell(ckey, "tinyintval", data_value{int8_t{127}}, write_timestamp);
+        mut.set_cell(ckey, "uuidval", data_value{utils::UUID(sstring("01234567-0123-0123-0123-0123456789ab"))}, write_timestamp);
+        mut.set_cell(ckey, "varcharval", data_value{"привет"}, write_timestamp);
+        mut.set_cell(ckey, "varintval", varint_type->deserialize(varint_type->from_string("123")), write_timestamp);
+        mut.set_cell(ckey, "durationval", duration_type->deserialize(duration_type->from_string("1h4m48s20ms")), write_timestamp);
+        mt->apply(std::move(mut));
+
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+

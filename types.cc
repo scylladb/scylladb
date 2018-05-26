@@ -131,8 +131,8 @@ struct simple_type_traits<db_clock::time_point> {
 
 template <typename T>
 struct simple_type_impl : concrete_type<T> {
-    simple_type_impl(sstring name, std::optional<uint32_t> value_length_if_fixed, bool is_fixed_length)
-        : concrete_type<T>(std::move(name), std::move(value_length_if_fixed), is_fixed_length) {}
+    simple_type_impl(sstring name, std::optional<uint32_t> value_length_if_fixed)
+        : concrete_type<T>(std::move(name), std::move(value_length_if_fixed)) {}
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -164,7 +164,7 @@ struct simple_type_impl : concrete_type<T> {
 template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
     integer_type_impl(sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : simple_type_impl<T>(name, std::move(value_length_if_fixed), true) {}
+        : simple_type_impl<T>(name, std::move(value_length_if_fixed)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -244,7 +244,10 @@ struct integer_type_impl : simple_type_impl<T> {
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
-    byte_type_impl() : integer_type_impl{byte_type_name, 1}
+    // Note that although byte_type is of a fixed size,
+    // Cassandra (erroneously) treats it as a variable-size
+    // so we have to pass disengaged optional for the value size
+    byte_type_impl() : integer_type_impl{byte_type_name, {}}
     { }
 
     virtual void validate(bytes_view v) const override {
@@ -296,7 +299,7 @@ struct long_type_impl : integer_type_impl<int64_t> {
 
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(sstring name)
-        : concrete_type(name, { }, false) {}
+        : concrete_type(name, { }) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -376,7 +379,7 @@ struct utf8_type_impl final : public string_type_impl {
 };
 
 struct bytes_type_impl final : public concrete_type<bytes> {
-    bytes_type_impl() : concrete_type(bytes_type_name, { }, false) {}
+    bytes_type_impl() : concrete_type(bytes_type_name, { }) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -441,7 +444,7 @@ struct bytes_type_impl final : public concrete_type<bytes> {
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
-    boolean_type_impl() : simple_type_impl<bool>(boolean_type_name, 1, true) {}
+    boolean_type_impl() : simple_type_impl<bool>(boolean_type_name, 1) {}
     void serialize_value(maybe_empty<bool> value, bytes::iterator& out) const {
         if (!value.empty()) {
             *out++ = char(value);
@@ -519,7 +522,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
 class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
-    date_type_impl() : concrete_type(date_type_name, 8, true) {}
+    date_type_impl() : concrete_type(date_type_name, 8) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -597,7 +600,7 @@ public:
 logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
-    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name, 16, true) {}
+    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name, 16) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -712,7 +715,7 @@ private:
 class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
     static logging::logger _logger;
 public:
-    timestamp_type_impl() : simple_type_impl(timestamp_type_name, 8, true) {}
+    timestamp_type_impl() : simple_type_impl(timestamp_type_name, 8) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -886,7 +889,7 @@ public:
 logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 
 struct simple_date_type_impl : public simple_type_impl<uint32_t> {
-    simple_date_type_impl() : simple_type_impl{simple_date_type_name, { }, true}
+    simple_date_type_impl() : simple_type_impl{simple_date_type_name, { }}
     { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -980,7 +983,7 @@ struct simple_date_type_impl : public simple_type_impl<uint32_t> {
 };
 
 struct time_type_impl : public simple_type_impl<int64_t> {
-    time_type_impl() : simple_type_impl{time_type_name, { }, true}
+    time_type_impl() : simple_type_impl{time_type_name, { }}
     { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -1081,7 +1084,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
-    uuid_type_impl() : concrete_type(uuid_type_name, 16, true) {}
+    uuid_type_impl() : concrete_type(uuid_type_name, 16) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1174,7 +1177,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
 using inet_address = seastar::net::inet_address;
 
 struct inet_addr_type_impl : concrete_type<inet_address> {
-    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name, { }, true) {}
+    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name, { }) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1308,7 +1311,7 @@ template<> struct simple_type_traits<double> : public float_type_traits<double> 
 template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
     floating_type_impl(sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : simple_type_impl<T>(std::move(name), std::move(value_length_if_fixed), true) {}
+        : simple_type_impl<T>(std::move(name), std::move(value_length_if_fixed)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1444,7 +1447,7 @@ struct float_type_impl : floating_type_impl<float> {
 
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:
-    varint_type_impl() : concrete_type{varint_type_name, { }, false} { }
+    varint_type_impl() : concrete_type{varint_type_name, { }} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1567,7 +1570,7 @@ public:
 
 class decimal_type_impl : public concrete_type<big_decimal> {
 public:
-    decimal_type_impl() : concrete_type{decimal_type_name, { }, false} { }
+    decimal_type_impl() : concrete_type{decimal_type_name, { }} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1673,7 +1676,7 @@ public:
 
 class counter_type_impl : public abstract_type {
 public:
-    counter_type_impl() : abstract_type{counter_type_name, { }, true} { }
+    counter_type_impl() : abstract_type{counter_type_name, { }} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1758,7 +1761,7 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
 
 class duration_type_impl : public concrete_type<cql_duration> {
 public:
-    duration_type_impl() : concrete_type(duration_type_name, { }, false) {
+    duration_type_impl() : concrete_type(duration_type_name, { }) {
     }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (value == nullptr) {
@@ -1909,7 +1912,7 @@ private:
 };
 
 struct empty_type_impl : abstract_type {
-    empty_type_impl() : abstract_type(empty_type_name, 0, true) {}
+    empty_type_impl() : abstract_type(empty_type_name, 0) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
     }
     virtual size_t serialized_size(const void* value) const override {
@@ -3193,14 +3196,14 @@ bool list_type_impl::references_duration() const {
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
-        : concrete_type(std::move(name), { }, false), _types(std::move(types)) {
+        : concrete_type(std::move(name), { }), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
-        : concrete_type(make_name(types), { }, false), _types(std::move(types)) {
+        : concrete_type(make_name(types), { }), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }

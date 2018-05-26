@@ -421,10 +421,9 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
-    bool _is_fixed_length;
 public:
-    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed, bool is_fixed_length)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _is_fixed_length(is_fixed_length) {}
+    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)) {}
     virtual ~abstract_type() {}
     virtual void serialize(const void* value, bytes::iterator& out) const = 0;
     void serialize(const data_value& value, bytes::iterator& out) const {
@@ -493,9 +492,6 @@ public:
     virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
     virtual bool references_duration() const {
         return false;
-    }
-    bool is_fixed_length() const {
-        return _is_fixed_length;
     }
     std::optional<uint32_t> value_length_if_fixed() const {
         return _value_length_if_fixed;
@@ -785,7 +781,7 @@ public:
 
 protected:
     explicit collection_type_impl(sstring name, const kind& k)
-            : abstract_type(std::move(name), {}, false), _kind(k) {}
+            : abstract_type(std::move(name), {}), _kind(k) {}
     virtual sstring cql3_type_name() const = 0;
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
@@ -915,8 +911,7 @@ class reversed_type_impl : public abstract_type {
     data_type _underlying_type;
     reversed_type_impl(data_type t)
         : abstract_type("org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
-                        t->value_length_if_fixed(),
-                        t->is_fixed_length())
+                        t->value_length_if_fixed())
         , _underlying_type(t)
     {}
 protected:
