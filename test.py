@@ -274,7 +274,7 @@ if __name__ == "__main__":
         futures.append(executor.submit(run_test, path, test_type, exec_args))
 
     cookie = n_total
-    for future in futures:
+    for future in concurrent.futures.as_completed(futures):
         test_path, test_args, success, out = future.result()
         cookie = print_progress(test_path, test_args, success, cookie)
         if not success:
