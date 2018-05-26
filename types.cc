@@ -244,7 +244,10 @@ struct integer_type_impl : simple_type_impl<T> {
 };
 
 struct byte_type_impl : integer_type_impl<int8_t> {
-    byte_type_impl() : integer_type_impl{byte_type_name, 1}
+    // Note that although byte_type is of a fixed size,
+    // Cassandra (erroneously) treats it as a variable-size
+    // so we have to pass disengaged optional for the value size
+    byte_type_impl() : integer_type_impl{byte_type_name, {}}
     { }
 
     virtual void validate(bytes_view v) const override {
