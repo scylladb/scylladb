@@ -633,13 +633,12 @@ indexed_table_select_statement::find_index_partition_ranges(distributed<service:
 // lexicographical order of the partition key columns (in the way that
 // clustering keys are sorted) - NOT in token order. See issue #3423.
 future<std::vector<indexed_table_select_statement::primary_key>>
-indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
+indexed_table_select_statement::find_index_clustering_rows(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options)
 {
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
-            [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
+    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now).then(
+            [this, now, &options, view] (foreign_ptr<lw_shared_ptr<query::result>> result, service::replicas_per_token_range) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
             columns.emplace_back(view->get_column_definition(cdef.name()));
@@ -652,7 +651,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
         // FIXME: read_posting_list already asks to read primary keys only.
         // why do we need to specify this again?
         auto slice = partition_slice_builder(*view).build();
-        query::result_view::consume(*qr.query_result,
+        query::result_view::consume(*result,
                                     slice,
                                     cql3::selection::result_set_builder::visitor(builder, *view, *selection));
         auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
