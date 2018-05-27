@@ -360,22 +360,19 @@ select_statement::execute(distributed<service::storage_proxy>& proxy,
 // list, we should probably require that the keys be ordered in token order
 // (see also issue #3423).
 future<shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute(service::storage_proxy& proxy,
+select_statement::execute(distributed<service::storage_proxy>& proxy,
                           lw_shared_ptr<query::read_command> cmd,
                           std::vector<primary_key>&& primary_keys,
                           service::query_state& state,
                           const query_options& options,
                           gc_clock::time_point now)
 {
-    // FIXME: pass the timeout from caller. The query has already started
-    // earlier (with read_posting_list()), not now.
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return do_with(std::move(primary_keys), [this, &proxy, &state, &options, cmd, timeout] (auto& keys) {
+    return do_with(std::move(primary_keys), [this, &proxy, &state, &options, cmd] (auto& keys) {
         assert(cmd->partition_limit == query::max_partitions);
         query::result_merger merger(cmd->row_limit, query::max_partitions);
         // there is no point to produce rows beyond the first row_limit:
         auto end = keys.size() <= cmd->row_limit ? keys.end() : keys.begin() + cmd->row_limit;
-        return map_reduce(keys.begin(), end, [this, &proxy, &state, &options, cmd, timeout] (auto& key) {
+        return map_reduce(keys.begin(), end, [this, &proxy, &state, &options, cmd] (auto& key) {
             auto command = ::make_lw_shared<query::read_command>(*cmd);
             // for each partition, read just one clustering row (TODO: can
             // get all needed rows of one partition at once.)
@@ -383,12 +380,12 @@ select_statement::execute(service::storage_proxy& proxy,
             if (key.clustering) {
                 command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
             }
-            return proxy.query(_schema,
+            return proxy.local().query(_schema,
                     command,
                     {dht::partition_range::make_singular(key.partition)},
                     options.get_consistency(),
-                    {timeout, state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
-                return std::move(qr.query_result);
+                    state.get_trace_state()).then([] (foreign_ptr<lw_shared_ptr<query::result>>&& result, service::replicas_per_token_range) {
+                return std::move(result);
             });
         }, std::move(merger));
     }).then([this, &options, now, cmd] (auto result) {

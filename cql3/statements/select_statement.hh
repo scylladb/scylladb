@@ -130,7 +130,7 @@ public:
     };
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute(
-            service::storage_proxy& proxy,
+            distributed<service::storage_proxy>& proxy,
             lw_shared_ptr<query::read_command> cmd,
             std::vector<primary_key>&& primary_keys,
             service::query_state& state,
