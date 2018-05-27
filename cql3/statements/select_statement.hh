@@ -198,7 +198,7 @@ private:
                                                                     service::query_state& state,
                                                                     const query_options& options);
 
-    future<std::vector<primary_key>> find_index_clustering_rows(service::storage_proxy& proxy,
+    future<std::vector<primary_key>> find_index_clustering_rows(distributed<service::storage_proxy>& proxy,
                                                                 service::query_state& state,
                                                                 const query_options& options);
 
