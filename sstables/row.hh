@@ -522,6 +522,13 @@ private:
         EXTENDED_FLAGS,
         STATIC_ROW,
         CLUSTERING_ROW,
+        CK_BLOCK,
+        CK_BLOCK_HEADER,
+        CK_BLOCK2,
+        CK_BLOCK_VALUE_LENGTH,
+        CK_BLOCK_VALUE_BYTES,
+        CK_BLOCK_END,
+        CLUSTERING_ROW_CONSUME,
         ROW_BODY,
         ROW_BODY_SIZE,
         ROW_BODY_PREV_SIZE,
@@ -560,10 +567,12 @@ private:
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
-    std::vector<bytes> _row_key;
+    std::vector<temporary_buffer<char>> _row_key;
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
+
+    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
     column_flags_m _column_flags{0};
     api::timestamp_type _column_timestamp;
@@ -571,9 +580,11 @@ private:
     gc_clock::duration _column_ttl;
     uint32_t _column_value_length;
     temporary_buffer<char> _column_value;
+    uint64_t _ck_blocks_header;
+    uint32_t _ck_blocks_header_offset;
 
-    void setup_columns(const std::vector <stdx::optional<column_id>>& column_ids,
-                       const std::vector <std::optional<uint32_t>>& column_value_fix_lengths) {
+    void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
+                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
         _column_ids = boost::make_iterator_range(column_ids);
         _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
     }
@@ -589,12 +600,40 @@ private:
     std::optional<uint32_t> get_column_value_length() {
         return _column_value_fix_lengths.front();
     }
+    void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
+        _row_key.clear();
+        _row_key.reserve(column_value_fix_lengths.size());
+        _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        _ck_blocks_header_offset = 0u;
+    }
+    bool no_more_ck_blocks() { return _ck_column_value_fix_lengths.empty(); }
+    void move_to_next_ck_block() {
+        _ck_column_value_fix_lengths.advance_begin(1);
+        ++_ck_blocks_header_offset;
+        if (_ck_blocks_header_offset == 32u) {
+            _ck_blocks_header_offset = 0u;
+        }
+    }
+    std::optional<uint32_t> get_ck_block_value_length() {
+        return _ck_column_value_fix_lengths.front();
+    }
+    bool is_block_empty() {
+        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset))) != 0;
+    }
+    bool should_read_block_header() {
+        return _ck_blocks_header_offset == 0u;
+    }
 public:
     using consumer = consumer_m;
     bool non_consuming() const {
         return (_state == state::DELETION_TIME_3
                 || _state == state::FLAGS_2
                 || _state == state::EXTENDED_FLAGS
+                || _state == state::CLUSTERING_ROW
+                || _state == state::CK_BLOCK_HEADER
+                || _state == state::CK_BLOCK_VALUE_LENGTH
+                || _state == state::CK_BLOCK_END
+                || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
                 || _state == state::ROW_BODY_MISSING_COLUMNS
@@ -685,12 +724,59 @@ public:
                           _column_translation.regular_column_value_fix_legths());
         case state::CLUSTERING_ROW:
         clustering_row_label:
+            _is_first_unfiltered = false;
+            setup_ck(_column_translation.clustering_column_value_fix_legths());
+        case state::CK_BLOCK:
+        ck_block_label:
+            if (no_more_ck_blocks()) {
+                goto clustering_row_consume_label;
+            }
+            if (!should_read_block_header()) {
+                _state = state::CK_BLOCK2;
+                goto ck_block2_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::CK_BLOCK_HEADER;
+                break;
+            }
+        case state::CK_BLOCK_HEADER:
+            _ck_blocks_header = _u64;
+        case state::CK_BLOCK2:
+        ck_block2_label:
+            if (is_block_empty()) {
+                _row_key.push_back({});
+                move_to_next_ck_block();
+                goto ck_block_label;
+            }
+            if (auto len = get_ck_block_value_length()) {
+                _column_value_length = *len;
+                _column_value = temporary_buffer<char>(_column_value_length);
+                _state = state::CK_BLOCK_VALUE_BYTES;
+                goto ck_block_value_bytes_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::CK_BLOCK_VALUE_LENGTH;
+                break;
+            }
+        case state::CK_BLOCK_VALUE_LENGTH:
+            _column_value_length = static_cast<uint32_t>(_u64);
+            _column_value = temporary_buffer<char>(_column_value_length);
+        case state::CK_BLOCK_VALUE_BYTES:
+        ck_block_value_bytes_label:
+            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+                _state = state::CK_BLOCK_END;
+                break;
+            }
+        case state::CK_BLOCK_END:
+            _row_key.push_back(std::move(_column_value));
+            move_to_next_ck_block();
+            _state = state::CK_BLOCK;
+            goto ck_block_label;
+        case state::CLUSTERING_ROW_CONSUME:
+        clustering_row_consume_label:
             {
-                _is_first_unfiltered = false;
-                // Clustering blocks should be read here but serialization header is needed for that.
-                // Table with just partition key does not have any so it's ok for the first version.
-                _row_key = std::vector<bytes>();
-                auto ret = _consumer.consume_row_start(std::move(_row_key));
+                auto ret = _consumer.consume_row_start(_row_key);
+                _row_key.clear();
                 _state = state::ROW_BODY;
                 if (ret == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
