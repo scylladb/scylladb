@@ -563,7 +563,7 @@ private:
     std::vector<bytes> _row_key;
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
-    boost::iterator_range<utils::chunked_vector<serialization_header::column_desc>::const_iterator> _column_descs;
+    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
 
     column_flags_m _column_flags{0};
     api::timestamp_type _column_timestamp;
@@ -573,23 +573,21 @@ private:
     temporary_buffer<char> _column_value;
 
     void setup_columns(const std::vector <stdx::optional<column_id>>& column_ids,
-                       const utils::chunked_vector<serialization_header::column_desc>& column_descs) {
+                       const std::vector <std::optional<uint32_t>>& column_value_fix_lengths) {
         _column_ids = boost::make_iterator_range(column_ids);
-        _column_descs = boost::make_iterator_range(column_descs);
+        _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
     }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
         _column_ids.advance_begin(1);
-        _column_descs.advance_begin(1);
+        _column_value_fix_lengths.advance_begin(1);
     }
     bool is_column_simple() { return true; }
     stdx::optional<column_id> get_column_id() {
         return _column_ids.front();
     }
     std::optional<uint32_t> get_column_value_length() {
-        auto type = abstract_type::parse_type(sstring(std::cbegin(_column_descs.front().type_name.value),
-                                                      std::cend(_column_descs.front().type_name.value)));
-        return type->value_length_if_fixed();
+        return _column_value_fix_lengths.front();
     }
 public:
     using consumer = consumer_m;
@@ -663,7 +661,8 @@ public:
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
-                setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
+                setup_columns(_column_translation.regular_columns(),
+                              _column_translation.regular_column_value_fix_legths());
                 goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
@@ -674,14 +673,16 @@ public:
             _extended_flags = unfiltered_extended_flags_m(_u8);
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
-                    setup_columns(_column_translation.static_columns(), _header.static_columns.elements);
+                    setup_columns(_column_translation.static_columns(),
+                                  _column_translation.static_column_value_fix_legths());
                     _state = state::STATIC_ROW;
                     goto static_row_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
-            setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
+            setup_columns(_column_translation.regular_columns(),
+                          _column_translation.regular_column_value_fix_legths());
         case state::CLUSTERING_ROW:
         clustering_row_label:
             {
