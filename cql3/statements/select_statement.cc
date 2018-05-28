@@ -532,48 +532,6 @@ select_statement::execute(service::storage_proxy& proxy,
     });
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>>
-select_statement::execute_internal(service::storage_proxy& proxy,
-                                   service::query_state& state,
-                                   const query_options& options)
-{
-    if (options.get_specific_options().page_size > 0) {
-        // need page, use regular execute
-        return do_execute(proxy, state, options);
-    }
-    int32_t limit = get_limit(options);
-    auto now = gc_clock::now();
-    auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
-        make_partition_slice(options), limit, now, std::experimental::nullopt, query::max_partitions, utils::UUID(), options.get_timestamp(state));
-    auto partition_ranges = _restrictions->get_partition_key_ranges(options);
-
-    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
-
-    ++_stats.reads;
-
-    if (needs_post_query_ordering() && _limit) {
-        return do_with(std::move(partition_ranges), [this, &proxy, &state, command] (auto& prs) {
-            assert(command->partition_limit == query::max_partitions);
-            query::result_merger merger(command->row_limit * prs.size(), query::max_partitions);
-            return map_reduce(prs.begin(), prs.end(), [this, &proxy, &state, command] (auto& pr) {
-                dht::partition_range_vector prange { pr };
-                auto cmd = ::make_lw_shared<query::read_command>(*command);
-                return proxy.query(_schema, cmd, std::move(prange), db::consistency_level::ONE, {db::no_timeout, state.get_trace_state(),
-                        }).then([] (service::storage_proxy::coordinator_query_result qr) {
-                    return std::move(qr.query_result);
-                });
-            }, std::move(merger));
-        }).then([command, this, &options, now] (auto result) {
-            return this->process_results(std::move(result), command, options, now);
-        }).finally([command] { });
-    } else {
-        auto query = proxy.query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE, {db::no_timeout, state.get_trace_state()});
-        return query.then([command, this, &options, now] (service::storage_proxy::coordinator_query_result qr) {
-            return this->process_results(std::move(qr.query_result), command, options, now);
-        }).finally([command] {});
-    }
-}
-
 shared_ptr<cql_transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,

@@ -98,14 +98,6 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
 
-    /**
-     * Variant of execute used for internal query against the system tables, and thus only query the local node = 0.
-     *
-     * @param state the current query state
-     */
-    virtual future<::shared_ptr<cql_transport::messages::result_message>>
-        execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
-
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const = 0;

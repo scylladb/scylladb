@@ -75,13 +75,6 @@ future<> cql3::statements::authorization_statement::check_access(const service::
     return make_ready_future<>();
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> cql3::statements::authorization_statement::execute_internal(
-                service::storage_proxy& proxy,
-                service::query_state& state, const query_options& options) {
-    // Internal queries are exclusively on the system keyspace and makes no sense here
-    throw std::runtime_error("unsupported operation");
-}
-
 void cql3::statements::authorization_statement::maybe_correct_resource(auth::resource& resource, const service::client_state& state) {
     if (resource.kind() == auth::resource_kind::data) {
         const auto data_view = auth::data_resource_view(resource);

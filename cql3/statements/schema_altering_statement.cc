@@ -109,16 +109,15 @@ schema_altering_statement::execute0(service::storage_proxy& proxy, service::quer
 
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
-    return execute0(proxy, state, options, false).then([this, &state](::shared_ptr<messages::result_message> result) {
-        return grant_permissions_to_creator(state.get_client_state()).then([result = std::move(result)] {
+    bool internal = state.get_client_state().is_internal();
+    return execute0(proxy, state, options, internal).then([this, &state, internal](::shared_ptr<messages::result_message> result) {
+        auto permissions_granted_fut = internal
+                ? make_ready_future<>()
+                : grant_permissions_to_creator(state.get_client_state());
+        return permissions_granted_fut.then([result = std::move(result)] {
            return result;
         });
     });
-}
-
-future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute_internal(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
-    return execute0(proxy, state, options, true);
 }
 
 }
