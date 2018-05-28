@@ -802,6 +802,48 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     });
 }
 
+SEASTAR_TEST_CASE(test_has_partition_key) {
+    return seastar::async([] {
+        for (const auto version : all_sstable_versions) {
+            storage_service_for_tests ssft;
+            auto dir = make_lw_shared<tmpdir>();
+            schema_builder builder("ks", "cf");
+            builder.with_column("p", utf8_type, column_kind::partition_key);
+            builder.with_column("c", int32_type, column_kind::clustering_key);
+            builder.with_column("v", int32_type);
+            auto s = builder.build(schema_builder::compact_storage::yes);
+
+            auto k = partition_key::from_exploded(*s, {to_bytes(make_local_key(s))});
+            auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(static_cast<int32_t>(0xffff0000))});
+
+            mutation m(s, k);
+            auto cell = atomic_cell::make_live(1, int32_type->decompose(17), { });
+            m.set_clustered_cell(ck, *s->get_column_definition("v"), std::move(cell));
+
+            auto mt = make_lw_shared<memtable>(s);
+            mt->apply(std::move(m));
+
+            auto sst = sstables::make_sstable(s,
+                                    dir->path,
+                                    1 /* generation */,
+                                    version,
+                                    sstables::sstable::format_types::big);
+            write_memtable_to_sstable_for_test(*mt, sst).get();
+            dht::decorated_key dk(dht::global_partitioner().decorate_key(*s, k));
+            auto hk = sstables::sstable::make_hashed_key(*s, dk.key());
+            sst->load().get();
+            auto mr = sst->read_rows_flat(s);
+            auto res =  sst->has_partition_key(hk, dk).get0();
+            BOOST_REQUIRE(bool(res));
+
+            auto dk2 = dht::global_partitioner().decorate_key(*s, partition_key::from_nodetool_style_string(s, "xx"));
+            auto hk2 = sstables::sstable::make_hashed_key(*s, dk2.key());
+            res =  sst->has_partition_key(hk2, dk2).get0();
+            BOOST_REQUIRE(! bool(res));
+        }
+    });
+}
+
 static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
     return std::make_unique<index_reader>(sst, default_priority_class());
 }
