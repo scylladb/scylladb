@@ -155,3 +155,37 @@ BOOST_AUTO_TEST_CASE(test_serialization) {
 
     BOOST_REQUIRE(key.equal(*s, reserialize(key)));
 }
+
+
+BOOST_AUTO_TEST_CASE(test_from_nodetool_style_string) {
+    auto s1 = make_lw_shared<schema>(
+    schema({}, "", "",
+        {
+            {"c1", utf8_type}
+        }, {
+            {"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}
+        },
+        {}, {}, utf8_type));
+
+    auto pk_value = bytes("value");
+    partition_key key1(std::vector<bytes>({pk_value}));
+
+    auto key2 = partition_key::from_nodetool_style_string(s1, "value");
+    BOOST_REQUIRE(key1.equal(*s1, key2));
+
+    auto s2 = make_lw_shared<schema>(
+    schema({}, "", "",
+        {
+            {"c1", utf8_type}, {"c2", utf8_type}
+        }, {
+            {"c3", bytes_type}, {"c4", bytes_type}
+        },
+        {}, {}, utf8_type));
+
+    auto pk_value1 = bytes("value1");
+    auto pk_value2 = bytes("value2");
+    partition_key key3(std::vector<bytes>({pk_value1, pk_value2}));
+
+    auto key4 = partition_key::from_nodetool_style_string(s2, "value1:value2");
+    BOOST_REQUIRE(key3.equal(*s1, key4));
+}
