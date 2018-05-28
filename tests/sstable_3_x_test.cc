@@ -441,6 +441,52 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_read_index) {
     });
 }
 
+SEASTAR_TEST_CASE(test_uncompressed_simple_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA,
+                               UNCOMPRESSED_SIMPLE_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SIMPLE_SCHEMA, pk);
+        };
+
+        auto int_cdef =
+            UNCOMPRESSED_SIMPLE_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(int_cdef);
+
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA,
+                                                            int32_type->decompose(105)),
+                          {{int_cdef, int32_type->decompose(1005)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA,
+                                                            int32_type->decompose(101)),
+                          {{int_cdef, int32_type->decompose(1001)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA,
+                                                            int32_type->decompose(102)),
+                          {{int_cdef, int32_type->decompose(1002)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA,
+                                                            int32_type->decompose(104)),
+                          {{int_cdef, int32_type->decompose(1004)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_SIMPLE_SCHEMA,
+                                                            int32_type->decompose(103)),
+                          {{int_cdef, int32_type->decompose(1003)}})
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 static void compare_files(sstring filename1, sstring filename2) {
     std::ifstream ifs1(filename1);
     std::ifstream ifs2(filename2);
