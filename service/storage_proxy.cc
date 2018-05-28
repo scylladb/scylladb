@@ -726,21 +726,19 @@ storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vect
     });
 
     _stats.register_metrics_local();
-    _hints_enabled_for_user_writes = bool(hinted_handoff_enabled);
-    if (!hinted_handoff_enabled) {
-        hinted_handoff_enabled.emplace();
-    }
-    supervisor::notify("creating hints manager");
-    slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
 
     const db::config& cfg = _db.local().get_config();
     // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
     db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
-    _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
+    if (hinted_handoff_enabled) {
+        supervisor::notify("creating hints manager");
+        slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
+        _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
+        _hints_manager->register_metrics("hints_manager");
+        _hints_resource_manager.register_manager(*_hints_manager);
+    }
 
-    _hints_manager->register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
-    _hints_resource_manager.register_manager(*_hints_manager);
     _hints_resource_manager.register_manager(_hints_for_views_manager);
 }
 
@@ -3647,7 +3645,7 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, dht::partiti
 }
 
 bool storage_proxy::hints_enabled(db::write_type type) noexcept {
-    return _hints_enabled_for_user_writes || (type == db::write_type::VIEW && bool(_hints_manager));
+    return bool(_hints_manager) || type == db::write_type::VIEW;
 }
 
 db::hints::manager& storage_proxy::hints_manager_for(db::write_type type) {

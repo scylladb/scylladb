@@ -152,7 +152,6 @@ private:
     db::hints::resource_manager _hints_resource_manager;
     stdx::optional<db::hints::manager> _hints_manager;
     db::hints::manager _hints_for_views_manager;
-    bool _hints_enabled_for_user_writes = false;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
