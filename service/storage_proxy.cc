@@ -735,6 +735,8 @@ storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vect
     // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
     db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
     _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
+
+    _hints_manager->register_metrics("hints_manager");
 }
 
 storage_proxy::rh_entry::rh_entry(shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}

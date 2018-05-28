@@ -52,10 +52,16 @@ manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
     , _resource_manager(res_manager)
-{
+{}
+
+manager::~manager() {
+    assert(_ep_managers.empty());
+}
+
+void manager::register_metrics(const sstring& group_name) {
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("hints_manager", {
+    _metrics.add_group(group_name, {
         sm::make_gauge("size_of_hints_in_progress", _stats.size_of_hints_in_progress,
                         sm::description("Size of hinted mutations that are scheduled to be written.")),
 
@@ -71,10 +77,6 @@ manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64
         sm::make_derive("sent", _stats.sent,
                         sm::description("Number of sent hints.")),
     });
-}
-
-manager::~manager() {
-    assert(_ep_managers.empty());
 }
 
 future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {

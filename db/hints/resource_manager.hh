@@ -79,7 +79,7 @@ public:
 private:
     /// \brief Check that hints don't occupy too much disk space.
     ///
-    /// Verifies that all \ref manager::_hints_dir dirs for all managers occupy less than \ref resource_limits::max_shard_disk_space_size.
+    /// Verifies that all \ref manager::_hints_dir dirs for all managers occupy less than \ref resource_manager::max_shard_disk_space_size.
     ///
     /// If they do, stop all end point managers that have more than one hints file - we don't want some DOWN Node to
     /// prevent hints to other Nodes from being generated (e.g. due to some temporary overload and timeout).
