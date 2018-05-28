@@ -487,6 +487,108 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_read) {
     });
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/simple
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   ck_int INT,
+//                                   ck_text TEXT,
+//                                   ck_uuid UUID,
+//                                   ck_inet INET,
+//                                   val INT,
+//                                   PRIMARY KEY(pk, ck_int, ck_text, ck_uuid, ck_inet))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
+//        VALUES(1, 101, 'This is a string for 1', f7fdcbd2-4544-482c-85fd-d9572adc3cd6, '10.0.0.1', 1001);
+// INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
+//        VALUES(2, 102, 'This is a string for 2', c25ae960-07a2-467d-8f35-5bd38647b367, '10.0.0.2', 1002);
+// INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
+//        VALUES(3, 103, 'This is a string for 3', f7e8ebc0-dbae-4c06-bae0-656c23f6af6a, '10.0.0.3', 1003);
+// INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
+//        VALUES(4, 104, 'This is a string for 4', 4549e2c2-786e-4b30-90aa-5dd37ae1db8f, '10.0.0.4', 1004);
+// INSERT INTO test_ks.test_table(pk, ck_int, ck_text, ck_uuid, ck_inet, val)
+//        VALUES(5, 105, 'This is a string for 5',  f1badb6f-80a0-4eef-90df-b3651d9a5578, '10.0.0.5', 1005);
+
+static thread_local const sstring UNCOMPRESSED_COMPOUND_CK_PATH = "tests/sstables/3.x/uncompressed/compound_ck";
+static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_CK_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck_int", int32_type, column_kind::clustering_key)
+        .with_column("ck_text", utf8_type, column_kind::clustering_key)
+        .with_column("ck_uuid", uuid_type, column_kind::clustering_key)
+        .with_column("ck_inet", inet_addr_type, column_kind::clustering_key)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_compound_ck_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_COMPOUND_CK_SCHEMA,
+                               UNCOMPRESSED_COMPOUND_CK_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_COMPOUND_CK_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COMPOUND_CK_SCHEMA, pk);
+        };
+
+        auto int_cdef =
+            UNCOMPRESSED_SIMPLE_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(int_cdef);
+
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
+                              int32_type->decompose(105),
+                              utf8_type->from_string("This is a string for 5"),
+                              uuid_type->from_string("f1badb6f-80a0-4eef-90df-b3651d9a5578"),
+                              inet_addr_type->from_string("10.0.0.5")
+                          }),
+                          {{int_cdef, int32_type->decompose(1005)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
+                              int32_type->decompose(101),
+                              utf8_type->from_string("This is a string for 1"),
+                              uuid_type->from_string("f7fdcbd2-4544-482c-85fd-d9572adc3cd6"),
+                              inet_addr_type->from_string("10.0.0.1")
+                          }),
+                          {{int_cdef, int32_type->decompose(1001)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
+                              int32_type->decompose(102),
+                              utf8_type->from_string("This is a string for 2"),
+                              uuid_type->from_string("c25ae960-07a2-467d-8f35-5bd38647b367"),
+                              inet_addr_type->from_string("10.0.0.2")
+                          }),
+                          {{int_cdef, int32_type->decompose(1002)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
+                              int32_type->decompose(104),
+                              utf8_type->from_string("This is a string for 4"),
+                              uuid_type->from_string("4549e2c2-786e-4b30-90aa-5dd37ae1db8f"),
+                              inet_addr_type->from_string("10.0.0.4")
+                          }),
+                          {{int_cdef, int32_type->decompose(1004)}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key::from_exploded(*UNCOMPRESSED_SIMPLE_SCHEMA, {
+                              int32_type->decompose(103),
+                              utf8_type->from_string("This is a string for 3"),
+                              uuid_type->from_string("f7e8ebc0-dbae-4c06-bae0-656c23f6af6a"),
+                              inet_addr_type->from_string("10.0.0.3")
+                          }),
+                          {{int_cdef, int32_type->decompose(1003)}})
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 static void compare_files(sstring filename1, sstring filename2) {
     std::ifstream ifs1(filename1);
     std::ifstream ifs2(filename2);
