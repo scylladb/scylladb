@@ -192,7 +192,7 @@ static auto write_row(Writer&& writer, const schema& s, const clustering_key_pre
     auto deleted_at_writer = write_row_marker(std::move(marker_writer), m).start_deleted_at();
     auto row_writer = write_tombstone(std::move(deleted_at_writer), t.regular()).end_deleted_at().start_cells();
     auto shadowable_deleted_at_writer = write_row_cells(std::move(row_writer), cells, s, column_kind::regular_column).end_cells().start_shadowable_deleted_at();
-    return write_tombstone(std::move(shadowable_deleted_at_writer), t.shadowable().tomb()).end_shadowable_deleted_at().end_deletable_row();
+    return write_tombstone(std::move(shadowable_deleted_at_writer), t.shadowable().tomb()).end_shadowable_deleted_at();
 }
 
 template<typename Writer>
@@ -203,7 +203,7 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     write_tombstones(s, row_tombstones, mp.row_tombstones());
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.non_dummy_rows()) {
-        write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at());
+        write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at()).end_deletable_row();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
@@ -242,8 +242,39 @@ void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     while (!crs.empty()) {
         auto& cr = crs.front();
-        write_row(clustering_rows.add(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb());
+        write_row(clustering_rows.add(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb()).end_deletable_row();
         crs.pop_front();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
+}
+
+frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf)
+{
+    bytes_ostream out;
+    ser::writer_of_mutation_fragment<bytes_ostream> writer(out);
+    mf.visit(seastar::make_visitor(
+        [&] (const clustering_row& cr) {
+            return write_row(std::move(writer).start_fragment_clustering_row().start_row(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb())
+                    .end_row()
+                .end_clustering_row();
+        },
+        [&] (const static_row& sr) {
+            return write_row_cells(std::move(writer).start_fragment_static_row().start_cells(), sr.cells(), s, column_kind::static_column)
+                    .end_cells()
+                .end_static_row();
+        },
+        [&] (const range_tombstone& rt) {
+            return std::move(writer).write_fragment_range_tombstone(rt);
+        },
+        [&] (const partition_start& ps) {
+            return std::move(writer).start_fragment_partition_start()
+                    .write_key(ps.key().key())
+                    .write_partition_tombstone(ps.partition_tombstone())
+                .end_partition_start();
+        },
+        [&] (const partition_end& pe) {
+            return std::move(writer).write_fragment_partition_end(pe);
+        }
+    )).end_mutation_fragment();
+    return frozen_mutation_fragment(std::move(out));
 }

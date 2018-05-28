@@ -153,3 +153,25 @@ class canonical_mutation stub [[writable]] {
     column_mapping mapping;
     mutation_partition partition;
 }
+
+class clustering_row stub [[writable]] {
+    deletable_row row;
+};
+
+class static_row stub [[writable]] {
+    row cells;
+};
+
+class partition_start stub [[writable]] {
+    partition_key key;
+    tombstone partition_tombstone;
+};
+
+class partition_end {
+};
+
+class mutation_fragment stub [[writable]] {
+    boost::variant<clustering_row, static_row, range_tombstone,
+                   partition_start, partition_end> fragment;
+};
+

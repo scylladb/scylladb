@@ -23,6 +23,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <seastar/util/variant_utils.hh>
+
 #include "tests/test-utils.hh"
 
 #include <map>
@@ -111,6 +113,10 @@ struct vectors_of_compounds {
     std::vector<simple_compound> first;
     wrapped_vector second;
 };
+
+struct empty_struct { };
+
+struct empty_final_struct { };
 
 #include "serialization_visitors.hh"
 #include "idl/idl_test.dist.hh"
@@ -343,4 +349,61 @@ BOOST_AUTO_TEST_CASE(test_skip_does_not_deserialize)
 
         BOOST_REQUIRE(prev == final_composite_test_object::construction_count);
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_empty_struct)
+{
+    bytes_ostream buf1;
+    ser::serialize(buf1, empty_struct());
+
+    auto in1 = ser::as_input_stream(buf1.linearize());
+    ser::deserialize(in1, boost::type<empty_struct>());
+
+    bytes_ostream buf2;
+    ser::serialize(buf2, empty_final_struct());
+
+    auto in2 = ser::as_input_stream(buf2.linearize());
+    ser::deserialize(in2, boost::type<empty_final_struct>());
+}
+
+BOOST_AUTO_TEST_CASE(test_just_a_variant)
+{
+    bytes_ostream buf;
+    ser::writer_of_just_a_variant(buf)
+        .start_variant_writable_simple_compound()
+            .write_foo(0x1234abcd)
+            .write_bar(0x1111ffff)
+        .end_writable_simple_compound()
+    .end_just_a_variant();
+
+    auto in = ser::as_input_stream(buf);
+    auto view = ser::deserialize(in, boost::type<ser::just_a_variant_view>());
+    bool fired = false;
+    seastar::visit(view.variant(), [&] (ser::writable_simple_compound_view v) {
+            fired = true;
+            BOOST_CHECK_EQUAL(v.foo(), 0x1234abcd);
+            BOOST_CHECK_EQUAL(v.bar(), 0x1111ffff);
+        },
+        [&] (simple_compound) { BOOST_FAIL("should not reach"); },
+        [&] (ser::unknown_variant_type) { BOOST_FAIL("should not reach"); }
+    );
+    BOOST_CHECK(fired);
+
+    buf = bytes_ostream();
+    ser::writer_of_just_a_variant(buf)
+        .write_variant_simple_compound(simple_compound { 0xaaaabbbb, 0xccccdddd })
+    .end_just_a_variant();
+
+    in = ser::as_input_stream(buf);
+    view = ser::deserialize(in, boost::type<ser::just_a_variant_view>());
+    fired = false;
+    seastar::visit(view.variant(), [&] (simple_compound v) {
+            fired = true;
+            BOOST_CHECK_EQUAL(v.foo, 0xaaaabbbb);
+            BOOST_CHECK_EQUAL(v.bar, 0xccccdddd);
+        },
+        [&] (ser::writable_simple_compound_view) { BOOST_FAIL("should not reach"); },
+        [&] (ser::unknown_variant_type) { BOOST_FAIL("should not reach"); }
+    );
+    BOOST_CHECK(fired);
 }

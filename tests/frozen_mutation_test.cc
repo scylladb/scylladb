@@ -99,3 +99,23 @@ SEASTAR_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_appl
         assert_that(m_unfrozen).is_equal_to(m_frozen);
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
+    storage_service_for_tests ssft;
+    for_each_mutation([] (const mutation& m) {
+        auto& s = *m.schema();
+        std::vector<mutation_fragment> mfs;
+        auto rd = flat_mutation_reader_from_mutations({ m });
+        rd.consume_pausable([&] (mutation_fragment mf) {
+            mfs.emplace_back(std::move(mf));
+            return stop_iteration::no;
+        }).get();
+
+        for (auto&& mf : mfs) {
+            auto refrozen_mf = freeze(s, mf).unfreeze(s);
+            if (!mf.equal(s, refrozen_mf)) {
+                BOOST_FAIL("Expected " << mf << " got " << refrozen_mf);
+            }
+        }
+    });
+}

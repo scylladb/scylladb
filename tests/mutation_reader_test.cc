@@ -1392,7 +1392,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
             const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
             auto frozen_mutations = boost::copy_range<std::vector<frozen_mutation>>(
                 mutations
-                | boost::adaptors::transformed(freeze)
+                | boost::adaptors::transformed([] (const mutation& m) { return freeze(m); })
             );
             auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
                 auto mt = make_lw_shared<memtable>(s.get());
