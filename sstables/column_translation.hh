@@ -76,6 +76,7 @@ class column_translation {
         std::vector<stdx::optional<column_id>> static_schema_column_id_from_sstable;
         std::vector<std::optional<uint32_t>> regular_column_value_fix_lengths;
         std::vector<std::optional<uint32_t>> static_column_value_fix_lengths;
+        std::vector<std::optional<uint32_t>> clustering_column_value_fix_lengths;
 
         state() = default;
         state(const state&) = delete;
@@ -90,6 +91,11 @@ class column_translation {
                     build(s, header.regular_columns.elements, false);
             std::tie(static_schema_column_id_from_sstable, static_column_value_fix_lengths) =
                     build(s, header.static_columns.elements, true);
+            clustering_column_value_fix_lengths.reserve(header.clustering_key_types_names.elements.size());
+            for (auto&& t : header.clustering_key_types_names.elements) {
+                auto type = abstract_type::parse_type(sstring(std::cbegin(t.value), std::cend(t.value)));
+                clustering_column_value_fix_lengths.push_back(type->value_length_if_fixed());
+            }
         }
     };
 
@@ -114,6 +120,9 @@ public:
     }
     const std::vector<std::optional<uint32_t>>& static_column_value_fix_legths() const {
         return _state->static_column_value_fix_lengths;
+    }
+    const std::vector<std::optional<uint32_t>>& clustering_column_value_fix_legths() const {
+        return _state->clustering_column_value_fix_lengths;
     }
 };
 
