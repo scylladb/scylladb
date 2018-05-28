@@ -38,45 +38,67 @@ namespace sstables {
 class column_translation {
 
     struct state {
+
+        static std::pair<std::vector<stdx::optional<column_id>>, std::vector<std::optional<uint32_t>>> build(
+            const schema& s,
+            const utils::chunked_vector<serialization_header::column_desc>& src,
+            bool is_static) {
+            std::vector<stdx::optional<column_id>> ids;
+            std::vector<std::optional<column_id>> lens;
+            if (s.is_dense()) {
+                if (is_static) {
+                    ids.push_back(s.static_begin()->id);
+                    lens.push_back(s.static_begin()->type->value_length_if_fixed());
+                } else {
+                    ids.push_back(s.regular_begin()->id);
+                    lens.push_back(s.regular_begin()->type->value_length_if_fixed());
+                }
+
+            } else {
+                ids.reserve(src.size());
+                lens.reserve(src.size());
+                for (auto&& desc : src) {
+                    const column_definition* def = s.get_column_definition(desc.name.value);
+                    if (def) {
+                        ids.push_back(def->id);
+                        lens.push_back(def->type->value_length_if_fixed());
+                    } else {
+                        ids.push_back(stdx::nullopt);
+                        lens.push_back(std::nullopt);
+                    }
+                }
+            }
+            return std::make_pair(std::move(ids), std::move(lens));
+        }
+
         utils::UUID schema_uuid;
         std::vector<stdx::optional<column_id>> regular_schema_column_id_from_sstable;
         std::vector<stdx::optional<column_id>> static_schema_column_id_from_sstable;
+        std::vector<std::optional<uint32_t>> regular_column_value_fix_lengths;
+        std::vector<std::optional<uint32_t>> static_column_value_fix_lengths;
+
+        state() = default;
+        state(const state&) = delete;
+        state& operator=(const state&) = delete;
+        state(state&&) = default;
+        state& operator=(state&&) = default;
+
+        state(const schema& s, const serialization_header& header)
+            : schema_uuid(s.version())
+        {
+            std::tie(regular_schema_column_id_from_sstable, regular_column_value_fix_lengths) =
+                    build(s, header.regular_columns.elements, false);
+            std::tie(static_schema_column_id_from_sstable, static_column_value_fix_lengths) =
+                    build(s, header.static_columns.elements, true);
+        }
     };
 
     lw_shared_ptr<const state> _state = make_lw_shared<const state>();
 
-    static std::vector<stdx::optional<column_id>> build(
-            const schema& s,
-            const utils::chunked_vector<serialization_header::column_desc>& src,
-            bool is_static) {
-        std::vector<stdx::optional<column_id>> res;
-        if (s.is_dense()) {
-            res.push_back(is_static ? s.static_begin()->id : s.regular_begin()->id);
-        } else {
-            res.reserve(src.size());
-            for (auto&& desc : src) {
-                const column_definition* def = s.get_column_definition(desc.name.value);
-                if (def) {
-                    res.push_back(def->id);
-                } else {
-                    res.push_back(stdx::nullopt);
-                }
-            }
-        }
-        return res;
-    }
-
-    static state build(const schema& s, const serialization_header& header) {
-        return {
-            s.version(),
-            build(s, header.regular_columns.elements, false),
-            build(s, header.static_columns.elements, true)
-        };
-    }
 public:
     column_translation get_for_schema(const schema& s, const serialization_header& header) {
         if (s.version() != _state->schema_uuid) {
-            _state = build(s, header);
+            _state = make_lw_shared(state(s, header));
         }
         return *this;
     }
@@ -86,6 +108,12 @@ public:
     }
     const std::vector<stdx::optional<column_id>>& static_columns() const {
         return _state->static_schema_column_id_from_sstable;
+    }
+    const std::vector<std::optional<uint32_t>>& regular_column_value_fix_legths() const {
+        return _state->regular_column_value_fix_lengths;
+    }
+    const std::vector<std::optional<uint32_t>>& static_column_value_fix_legths() const {
+        return _state->static_column_value_fix_lengths;
     }
 };
 
