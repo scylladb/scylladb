@@ -173,6 +173,107 @@ SEASTAR_TEST_CASE(test_uncompressed_static_row_read) {
     });
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/compound_static_row
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   ck INT,
+//                                   s_int INT STATIC,
+//                                   s_text TEXT STATIC,
+//                                   s_inet INET STATIC,
+//                                   val INT,
+//                                   PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck, s_int, s_text, s_inet, val)
+//                         VALUES(1, 11, 101, 'Text for 1', '10.0.0.1', 1001);
+// INSERT INTO test_ks.test_table(pk, ck, s_int, s_text, s_inet, val)
+//                         VALUES(2, 12, 102, 'Text for 2', '10.0.0.2', 1002);
+// INSERT INTO test_ks.test_table(pk, ck, s_int, s_text, s_inet, val)
+//                         VALUES(3, 13, 103, 'Text for 3', '10.0.0.3', 1003);
+// INSERT INTO test_ks.test_table(pk, ck, s_int, s_text, s_inet, val)
+//                         VALUES(4, 14, 104, 'Text for 4', '10.0.0.4', 1004);
+// INSERT INTO test_ks.test_table(pk, ck, s_int, s_text, s_inet, val)
+//                         VALUES(5, 15, 105, 'Text for 5', '10.0.0.5', 1005);
+
+static thread_local const sstring UNCOMPRESSED_COMPOUND_STATIC_ROW_PATH =
+    "tests/sstables/3.x/uncompressed/compound_static_row";
+static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("s_int", int32_type, column_kind::static_column)
+        .with_column("s_text", utf8_type, column_kind::static_column)
+        .with_column("s_inet", inet_addr_type, column_kind::static_column)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_compound_static_row_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA,
+                               UNCOMPRESSED_COMPOUND_STATIC_ROW_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA, pk);
+        };
+
+        auto s_int_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s_int"));
+        BOOST_REQUIRE(s_int_cdef);
+        auto s_text_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s_text"));
+        BOOST_REQUIRE(s_text_cdef);
+        auto s_inet_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s_inet"));
+        BOOST_REQUIRE(s_inet_cdef);
+        auto val_cdef = UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(val_cdef);
+
+        auto generate = [&] (int int_val, sstring_view text_val, sstring_view inet_val) {
+            std::vector<flat_reader_assertions::expected_column> columns;
+
+            columns.push_back({s_int_cdef, int32_type->decompose(int_val)});
+            columns.push_back({s_text_cdef, utf8_type->from_string(text_val)});
+            columns.push_back({s_inet_cdef, inet_addr_type->from_string(inet_val)});
+
+            return std::move(columns);
+        };
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_static_row(generate(105, "Text for 5", "10.0.0.5"))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(15)),
+                          {{val_cdef, int32_type->decompose(int32_t(1005))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_static_row(generate(101, "Text for 1", "10.0.0.1"))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(11)),
+                          {{val_cdef, int32_type->decompose(int32_t(1001))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_static_row(generate(102, "Text for 2", "10.0.0.2"))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(12)),
+                          {{val_cdef, int32_type->decompose(int32_t(1002))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_static_row(generate(104, "Text for 4", "10.0.0.4"))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(14)),
+                          {{val_cdef, int32_type->decompose(int32_t(1004))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_static_row(generate(103, "Text for 3", "10.0.0.3"))
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(13)),
+                          {{val_cdef, int32_type->decompose(int32_t(1003))}})
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_only
 // They were created using following CQL statements:
 //
