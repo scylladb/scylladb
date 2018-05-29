@@ -46,6 +46,7 @@
 #include "clustering_key_filter.hh"
 #include "intrusive_set_external_comparator.hh"
 #include "utils/with_relational_operators.hh"
+#include "utils/preempt.hh"
 
 class mutation_fragment;
 class clustering_row;
@@ -987,8 +988,19 @@ public:
     // This instance and p are governed by the same schema.
     //
     // Must be provided with a pointer to the cache_tracker, which owns both this and p.
-    void apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*);
-    void apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema);
+    //
+    // Returns stop_iteration::no if the operation was preempted before finished, and stop_iteration::yes otherwise.
+    // On preemption the sum of this and p stays the same (represents the same set of writes), and the state of this
+    // object contains at least all the writes it contained before the call (monotonicity). It may contain partial writes.
+    // Also, some progress is always guaranteed (liveness).
+    //
+    // The operation can be drien to completion like this:
+    //
+    //   while (apply_monotonically(..., is_preemtable::yes) == stop_iteration::no) { }
+    //
+    // If is_preemptible::no is passed as argument then stop_iteration::no is never returned.
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker*, is_preemptible = is_preemptible::no);
+    stop_iteration apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema, is_preemptible = is_preemptible::no);
 
     // Weak exception guarantees.
     // Assumes this and p are not owned by a cache_tracker.

@@ -280,11 +280,14 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker, is_preemptible preemptible) {
     _tombstone.apply(p._tombstone);
-    _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
     _static_row_continuous |= p._static_row_continuous;
+
+    if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
+        return stop_iteration::no;
+    }
 
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
@@ -317,22 +320,34 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
                 // Newer evictable versions store complete rows
                 i->_row = std::move(src_e._row);
             } else {
+                memory::on_alloc_point();
                 i->_row.apply_monotonically(s, std::move(src_e._row));
             }
             i->set_continuous(continuous);
             i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
+        if (preemptible && need_preempt() && p_i != p._rows.end()) {
+            // We cannot leave p with the clustering range up to p_i->position()
+            // marked as continuous because some of its sub-ranges may have originally been discontinuous.
+            // This would result in the sum of this and p to have broader continuity after preemption,
+            // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
+            // if that's what we're merging here.
+            // It's always safe to mark the range as discontinuous.
+            p_i->set_continuous(false);
+            return stop_iteration::no;
+        }
     }
+    return stop_iteration::yes;
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema, is_preemptible preemptible) {
     if (s.version() == p_schema.version()) {
-        apply_monotonically(s, std::move(p), no_cache_tracker);
+        return apply_monotonically(s, std::move(p), no_cache_tracker, preemptible);
     } else {
         mutation_partition p2(s, p);
         p2.upgrade(p_schema, s);
-        apply_monotonically(s, std::move(p2), no_cache_tracker);
+        return apply_monotonically(s, std::move(p2), no_cache_tracker, is_preemptible::no); // FIXME: make preemptible
     }
 }
 

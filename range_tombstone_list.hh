@@ -24,6 +24,7 @@
 #include "range_tombstone.hh"
 #include "query-request.hh"
 #include "position_in_partition.hh"
+#include "utils/preempt.hh"
 #include <iosfwd>
 
 class range_tombstone_list final {
@@ -149,7 +150,7 @@ public:
     /// Monotonic exception guarantees. In case of failure the object will contain at least as much information as before the call.
     /// The other list will be left in a state such that it would still commute with this object to the same state as it
     /// would if the call didn't fail.
-    void apply_monotonically(const schema& s, range_tombstone_list&& list);
+    stop_iteration apply_monotonically(const schema& s, range_tombstone_list&& list, is_preemptible = is_preemptible::no);
 public:
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Returns range of tombstones which overlap with given range
