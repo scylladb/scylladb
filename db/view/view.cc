@@ -833,35 +833,6 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
 future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
-#if 0
-    Tracing.trace("Determining replicas for mutation");
-    final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
-    long startTime = System.nanoTime();
-
-    try
-    {
-        // if we haven't joined the ring, write everything to batchlog because paired replicas may be stale
-        final UUID batchUUID = UUIDGen.getTimeUUID();
-
-        if (StorageService.instance.isStarting() || StorageService.instance.isJoining() || StorageService.instance.isMoving())
-        {
-            BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(),
-                                                    mutations), writeCommitLog);
-        }
-        else
-        {
-            List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
-            List<Mutation> nonPairedMutations = new LinkedList<>();
-            Token baseToken = StorageService.instance.getTokenMetadata().partitioner.getToken(dataKey);
-
-            ConsistencyLevel consistencyLevel = ConsistencyLevel.ONE;
-
-            //Since the base -> view replication is 1:1 we only need to store the BL locally
-            final Collection<InetAddress> batchlogEndpoints = Collections.singleton(FBUtilities.getBroadcastAddress());
-            BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
-                                                                                                          () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
-            // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
-#endif
     auto fs = std::make_unique<std::vector<future<>>>();
     for (auto& mut : mutations) {
         auto view_token = mut.token();
@@ -879,8 +850,8 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
 
             stats.view_updates_pushed_local += is_endpoint_local;
             stats.view_updates_pushed_remote += updates_pushed_remote;
-            if (is_endpoint_local && service::get_local_storage_service().is_joined()
-                    && pending_endpoints.empty()) {
+
+            if (is_endpoint_local && pending_endpoints.empty()) {
                 // Note that we start here an asynchronous apply operation, and
                 // do not wait for it to complete.
                 // Note also that mutate_locally(mut) copies mut (in
@@ -908,48 +879,31 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                         })
                 );
             }
-        } else {
-            //TODO(sarna): Add view updates stats here after hinted handoff for materialized views is implemented
-#if 0
-                    //if there are no paired endpoints there are probably range movements going on,
-                    //so we write to the local batchlog to replay later
-                    if (pendingEndpoints.isEmpty())
-                        vlogger.warn("Received base materialized view mutation for key {} that does not belong " +
-                                    "to this node. There is probably a range movement happening (move or decommission)," +
-                                    "but this node hasn't updated its ring metadata yet. Adding mutation to " +
-                                    "local batchlog to be replayed later.",
-                                    mutation.key());
-                    nonPairedMutations.add(mutation);
-                }
-#endif
+        } else if (!pending_endpoints.empty()) {
+            // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
+            // such that this base replica is gaining new token ranges. The current node is thus a pending_endpoint
+            // from the POV of the coordinator that sent the request. Since we only look at natural endpoints to
+            // determine base-to-view pairings, the current node won't appear in the list of base replicas. Sending
+            // view updates to the view replica this base will eventually be paired with only makes a difference when
+            // the base update didn't make it to the node which is currently being decommissioned or moved-from. Also,
+            // if HH is enabled at the coordinator, the update will either make it there before the range movement
+            // finishes, or later to this node when it becomes a natural endpoint for the token. We still ensure we
+            // send to any pending view endpoints though.
+            auto updates_pushed_remote = pending_endpoints.size();
+            stats.view_updates_pushed_remote += updates_pushed_remote;
+            auto target = pending_endpoints.back();
+            pending_endpoints.pop_back();
+            fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
+                    std::move(mut),
+                    target,
+                    std::move(pending_endpoints),
+                    db::write_type::VIEW).handle_exception([target, updates_pushed_remote, &stats] (auto ep) {
+                stats.view_updates_failed_remote += updates_pushed_remote;
+                vlogger.error("Error applying view update to {}: {}", target, ep);
+                return make_exception_future<>(std::move(ep));
+            }));
         }
     }
-#if 0
-            if (!wrappers.isEmpty())
-            {
-                // Apply to local batchlog memtable in this thread
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), Lists.transform(wrappers, w -> w.mutation)),
-                                      writeCommitLog);
-
-                    // now actually perform the writes and wait for them to complete
-                asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.VIEW_MUTATION);
-            }
-#endif
-#if 0
-            if (!nonPairedMutations.isEmpty())
-            {
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), nonPairedMutations),
-                                      writeCommitLog);
-            }
-        }
-#endif
-#if 0
-    }
-    finally
-    {
-        viewWriteMetrics.addNano(System.nanoTime() - startTime);
-    }
-#endif
     auto f = seastar::when_all_succeed(fs->begin(), fs->end());
     return f.finally([fs = std::move(fs)] { });
 }
