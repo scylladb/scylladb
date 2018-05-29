@@ -99,6 +99,80 @@ public:
     }
 };
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/static_row
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck INT, s INT STATIC, val INT, PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(1, 11, 101, 1001);
+// INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(2, 12, 102, 1002);
+// INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(3, 13, 103, 1003);
+// INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(4, 14, 104, 1004);
+// INSERT INTO test_ks.test_table(pk, ck, s, val) VALUES(5, 15, 105, 1005);
+
+static thread_local const sstring UNCOMPRESSED_STATIC_ROW_PATH =
+    "tests/sstables/3.x/uncompressed/static_row";
+static thread_local const schema_ptr UNCOMPRESSED_STATIC_ROW_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("s", int32_type, column_kind::static_column)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_static_row_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                               UNCOMPRESSED_STATIC_ROW_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_STATIC_ROW_SCHEMA, pk);
+        };
+
+        auto s_cdef = UNCOMPRESSED_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("s"));
+        BOOST_REQUIRE(s_cdef);
+        auto val_cdef = UNCOMPRESSED_STATIC_ROW_SCHEMA->get_column_definition(to_bytes("val"));
+        BOOST_REQUIRE(val_cdef);
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(105))}})
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(15)),
+                          {{val_cdef, int32_type->decompose(int32_t(1005))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(101))}})
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(11)),
+                          {{val_cdef, int32_type->decompose(int32_t(1001))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(102))}})
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(12)),
+                          {{val_cdef, int32_type->decompose(int32_t(1002))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(104))}})
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(14)),
+                          {{val_cdef, int32_type->decompose(int32_t(1004))}})
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(103))}})
+            .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_STATIC_ROW_SCHEMA,
+                                                            int32_type->decompose(13)),
+                          {{val_cdef, int32_type->decompose(int32_t(1003))}})
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_only
 // They were created using following CQL statements:
 //
