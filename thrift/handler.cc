@@ -1098,27 +1098,37 @@ private:
         mtd.__set_default_value_type(utf8);
         result.__set_schema(mtd);
 
-        std::vector<CqlRow> rows;
-        rows.reserve(rs.rows().size());
-        for (auto&& row : rs.rows()) {
-            std::vector<Column> columns;
-            columns.reserve(rs.get_metadata().column_count());
-            for (unsigned i = 0; i < row.size(); i++) { // iterator
-                auto& col = rs.get_metadata().get_names()[i];
-                Column c;
-                c.__set_name(col->name->to_string());
-                auto& data = row[i];
-                if (data) {
-                    c.__set_value(bytes_to_string(*data));
-                }
-                columns.emplace_back(std::move(c));
+        struct visitor {
+            std::vector<CqlRow> _rows;
+            const cql3::metadata& _metadata;
+            std::vector<Column> _columns;
+            column_id _column_id;
+
+            void start_row() {
+                _column_id = 0;
+                _columns.reserve(_metadata.column_count());
             }
-            CqlRow r;
-            r.__set_key(std::string());
-            r.__set_columns(columns);
-            rows.emplace_back(std::move(r));
-        }
-        result.__set_rows(rows);
+            void accept_value(std::optional<query::result_bytes_view> cell) {
+                auto& col = _metadata.get_names()[_column_id++];
+
+                Column& c = _columns.emplace_back();
+                c.__set_name(col->name->to_string());
+                if (cell) {
+                    c.__set_value(bytes_to_string(*cell));
+                }
+                
+            }
+            void end_row() {
+                CqlRow& r = _rows.emplace_back();
+                r.__set_key(std::string());
+                r.__set_columns(std::move(_columns));
+                _columns = { };
+            }
+        };
+
+        visitor v { {}, rs.get_metadata(), {}, {} };
+        rs.visit(v);
+        result.__set_rows(std::move(v._rows));
         return result;
     }
     static KsDef get_keyspace_definition(const keyspace& ks) {
