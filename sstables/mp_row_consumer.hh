@@ -956,6 +956,16 @@ public:
     }
 
     virtual proceed consume_row_end(const liveness_info& liveness_info) override {
+        auto fill_cells = [this] (column_kind kind, row& cells) {
+            auto max_id = boost::max_element(_cells, [](auto&& a, auto&& b) {
+                return a.id < b.id;
+            });
+            cells.reserve(max_id->id);
+            for (auto&& c : _cells) {
+                cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
+            }
+        };
+
         if (_cells.empty()) {
             if (liveness_info.timestamp() != api::missing_timestamp) {
                 row_marker rm(liveness_info.timestamp(),
@@ -964,13 +974,7 @@ public:
                 _in_progress_row.apply(std::move(rm));
             }
         } else {
-            auto max_id = boost::max_element(_cells, [] (auto&& a, auto&& b) {
-                return a.id < b.id;
-            });
-            _in_progress_row.cells().reserve(max_id->id);
-            for (auto &&c : _cells) {
-                _in_progress_row.set_cell(_schema->column_at(column_kind::regular_column, c.id), std::move(c.val));
-            }
+            fill_cells(column_kind::regular_column, _in_progress_row.cells());
         }
         _reader->push_mutation_fragment(std::move(_in_progress_row));
         return proceed(!_reader->is_buffer_full());
