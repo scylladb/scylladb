@@ -150,7 +150,7 @@ public:
     cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
     virtual ~cache_flat_mutation_reader() {
-        maybe_merge_versions(_snp, _lsa_manager.region(), _lsa_manager.read_section());
+        maybe_merge_versions(_snp);
     }
     virtual void next_partition() override {
         clear_buffer_to_next_partition();

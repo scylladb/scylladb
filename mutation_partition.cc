@@ -2321,6 +2321,9 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
 }
 
 mutation_cleaner::~mutation_cleaner() {
+    _worker_state->done = true;
+    _worker_state->cv.signal();
+    _worker_state->snapshots.clear_and_dispose(typename lw_shared_ptr<partition_snapshot>::disposer());
     with_allocator(_region.allocator(), [this] {
         clear();
     });
@@ -2354,12 +2357,74 @@ memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
 
 void mutation_cleaner::merge(mutation_cleaner& r) noexcept {
     _versions.splice(r._versions);
+    _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
+    if (!_worker_state->snapshots.empty()) {
+        _worker_state->cv.signal();
+    }
+}
+
+void mutation_cleaner::start_worker() {
+    auto f = repeat([w = _worker_state, this] () mutable noexcept {
+        return w->cv.wait([w] {
+            return w->done || !w->snapshots.empty();
+        }).then([this, w] () noexcept {
+            if (w->done) {
+                return stop_iteration::yes;
+            }
+            merge_some();
+            return stop_iteration::no;
+        });
+    });
+    if (f.failed()) {
+        f.get();
+    }
+}
+
+stop_iteration mutation_cleaner::merge_some(partition_snapshot& snp) noexcept {
+    auto&& region = snp.region();
+    return with_allocator(region.allocator(), [&] {
+        return with_linearized_managed_bytes([&] {
+            // Allocating sections require the region to be reclaimable
+            // which means that they cannot be nested.
+            // It is, however, possible, that if the snapshot is taken
+            // inside an allocating section and then an exception is thrown
+            // this function will be called to clean up even though we
+            // still will be in the context of the allocating section.
+            if (!region.reclaiming_enabled()) {
+                return stop_iteration::no;
+            }
+            try {
+                return _worker_state->alloc_section(region, [&] {
+                    return snp.merge_partition_versions();
+                });
+            } catch (...) {
+                // Merging failed, give up as there is no guarantee of forward progress.
+                return stop_iteration::yes;
+            }
+        });
+    });
+}
+
+stop_iteration mutation_cleaner::merge_some() noexcept {
+    if (_worker_state->snapshots.empty()) {
+        return stop_iteration::yes;
+    }
+    partition_snapshot& snp = _worker_state->snapshots.front();
+    if (merge_some(snp) == stop_iteration::yes) {
+        _worker_state->snapshots.pop_front();
+        lw_shared_ptr<partition_snapshot>::dispose(&snp);
+    }
+    return stop_iteration::no;
 }
 
 future<> mutation_cleaner::drain() {
     return repeat([this] {
-        return with_allocator(_region.allocator(), [this] {
-            return clear_gently();
+        return merge_some();
+    }).then([this] {
+        return repeat([this] {
+            return with_allocator(_region.allocator(), [this] {
+                return clear_gently();
+            });
         });
     });
 }

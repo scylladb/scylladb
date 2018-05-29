@@ -33,32 +33,12 @@ struct partition_snapshot_reader_dummy_accounter {
 };
 extern partition_snapshot_reader_dummy_accounter no_accounter;
 
-inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp,
-                                 logalloc::region& lsa_region,
-                                 logalloc::allocating_section& read_section) {
-    if (!snp.owned()) {
-        return;
+inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp_ptr) noexcept {
+    auto&& cleaner = snp_ptr->cleaner();
+    auto snp = snp_ptr.release();
+    if (snp) {
+        cleaner.merge_and_destroy(*snp.release());
     }
-    // If no one else is using this particular snapshot try to merge partition
-    // versions.
-    with_allocator(lsa_region.allocator(), [&snp, &lsa_region, &read_section] {
-        return with_linearized_managed_bytes([&snp, &lsa_region, &read_section] {
-            try {
-                // Allocating sections require the region to be reclaimable
-                // which means that they cannot be nested.
-                // It is, however, possible, that if the snapshot is taken
-                // inside an allocating section and then an exception is thrown
-                // this function will be called to clean up even though we
-                // still will be in the context of the allocating section.
-                if (lsa_region.reclaiming_enabled()) {
-                    read_section(lsa_region, [&snp] {
-                        snp->merge_partition_versions();
-                    });
-                }
-            } catch (...) { }
-            snp = {};
-        });
-    });
 }
 
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
@@ -99,7 +79,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     private:
         template<typename Function>
         decltype(auto) in_alloc_section(Function&& fn) {
-            return _read_section.with_reclaiming_disabled(_region, [&] { 
+            return _read_section.with_reclaiming_disabled(_region, [&] {
                 return with_linearized_managed_bytes([&] {
                     return fn();
                 });
@@ -169,7 +149,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         { }
 
         ~lsa_partition_reader() {
-            maybe_merge_versions(_snapshot, _region, _read_section);
+            maybe_merge_versions(_snapshot);
         }
 
         template<typename Function>
@@ -187,7 +167,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 return _snapshot->static_row(_digest_requested);
             });
         }
-        
+
         // Returns next clustered row in the range.
         // If the ck_range is the same as the one used previously last_row needs
         // to be engaged and equal the position of the row returned last time.

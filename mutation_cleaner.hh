@@ -36,11 +36,32 @@
 // mutation_cleaner should not be thread local objects (or members of thread
 // local objects).
 class mutation_cleaner final {
+    using snapshot_list = boost::intrusive::slist<partition_snapshot,
+        boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>>;
+    struct worker {
+        condition_variable cv;
+        snapshot_list snapshots;
+        logalloc::allocating_section alloc_section;
+        bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner instance.
+    };
+private:
     logalloc::region& _region;
     cache_tracker* _tracker;
     partition_version_list _versions;
+    lw_shared_ptr<worker> _worker_state;
+private:
+    stop_iteration merge_some(partition_snapshot& snp) noexcept;
+    stop_iteration merge_some() noexcept;
+    void start_worker();
 public:
-    mutation_cleaner(logalloc::region& r, cache_tracker* t) : _region(r), _tracker(t) {}
+    mutation_cleaner(logalloc::region& r, cache_tracker* t)
+        : _region(r)
+        , _tracker(t)
+        , _worker_state(make_lw_shared<worker>())
+    {
+        start_worker();
+    }
+
     ~mutation_cleaner();
 
     // Frees some of the data. Returns stop_iteration::yes iff all was freed.
@@ -75,6 +96,17 @@ public:
 
     // Forces cleaning and returns a future which resolves when there is nothing to clean.
     future<> drain();
+
+    void merge_and_destroy(partition_snapshot& ps) noexcept {
+        if (ps.slide_to_oldest() == stop_iteration::yes || merge_some(ps) == stop_iteration::yes) {
+            lw_shared_ptr<partition_snapshot>::dispose(&ps);
+        } else {
+            // The snapshot must not be reachable by partitino_entry::read() after this,
+            // which is ensured by slide_to_oldest() == stop_iteration::no.
+            _worker_state->snapshots.push_front(ps);
+            _worker_state->cv.signal();
+        }
+    }
 };
 
 inline

@@ -187,23 +187,49 @@ void merge_versions(const schema& s, mutation_partition& newer, mutation_partiti
     newer = std::move(older);
 }
 
-void partition_snapshot::merge_partition_versions() {
+stop_iteration partition_snapshot::merge_partition_versions() {
     partition_version_ref& v = version();
     if (!v.is_unique_owner()) {
-        auto first_used = &*v;
-        _version = { };
-        while (first_used->prev() && !first_used->is_referenced()) {
-            first_used = first_used->prev();
+        // Shift _version to the oldest unreferenced version and then keep merging left hand side into it.
+        // This is good for performance because in case we were at the latest version
+        // we leave it for incoming writes and they don't have to create a new one.
+        partition_version* current = &*v;
+        while (current->next() && !current->next()->is_referenced()) {
+            current = current->next();
+            _version = partition_version_ref(*current);
         }
-
-        auto current = first_used->next();
-        while (current && !current->is_referenced()) {
-            auto next = current->next();
-            merge_versions(*_schema, first_used->partition(), std::move(current->partition()), _tracker);
-            current_allocator().destroy(current);
-            current = next;
+        while (auto prev = current->prev()) {
+            _region.allocator().invalidate_references();
+            if (current->partition().apply_monotonically(*schema(), std::move(prev->partition()), _tracker, is_preemptible::yes) == stop_iteration::no) {
+                return stop_iteration::no;
+            }
+            if (prev->is_referenced()) {
+                _version.release();
+                prev->back_reference() = partition_version_ref(*current, prev->back_reference().is_unique_owner());
+                current_allocator().destroy(prev);
+                return stop_iteration::yes;
+            }
+            current_allocator().destroy(prev);
         }
     }
+    return stop_iteration::yes;
+}
+
+stop_iteration partition_snapshot::slide_to_oldest() noexcept {
+    partition_version_ref& v = version();
+    if (v.is_unique_owner()) {
+        return stop_iteration::yes;
+    }
+    if (_entry) {
+        _entry->_snapshot = nullptr;
+        _entry = nullptr;
+    }
+    partition_version* current = &*v;
+    while (current->next() && !current->next()->is_referenced()) {
+        current = current->next();
+        _version = partition_version_ref(*current);
+    }
+    return current->prev() ? stop_iteration::no : stop_iteration::yes;
 }
 
 unsigned partition_snapshot::version_count()
@@ -467,8 +493,8 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
         prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
     }
     auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
-    auto merge_dst_snp = defer([preemptible, dst_snp, &reg, &alloc] () mutable {
-        maybe_merge_versions(dst_snp, reg, alloc);
+    auto merge_dst_snp = defer([preemptible, dst_snp] () mutable {
+        maybe_merge_versions(dst_snp);
     });
 
     // Once we start updating the partition, we must keep all snapshots until the update completes,
