@@ -29,6 +29,7 @@
 
 #include "partition_version.hh"
 #include "partition_snapshot_row_cursor.hh"
+#include "partition_snapshot_reader.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -869,11 +870,10 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
 
-                snap1->merge_partition_versions();
-                snap1 = {};
+                maybe_merge_versions(snap1);
+                maybe_merge_versions(snap2);
 
-                snap2->merge_partition_versions();
-                snap2 = {};
+                cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
                 assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
@@ -890,11 +890,10 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
 
-                snap2->merge_partition_versions();
-                snap2 = {};
+                maybe_merge_versions(snap2);
+                maybe_merge_versions(snap1);
 
-                snap1->merge_partition_versions();
-                snap1 = {};
+                cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
                 assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
