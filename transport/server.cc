@@ -1165,12 +1165,28 @@ public:
         _response.write_int(0x0002);
         auto& rs = m.rs();
         _response.write(rs.get_metadata(), _skip_metadata);
-        _response.write_int(rs.size());
-        for (auto&& row : rs.rows()) {
-            for (auto&& cell : row | boost::adaptors::sliced(0, rs.get_metadata().column_count())) {
+        auto row_count_plhldr = _response.write_int_placeholder();
+
+        class visitor {
+            cql_server::response& _response;
+            int32_t _row_count = 0;
+        public:
+            visitor(cql_server::response& r) : _response(r) { }
+
+            void start_row() {
+                _row_count++;
+            }
+            void accept_value(std::optional<query::result_bytes_view> cell) {
                 _response.write_value(cell);
             }
-        }
+            void end_row() { }
+
+            int32_t row_count() const { return _row_count; }
+        };
+
+        auto v = visitor(_response);
+        rs.visit(v);
+        row_count_plhldr.write(v.row_count());
     }
 };
 
@@ -1753,6 +1769,20 @@ void cql_server::response::write_value(bytes_opt value)
 
     write_int(value->size());
     _body.write(*value);
+}
+
+void cql_server::response::write_value(std::optional<query::result_bytes_view> value)
+{
+    if (!value) {
+        write_int(-1);
+        return;
+    }
+
+    write_int(value->size_bytes());
+    using boost::range::for_each;
+    for_each(*value, [&] (bytes_view fragment) {
+        _body.write(fragment);
+    });
 }
 
 class type_codec {
