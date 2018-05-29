@@ -147,7 +147,6 @@ concept bool ResultVisitor = requires(Visitor& visitor) {
 )
 
 class result_set {
-public:
     ::shared_ptr<metadata> _metadata;
     std::deque<std::vector<bytes_opt>> _rows;
 public:
