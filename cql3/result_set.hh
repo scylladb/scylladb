@@ -47,6 +47,10 @@
 #include "service/pager/paging_state.hh"
 #include "schema.hh"
 
+#include "query-result-reader.hh"
+
+#include <seastar/util/gcc6-concepts.hh>
+
 namespace cql3 {
 
 class metadata {
@@ -131,6 +135,17 @@ public:
     const std::vector<uint16_t>& partition_key_bind_indices() const;
 };
 
+GCC6_CONCEPT(
+
+template<typename Visitor>
+concept bool ResultVisitor = requires(Visitor& visitor) {
+    visitor.start_row();
+    visitor.accept_value(std::optional<query::result_bytes_view>());
+    visitor.end_row();
+};
+
+)
+
 class result_set {
 public:
     ::shared_ptr<metadata> _metadata;
@@ -163,6 +178,20 @@ public:
 
     // Returns a range of rows. A row is a range of bytes_opt.
     const std::deque<std::vector<bytes_opt>>& rows() const;
+
+    template<typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void visit(Visitor&& visitor) const {
+        auto column_count = get_metadata().column_count();
+        for (auto& row : _rows) {
+            visitor.start_row();
+            for (auto i = 0u; i < column_count; i++) {
+                auto& cell = row[i];
+                visitor.accept_value(cell ? std::optional<query::result_bytes_view>(*cell) : std::optional<query::result_bytes_view>());
+            }
+            visitor.end_row();
+        }
+    }
 };
 
 }
