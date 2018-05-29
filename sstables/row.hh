@@ -149,6 +149,8 @@ public:
 
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
+    virtual proceed consume_static_row_start() = 0;
+
     virtual proceed consume_column(stdx::optional<column_id> column_id,
                                    bytes_view value,
                                    api::timestamp_type timestamp,

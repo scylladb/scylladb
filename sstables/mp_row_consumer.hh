@@ -820,6 +820,9 @@ class mp_row_consumer_m : public consumer_m {
     streamed_mutation::forwarding _fwd;
 
     clustering_row _in_progress_row{clustering_key_prefix::make_empty()};
+    static_row _in_progress_static_row;
+    bool _inside_static_row = false;
+
     struct cell {
         column_id id;
         atomic_cell_or_collection val;
@@ -938,6 +941,13 @@ public:
         return proceed::yes;
     }
 
+    virtual proceed consume_static_row_start() override {
+        _inside_static_row = true;
+        _in_progress_static_row = static_row();
+        _cells.clear();
+        return proceed::yes;
+    }
+
     virtual proceed consume_column(stdx::optional<column_id> column_id,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
@@ -946,7 +956,8 @@ public:
         if (!column_id) {
             return proceed::yes;
         }
-        const column_definition& column_def = _schema->column_at(column_kind::regular_column, *column_id);
+        auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
+        const column_definition& column_def = _schema->column_at(column_type, *column_id);
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
@@ -957,26 +968,33 @@ public:
 
     virtual proceed consume_row_end(const liveness_info& liveness_info) override {
         auto fill_cells = [this] (column_kind kind, row& cells) {
-            auto max_id = boost::max_element(_cells, [](auto&& a, auto&& b) {
+            auto max_id = boost::max_element(_cells, [](auto &&a, auto &&b) {
                 return a.id < b.id;
             });
             cells.reserve(max_id->id);
-            for (auto&& c : _cells) {
+            for (auto &&c : _cells) {
                 cells.apply(_schema->column_at(kind, c.id), std::move(c.val));
             }
         };
 
-        if (_cells.empty()) {
-            if (liveness_info.timestamp() != api::missing_timestamp) {
-                row_marker rm(liveness_info.timestamp(),
-                              liveness_info.ttl(),
-                              liveness_info.local_deletion_time());
-                _in_progress_row.apply(std::move(rm));
-            }
+        if (_inside_static_row) {
+            fill_cells(column_kind::static_column, _in_progress_static_row.cells());
+            _reader->push_mutation_fragment(std::move(_in_progress_static_row));
+            _inside_static_row = false;
         } else {
-            fill_cells(column_kind::regular_column, _in_progress_row.cells());
+            if (_cells.empty()) {
+                if (liveness_info.timestamp() != api::missing_timestamp) {
+                    row_marker rm(liveness_info.timestamp(),
+                                  liveness_info.ttl(),
+                                  liveness_info.local_deletion_time());
+                    _in_progress_row.apply(std::move(rm));
+                }
+            } else {
+                fill_cells(column_kind::regular_column, _in_progress_row.cells());
+            }
+            _reader->push_mutation_fragment(std::move(_in_progress_row));
         }
-        _reader->push_mutation_fragment(std::move(_in_progress_row));
+
         return proceed(!_reader->is_buffer_full());
     }
 
