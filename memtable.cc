@@ -322,7 +322,7 @@ public:
                     _delegate = delegate_reader(*_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
                     auto key_and_snp = read_section()(region(), [&] {
-                        return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, lw_shared_ptr<partition_snapshot>>> {
+                        return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
                             memtable_entry *e = fetch_entry();
                             if (!e) {
                                 return { };
@@ -484,7 +484,7 @@ private:
     void get_next_partition() {
         uint64_t component_size = 0;
         auto key_and_snp = read_section()(region(), [&] {
-            return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, lw_shared_ptr<partition_snapshot>>> {
+            return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
                 memtable_entry* e = fetch_entry();
                 if (e) {
                     auto dk = e->key();
@@ -550,7 +550,7 @@ public:
     }
 };
 
-lw_shared_ptr<partition_snapshot> memtable_entry::snapshot(memtable& mtbl) {
+partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
@@ -564,7 +564,7 @@ memtable::make_flat_reader(schema_ptr s,
                       mutation_reader::forwarding fwd_mr) {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
-        auto snp = _read_section(*this, [&] () -> lw_shared_ptr<partition_snapshot> {
+        auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
             managed_bytes::linearization_context_guard lcg;
             auto i = partitions.find(pos, memtable_entry::compare(_schema));
             if (i != partitions.end()) {

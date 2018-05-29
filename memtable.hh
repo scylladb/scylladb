@@ -66,7 +66,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    lw_shared_ptr<partition_snapshot> snapshot(memtable& mtbl);
+    partition_snapshot_ptr snapshot(memtable& mtbl);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();

@@ -64,7 +64,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
 
         end_of_stream
     };
-    lw_shared_ptr<partition_snapshot> _snp;
+    partition_snapshot_ptr _snp;
     position_in_partition::tri_compare _position_cmp;
 
     query::clustering_key_filter_ranges _ck_ranges;
@@ -129,7 +129,7 @@ public:
                                dht::decorated_key dk,
                                query::clustering_key_filter_ranges&& crr,
                                lw_shared_ptr<read_context> ctx,
-                               lw_shared_ptr<partition_snapshot> snp,
+                               partition_snapshot_ptr snp,
                                row_cache& cache)
         : flat_mutation_reader::impl(std::move(s))
         , _snp(std::move(snp))
@@ -149,9 +149,6 @@ public:
     cache_flat_mutation_reader(const cache_flat_mutation_reader&) = delete;
     cache_flat_mutation_reader(cache_flat_mutation_reader&&) = delete;
     virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override;
-    virtual ~cache_flat_mutation_reader() {
-        maybe_merge_versions(_snp);
-    }
     virtual void next_partition() override {
         clear_buffer_to_next_partition();
         if (is_buffer_empty()) {
@@ -667,7 +664,7 @@ inline flat_mutation_reader make_cache_flat_mutation_reader(schema_ptr s,
                                                             query::clustering_key_filter_ranges crr,
                                                             row_cache& cache,
                                                             lw_shared_ptr<cache::read_context> ctx,
-                                                            lw_shared_ptr<partition_snapshot> snp)
+                                                            partition_snapshot_ptr snp)
 {
     return make_flat_mutation_reader<cache::cache_flat_mutation_reader>(
         std::move(s), std::move(dk), std::move(crr), std::move(ctx), std::move(snp), cache);

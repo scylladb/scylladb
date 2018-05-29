@@ -103,7 +103,7 @@ mutation make_incomplete_mutation() {
     return mutation(SCHEMA, DK, mutation_partition::make_incomplete(*SCHEMA));
 }
 
-static void assert_single_version(lw_shared_ptr<partition_snapshot> snp) {
+static void assert_single_version(partition_snapshot_ptr snp) {
     BOOST_REQUIRE(snp->at_latest_version());
     BOOST_REQUIRE_EQUAL(snp->version_count(), 1);
 }
@@ -140,7 +140,7 @@ struct expected_row {
     }
 };
 
-static void assert_cached_rows(lw_shared_ptr<partition_snapshot> snp, std::deque<expected_row> expected) {
+static void assert_cached_rows(partition_snapshot_ptr snp, std::deque<expected_row> expected) {
     auto&& rows = snp->version()->partition().clustered_rows();
     for (auto&& r : rows) {
         BOOST_REQUIRE(!expected.empty());
@@ -173,7 +173,7 @@ struct expected_tombstone {
     }
 };
 
-static void assert_cached_tombstones(lw_shared_ptr<partition_snapshot> snp, std::deque<range_tombstone> expected) {
+static void assert_cached_tombstones(partition_snapshot_ptr snp, std::deque<range_tombstone> expected) {
     const range_tombstone_list& rts = snp->version()->partition().row_tombstones();
     for (auto&& rt : rts) {
         BOOST_REQUIRE(!expected.empty());
@@ -187,7 +187,7 @@ static void assert_cached_tombstones(lw_shared_ptr<partition_snapshot> snp, std:
 
 class cache_tester {
 public:
-    static lw_shared_ptr<partition_snapshot> snapshot_for_key(row_cache& rc, const dht::decorated_key& dk) {
+    static partition_snapshot_ptr snapshot_for_key(row_cache& rc, const dht::decorated_key& dk) {
         return rc._read_section(rc._tracker.region(), [&] {
             return with_linearized_managed_bytes([&] {
                 cache_entry& e = rc.find_or_create(dk, {}, rc.phase_of(dk));

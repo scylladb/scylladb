@@ -486,16 +486,13 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
     bool can_move = !pe._snapshot;
 
     auto src_snp = pe.read(reg, pe_cleaner, s.shared_from_this(), no_cache_tracker);
-    lw_shared_ptr<partition_snapshot> prev_snp;
+    partition_snapshot_ptr prev_snp;
     if (preemptible) {
         // Reads must see prev_snp until whole update completes so that writes
         // are not partially visible.
         prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
     }
     auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
-    auto merge_dst_snp = defer([preemptible, dst_snp] () mutable {
-        maybe_merge_versions(dst_snp);
-    });
 
     // Once we start updating the partition, we must keep all snapshots until the update completes,
     // otherwise partial writes would be published. So the scope of snapshots must enclose the scope
@@ -503,7 +500,6 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
     // give the caller a chance to store the coroutine object. The code inside coroutine below
     // runs outside allocating section.
     return coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
-            merge_dst_snp = std::move(merge_dst_snp), // needs to go away last so that dst_snp is not owned by anyone else
             cur = partition_snapshot_row_cursor(s, *dst_snp),
             src_cur = partition_snapshot_row_cursor(s, *src_snp, can_move),
             dst_snp = std::move(dst_snp),
@@ -610,7 +606,7 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& 
     remove_or_mark_as_unique_owner(old_version, &cleaner);
 }
 
-lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
+partition_snapshot_ptr partition_entry::read(logalloc::region& r,
     mutation_cleaner& cleaner, schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
 {
     if (_snapshot) {
@@ -633,7 +629,7 @@ lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
 
     auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, cleaner, this, tracker, phase);
     _snapshot = snp.get();
-    return snp;
+    return partition_snapshot_ptr(std::move(snp));
 }
 
 std::vector<range_tombstone>
@@ -695,5 +691,15 @@ void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
         auto v = &*_version;
         _version = { };
         remove_or_mark_as_unique_owner(v, &cleaner);
+    }
+}
+
+partition_snapshot_ptr::~partition_snapshot_ptr() {
+    if (_snp) {
+        auto&& cleaner = _snp->cleaner();
+        auto snp = _snp.release();
+        if (snp) {
+            cleaner.merge_and_destroy(*snp.release());
+        }
     }
 }

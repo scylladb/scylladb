@@ -379,6 +379,36 @@ public:
     std::vector<range_tombstone> range_tombstones();
 };
 
+class partition_snapshot_ptr {
+    lw_shared_ptr<partition_snapshot> _snp;
+public:
+    using value_type = partition_snapshot;
+    partition_snapshot_ptr() = default;
+    partition_snapshot_ptr(partition_snapshot_ptr&&) = default;
+    partition_snapshot_ptr(const partition_snapshot_ptr&) = default;
+    partition_snapshot_ptr(lw_shared_ptr<partition_snapshot> snp) : _snp(std::move(snp)) {}
+    ~partition_snapshot_ptr();
+    partition_snapshot_ptr& operator=(partition_snapshot_ptr&& other) noexcept {
+        if (this != &other) {
+            this->~partition_snapshot_ptr();
+            new (this) partition_snapshot_ptr(std::move(other));
+        }
+        return *this;
+    }
+    partition_snapshot_ptr& operator=(const partition_snapshot_ptr& other) noexcept {
+        if (this != &other) {
+            this->~partition_snapshot_ptr();
+            new (this) partition_snapshot_ptr(other);
+        }
+        return *this;
+    }
+    partition_snapshot& operator*() { return *_snp; }
+    const partition_snapshot& operator*() const { return *_snp; }
+    partition_snapshot* operator->() { return &*_snp; }
+    const partition_snapshot* operator->() const { return &*_snp; }
+    explicit operator bool() const { return bool(_snp); }
+};
+
 class real_dirty_memory_accounter;
 
 // Represents mutation_partition with snapshotting support a la MVCC.
@@ -534,7 +564,7 @@ public:
     void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(logalloc::region& region,
+    partition_snapshot_ptr read(logalloc::region& region,
         mutation_cleaner&,
         schema_ptr entry_schema,
         cache_tracker*,
