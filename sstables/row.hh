@@ -147,7 +147,7 @@ public:
     // proceed consuming more data.
     virtual proceed consume_partition_end() = 0;
 
-    virtual proceed consume_row_start(bytes_view ck) = 0;
+    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
     virtual proceed consume_column(stdx::optional<column_id> column_id,
                                    bytes_view value,
@@ -521,8 +521,15 @@ private:
         FLAGS_2,
         EXTENDED_FLAGS,
         STATIC_ROW,
+        CLUSTERING_ROW,
+        CK_BLOCK,
+        CK_BLOCK_HEADER,
+        CK_BLOCK2,
+        CK_BLOCK_VALUE_LENGTH,
+        CK_BLOCK_VALUE_BYTES,
+        CK_BLOCK_END,
+        CLUSTERING_ROW_CONSUME,
         ROW_BODY,
-        ROW_BODY_2,
         ROW_BODY_SIZE,
         ROW_BODY_PREV_SIZE,
         ROW_BODY_TIMESTAMP,
@@ -560,10 +567,12 @@ private:
     liveness_info _liveness;
     bool _is_first_unfiltered = true;
 
-    temporary_buffer<char> _row_key;
+    std::vector<temporary_buffer<char>> _row_key;
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
-    boost::iterator_range<utils::chunked_vector<serialization_header::column_desc>::const_iterator> _column_descs;
+    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
+
+    boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
     column_flags_m _column_flags{0};
     api::timestamp_type _column_timestamp;
@@ -571,25 +580,48 @@ private:
     gc_clock::duration _column_ttl;
     uint32_t _column_value_length;
     temporary_buffer<char> _column_value;
+    uint64_t _ck_blocks_header;
+    uint32_t _ck_blocks_header_offset;
 
-    void setup_columns(const std::vector <stdx::optional<column_id>>& column_ids,
-                       const utils::chunked_vector<serialization_header::column_desc>& column_descs) {
+    void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
+                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
         _column_ids = boost::make_iterator_range(column_ids);
-        _column_descs = boost::make_iterator_range(column_descs);
+        _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
     }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
         _column_ids.advance_begin(1);
-        _column_descs.advance_begin(1);
+        _column_value_fix_lengths.advance_begin(1);
     }
     bool is_column_simple() { return true; }
     stdx::optional<column_id> get_column_id() {
         return _column_ids.front();
     }
     std::optional<uint32_t> get_column_value_length() {
-        auto type = abstract_type::parse_type(sstring(std::cbegin(_column_descs.front().type_name.value),
-                                                      std::cend(_column_descs.front().type_name.value)));
-        return type->value_length_if_fixed();
+        return _column_value_fix_lengths.front();
+    }
+    void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
+        _row_key.clear();
+        _row_key.reserve(column_value_fix_lengths.size());
+        _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        _ck_blocks_header_offset = 0u;
+    }
+    bool no_more_ck_blocks() { return _ck_column_value_fix_lengths.empty(); }
+    void move_to_next_ck_block() {
+        _ck_column_value_fix_lengths.advance_begin(1);
+        ++_ck_blocks_header_offset;
+        if (_ck_blocks_header_offset == 32u) {
+            _ck_blocks_header_offset = 0u;
+        }
+    }
+    std::optional<uint32_t> get_ck_block_value_length() {
+        return _ck_column_value_fix_lengths.front();
+    }
+    bool is_block_empty() {
+        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset))) != 0;
+    }
+    bool should_read_block_header() {
+        return _ck_blocks_header_offset == 0u;
     }
 public:
     using consumer = consumer_m;
@@ -597,6 +629,11 @@ public:
         return (_state == state::DELETION_TIME_3
                 || _state == state::FLAGS_2
                 || _state == state::EXTENDED_FLAGS
+                || _state == state::CLUSTERING_ROW
+                || _state == state::CK_BLOCK_HEADER
+                || _state == state::CK_BLOCK_VALUE_LENGTH
+                || _state == state::CK_BLOCK_END
+                || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
                 || _state == state::ROW_BODY_MISSING_COLUMNS
@@ -662,9 +699,10 @@ public:
                 goto range_tombstone_marker_label;
             } else if (!_flags.has_extended_flags()) {
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
-                _state = state::ROW_BODY;
-                setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
-                goto row_body_label;
+                _state = state::CLUSTERING_ROW;
+                setup_columns(_column_translation.regular_columns(),
+                              _column_translation.regular_column_value_fix_legths());
+                goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
                 _state = state::EXTENDED_FLAGS;
@@ -674,31 +712,77 @@ public:
             _extended_flags = unfiltered_extended_flags_m(_u8);
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
-                    setup_columns(_column_translation.static_columns(), _header.static_columns.elements);
+                    setup_columns(_column_translation.static_columns(),
+                                  _column_translation.static_column_value_fix_legths());
                     _state = state::STATIC_ROW;
                     goto static_row_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
             }
-            setup_columns(_column_translation.regular_columns(), _header.regular_columns.elements);
-        case state::ROW_BODY:
-        row_body_label:
+            setup_columns(_column_translation.regular_columns(),
+                          _column_translation.regular_column_value_fix_legths());
+        case state::CLUSTERING_ROW:
+        clustering_row_label:
+            _is_first_unfiltered = false;
+            setup_ck(_column_translation.clustering_column_value_fix_legths());
+        case state::CK_BLOCK:
+        ck_block_label:
+            if (no_more_ck_blocks()) {
+                goto clustering_row_consume_label;
+            }
+            if (!should_read_block_header()) {
+                _state = state::CK_BLOCK2;
+                goto ck_block2_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::CK_BLOCK_HEADER;
+                break;
+            }
+        case state::CK_BLOCK_HEADER:
+            _ck_blocks_header = _u64;
+        case state::CK_BLOCK2:
+        ck_block2_label:
+            if (is_block_empty()) {
+                _row_key.push_back({});
+                move_to_next_ck_block();
+                goto ck_block_label;
+            }
+            if (auto len = get_ck_block_value_length()) {
+                _column_value_length = *len;
+                _column_value = temporary_buffer<char>(_column_value_length);
+                _state = state::CK_BLOCK_VALUE_BYTES;
+                goto ck_block_value_bytes_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::CK_BLOCK_VALUE_LENGTH;
+                break;
+            }
+        case state::CK_BLOCK_VALUE_LENGTH:
+            _column_value_length = static_cast<uint32_t>(_u64);
+            _column_value = temporary_buffer<char>(_column_value_length);
+        case state::CK_BLOCK_VALUE_BYTES:
+        ck_block_value_bytes_label:
+            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+                _state = state::CK_BLOCK_END;
+                break;
+            }
+        case state::CK_BLOCK_END:
+            _row_key.push_back(std::move(_column_value));
+            move_to_next_ck_block();
+            _state = state::CK_BLOCK;
+            goto ck_block_label;
+        case state::CLUSTERING_ROW_CONSUME:
+        clustering_row_consume_label:
             {
-                _is_first_unfiltered = false;
-                // Clustering blocks should be read here but serialization header is needed for that.
-                // Table with just partition key does not have any so it's ok for the first version.
-                _row_key = temporary_buffer<char>();
-                auto ret = _consumer.consume_row_start(to_bytes_view(_row_key));
-                // after calling the consume function, we can release the
-                // buffers we held for it.
-                _row_key.release();
-                _state = state::ROW_BODY_2;
+                auto ret = _consumer.consume_row_start(_row_key);
+                _row_key.clear();
+                _state = state::ROW_BODY;
                 if (ret == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
             }
-        case state::ROW_BODY_2:
+        case state::ROW_BODY:
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_SIZE;
                 break;

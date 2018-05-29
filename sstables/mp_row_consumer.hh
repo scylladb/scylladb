@@ -931,8 +931,9 @@ public:
         return proceed::no;
     }
 
-    virtual proceed consume_row_start(bytes_view ck) override {
-        _in_progress_row = clustering_row(clustering_key_prefix::from_bytes(ck));
+    virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
+        _in_progress_row = clustering_row(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
+            [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
         _cells.clear();
         return proceed::yes;
     }
