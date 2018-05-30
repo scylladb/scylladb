@@ -79,7 +79,7 @@ cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
             auto& cn = rs.get_metadata().get_names();
             auto set = rs.result_set();
             for (auto& r : set.rows()) {
-                rows.emplace_back(cn, r);
+                rows.emplace_back(cn, std::move(r));
             }
         }
     };
