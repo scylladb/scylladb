@@ -544,6 +544,8 @@ private:
         ROW_BODY_DELETION_3,
         ROW_BODY_MISSING_COLUMNS,
         ROW_BODY_MISSING_COLUMNS_2,
+        ROW_BODY_MISSING_COLUMNS_READ_COLUMNS,
+        ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2,
         COLUMN,
         SIMPLE_COLUMN,
         COMPLEX_COLUMN,
@@ -577,6 +579,7 @@ private:
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
     boost::dynamic_bitset<uint64_t> _columns_selector;
+    uint64_t _missing_columns_to_read;
 
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
@@ -653,6 +656,7 @@ public:
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
                 || _state == state::ROW_BODY_MISSING_COLUMNS_2
+                || _state == state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2
                 || _state == state::COLUMN
                 || _state == state::NEXT_COLUMN
                 || _state == state::COLUMN_TIMESTAMP
@@ -703,7 +707,6 @@ public:
             }
         case state::FLAGS_2:
             _flags = unfiltered_flags_m(_u8);
-
             if (_flags.is_end_of_partition()) {
                 _state = state::PARTITION_START;
                 if (_consumer.consume_partition_end() == consumer_m::proceed::no) {
@@ -987,8 +990,28 @@ public:
                     skip_absent_columns();
                     goto column_label;
                 }
+                if (_column_ids.size() - first_variant_read < _column_ids.size() / 2) {
+                    _missing_columns_to_read = _column_ids.size() - first_variant_read;
+                    _columns_selector.resize(_column_ids.size());
+                    _columns_selector.reset();
+                    goto row_body_missing_columns_read_columns_label;
+                }
                 throw malformed_sstable_exception("unimplemented state: column subsets bigger than 63 not supported");
             }
+        case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS:
+        row_body_missing_columns_read_columns_label:
+            if (_missing_columns_to_read == 0) {
+                skip_absent_columns();
+                goto column_label;
+            }
+            --_missing_columns_to_read;
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2;
+                break;
+            }
+        case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS_2:
+            _columns_selector.flip(_u64);
+            goto row_body_missing_columns_read_columns_label;
         case state::COMPLEX_COLUMN:
         complex_column_label:
             throw malformed_sstable_exception("unimplemented state: complex columns not supported");
