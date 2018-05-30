@@ -26,23 +26,14 @@
 
 #include "utils/logalloc.hh"
 
-// Container for garbage partition_version objects, used for freeing them incrementally.
-//
-// Mutation cleaner extends the lifetime of mutation_partition without doing
-// the same for its schema. This means that the destruction of mutation_partition
-// as well as any LSA migrators it may use cannot depend on the schema. Moreover,
-// all used LSA migrators need remain alive and registered as long as
-// mutation_cleaner is alive. In particular, this means that the instances of
-// mutation_cleaner should not be thread local objects (or members of thread
-// local objects).
-class mutation_cleaner final {
+class mutation_cleaner_impl final {
     using snapshot_list = boost::intrusive::slist<partition_snapshot,
         boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>>;
     struct worker {
         condition_variable cv;
         snapshot_list snapshots;
         logalloc::allocating_section alloc_section;
-        bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner instance.
+        bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner_impl instance.
     };
 private:
     logalloc::region& _region;
@@ -54,71 +45,122 @@ private:
     stop_iteration merge_some() noexcept;
     void start_worker();
 public:
-    mutation_cleaner(logalloc::region& r, cache_tracker* t)
+    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t)
         : _region(r)
         , _tracker(t)
         , _worker_state(make_lw_shared<worker>())
     {
         start_worker();
     }
-
-    ~mutation_cleaner();
-
-    // Frees some of the data. Returns stop_iteration::yes iff all was freed.
-    // Must be invoked under owning allocator.
+    ~mutation_cleaner_impl();
     stop_iteration clear_gently() noexcept;
-
-    // Must be invoked under owning allocator.
     memory::reclaiming_result clear_some() noexcept;
-
-    // Must be invoked under owning allocator.
     void clear() noexcept;
-
-    // Enqueues v for destruction.
-    // The object must not be part of any list, and must not be accessed externally any more.
-    // In particular, it must not be attached, even indirectly, to any snapshot or partition_entry,
-    // and must not be evicted from.
-    // Must be invoked under owning allocator.
     void destroy_later(partition_version& v) noexcept;
-
-    // Destroys v now or later.
-    // Same requirements as destroy_later().
-    // Must be invoked under owning allocator.
     void destroy_gently(partition_version& v) noexcept;
-
-    // Transfers objects from other to this.
-    // This and other must belong to the same logalloc::region, and the same cache_tracker.
-    // After the call bool(other) is false.
-    void merge(mutation_cleaner& other) noexcept;
-
-    // Returns true iff contains no unfreed objects
+    void merge(mutation_cleaner_impl& other) noexcept;
     bool empty() const noexcept { return _versions.empty(); }
-
-    // Forces cleaning and returns a future which resolves when there is nothing to clean.
     future<> drain();
-
-    void merge_and_destroy(partition_snapshot& ps) noexcept {
-        if (ps.slide_to_oldest() == stop_iteration::yes || merge_some(ps) == stop_iteration::yes) {
-            lw_shared_ptr<partition_snapshot>::dispose(&ps);
-        } else {
-            // The snapshot must not be reachable by partitino_entry::read() after this,
-            // which is ensured by slide_to_oldest() == stop_iteration::no.
-            _worker_state->snapshots.push_front(ps);
-            _worker_state->cv.signal();
-        }
-    }
+    void merge_and_destroy(partition_snapshot&) noexcept;
 };
 
 inline
-void mutation_cleaner::destroy_later(partition_version& v) noexcept {
+void mutation_cleaner_impl::destroy_later(partition_version& v) noexcept {
     _versions.push_back(v);
 }
 
 inline
-void mutation_cleaner::destroy_gently(partition_version& v) noexcept {
+void mutation_cleaner_impl::destroy_gently(partition_version& v) noexcept {
     if (v.clear_gently(_tracker) == stop_iteration::no) {
         destroy_later(v);
     } else {
         current_allocator().destroy(&v);
     }
 }
+
+inline
+void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
+    if (ps.slide_to_oldest() == stop_iteration::yes || merge_some(ps) == stop_iteration::yes) {
+        lw_shared_ptr<partition_snapshot>::dispose(&ps);
+    } else {
+        // The snapshot must not be reachable by partitino_entry::read() after this,
+        // which is ensured by slide_to_oldest() == stop_iteration::no.
+        _worker_state->snapshots.push_front(ps);
+        _worker_state->cv.signal();
+    }
+}
+
+// Container for garbage partition_version objects, used for freeing them incrementally.
+//
+// Mutation cleaner extends the lifetime of mutation_partition without doing
+// the same for its schema. This means that the destruction of mutation_partition
+// as well as any LSA migrators it may use cannot depend on the schema. Moreover,
+// all used LSA migrators need remain alive and registered as long as
+// mutation_cleaner is alive. In particular, this means that the instances of
+// mutation_cleaner should not be thread local objects (or members of thread
+// local objects).
+class mutation_cleaner final {
+    lw_shared_ptr<mutation_cleaner_impl> _impl;
+public:
+    mutation_cleaner(logalloc::region& r, cache_tracker* t)
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t)) {
+    }
+
+    // Frees some of the data. Returns stop_iteration::yes iff all was freed.
+    // Must be invoked under owning allocator.
+    stop_iteration clear_gently() noexcept {
+        return _impl->clear_gently();
+    }
+
+    // Must be invoked under owning allocator.
+    memory::reclaiming_result clear_some() noexcept {
+        return _impl->clear_some();
+    }
+
+    // Must be invoked under owning allocator.
+    void clear() noexcept {
+        _impl->clear();
+    }
+
+    // Enqueues v for destruction.
+    // The object must not be part of any list, and must not be accessed externally any more.
+    // In particular, it must not be attached, even indirectly, to any snapshot or partition_entry,
+    // and must not be evicted from.
+    // Must be invoked under owning allocator.
+    void destroy_later(partition_version& v) noexcept {
+        return _impl->destroy_later(v);
+    }
+
+    // Destroys v now or later.
+    // Same requirements as destroy_later().
+    // Must be invoked under owning allocator.
+    void destroy_gently(partition_version& v) noexcept {
+        return _impl->destroy_gently(v);
+    }
+
+    // Transfers objects from other to this.
+    // This and other must belong to the same logalloc::region, and the same cache_tracker.
+    // After the call other will refer to this cleaner.
+    void merge(mutation_cleaner& other) noexcept {
+        _impl->merge(*other._impl);
+        other._impl = _impl;
+    }
+
+    // Returns true iff contains no unfreed objects
+    bool empty() const noexcept {
+        return _impl->empty();
+    }
+
+    // Forces cleaning and returns a future which resolves when there is nothing to clean.
+    future<> drain() {
+        return _impl->drain();
+    }
+
+    // Will merge given snapshot using partition_snapshot::merge_partition_versions() and then destroys it
+    // using destroy_from_this(), possibly deferring in between.
+    // This instance becomes the sole owner of the partition_snapshot object, the caller should not destroy it
+    // nor access it after calling this.
+    void merge_and_destroy(partition_snapshot& ps) {
+        return _impl->merge_and_destroy(ps);
+    }
+};

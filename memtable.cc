@@ -30,8 +30,7 @@
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _memtable_cleaner(*this, no_cache_tracker)
-        , _cleaner(&_memtable_cleaner)
+        , _cleaner(*this, no_cache_tracker)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
@@ -56,10 +55,9 @@ void memtable::clear() noexcept {
     auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose([this] (memtable_entry* e) {
-            e->partition().evict(_memtable_cleaner);
+            e->partition().evict(_cleaner);
             current_deleter<memtable_entry>()(e);
         });
-        _memtable_cleaner.clear();
     });
     remove_flushed_memory(dirty_before - dirty_size());
 }

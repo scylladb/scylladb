@@ -2320,7 +2320,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     return f.finally([r_a_r = std::move(r_a_r)] { });
 }
 
-mutation_cleaner::~mutation_cleaner() {
+mutation_cleaner_impl::~mutation_cleaner_impl() {
     _worker_state->done = true;
     _worker_state->cv.signal();
     _worker_state->snapshots.clear_and_dispose(typename lw_shared_ptr<partition_snapshot>::disposer());
@@ -2329,11 +2329,11 @@ mutation_cleaner::~mutation_cleaner() {
     });
 }
 
-void mutation_cleaner::clear() noexcept {
+void mutation_cleaner_impl::clear() noexcept {
     while (clear_gently() == stop_iteration::no) ;
 }
 
-stop_iteration mutation_cleaner::clear_gently() noexcept {
+stop_iteration mutation_cleaner_impl::clear_gently() noexcept {
     while (clear_some() == memory::reclaiming_result::reclaimed_something) {
         if (need_preempt()) {
             return stop_iteration::no;
@@ -2342,7 +2342,7 @@ stop_iteration mutation_cleaner::clear_gently() noexcept {
     return stop_iteration::yes;
 }
 
-memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
+memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
     if (_versions.empty()) {
         return memory::reclaiming_result::reclaimed_nothing;
     }
@@ -2355,7 +2355,7 @@ memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
     return memory::reclaiming_result::reclaimed_something;
 }
 
-void mutation_cleaner::merge(mutation_cleaner& r) noexcept {
+void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
     _versions.splice(r._versions);
     _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
     if (!_worker_state->snapshots.empty()) {
@@ -2363,7 +2363,7 @@ void mutation_cleaner::merge(mutation_cleaner& r) noexcept {
     }
 }
 
-void mutation_cleaner::start_worker() {
+void mutation_cleaner_impl::start_worker() {
     auto f = repeat([w = _worker_state, this] () mutable noexcept {
         return w->cv.wait([w] {
             return w->done || !w->snapshots.empty();
@@ -2380,7 +2380,7 @@ void mutation_cleaner::start_worker() {
     }
 }
 
-stop_iteration mutation_cleaner::merge_some(partition_snapshot& snp) noexcept {
+stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexcept {
     auto&& region = snp.region();
     return with_allocator(region.allocator(), [&] {
         return with_linearized_managed_bytes([&] {
@@ -2405,7 +2405,7 @@ stop_iteration mutation_cleaner::merge_some(partition_snapshot& snp) noexcept {
     });
 }
 
-stop_iteration mutation_cleaner::merge_some() noexcept {
+stop_iteration mutation_cleaner_impl::merge_some() noexcept {
     if (_worker_state->snapshots.empty()) {
         return stop_iteration::yes;
     }
@@ -2417,7 +2417,7 @@ stop_iteration mutation_cleaner::merge_some() noexcept {
     return stop_iteration::no;
 }
 
-future<> mutation_cleaner::drain() {
+future<> mutation_cleaner_impl::drain() {
     return repeat([this] {
         return merge_some();
     }).then([this] {

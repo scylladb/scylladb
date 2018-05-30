@@ -304,7 +304,7 @@ private:
     cache_tracker* _tracker;
     boost::intrusive::slist_member_hook<> _cleaner_hook;
     friend class partition_entry;
-    friend class mutation_cleaner;
+    friend class mutation_cleaner_impl;
 public:
     explicit partition_snapshot(schema_ptr s,
                                 logalloc::region& region,

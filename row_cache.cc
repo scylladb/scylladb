@@ -933,8 +933,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
-    _tracker.memtable_cleaner().merge(m._memtable_cleaner);
-    m._cleaner = &_tracker.memtable_cleaner();
+    _tracker.memtable_cleaner().merge(m._cleaner);
     STAP_PROBE(scylla, row_cache_update_start);
     auto cleanup = defer([&m, this] {
         invalidate_sync(m);

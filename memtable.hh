@@ -125,8 +125,7 @@ public:
         bi::compare<memtable_entry::compare>>;
 private:
     dirty_memory_manager& _dirty_mgr;
-    mutation_cleaner _memtable_cleaner;
-    mutation_cleaner* _cleaner; // will switch to cache's cleaner after memtable is moved to cache.
+    mutation_cleaner _cleaner;
     memtable_list *_memtable_list;
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
@@ -294,7 +293,7 @@ public:
     }
 
     mutation_cleaner& cleaner() {
-        return *_cleaner;
+        return _cleaner;
     }
 public:
     memtable_list* get_memtable_list() {
