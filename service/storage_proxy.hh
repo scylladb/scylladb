@@ -149,6 +149,7 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
+    db::hints::resource_manager _hints_resource_manager;
     stdx::optional<db::hints::manager> _hints_manager;
     bool _hints_enabled_for_user_writes = false;
     stats _stats;

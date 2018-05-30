@@ -108,6 +108,7 @@ private:
             key_type _ep_key;
             end_point_hints_manager& _ep_manager;
             manager& _shard_manager;
+            resource_manager& _resource_manager;
             service::storage_proxy& _proxy;
             database& _db;
             gms::gossiper& _gossiper;
@@ -378,6 +379,10 @@ private:
         struct stats& shard_stats() {
             return _shard_manager._stats;
         }
+
+        resource_manager& shard_resource_manager() {
+            return _shard_manager._resource_manager;
+        }
     };
 
 private:
@@ -446,11 +451,7 @@ private:
     bool _stopping = false;
     seastar::gate _draining_eps_gate; // gate used to control the progress of ep_managers stopping not in the context of manager::stop() call
 
-    // Limit the maximum size of in-flight (being sent) hints by 10% of the shard memory.
-    // Also don't allow more than 128 in-flight hints to limit the collateral memory consumption as well.
-    const size_t _max_send_in_flight_memory;
-    const size_t _min_send_hint_budget;
-    seastar::semaphore _send_limiter;
+    resource_manager& _resource_manager;
 
     space_watchdog _space_watchdog;
     ep_managers_map_type _ep_managers;
@@ -458,7 +459,7 @@ private:
     seastar::metrics::metric_groups _metrics;
 
 public:
-    manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, distributed<database>& db);
+    manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
     virtual ~manager();
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     future<> stop();
