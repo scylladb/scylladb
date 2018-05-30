@@ -193,4 +193,19 @@ public:
     }
 };
 
+class result {
+    std::unique_ptr<cql3::result_set> _result_set;
+public:
+    explicit result(std::unique_ptr<cql3::result_set> rs) : _result_set(std::move(rs)) { }
+
+    const cql3::metadata& get_metadata() const { return _result_set->get_metadata(); }
+    cql3::result_set result_set() const { return *_result_set; }
+    
+    template<typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void visit(Visitor&& visitor) const {
+        _result_set->visit(std::forward<Visitor>(visitor));
+    }
+};
+
 }

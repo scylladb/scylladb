@@ -93,7 +93,7 @@ cql3::statements::list_users_statement::execute(service::storage_proxy& proxy, s
                 });
             }).then([&results] {
                 return make_ready_future<::shared_ptr<result_message>>(::make_shared<result_message::rows>(
-                        std::move(results)));
+                        result(std::move(results))));
             });
         });
     };

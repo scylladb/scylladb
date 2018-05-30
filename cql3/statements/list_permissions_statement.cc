@@ -166,8 +166,8 @@ cql3::statements::list_permissions_statement::execute(
                 }
             }
 
-            auto rows = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
-            return ::shared_ptr<cql_transport::messages::result_message>(std::move(rows));
+            auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
+            return ::shared_ptr<cql_transport::messages::result_message>(rows);
         }).handle_exception_type([](const auth::nonexistant_role& e) {
             return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
                     exceptions::invalid_request_exception(e.what()));

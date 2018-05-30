@@ -341,7 +341,7 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
 
         if (roles.empty()) {
             return make_ready_future<result_message_ptr>(
-                ::make_shared<result_message::rows>(std::move(results)));
+                ::make_shared<result_message::rows>(result(std::move(results))));
         }
 
         std::vector<sstring> sorted_roles(roles.cbegin(), roles.cend());
@@ -372,7 +372,7 @@ list_roles_statement::execute(service::storage_proxy&, service::query_state& sta
                                                     std::make_move_iterator(os.end())))));
                 });
             }).then([&results] {
-                return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(std::move(results)));
+                return make_ready_future<result_message_ptr>(::make_shared<result_message::rows>(result(std::move(results))));
             });
         });
     };

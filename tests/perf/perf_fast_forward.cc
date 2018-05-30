@@ -747,10 +747,11 @@ static
 table_config read_config(cql_test_env& env, const sstring& name) {
     auto msg = env.execute_cql(sprint("select n_rows, value_size from ks.config where name = '%s'", name)).get0();
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-    if (rows->rs().size() < 1) {
+    auto rs = rows->rs().result_set();
+    if (rs.size() < 1) {
         throw std::runtime_error("config not found. Did you run --populate ?");
     }
-    const std::vector<bytes_opt>& config_row = rows->rs().rows()[0];
+    const std::vector<bytes_opt>& config_row = rs.rows()[0];
     if (config_row.size() != 2) {
         throw std::runtime_error("config row has invalid size");
     }

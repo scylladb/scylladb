@@ -1078,7 +1078,7 @@ private:
         }
         return std::make_pair(std::move(ret), is_compound);
     }
-    static CqlResult to_thrift_result(const cql3::result_set& rs) {
+    static CqlResult to_thrift_result(const cql3::result& rs) {
         CqlResult result;
         result.__set_type(CqlResultType::ROWS);
 
