@@ -39,6 +39,7 @@
 #include "tracing/trace_state.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "flat_mutation_reader.hh"
+#include "mutation_cleaner.hh"
 
 namespace bi = boost::intrusive;
 
@@ -128,6 +129,7 @@ public:
     // Evicts contents of this entry.
     // The caller is still responsible for unlinking and destroying this entry.
     void evict(cache_tracker&) noexcept;
+
     const dht::decorated_key& key() const { return _key; }
     dht::ring_position_view position() const {
         if (is_dummy_entry()) {
@@ -230,6 +232,8 @@ private:
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
     lru_type _lru;
+    mutation_cleaner _garbage;
+    mutation_cleaner _memtable_cleaner;
 private:
     void setup_metrics();
 public:
@@ -261,9 +265,38 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
+    mutation_cleaner& cleaner() { return _garbage; }
+    mutation_cleaner& memtable_cleaner() { return _memtable_cleaner; }
     uint64_t partitions() const { return _stats.partitions; }
     const stats& get_stats() const { return _stats; }
 };
+
+inline
+void cache_tracker::on_remove(rows_entry& row) noexcept {
+    --_stats.rows;
+    ++_stats.row_removals;
+}
+
+inline
+void cache_tracker::insert(rows_entry& entry) noexcept {
+    ++_stats.row_insertions;
+    ++_stats.rows;
+    _lru.push_front(entry);
+}
+
+inline
+void cache_tracker::insert(partition_version& pv) noexcept {
+    for (rows_entry& row : pv.partition().clustered_rows()) {
+        insert(row);
+    }
+}
+
+inline
+void cache_tracker::insert(partition_entry& pe) noexcept {
+    for (partition_version& pv : pe.versions_from_oldest()) {
+        insert(pv);
+    }
+}
 
 // Returns a reference to shard-wide cache_tracker.
 cache_tracker& global_cache_tracker();
@@ -342,7 +375,7 @@ private:
     // of the range at the time when reading began.
 
     mutation_source _underlying;
-    phase_type _underlying_phase = 0;
+    phase_type _underlying_phase = partition_snapshot::min_phase;
     mutation_source_opt _prev_snapshot;
 
     // Positions >= than this are using _prev_snapshot, the rest is using _underlying.

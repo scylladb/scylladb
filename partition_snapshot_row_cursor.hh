@@ -23,6 +23,7 @@
 
 #include "partition_version.hh"
 #include "row_cache.hh"
+#include "utils/small_vector.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 class partition_snapshot_row_cursor;
@@ -110,7 +111,9 @@ class partition_snapshot_row_cursor final {
     struct position_in_version {
         mutation_partition::rows_type::iterator it;
         mutation_partition::rows_type::iterator end;
+        mutation_partition::rows_type* rows;
         int version_no;
+        bool unique_owner;
 
         struct less_compare {
             rows_entry::tri_compare _cmp;
@@ -125,11 +128,12 @@ class partition_snapshot_row_cursor final {
 
     const schema& _schema;
     partition_snapshot& _snp;
-    std::vector<position_in_version> _heap;
-    std::vector<mutation_partition::rows_type::iterator> _iterators;
-    std::vector<position_in_version> _current_row;
+    utils::small_vector<position_in_version, 2> _heap;
+    utils::small_vector<mutation_partition::rows_type::iterator, 2> _iterators;
+    utils::small_vector<position_in_version, 2> _current_row;
     bool _continuous;
     bool _dummy;
+    const bool _unique_owner;
     position_in_partition _position;
     partition_snapshot::change_mark _change_mark;
 
@@ -165,22 +169,27 @@ class partition_snapshot_row_cursor final {
         _current_row.clear();
         _iterators.clear();
         int version_no = 0;
+        bool unique_owner = _unique_owner;
+        bool first = true;
         for (auto&& v : _snp.versions()) {
+            unique_owner = unique_owner && (first || !v.is_referenced());
             auto& rows = v.partition().clustered_rows();
             auto pos = rows.lower_bound(lower_bound, less);
             auto end = rows.end();
             _iterators.push_back(pos);
             if (pos != end) {
-                _heap.push_back({pos, end, version_no});
+                _heap.push_back({pos, end, &rows, version_no, unique_owner});
             }
             ++version_no;
+            first = false;
         }
         boost::range::make_heap(_heap, heap_less);
     }
 public:
-    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false)
         : _schema(s)
         , _snp(snp)
+        , _unique_owner(unique_owner)
         , _position(position_in_partition::static_row_tag_t{})
     { }
 
@@ -192,6 +201,18 @@ public:
     // are still valid. Note that this doesn't mean that the cursor itself is valid.
     bool iterators_valid() const {
         return _snp.get_change_mark() == _change_mark;
+    }
+
+    // Advances cursor to the first entry with position >= pos, if such entry exists.
+    // Otherwise returns false and the cursor is left not pointing at a row and invalid.
+    bool maybe_advance_to(position_in_partition_view pos) {
+        prepare_heap(pos);
+        _change_mark = _snp.get_change_mark();
+        if (_heap.empty()) {
+            return false;
+        }
+        recreate_current_row();
+        return true;
     }
 
     // Brings back the cursor to validity.
@@ -242,6 +263,16 @@ public:
         return true;
     }
 
+    // Brings back the cursor to validity, pointing at the first row with position not smaller
+    // than the current position. Returns false iff no such row exists.
+    // Assumes that rows are not inserted into the snapshot (static). They can be removed.
+    bool maybe_refresh_static() {
+        if (!iterators_valid()) {
+            return maybe_advance_to(_position);
+        }
+        return true;
+    }
+
     // Moves the cursor to the first entry with position >= pos.
     //
     // The caller must ensure that such entry exists.
@@ -286,6 +317,34 @@ public:
         return true;
     }
 
+    // Advances the cursor to the next row, erasing entries under the cursor which
+    // are owned by the cursor.
+    // If there is no next row, returns false and the cursor is no longer pointing at a row.
+    // Can be only called on a valid cursor pointing at a row.
+    // When throws, the cursor is invalidated and its position is not changed.
+    bool erase_and_advance() {
+        memory::on_alloc_point();
+        position_in_version::less_compare heap_less(_schema);
+        for (auto&& curr : _current_row) {
+            if (curr.unique_owner) {
+                curr.it = curr.rows->erase_and_dispose(curr.it, current_deleter<rows_entry>());
+            } else {
+                ++curr.it;
+            }
+            _iterators[curr.version_no] = curr.it;
+            if (curr.it != curr.end) {
+                _heap.push_back(curr);
+                boost::range::push_heap(_heap, heap_less);
+            }
+        }
+        _current_row.clear();
+        if (_heap.empty()) {
+            return false;
+        }
+        recreate_current_row();
+        return true;
+    }
+
     // Can be called when cursor is pointing at a row.
     bool continuous() const { return _continuous; }
 
@@ -308,6 +367,29 @@ public:
             cr.apply(_schema, *it->it);
         }
         return mf;
+    }
+
+    // Can be called only when cursor is valid and pointing at a row.
+    // Monotonic exception guarantees.
+    template <typename Consumer>
+    void consume_row(Consumer&& consumer) {
+        for (position_in_version& v : _current_row) {
+            if (v.unique_owner) {
+                consumer(std::move(v.it->row()));
+            } else {
+                consumer(deletable_row(v.it->row()));
+            }
+        }
+    }
+
+    // Returns memory footprint of row entries under the cursor.
+    // Can be called only when cursor is valid and pointing at a row.
+    size_t memory_usage() const {
+        size_t result = 0;
+        for (const position_in_version& v : _current_row) {
+            result += v.it->memory_usage();
+        }
+        return result;
     }
 
     struct ensure_result {
@@ -345,11 +427,16 @@ public:
     // Doesn't change logical value of mutation_partition or continuity of the snapshot.
     // The cursor doesn't have to be valid.
     // The cursor is invalid after the call.
-    // Assumes the snapshot is evictable.
+    // Assumes the snapshot is evictable and not populated by means other than ensure_entry_if_complete().
+    // Subsequent calls to ensure_entry_if_complete() must be given strictly monotonically increasing
+    // positions unless iterators are invalidated across the calls.
     stdx::optional<ensure_result> ensure_entry_if_complete(position_in_partition_view pos) {
-        prepare_heap(pos);
-        if (!_heap.empty()) {
-            recreate_current_row();
+        position_in_partition::less_compare less(_schema);
+        if (!iterators_valid() || less(position(), pos)) {
+            auto has_entry = maybe_advance_to(pos);
+            assert(has_entry); // evictable snapshots must have a dummy after all rows.
+        }
+        {
             position_in_partition::equal_compare eq(_schema);
             if (eq(position(), pos)) {
                 if (dummy()) {

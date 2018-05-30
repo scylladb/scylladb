@@ -36,6 +36,7 @@
 #include "counters.hh"
 #include "row_cache.hh"
 #include "view_info.hh"
+#include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>
 
 template<bool reversed>
@@ -294,9 +295,12 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
     auto p_i = p._rows.begin();
+    auto i = _rows.begin();
     while (p_i != p._rows.end()) {
         rows_entry& src_e = *p_i;
-        auto i = _rows.lower_bound(src_e, less);
+        if (i != _rows.end() && less(*i, src_e)) {
+            i = _rows.lower_bound(src_e, less);
+        }
         if (i == _rows.end() || less(src_e, *i)) {
             p_i = p._rows.erase(p_i);
             auto src_i = _rows.insert_before(i, src_e);
@@ -2202,6 +2206,31 @@ clustering_interval_set mutation_partition::get_continuity(const schema& s, is_c
     return result;
 }
 
+stop_iteration mutation_partition::clear_gently(cache_tracker* tracker) noexcept {
+    if (_row_tombstones.clear_gently() == stop_iteration::no) {
+        return stop_iteration::no;
+    }
+
+    auto del = current_deleter<rows_entry>();
+    auto i = _rows.begin();
+    auto end = _rows.end();
+    while (i != end) {
+        if (tracker) {
+            tracker->on_remove(*i);
+        }
+        i = _rows.erase_and_dispose(i, del);
+
+        // The iterator comparison below is to not defer destruction of now empty
+        // mutation_partition objects. Not doing this would cause eviction to leave garbage
+        // versions behind unnecessarily.
+        if (need_preempt() && i != end) {
+            return stop_iteration::no;
+        }
+    }
+
+    return stop_iteration::yes;
+}
+
 bool
 mutation_partition::check_continuity(const schema& s, const position_range& r, is_continuous cont) const {
     auto less = rows_entry::compare(s);
@@ -2267,4 +2296,48 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
     auto f = r_a_r->reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions::no);
     return f.finally([r_a_r = std::move(r_a_r)] { });
+}
+
+mutation_cleaner::~mutation_cleaner() {
+    with_allocator(_region.allocator(), [this] {
+        clear();
+    });
+}
+
+void mutation_cleaner::clear() noexcept {
+    while (clear_gently() == stop_iteration::no) ;
+}
+
+stop_iteration mutation_cleaner::clear_gently() noexcept {
+    while (clear_some() == memory::reclaiming_result::reclaimed_something) {
+        if (need_preempt()) {
+            return stop_iteration::no;
+        }
+    }
+    return stop_iteration::yes;
+}
+
+memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
+    if (_versions.empty()) {
+        return memory::reclaiming_result::reclaimed_nothing;
+    }
+    auto&& alloc = current_allocator();
+    partition_version& pv = _versions.front();
+    if (pv.clear_gently(_tracker) == stop_iteration::yes) {
+        _versions.pop_front();
+        alloc.destroy(&pv);
+    }
+    return memory::reclaiming_result::reclaimed_something;
+}
+
+void mutation_cleaner::merge(mutation_cleaner& r) noexcept {
+    _versions.splice(r._versions);
+}
+
+future<> mutation_cleaner::drain() {
+    return repeat([this] {
+        return with_allocator(_region.allocator(), [this] {
+            return clear_gently();
+        });
+    });
 }

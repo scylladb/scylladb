@@ -281,6 +281,19 @@ range_tombstone_list range_tombstone_list::difference(const schema& s, const ran
     return diff;
 }
 
+stop_iteration range_tombstone_list::clear_gently() noexcept {
+    auto del = current_deleter<range_tombstone>();
+    auto i = _tombstones.begin();
+    auto end = _tombstones.end();
+    while (i != end) {
+        i = _tombstones.erase_and_dispose(i, del);
+        if (need_preempt()) {
+            return stop_iteration::no;
+        }
+    }
+    return stop_iteration::yes;
+}
+
 void range_tombstone_list::apply(const schema& s, const range_tombstone_list& rt_list) {
     for (auto&& rt : rt_list) {
         apply(s, rt);

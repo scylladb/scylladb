@@ -178,12 +178,22 @@ public:
     void clear() {
         _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
     }
+    // Removes elements of this list in batches.
+    // Returns stop_iteration::yes iff there is no more elements to remove.
+    stop_iteration clear_gently() noexcept;
     void apply(const schema& s, const range_tombstone_list& rt_list);
     // See reversibly_mergeable.hh
     reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_list&);
     bool equal(const schema&, const range_tombstone_list&) const;
+    size_t external_memory_usage() const {
+        size_t result = 0;
+        for (auto& rtb : _tombstones) {
+            result += rtb.memory_usage();
+        }
+        return result;
+    }
 private:
     void apply_reversibly(const schema& s, clustering_key_prefix start, bound_kind start_kind,
                           clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);

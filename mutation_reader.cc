@@ -822,8 +822,14 @@ mutation_source make_empty_mutation_source() {
             const query::partition_slice& slice,
             const io_priority_class& pc,
             tracing::trace_state_ptr tr,
-            streamed_mutation::forwarding fwd) {
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding,
+            reader_resource_tracker) {
         return make_empty_flat_reader(s);
+    }, [] {
+        return [] (const dht::decorated_key& key) {
+            return partition_presence_checker_result::definitely_doesnt_exist;
+        };
     });
 }
 

@@ -25,6 +25,7 @@
 #include "mutation_fragment.hh"
 #include "utils/anchorless_list.hh"
 #include "utils/logalloc.hh"
+#include "utils/coroutine.hh"
 
 #include <boost/intrusive/parent_from_member.hpp>
 
@@ -146,6 +147,7 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
     mutation_partition _partition;
 
     friend class partition_version_ref;
+    friend class partition_entry;
 public:
     static partition_version& container_of(mutation_partition& mp) {
         return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
@@ -160,6 +162,9 @@ public:
     partition_version(partition_version&& pv) noexcept;
     partition_version& operator=(partition_version&& pv) noexcept;
     ~partition_version();
+    // Frees elements of this version in batches.
+    // Returns stop_iteration::yes iff there are no more elements to free.
+    stop_iteration clear_gently(cache_tracker* tracker) noexcept;
 
     mutation_partition& partition() { return _partition; }
     const mutation_partition& partition() const { return _partition; }
@@ -195,6 +200,7 @@ public:
     }
     partition_version_ref(partition_version_ref&& other) noexcept
         : _version(other._version)
+        , _unique_owner(other._unique_owner)
     {
         if (_version) {
             _version->_backref = this;
@@ -230,6 +236,13 @@ public:
 
     bool is_unique_owner() const { return _unique_owner; }
     void mark_as_unique_owner() { _unique_owner = true; }
+
+    void release() {
+        if (_version) {
+            _version->_backref = nullptr;
+        }
+        _version = nullptr;
+    }
 };
 
 inline
@@ -239,14 +252,17 @@ bool partition_version::is_referenced_from_entry() const {
 
 class partition_entry;
 class cache_tracker;
+class mutation_cleaner;
 
 static constexpr cache_tracker* no_cache_tracker = nullptr;
+static constexpr mutation_cleaner* no_cleaner = nullptr;
 
 class partition_snapshot : public enable_lw_shared_from_this<partition_snapshot> {
 public:
     // Only snapshots created with the same value of phase can point to the same version.
     using phase_type = uint64_t;
-    static constexpr phase_type default_phase = 0;
+    static constexpr phase_type default_phase = 0; // For use with non-evictable snapshots
+    static constexpr phase_type min_phase = 1; // Use 1 to prevent underflow on apply_to_incomplete()
     static constexpr phase_type max_phase = std::numeric_limits<phase_type>::max();
 public:
     // Used for determining reference stability.
@@ -281,20 +297,26 @@ private:
     partition_entry* _entry;
     phase_type _phase;
     logalloc::region& _region;
+    mutation_cleaner& _cleaner;
     cache_tracker* _tracker;
 
     friend class partition_entry;
 public:
     explicit partition_snapshot(schema_ptr s,
                                 logalloc::region& region,
+                                mutation_cleaner& cleaner,
                                 partition_entry* entry,
                                 cache_tracker* tracker, // non-null for evictable snapshots
                                 phase_type phase = default_phase)
-        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _tracker(tracker) { }
+        : _schema(std::move(s)), _entry(entry), _phase(phase), _region(region), _cleaner(cleaner), _tracker(tracker) { }
     partition_snapshot(const partition_snapshot&) = delete;
     partition_snapshot(partition_snapshot&&) = delete;
     partition_snapshot& operator=(const partition_snapshot&) = delete;
     partition_snapshot& operator=(partition_snapshot&&) = delete;
+
+    static partition_snapshot& container_of(partition_version_ref* ref) {
+        return *boost::intrusive::get_parent_from_member(ref, &partition_snapshot::_version);
+    }
 
     // If possible merges the version pointed to by this snapshot with
     // adjacent partition versions. Leaves the snapshot in an unspecified state.
@@ -335,6 +357,8 @@ public:
     std::vector<range_tombstone> range_tombstones();
 };
 
+class real_dirty_memory_accounter;
+
 // Represents mutation_partition with snapshotting support a la MVCC.
 //
 // Internally the state is represented by an ordered list of mutation_partition
@@ -363,14 +387,7 @@ class partition_entry {
     friend class partition_snapshot;
     friend class cache_entry;
 private:
-    // Detaches all versions temporarily around execution of the function.
-    // The function receives partition_version* pointing to the latest version.
-    template<typename Func>
-    void with_detached_versions(Func&&);
-
     void set_version(partition_version*);
-
-    void apply_to_incomplete(const schema& s, partition_version* other, logalloc::region&, cache_tracker&);
 public:
     struct evictable_tag {};
     class rows_iterator;
@@ -387,7 +404,10 @@ public:
     // Strong exception guarantees for the state of mp.
     partition_entry(evictable_tag, const schema& s, mutation_partition&& mp);
     ~partition_entry();
-
+    // Frees elements of this entry in batches.
+    // Active snapshots are detached, data referenced by them is not cleared.
+    // Returns stop_iteration::yes iff there are no more elements to free.
+    stop_iteration clear_gently(cache_tracker*) noexcept;
     static partition_entry make_evictable(const schema& s, mutation_partition&& mp);
     static partition_entry make_evictable(const schema& s, const mutation_partition& mp);
 
@@ -410,7 +430,7 @@ public:
     // Removes data contained by this entry, but not owned by snapshots.
     // Snapshots will be unlinked and evicted independently by reclaimer.
     // This entry is invalid after this and can only be destroyed.
-    void evict(cache_tracker&) noexcept;
+    void evict(mutation_cleaner&) noexcept;
 
     partition_version_ref& version() {
         return _version;
@@ -446,7 +466,11 @@ public:
     // If an exception is thrown this and pe will be left in some valid states
     // such that if the operation is retried (possibly many times) and eventually
     // succeeds the result will be as if the first attempt didn't fail.
-    void apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::region&, cache_tracker&);
+    //
+    // Returns a coroutine object representing the operation.
+    // The coroutine must be resumed with the region being unlocked.
+    coroutine apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::allocating_section&,
+        logalloc::region&, cache_tracker&, partition_snapshot::phase_type, real_dirty_memory_accounter&);
 
     // If this entry is evictable, cache_tracker must be provided.
     partition_version& add_version(const schema& s, cache_tracker*);
@@ -467,10 +491,13 @@ public:
     tombstone partition_tombstone() const;
 
     // needs to be called with reclaiming disabled
-    void upgrade(schema_ptr from, schema_ptr to, cache_tracker*);
+    void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(logalloc::region& region, schema_ptr entry_schema, cache_tracker*,
+    lw_shared_ptr<partition_snapshot> read(logalloc::region& region,
+        mutation_cleaner&,
+        schema_ptr entry_schema,
+        cache_tracker*,
         partition_snapshot::phase_type phase = partition_snapshot::default_phase);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_entry& e);

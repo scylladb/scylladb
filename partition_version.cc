@@ -25,17 +25,20 @@
 #include "partition_version.hh"
 #include "row_cache.hh"
 #include "partition_snapshot_row_cursor.hh"
+#include "partition_snapshot_reader.hh"
+#include "utils/coroutine.hh"
+#include "real_dirty_memory_accounter.hh"
 
-static void remove_or_mark_as_unique_owner(partition_version* current, cache_tracker* tracker)
+static void remove_or_mark_as_unique_owner(partition_version* current, mutation_cleaner* cleaner)
 {
     while (current && !current->is_referenced()) {
         auto next = current->next();
-        if (tracker) {
-            for (rows_entry& row : current->partition().clustered_rows()) {
-                tracker->on_remove(row);
-            }
+        current->erase();
+        if (cleaner) {
+            cleaner->destroy_gently(*current);
+        } else {
+            current_allocator().destroy(current);
         }
-        current_allocator().destroy(current);
         current = next;
     }
     if (current) {
@@ -68,6 +71,10 @@ partition_version::~partition_version()
     if (_backref) {
         _backref->_version = nullptr;
     }
+}
+
+stop_iteration partition_version::clear_gently(cache_tracker* tracker) noexcept {
+    return _partition.clear_gently(tracker);
 }
 
 size_t partition_version::size_in_allocator(allocation_strategy& allocator) const {
@@ -156,7 +163,7 @@ partition_snapshot::~partition_snapshot() {
         if (_version && _version.is_unique_owner()) {
             auto v = &*_version;
             _version = {};
-            remove_or_mark_as_unique_owner(v, _tracker);
+            remove_or_mark_as_unique_owner(v, &_cleaner);
         } else if (_entry) {
             _entry->_snapshot = nullptr;
         }
@@ -229,8 +236,38 @@ partition_entry::~partition_entry() {
     } else {
         auto v = &*_version;
         _version = { };
-        remove_or_mark_as_unique_owner(v, no_cache_tracker);
+        remove_or_mark_as_unique_owner(v, no_cleaner);
     }
+}
+
+stop_iteration partition_entry::clear_gently(cache_tracker* tracker) noexcept {
+    if (!_version) {
+        return stop_iteration::yes;
+    }
+
+    if (_snapshot) {
+        _snapshot->_version = std::move(_version);
+        _snapshot->_version.mark_as_unique_owner();
+        _snapshot->_entry = nullptr;
+        return stop_iteration::yes;
+    }
+
+    partition_version* v = &*_version;
+    _version = {};
+    while (v) {
+        if (v->is_referenced()) {
+            v->back_reference().mark_as_unique_owner();
+            break;
+        }
+        auto next = v->next();
+        if (v->clear_gently(tracker) == stop_iteration::no) {
+            _version = partition_version_ref(*v);
+            return stop_iteration::no;
+        }
+        current_allocator().destroy(&*v);
+        v = next;
+    }
+    return stop_iteration::yes;
 }
 
 void partition_entry::set_version(partition_version* new_version)
@@ -382,94 +419,121 @@ public:
     }
 };
 
-template<typename Func>
-void partition_entry::with_detached_versions(Func&& func) {
-    partition_version* current = &*_version;
-    auto snapshot = _snapshot;
-    if (snapshot) {
-        snapshot->_version = std::move(_version);
-        snapshot->_entry = nullptr;
-        _snapshot = nullptr;
-    }
-    auto prev = std::exchange(_version, {});
+coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
+    logalloc::allocating_section& alloc, logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase,
+    real_dirty_memory_accounter& acc)
+{
+    // This flag controls whether this operation may defer. It is more
+    // expensive to apply with deferring due to construction of snapshots and
+    // two-pass application, with the first pass filtering and moving data to
+    // the new version and the second pass merging it back once all is done.
+    // We cannot merge into current version because if we defer in the middle
+    // that may publish partial writes. Also, snapshot construction results in
+    // creation of garbage objects, partition_version and rows_entry. Garbage
+    // will yield sparse segments and add overhead due to increased LSA
+    // segment compaction. This becomes especially significant for small
+    // partitions where I saw 40% slow down.
+    const bool preemptible = s.clustering_key_size() > 0;
 
-    auto revert = defer([&] {
-        if (snapshot) {
-            _snapshot = snapshot;
-            snapshot->_entry = this;
-            _version = std::move(snapshot->_version);
-        } else {
-            _version = std::move(prev);
-        }
+    if (s.version() != pe_schema.version()) {
+        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), tracker.cleaner(), &tracker);
+    }
+
+    bool can_move = !pe._snapshot;
+
+    auto src_snp = pe.read(reg, tracker.cleaner(), s.shared_from_this(), &tracker);
+    lw_shared_ptr<partition_snapshot> prev_snp;
+    if (preemptible) {
+        // Reads must see prev_snp until whole update completes so that writes
+        // are not partially visible.
+        prev_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase - 1);
+    }
+    auto dst_snp = read(reg, tracker.cleaner(), s.shared_from_this(), &tracker, phase);
+    auto merge_dst_snp = defer([preemptible, dst_snp, &reg, &alloc] () mutable {
+        maybe_merge_versions(dst_snp, reg, alloc);
     });
 
-    func(current);
-}
+    // Once we start updating the partition, we must keep all snapshots until the update completes,
+    // otherwise partial writes would be published. So the scope of snapshots must enclose the scope
+    // of allocating sections, so we return here to get out of the current allocating section and
+    // give the caller a chance to store the coroutine object. The code inside coroutine below
+    // runs outside allocating section.
+    return coroutine([&tracker, &s, &alloc, &reg, &acc, can_move, preemptible,
+            merge_dst_snp = std::move(merge_dst_snp), // needs to go away last so that dst_snp is not owned by anyone else
+            cur = partition_snapshot_row_cursor(s, *dst_snp),
+            src_cur = partition_snapshot_row_cursor(s, *src_snp, can_move),
+            dst_snp = std::move(dst_snp),
+            prev_snp = std::move(prev_snp),
+            src_snp = std::move(src_snp),
+            static_done = false] () mutable {
+        auto&& allocator = reg.allocator();
+        return alloc(reg, [&] {
+            return with_linearized_managed_bytes([&] {
+                size_t dirty_size = 0;
 
-void partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
-    logalloc::region& reg, cache_tracker& tracker)
-{
-    if (s.version() != pe_schema.version()) {
-        partition_entry entry(pe.squashed(pe_schema.shared_from_this(), s.shared_from_this()));
-        entry.with_detached_versions([&] (partition_version* v) {
-            apply_to_incomplete(s, v, reg, tracker);
-        });
-    } else {
-        pe.with_detached_versions([&](partition_version* v) {
-            apply_to_incomplete(s, v, reg, tracker);
-        });
-    }
-}
-
-void partition_entry::apply_to_incomplete(const schema& s, partition_version* version,
-        logalloc::region& reg, cache_tracker& tracker) {
-    partition_version& dst = open_version(s, &tracker);
-    auto snp = read(reg, s.shared_from_this(), &tracker);
-    bool can_move = true;
-    auto current = version;
-    bool static_row_continuous = snp->static_row_continuous();
-    while (current) {
-        can_move &= !current->is_referenced();
-        dst.partition().apply(current->partition().partition_tombstone());
-        if (static_row_continuous) {
-            row& static_row = dst.partition().static_row();
-            if (can_move) {
-                static_row.apply(s, column_kind::static_column, std::move(current->partition().static_row()));
-            } else {
-                static_row.apply(s, column_kind::static_column, current->partition().static_row());
-            }
-        }
-        range_tombstone_list& tombstones = dst.partition().row_tombstones();
-        if (can_move) {
-            tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
-        } else {
-            tombstones.apply_monotonically(s, current->partition().row_tombstones());
-        }
-        current = current->next();
-    }
-
-    partition_entry::rows_iterator source(version, s);
-    partition_snapshot_row_cursor cur(s, *snp);
-
-    while (!source.done()) {
-        if (!source.is_dummy()) {
-            tracker.on_row_processed_from_memtable();
-            auto ropt = cur.ensure_entry_if_complete(source.position());
-            if (ropt) {
-                rows_entry& e = ropt->row;
-                source.consume_row([&] (deletable_row&& row) {
-                    e.row().apply_monotonically(s, std::move(row));
-                });
-                if (!ropt->inserted) {
-                    tracker.on_row_merged_from_memtable();
+                if (!static_done) {
+                    partition_version& dst = *dst_snp->version();
+                    bool static_row_continuous = dst_snp->static_row_continuous();
+                    auto current = &*src_snp->version();
+                    while (current) {
+                        dirty_size += allocator.object_memory_size_in_allocator(current)
+                            + current->partition().static_row().external_memory_usage();
+                        dst.partition().apply(current->partition().partition_tombstone());
+                        if (static_row_continuous) {
+                            row& static_row = dst.partition().static_row();
+                            if (can_move) {
+                                static_row.apply(s, column_kind::static_column,
+                                    std::move(current->partition().static_row()));
+                            } else {
+                                static_row.apply(s, column_kind::static_column, current->partition().static_row());
+                            }
+                        }
+                        dirty_size += current->partition().row_tombstones().external_memory_usage();
+                        range_tombstone_list& tombstones = dst.partition().row_tombstones();
+                        // FIXME: defer while applying range tombstones
+                        if (can_move) {
+                            tombstones.apply_monotonically(s, std::move(current->partition().row_tombstones()));
+                        } else {
+                            tombstones.apply_monotonically(s, current->partition().row_tombstones());
+                        }
+                        current = current->next();
+                        can_move &= current && !current->is_referenced();
+                    }
+                    acc.unpin_memory(dirty_size);
+                    static_done = true;
                 }
-            } else {
-                tracker.on_row_dropped_from_memtable();
-            }
-        }
-        source.remove_current_row_when_possible();
-        source.move_to_next_row();
-    }
+
+                if (!src_cur.maybe_refresh_static()) {
+                    return stop_iteration::yes;
+                }
+
+                do {
+                    auto size = src_cur.memory_usage();
+                    if (!src_cur.dummy()) {
+                        tracker.on_row_processed_from_memtable();
+                        auto ropt = cur.ensure_entry_if_complete(src_cur.position());
+                        if (ropt) {
+                            if (!ropt->inserted) {
+                                tracker.on_row_merged_from_memtable();
+                            }
+                            rows_entry& e = ropt->row;
+                            src_cur.consume_row([&](deletable_row&& row) {
+                                e.row().apply_monotonically(s, std::move(row));
+                            });
+                        } else {
+                            tracker.on_row_dropped_from_memtable();
+                        }
+                    }
+                    auto has_next = src_cur.erase_and_advance();
+                    acc.unpin_memory(size);
+                    if (!has_next) {
+                        return stop_iteration::yes;
+                    }
+                } while (!preemptible || !need_preempt());
+                return stop_iteration::no;
+            });
+        });
+    });
 }
 
 mutation_partition partition_entry::squashed(schema_ptr from, schema_ptr to)
@@ -491,7 +555,7 @@ mutation_partition partition_entry::squashed(const schema& s)
     return squashed(s.shared_from_this(), s.shared_from_this());
 }
 
-void partition_entry::upgrade(schema_ptr from, schema_ptr to, cache_tracker* tracker)
+void partition_entry::upgrade(schema_ptr from, schema_ptr to, mutation_cleaner& cleaner, cache_tracker* tracker)
 {
     auto new_version = current_allocator().construct<partition_version>(squashed(from, to));
     auto old_version = &*_version;
@@ -499,22 +563,33 @@ void partition_entry::upgrade(schema_ptr from, schema_ptr to, cache_tracker* tra
     if (tracker) {
         tracker->insert(*new_version);
     }
-    remove_or_mark_as_unique_owner(old_version, tracker);
+    remove_or_mark_as_unique_owner(old_version, &cleaner);
 }
 
 lw_shared_ptr<partition_snapshot> partition_entry::read(logalloc::region& r,
-    schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
+    mutation_cleaner& cleaner, schema_ptr entry_schema, cache_tracker* tracker, partition_snapshot::phase_type phase)
 {
-    with_allocator(r.allocator(), [&] {
-        open_version(*entry_schema, tracker, phase);
-    });
     if (_snapshot) {
-        return _snapshot->shared_from_this();
-    } else {
-        auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, this, tracker, phase);
-        _snapshot = snp.get();
-        return snp;
+        if (_snapshot->_phase == phase) {
+            return _snapshot->shared_from_this();
+        } else if (phase < _snapshot->_phase) {
+            // If entry is being updated, we will get reads for non-latest phase, and
+            // they must attach to the non-current version.
+            partition_version* second = _version->next();
+            assert(second && second->is_referenced());
+            auto snp = partition_snapshot::container_of(second->_backref).shared_from_this();
+            assert(phase == snp->_phase);
+            return snp;
+        } else { // phase > _snapshot->_phase
+            with_allocator(r.allocator(), [&] {
+                add_version(*entry_schema, tracker);
+            });
+        }
     }
+
+    auto snp = make_lw_shared<partition_snapshot>(entry_schema, r, cleaner, this, tracker, phase);
+    _snapshot = snp.get();
+    return snp;
 }
 
 std::vector<range_tombstone>
@@ -564,7 +639,7 @@ std::ostream& operator<<(std::ostream& out, const partition_entry& e) {
     return out;
 }
 
-void partition_entry::evict(cache_tracker& tracker) noexcept {
+void partition_entry::evict(mutation_cleaner& cleaner) noexcept {
     if (!_version) {
         return;
     }
@@ -575,6 +650,6 @@ void partition_entry::evict(cache_tracker& tracker) noexcept {
     } else {
         auto v = &*_version;
         _version = { };
-        remove_or_mark_as_unique_owner(v, &tracker);
+        remove_or_mark_as_unique_owner(v, &cleaner);
     }
 }
