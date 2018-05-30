@@ -80,14 +80,14 @@ public:
             : _cells(v.cells())
             , _i(_cells.begin())
         { }
-        std::experimental::optional<result_atomic_cell_view> next_atomic_cell() {
+        std::optional<result_atomic_cell_view> next_atomic_cell() {
             auto cell_opt = *_i++;
             if (!cell_opt) {
                 return {};
             }
             return {result_atomic_cell_view(*cell_opt)};
         }
-        std::experimental::optional<result_bytes_view> next_collection_cell() {
+        std::optional<result_bytes_view> next_collection_cell() {
             auto cell_opt = *_i++;
             if (!cell_opt) {
                 return {};

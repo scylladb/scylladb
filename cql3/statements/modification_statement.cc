@@ -207,7 +207,7 @@ class prefetch_data_builder {
     schema_ptr _schema;
     std::experimental::optional<partition_key> _pkey;
 private:
-    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::experimental::optional<query::result_bytes_view>& cell) {
+    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::optional<query::result_bytes_view>& cell) {
         if (cell) {
             auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
             if (!ctype->is_multi_cell()) {
