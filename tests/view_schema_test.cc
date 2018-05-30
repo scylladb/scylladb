@@ -3271,3 +3271,30 @@ SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) 
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_alter_table_with_updates) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c));").get();
+        e.execute_cql("create materialized view vcf as select p, c, v1, v2 from cf "
+                      "where p is not null and c is not null and v1 is not null and v2 is not null "
+                      "primary key (v1, p, c)").get();
+        e.execute_cql("update cf set v1 = 4, v2 = 5 where p = 1 and c = 1").get();
+        e.execute_cql("alter table cf add f int;").get();
+        e.execute_cql("alter table cf add o int;").get();
+        e.execute_cql("alter table cf add t int;").get();
+        e.execute_cql("alter table cf add x int;").get();
+        e.execute_cql("alter table cf add z int;").get();
+        e.execute_cql("update cf set v2 = 7 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select p, c, v1, v2 from vcf").get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                        {int32_type->decompose(1)},
+                        {int32_type->decompose(1)},
+                        {int32_type->decompose(4)},
+                        {int32_type->decompose(7)},
+                    });
+        });
+    });
+}
