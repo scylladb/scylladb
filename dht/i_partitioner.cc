@@ -155,6 +155,26 @@ std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, partition_ranges_view v) {
+    out << "{";
+
+    if (v.empty()) {
+        out << " }";
+        return out;
+    }
+
+    auto it = v.begin();
+    out << *it;
+    ++it;
+
+    for (;it != v.end(); ++it) {
+        out << ", " << *it;
+    }
+
+    out << "}";
+    return out;
+}
+
 // FIXME: make it per-keyspace
 std::unique_ptr<i_partitioner> default_partitioner;
 
