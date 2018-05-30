@@ -139,6 +139,12 @@ public:
             return mf;
         }
 
+        void unpop_mutation_fragment(mutation_fragment mf) {
+            const auto memory_usage = mf.memory_usage(*_schema);
+            _buffer.emplace_front(std::move(mf));
+            _buffer_size += memory_usage;
+        }
+
         future<mutation_fragment_opt> operator()() {
             if (is_buffer_empty()) {
                 if (is_end_of_stream()) {
@@ -398,6 +404,7 @@ public:
     bool is_buffer_empty() const { return _impl->is_buffer_empty(); }
     bool is_buffer_full() const { return _impl->is_buffer_full(); }
     mutation_fragment pop_mutation_fragment() { return _impl->pop_mutation_fragment(); }
+    void unpop_mutation_fragment(mutation_fragment mf) { _impl->unpop_mutation_fragment(std::move(mf)); }
     const schema_ptr& schema() const { return _impl->_schema; }
     void set_max_buffer_size(size_t size) {
         _impl->max_buffer_size_in_bytes = size;
