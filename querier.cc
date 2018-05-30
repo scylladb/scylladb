@@ -152,34 +152,32 @@ const size_t querier_cache::max_queriers_memory_usage = memory::stats().total_me
 void querier_cache::scan_cache_entries() {
     const auto now = lowres_clock::now();
 
-    auto it = _meta_entries.begin();
-    const auto end = _meta_entries.end();
+    auto it = _entries.begin();
+    const auto end = _entries.end();
     while (it != end && it->is_expired(now)) {
-        if (*it) {
-            ++_stats.time_based_evictions;
-        }
-        it = _meta_entries.erase(it);
-        _stats.population = _entries.size();
+        ++_stats.time_based_evictions;
+        --_stats.population;
+        it = _entries.erase(it);
     }
 }
 
 querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state) {
-    const auto queriers = _entries.equal_range(key);
+    const auto queriers = _index.equal_range(key);
 
-    if (queriers.first == _entries.end()) {
+    if (queriers.first == _index.end()) {
         tracing::trace(trace_state, "Found no cached querier for key {}", key);
         return _entries.end();
     }
 
-    const auto it = std::find_if(queriers.first, queriers.second, [&] (const std::pair<const utils::UUID, entry>& elem) {
-        return elem.second.get().matches(range);
+    const auto it = std::find_if(queriers.first, queriers.second, [&] (const entry& e) {
+        return e.value().matches(range);
     });
 
     if (it == queriers.second) {
         tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range {}", key, range);
     }
     tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
-    return it;
+    return it->pos();
 }
 
 querier_cache::querier_cache(std::chrono::seconds entry_ttl)
@@ -199,8 +197,7 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
 
     tracing::trace(trace_state, "Caching querier with key {}", key);
 
-    auto memory_usage = boost::accumulate(
-            _entries | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&querier_cache::entry::memory_usage)), size_t(0));
+    auto memory_usage = boost::accumulate(_entries | boost::adaptors::transformed(std::mem_fn(&entry::memory_usage)), size_t(0));
 
     // We add the memory-usage of the to-be added querier to the memory-usage
     // of all the cached queriers. We now need to makes sure this number is
@@ -210,20 +207,20 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     memory_usage += q.memory_usage();
 
     if (memory_usage >= max_queriers_memory_usage) {
-        auto it = _meta_entries.begin();
-        const auto end = _meta_entries.end();
+        auto it = _entries.begin();
+        const auto end = _entries.end();
         while (it != end && memory_usage >= max_queriers_memory_usage) {
-            if (*it) {
-                ++_stats.memory_based_evictions;
-                memory_usage -= it->get_entry().memory_usage();
-            }
-            it = _meta_entries.erase(it);
+            ++_stats.memory_based_evictions;
+            memory_usage -= it->memory_usage();
+            --_stats.population;
+            it = _entries.erase(it);
         }
     }
 
-    const auto it = _entries.emplace(key, entry::param{std::move(q), _entry_ttl}).first;
-    _meta_entries.emplace_back(_entries, it);
-    _stats.population = _entries.size();
+    auto& e = _entries.emplace_back(key, std::move(q), lowres_clock::now() + _entry_ttl);
+    e.set_pos(--_entries.end());
+    _index.insert(e);
+    ++_stats.population;
 }
 
 querier querier_cache::lookup(utils::UUID key,
@@ -240,9 +237,9 @@ querier querier_cache::lookup(utils::UUID key,
         return create_fun();
     }
 
-    auto q = std::move(it->second).get();
+    auto q = std::move(*it).value();
     _entries.erase(it);
-    _stats.population = _entries.size();
+    --_stats.population;
 
     const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
     if (can_be_used == querier::can_use::yes) {
@@ -265,25 +262,24 @@ bool querier_cache::evict_one() {
         return false;
     }
 
-    auto it = _meta_entries.begin();
-    const auto end = _meta_entries.end();
-    while (it != end) {
-        const auto is_live = bool(*it);
-        it = _meta_entries.erase(it);
-        _stats.population = _entries.size();
-        if (is_live) {
-            ++_stats.resource_based_evictions;
-            return true;
-        }
-    }
-    return false;
+    ++_stats.resource_based_evictions;
+    --_stats.population;
+    _entries.pop_front();
+
+    return true;
 }
 
 void querier_cache::evict_all_for_table(const utils::UUID& schema_id) {
-    _meta_entries.remove_if([&] (const meta_entry& me) {
-        return !me || me.get_entry().get().schema()->id() == schema_id;
-    });
-    _stats.population = _entries.size();
+    auto it = _entries.begin();
+    const auto end = _entries.end();
+    while (it != end) {
+        if (it->schema().id() == schema_id) {
+            --_stats.population;
+            it = _entries.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page)

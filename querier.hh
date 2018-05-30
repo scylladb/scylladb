@@ -24,7 +24,8 @@
 #include "mutation_compactor.hh"
 #include "mutation_reader.hh"
 
-#include <seastar/core/weak_ptr.hh>
+#include <boost/intrusive/set.hpp>
+
 #include <variant>
 
 /// One-stop object for serving queries.
@@ -264,75 +265,65 @@ public:
     };
 
 private:
-    class entry : public weakly_referencable<entry> {
-        querier _querier;
-        lowres_clock::time_point _expires;
-    public:
-        // Since entry cannot be moved and unordered_map::emplace can pass only
-        // a single param to it's mapped-type we need to force a single-param
-        // constructor for entry. Oh C++...
-        struct param {
-            querier q;
-            std::chrono::seconds ttl;
-        };
+    class entry : public boost::intrusive::set_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
+        // Self reference so that we can remove the entry given an `entry&`.
+        std::list<entry>::iterator _pos;
+        const utils::UUID _key;
+        const lowres_clock::time_point _expires;
+        querier _value;
 
-        explicit entry(param p)
-            : _querier(std::move(p.q))
-            , _expires(lowres_clock::now() + p.ttl) {
+    public:
+        entry(utils::UUID key, querier q, lowres_clock::time_point expires)
+            : _key(key)
+            , _expires(expires)
+            , _value(std::move(q)) {
+        }
+
+        std::list<entry>::iterator pos() const {
+            return _pos;
+        }
+
+        void set_pos(std::list<entry>::iterator pos) {
+            _pos = pos;
+        }
+
+        const utils::UUID& key() const {
+            return _key;
+        }
+
+        const ::schema& schema() const {
+            return *_value.schema();
         }
 
         bool is_expired(const lowres_clock::time_point& now) const {
             return _expires <= now;
         }
 
-        const querier& get() const & {
-            return _querier;
-        }
-
-        querier&& get() && {
-            return std::move(_querier);
-        }
-
         size_t memory_usage() const {
-            return _querier.memory_usage();
+            return _value.memory_usage();
+        }
+
+        const querier& value() const & {
+            return _value;
+        }
+
+        querier value() && {
+            return std::move(_value);
         }
     };
 
-    using entries = std::unordered_map<utils::UUID, entry>;
-
-    class meta_entry {
-        entries& _entries;
-        weak_ptr<entry> _entry_ptr;
-        entries::iterator _entry_it;
-
-    public:
-        meta_entry(entries& e, entries::iterator it)
-            : _entries(e)
-            , _entry_ptr(it->second.weak_from_this())
-            , _entry_it(it) {
-        }
-
-        ~meta_entry() {
-            if (_entry_ptr) {
-                _entries.erase(_entry_it);
-            }
-        }
-
-        bool is_expired(const lowres_clock::time_point& now) const {
-            return !_entry_ptr || _entry_ptr->is_expired(now);
-        }
-
-        explicit operator bool() const {
-            return bool(_entry_ptr);
-        }
-
-        const entry& get_entry() const {
-            return *_entry_ptr;
-        }
+    struct key_of_entry {
+        using type = utils::UUID;
+        const type& operator()(const entry& e) { return e.key(); }
     };
 
+    using entries = std::list<entry>;
+    using index = boost::intrusive::multiset<entry, boost::intrusive::key_of_value<key_of_entry>,
+          boost::intrusive::constant_time_size<false>>;
+
+private:
     entries _entries;
-    std::list<meta_entry> _meta_entries;
+    index _index;
     timer<lowres_clock> _expiry_timer;
     std::chrono::seconds _entry_ttl;
     stats _stats;
