@@ -990,13 +990,15 @@ public:
                     skip_absent_columns();
                     goto column_label;
                 }
+                _columns_selector.resize(_column_ids.size());
                 if (_column_ids.size() - first_variant_read < _column_ids.size() / 2) {
                     _missing_columns_to_read = _column_ids.size() - first_variant_read;
-                    _columns_selector.resize(_column_ids.size());
                     _columns_selector.reset();
-                    goto row_body_missing_columns_read_columns_label;
+                } else {
+                    _missing_columns_to_read = first_variant_read;
+                    _columns_selector.set();
                 }
-                throw malformed_sstable_exception("unimplemented state: column subsets bigger than 63 not supported");
+                goto row_body_missing_columns_read_columns_label;
             }
         case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS:
         row_body_missing_columns_read_columns_label:
