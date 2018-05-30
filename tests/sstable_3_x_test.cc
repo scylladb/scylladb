@@ -701,6 +701,179 @@ SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
     });
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/large_subset_of_columns_sparse
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   val1 INT, val2 INT, val3 INT, val4 INT, val5 INT, val6 INT, val7 INT, val8 INT,
+//                                   val9 INT,
+//                                   val10 INT, val11 INT, val12 INT, val13 INT, val14 INT, val15 INT, val16 INT,
+//                                   val17 INT, val18 INT, val19 INT,
+//                                   val20 INT, val21 INT, val22 INT, val23 INT, val24 INT, val25 INT, val26 INT,
+//                                   val27 INT, val28 INT, val29 INT,
+//                                   val30 INT, val31 INT, val32 INT, val33 INT, val34 INT, val35 INT, val36 INT,
+//                                   val37 INT, val38 INT, val39 INT,
+//                                   val40 INT, val41 INT, val42 INT, val43 INT, val44 INT, val45 INT, val46 INT,
+//                                   val47 INT, val48 INT, val49 INT,
+//                                   val50 INT, val51 INT, val52 INT, val53 INT, val54 INT, val55 INT, val56 INT,
+//                                   val57 INT, val58 INT, val59 INT,
+//                                   val60 INT, val61 INT, val62 INT, val63 INT, val64 INT,
+//                                   PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, val1) VALUES(1, 11);
+// INSERT INTO test_ks.test_table(pk, val2, val5, val6, val7, val60) VALUES(2, 22, 222, 2222, 22222, 222222);
+// INSERT INTO test_ks.test_table(pk,val32, val33) VALUES(3, 33, 333);
+// INSERT INTO test_ks.test_table(pk, val1, val2, val3, val4, val5, val6, val7, val8, val9,
+//                                    val10, val11, val12, val13, val14, val15, val16, val17, val18, val19,
+//                                    val20, val21, val22, val23, val24, val25, val26, val27, val28, val29,
+//                                    val30, val31)
+//                         VALUES(4, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+//                                   10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+//                                   20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+//                                   30, 31);
+// INSERT INTO test_ks.test_table(pk, val34, val35, val36, val37, val38, val39, val40, val41, val42,
+//                                    val43, val44, val45, val46, val47, val48, val49, val50, val51, val52,
+//                                    val53, val54, val55, val56, val57, val58, val59, val60, val61, val62,
+//                                    val63, val64)
+//                         VALUES(5, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+//                                   10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+//                                   20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+//                                   30, 31);
+//
+// IMPORTANT: each column has to be covered by at least one insert otherwise it won't be present in the sstable
+
+static thread_local const sstring UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_PATH =
+    "tests/sstables/3.x/uncompressed/large_subset_of_columns_sparse";
+static thread_local const schema_ptr UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("val1", int32_type)
+        .with_column("val2", int32_type)
+        .with_column("val3", int32_type)
+        .with_column("val4", int32_type)
+        .with_column("val5", int32_type)
+        .with_column("val6", int32_type)
+        .with_column("val7", int32_type)
+        .with_column("val8", int32_type)
+        .with_column("val9", int32_type)
+        .with_column("val10", int32_type)
+        .with_column("val11", int32_type)
+        .with_column("val12", int32_type)
+        .with_column("val13", int32_type)
+        .with_column("val14", int32_type)
+        .with_column("val15", int32_type)
+        .with_column("val16", int32_type)
+        .with_column("val17", int32_type)
+        .with_column("val18", int32_type)
+        .with_column("val19", int32_type)
+        .with_column("val20", int32_type)
+        .with_column("val21", int32_type)
+        .with_column("val22", int32_type)
+        .with_column("val23", int32_type)
+        .with_column("val24", int32_type)
+        .with_column("val25", int32_type)
+        .with_column("val26", int32_type)
+        .with_column("val27", int32_type)
+        .with_column("val28", int32_type)
+        .with_column("val29", int32_type)
+        .with_column("val30", int32_type)
+        .with_column("val31", int32_type)
+        .with_column("val32", int32_type)
+        .with_column("val33", int32_type)
+        .with_column("val34", int32_type)
+        .with_column("val35", int32_type)
+        .with_column("val36", int32_type)
+        .with_column("val37", int32_type)
+        .with_column("val38", int32_type)
+        .with_column("val39", int32_type)
+        .with_column("val40", int32_type)
+        .with_column("val41", int32_type)
+        .with_column("val42", int32_type)
+        .with_column("val43", int32_type)
+        .with_column("val44", int32_type)
+        .with_column("val45", int32_type)
+        .with_column("val46", int32_type)
+        .with_column("val47", int32_type)
+        .with_column("val48", int32_type)
+        .with_column("val49", int32_type)
+        .with_column("val50", int32_type)
+        .with_column("val51", int32_type)
+        .with_column("val52", int32_type)
+        .with_column("val53", int32_type)
+        .with_column("val54", int32_type)
+        .with_column("val55", int32_type)
+        .with_column("val56", int32_type)
+        .with_column("val57", int32_type)
+        .with_column("val58", int32_type)
+        .with_column("val59", int32_type)
+        .with_column("val60", int32_type)
+        .with_column("val61", int32_type)
+        .with_column("val62", int32_type)
+        .with_column("val63", int32_type)
+        .with_column("val64", int32_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA,
+                               UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA, pk);
+        };
+
+        std::vector<const column_definition*> column_defs(64);
+        for (int i = 0; i < 64; ++i) {
+            column_defs[i] = UNCOMPRESSED_LARGE_SUBSET_OF_COLUMNS_SPARSE_SCHEMA->get_column_definition(to_bytes(sprint("val%d", (i + 1))));
+            BOOST_REQUIRE(column_defs[i]);
+        }
+
+        auto generate = [&] (const std::vector<std::pair<int, int>>& column_values) {
+            std::vector<flat_reader_assertions::expected_column> columns;
+
+            for (auto& p : column_values) {
+                columns.push_back({column_defs[p.first - 1], int32_type->decompose(p.second)});
+            }
+
+            return columns;
+        };
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({{34, 1}, {35, 2}, {36, 3}, {37, 4}, {38, 5}, {39, 6}, {40, 7}, {41, 8}, {42, 9},
+                                    {43, 10}, {44, 11}, {45, 12}, {46, 13}, {47, 14}, {48, 15}, {49, 16}, {50, 17},
+                                    {51, 18}, {52, 19}, {53, 20}, {54, 21}, {55, 22}, {56, 23}, {57, 24}, {58, 25},
+                                    {59, 26}, {60, 27}, {61, 28}, {62, 29}, {63, 30}, {64, 31}}))
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({{1, 11}}))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({{2, 22}, {5, 222}, {6, 2222}, {7, 22222}, {60, 222222}}))
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}, {7, 7}, {8, 8}, {9, 9},
+                                    {10, 10}, {11, 11}, {12, 12}, {13, 13}, {14, 14}, {15, 15}, {16, 16}, {17, 17},
+                                    {18, 18}, {19, 19}, {20, 20}, {21, 21}, {22, 22}, {23, 23}, {24, 24}, {25, 25},
+                                    {26, 26}, {27, 27}, {28, 28}, {29, 29}, {30, 30}, {31, 31}}))
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({{32, 33}, {33, 333}}))
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
