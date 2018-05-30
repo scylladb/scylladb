@@ -97,6 +97,35 @@ public:
         { }
     };
 
+    flat_reader_assertions& produces_static_row(const std::vector<expected_column>& columns) {
+        BOOST_TEST_MESSAGE(sprint("Expecting static row"));
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL("Expected static row, got end of stream");
+        }
+        if (!mfopt->is_static_row()) {
+            BOOST_FAIL(sprint("Expected static row, got: %s", *mfopt));
+        }
+        auto& cells = mfopt->as_static_row().cells();
+        if (cells.size() != columns.size()) {
+            BOOST_FAIL(sprint("Expected static row with %s columns, but has %s", columns.size(), cells.size()));
+        }
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const atomic_cell_or_collection* cell = cells.find_cell(columns[i].id);
+            if (!cell) {
+                BOOST_FAIL(sprint("Expected static row with column %s, but it is not present", columns[i].name));
+            }
+            auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell().value());
+            if (cmp != 0) {
+                BOOST_FAIL(sprint("Expected static row with column %s having value %s, but it has value %s",
+                                  columns[i].name,
+                                  columns[i].value,
+                                  cell->as_atomic_cell().value()));
+            }
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_row(const clustering_key& ck, const std::vector<expected_column>& columns) {
         BOOST_TEST_MESSAGE(sprint("Expect %s", ck));
         auto mfopt = read_next();

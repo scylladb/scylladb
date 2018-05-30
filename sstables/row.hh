@@ -149,6 +149,8 @@ public:
 
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
 
+    virtual proceed consume_static_row_start() = 0;
+
     virtual proceed consume_column(stdx::optional<column_id> column_id,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
@@ -520,7 +522,6 @@ private:
         FLAGS,
         FLAGS_2,
         EXTENDED_FLAGS,
-        STATIC_ROW,
         CLUSTERING_ROW,
         CK_BLOCK,
         CK_BLOCK_HEADER,
@@ -714,8 +715,9 @@ public:
                 if (_is_first_unfiltered) {
                     setup_columns(_column_translation.static_columns(),
                                   _column_translation.static_column_value_fix_legths());
-                    _state = state::STATIC_ROW;
-                    goto static_row_label;
+                    _is_first_unfiltered = false;
+                    _consumer.consume_static_row_start();
+                    goto row_body_label;
                 } else {
                     throw malformed_sstable_exception("static row should be a first unfiltered in a partition");
                 }
@@ -783,6 +785,7 @@ public:
                 }
             }
         case state::ROW_BODY:
+        row_body_label:
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_SIZE;
                 break;
@@ -953,9 +956,6 @@ public:
         case state::COMPLEX_COLUMN:
         complex_column_label:
             throw malformed_sstable_exception("unimplemented state: complex columns not supported");
-        case state::STATIC_ROW:
-        static_row_label:
-            throw malformed_sstable_exception("unimplemented state");
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
             throw malformed_sstable_exception("unimplemented state");
