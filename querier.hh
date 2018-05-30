@@ -28,6 +28,8 @@
 
 #include <variant>
 
+namespace query {
+
 /// One-stop object for serving queries.
 ///
 /// Encapsulates all state and logic for serving all pages for a given range
@@ -399,3 +401,5 @@ public:
             tracing::trace_state_ptr trace_state,
             const noncopyable_function<querier()>& create_fun);
 };
+
+} // namespace query

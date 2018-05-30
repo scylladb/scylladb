@@ -76,10 +76,10 @@ private:
 
     // Expected value of the above counters, updated by this.
     unsigned _expected_factory_invoked{};
-    querier_cache::stats _expected_stats;
+    query::querier_cache::stats _expected_stats;
 
     simple_schema _s;
-    querier_cache _cache;
+    query::querier_cache _cache;
     const std::vector<mutation> _mutations;
     const mutation_source _mutation_source;
 
@@ -110,8 +110,8 @@ private:
         return mutations;
     }
 
-    querier make_querier(const dht::partition_range& range) {
-        return querier(_mutation_source,
+    query::querier make_querier(const dht::partition_range& range) {
+        return query::querier(_mutation_source,
             _s.schema(),
             range,
             _s.schema()->full_slice(),

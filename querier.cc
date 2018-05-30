@@ -25,6 +25,8 @@
 
 #include <boost/range/adaptor/map.hpp>
 
+namespace query {
+
 static sstring cannot_use_reason(querier::can_use cu)
 {
     switch (cu)
@@ -304,3 +306,5 @@ querier querier_cache_context::lookup(emit_only_live_rows only_live,
     }
     return create_fun();
 }
+
+} // namespace query

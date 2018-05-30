@@ -132,7 +132,7 @@ future<reconcilable_result> mutation_query(
     query::result_memory_accounter&& accounter = { },
     tracing::trace_state_ptr trace_ptr = nullptr,
     db::timeout_clock::time_point timeout = db::no_timeout,
-    querier_cache_context cache_ctx = { });
+    query::querier_cache_context cache_ctx = { });
 
 future<> data_query(
     schema_ptr s,
@@ -145,7 +145,7 @@ future<> data_query(
     query::result::builder& builder,
     tracing::trace_state_ptr trace_ptr = nullptr,
     db::timeout_clock::time_point timeout = db::no_timeout,
-    querier_cache_context cache_ctx = { });
+    query::querier_cache_context cache_ctx = { });
 
 
 class mutation_query_stage {
@@ -160,7 +160,7 @@ class mutation_query_stage {
         query::result_memory_accounter&&,
         tracing::trace_state_ptr,
         db::timeout_clock::time_point,
-        querier_cache_context> _execution_stage;
+        query::querier_cache_context> _execution_stage;
 public:
     explicit mutation_query_stage();
     template <typename... Args>
