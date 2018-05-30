@@ -2013,10 +2013,11 @@ future<> data_query(
         return make_ready_future<>();
     }
 
-    auto q = cache_ctx.lookup(emit_only_live_rows::yes, *s, range, slice, trace_ptr, [&, trace_ptr] {
-        return query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(),
-                std::move(trace_ptr), emit_only_live_rows::yes);
-    });
+    auto querier_opt = cache_ctx.lookup(emit_only_live_rows::yes, *s, range, slice, trace_ptr);
+    auto q = querier_opt
+            ? std::move(*querier_opt)
+            : query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
+                    emit_only_live_rows::yes);
 
     return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::querier& q) mutable {
         auto qrb = query_result_builder(*s, builder);
@@ -2125,10 +2126,11 @@ static do_mutation_query(schema_ptr s,
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
-    auto q = cache_ctx.lookup(emit_only_live_rows::no, *s, range, slice, trace_ptr, [&, trace_ptr] {
-        return query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(),
-                std::move(trace_ptr), emit_only_live_rows::no);
-    });
+    auto querier_opt = cache_ctx.lookup(emit_only_live_rows::no, *s, range, slice, trace_ptr);
+    auto q = querier_opt
+            ? std::move(*querier_opt)
+            : query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
+                    emit_only_live_rows::no);
 
     return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
                 query::querier& q) mutable {

@@ -224,18 +224,17 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     ++_stats.population;
 }
 
-querier querier_cache::lookup(utils::UUID key,
+std::optional<querier> querier_cache::lookup(utils::UUID key,
         emit_only_live_rows only_live,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state,
-        const noncopyable_function<querier()>& create_fun) {
+        tracing::trace_state_ptr trace_state) {
     auto it = find_querier(key, range, trace_state);
     ++_stats.lookups;
     if (it == _entries.end()) {
         ++_stats.misses;
-        return create_fun();
+        return std::nullopt;
     }
 
     auto q = std::move(*it).value();
@@ -245,12 +244,12 @@ querier querier_cache::lookup(utils::UUID key,
     const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
     if (can_be_used == querier::can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
-        return q;
+        return std::optional<querier>(std::move(q));
     }
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
     ++_stats.drops;
-    return create_fun();
+    return std::nullopt;
 }
 
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
@@ -295,16 +294,15 @@ void querier_cache_context::insert(querier&& q, tracing::trace_state_ptr trace_s
     }
 }
 
-querier querier_cache_context::lookup(emit_only_live_rows only_live,
+std::optional<querier> querier_cache_context::lookup(emit_only_live_rows only_live,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state,
-        const noncopyable_function<querier()>& create_fun) {
+        tracing::trace_state_ptr trace_state) {
     if (_cache && _key != utils::UUID{} && !_is_first_page) {
-        return _cache->lookup(_key, only_live, s, range, slice, std::move(trace_state), create_fun);
+        return _cache->lookup(_key, only_live, s, range, slice, std::move(trace_state));
     }
-    return create_fun();
+    return std::nullopt;
 }
 
 } // namespace query

@@ -345,8 +345,6 @@ public:
 
     /// Lookup a querier in the cache.
     ///
-    /// If the querier doesn't exist, use `create_fun' to create it.
-    ///
     /// Queriers are found based on `key` and `range`. There may be multiple
     /// queriers for the same `key` differentiated by their read range. Since
     /// each subsequent page may have a narrower read range then the one before
@@ -357,15 +355,13 @@ public:
     ///
     /// The found querier is checked for a matching read-kind and schema
     /// version. The start position is also checked against the current
-    /// position of the querier using the `range' and `slice'. If there is a
-    /// mismatch drop the querier and create a new one with `create_fun'.
-    querier lookup(utils::UUID key,
+    /// position of the querier using the `range' and `slice'.
+    std::optional<querier> lookup(utils::UUID key,
             emit_only_live_rows only_live,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state,
-            const noncopyable_function<querier()>& create_fun);
+            tracing::trace_state_ptr trace_state);
 
     void set_entry_ttl(std::chrono::seconds entry_ttl);
 
@@ -394,12 +390,11 @@ public:
     querier_cache_context() = default;
     querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page);
     void insert(querier&& q, tracing::trace_state_ptr trace_state);
-    querier lookup(emit_only_live_rows only_live,
+    std::optional<querier> lookup(emit_only_live_rows only_live,
             const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            tracing::trace_state_ptr trace_state,
-            const noncopyable_function<querier()>& create_fun);
+            tracing::trace_state_ptr trace_state);
 };
 
 } // namespace query

@@ -71,9 +71,6 @@ public:
     static const size_t max_reader_buffer_size = 8 * 1024;
 
 private:
-    // Actual counters updated by the cache.
-    unsigned _factory_invoked{};
-
     // Expected value of the above counters, updated by this.
     unsigned _expected_factory_invoked{};
     query::querier_cache::stats _expected_stats;
@@ -272,21 +269,8 @@ public:
             const dht::partition_range& lookup_range,
             const query::partition_slice& lookup_slice) {
 
-        _cache.lookup(make_cache_key(lookup_key), emit_only_live_rows::no, lookup_schema, lookup_range, lookup_slice, nullptr, [this, &lookup_range] {
-            ++_factory_invoked;
-            return make_querier(lookup_range);
-        });
+        _cache.lookup(make_cache_key(lookup_key), emit_only_live_rows::no, lookup_schema, lookup_range, lookup_slice, nullptr);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
-        return *this;
-    }
-
-    test_querier_cache& no_factory_invoked() {
-        BOOST_REQUIRE_EQUAL(_factory_invoked, _expected_factory_invoked);
-        return *this;
-    }
-
-    test_querier_cache& factory_invoked() {
-        BOOST_REQUIRE_EQUAL(_factory_invoked, ++_expected_factory_invoked);
         return *this;
     }
 
@@ -344,7 +328,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_key_misses) {
 
     const auto entry = t.produce_first_page_and_save_querier();
     t.assert_cache_lookup(90, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .factory_invoked()
         .misses()
         .no_drops()
         .no_evictions();
@@ -359,7 +342,6 @@ SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_clustering_row) {
 
     const auto entry = t.produce_first_page_and_save_querier(1, t.make_singular_partition_range(1), 2);
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .no_factory_invoked()
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -370,7 +352,6 @@ SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_static_row) {
 
     const auto entry = t.produce_first_page_and_save_querier(1, t.make_singular_partition_range(1), 1);
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .no_factory_invoked()
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -381,7 +362,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_clustering_row) {
 
     const auto entry = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, true}, {3, false}), 3);
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .no_factory_invoked()
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -392,7 +372,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_static_row) {
 
     const auto entry = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, true}, {3, false}), 1);
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .no_factory_invoked()
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -407,7 +386,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_original_range_drops) {
 
     const auto entry = t.produce_first_page_and_save_querier(1);
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.original_range, entry.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
@@ -421,12 +399,10 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_slice_drops) {
     const auto entry1 = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, false}, {3, true}), 3);
     const auto entry2 = t.produce_first_page_and_save_querier(2, t.make_partition_range({1, false}, {3, true}), 4);
     t.assert_cache_lookup(entry1.key, *t.get_schema(), entry1.expected_range, entry2.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
     t.assert_cache_lookup(entry2.key, *t.get_schema(), entry2.expected_range, entry1.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
@@ -434,7 +410,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_slice_drops) {
     // Wrong slice.
     const auto entry3 = t.produce_first_page_and_save_querier(3);
     t.assert_cache_lookup(entry3.key, *t.get_schema(), entry3.expected_range, t.get_schema()->full_slice())
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
@@ -443,12 +418,10 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_slice_drops) {
     const auto entry4 = t.produce_first_page_and_save_querier(4, t.make_partition_range({1, false}, {3, true}), 1);
     const auto entry5 = t.produce_first_page_and_save_querier(5, t.make_partition_range({1, false}, {3, true}), 2);
     t.assert_cache_lookup(entry4.key, *t.get_schema(), entry4.expected_range, entry5.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
     t.assert_cache_lookup(entry5.key, *t.get_schema(), entry5.expected_range, entry4.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
@@ -461,7 +434,6 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_different_schema_version_drops) {
 
     const auto entry = t.produce_first_page_and_save_querier();
     t.assert_cache_lookup(entry.key, *new_schema, entry.expected_range, entry.expected_slice)
-        .factory_invoked()
         .no_misses()
         .drops()
         .no_evictions();
@@ -483,7 +455,6 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
     seastar::sleep(700ms).get();
 
     t.assert_cache_lookup(entry1.key, *t.get_schema(), entry1.expected_range, entry1.expected_slice)
-        .factory_invoked()
         .misses()
         .no_drops()
         .time_based_evictions();
@@ -491,7 +462,6 @@ SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
     seastar::sleep(700ms).get();
 
     t.assert_cache_lookup(entry2.key, *t.get_schema(), entry2.expected_range, entry2.expected_slice)
-        .factory_invoked()
         .misses()
         .no_drops()
         .time_based_evictions();
@@ -533,7 +503,6 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
     t.produce_first_page_and_save_querier(queriers_needed_to_fill_cache);
 
     t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
-        .factory_invoked()
         .misses()
         .no_drops()
         .memory_based_evictions();
