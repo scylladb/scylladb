@@ -389,7 +389,11 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no);
 
 using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::unique_ptr<flat_mutation_reader>>>(unsigned,
+        schema_ptr,
         const dht::partition_range&,
+        const query::partition_slice&,
+        const io_priority_class&,
+        tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding)>;
 
@@ -412,7 +416,10 @@ using remote_reader_factory = noncopyable_function<future<foreign_ptr<std::uniqu
 /// foreign_reader to issue sufficient read-aheads on its own to avoid blocking.
 flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
         const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
+        tracing::trace_state_ptr trace_state = nullptr,
         streamed_mutation::forwarding fwd_sm = streamed_mutation::forwarding::no,
         mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);

@@ -985,7 +985,10 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
 class multishard_combining_reader : public flat_mutation_reader::impl {
     const dht::i_partitioner& _partitioner;
     const dht::partition_range* _pr;
+    const query::partition_slice& _ps;
+    const io_priority_class& _pc;
     remote_reader_factory _reader_factory;
+    tracing::trace_state_ptr _trace_state;
     const streamed_mutation::forwarding _fwd_sm;
     const mutation_reader::forwarding _fwd_mr;
 
@@ -1078,8 +1081,11 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
 public:
     multishard_combining_reader(schema_ptr s,
         const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
+        tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr);
 
@@ -1135,7 +1141,8 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
     if (_read_ahead) {
         return _reader_promise.get_future();
     }
-    return _parent._reader_factory(_shard, *_parent._pr, _parent._fwd_sm, _parent._fwd_mr).then(
+    return _parent._reader_factory(_shard, _parent._schema, *_parent._pr, _parent._ps, _parent._pc, _parent._trace_state, _parent._fwd_sm,
+            _parent._fwd_mr).then(
             [this, state = _state] (foreign_ptr<std::unique_ptr<flat_mutation_reader>>&& r) mutable {
         // Use the captured instance to check whether the reader is abdandoned.
         // If the reader is abandoned we can't read members of this anymore.
@@ -1203,14 +1210,20 @@ future<> multishard_combining_reader::handle_empty_reader_buffer(db::timeout_clo
 
 multishard_combining_reader::multishard_combining_reader(schema_ptr s,
         const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
+        tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr)
     : impl(s)
     , _partitioner(partitioner)
     , _pr(&pr)
+    , _ps(ps)
+    , _pc(pc)
     , _reader_factory(std::move(reader_factory))
+    , _trace_state(std::move(trace_state))
     , _fwd_sm(fwd_sm)
     , _fwd_mr(fwd_mr)
     , _current_shard(pr.start() ? _partitioner.shard_of(pr.start()->value().token()) : _partitioner.shard_of_minimum_token())
@@ -1286,9 +1299,13 @@ future<> multishard_combining_reader::fast_forward_to(position_range pr, db::tim
 
 flat_mutation_reader make_multishard_combining_reader(schema_ptr schema,
         const dht::partition_range& pr,
+        const query::partition_slice& ps,
+        const io_priority_class& pc,
         const dht::i_partitioner& partitioner,
         remote_reader_factory reader_factory,
+        tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr) {
-    return make_flat_mutation_reader<multishard_combining_reader>(schema, pr, partitioner, std::move(reader_factory), fwd_sm, fwd_mr);
+    return make_flat_mutation_reader<multishard_combining_reader>(std::move(schema), pr, ps, pc, partitioner, std::move(reader_factory),
+            std::move(trace_state), fwd_sm, fwd_mr);
 }
