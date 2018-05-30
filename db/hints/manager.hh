@@ -32,6 +32,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_mutex.hh>
 #include "gms/gossiper.hh"
+#include "locator/snitch_base.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
@@ -62,6 +63,7 @@ private:
     class drain_tag {};
     using drain = seastar::bool_class<drain_tag>;
 
+public:
     class end_point_hints_manager {
     public:
         using key_type = gms::inet_address;
@@ -389,49 +391,6 @@ private:
     using ep_key_type = typename end_point_hints_manager::key_type;
     using ep_managers_map_type = std::unordered_map<ep_key_type, end_point_hints_manager>;
 
-    class space_watchdog {
-    private:
-        static const std::chrono::seconds _watchdog_period;
-
-    private:
-        std::unordered_set<ep_key_type> _eps_with_pending_hints;
-        size_t _total_size = 0;
-        manager& _shard_manager;
-        seastar::gate _gate;
-        seastar::timer<timer_clock_type> _timer;
-        int _files_count = 0;
-
-    public:
-        space_watchdog(manager& shard_manager);
-        future<> stop() noexcept;
-        void start();
-
-    private:
-        /// \brief Check that hints don't occupy too much disk space.
-        ///
-        /// Verifies that the whole \ref manager::_hints_dir occupies less than \ref manager::max_shard_disk_space_size.
-        ///
-        /// If it does, stop all end point managers that have more than one hints file - we don't want some DOWN Node to
-        /// prevent hints to other Nodes from being generated (e.g. due to some temporary overload and timeout).
-        ///
-        /// This is a simplistic implementation of a manager for a limited shared resource with a minimum guarantied share for all
-        /// participants.
-        ///
-        /// This implementation guaranties at least a single hint share for all end point managers.
-        void on_timer();
-
-        /// \brief Scan files in a single end point directory.
-        ///
-        /// Add sizes of files in the directory to _total_size. If number of files is greater than 1 add this end point ID
-        /// to _eps_with_pending_hints so that we may block it if _total_size value becomes greater than the maximum allowed
-        /// value.
-        ///
-        /// \param path directory to scan
-        /// \param ep_name end point ID (as a string)
-        /// \return future that resolves when scanning is complete
-        future<> scan_one_ep_dir(boost::filesystem::path path, ep_key_type ep_name);
-    };
-
 public:
     static const std::string FILENAME_PREFIX;
     static const std::chrono::seconds hints_flush_period;
@@ -453,10 +412,10 @@ private:
 
     resource_manager& _resource_manager;
 
-    space_watchdog _space_watchdog;
     ep_managers_map_type _ep_managers;
     stats _stats;
     seastar::metrics::metric_groups _metrics;
+    std::unordered_set<ep_key_type> _eps_with_pending_hints;
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -507,6 +466,32 @@ public:
         return it->second.hints_in_progress();
     }
 
+    void add_ep_with_pending_hints(ep_key_type key) {
+        _eps_with_pending_hints.insert(key);
+    }
+
+    void clear_eps_with_pending_hints() {
+        _eps_with_pending_hints.clear();
+        _eps_with_pending_hints.reserve(_ep_managers.size());
+    }
+
+    bool has_ep_with_pending_hints(ep_key_type key) const {
+        return _eps_with_pending_hints.count(key);
+    }
+
+    size_t ep_managers_size() const {
+        return _ep_managers.size();
+    }
+
+    const boost::filesystem::path& hints_dir() const {
+        return _hints_dir;
+    }
+
+    void allow_hints();
+    void forbid_hints();
+    void forbid_hints_for_eps_with_pending_hints();
+
+
     static future<> rebalance() {
         // TODO
         return make_ready_future<>();
@@ -523,10 +508,6 @@ public:
 private:
     node_to_hint_store_factory_type& store_factory() noexcept {
         return _store_factory;
-    }
-
-    const boost::filesystem::path& hints_dir() const {
-        return _hints_dir;
     }
 
     service::storage_proxy& local_storage_proxy() const noexcept {
@@ -555,7 +536,7 @@ private:
     /// \param endpoint node that left the cluster
     void drain_for(gms::inet_address endpoint);
 
-private:
+public:
     ep_managers_map_type::iterator find_ep_manager(ep_key_type ep_key) noexcept {
         return _ep_managers.find(ep_key);
     }

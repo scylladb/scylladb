@@ -42,7 +42,6 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
-const std::chrono::seconds manager::space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
 size_t db::hints::resource_manager::max_shard_disk_space_size;
 
@@ -53,7 +52,6 @@ manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
     , _resource_manager(res_manager)
-    , _space_watchdog(*this)
 {
     namespace sm = seastar::metrics;
 
@@ -91,8 +89,6 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
         _strorage_service_anchor->register_subscriber(this);
-        // we are ready to store new hints...
-        _space_watchdog.start();
     });
 }
 
@@ -106,15 +102,32 @@ future<> manager::stop() {
     _stopping = true;
 
     return _draining_eps_gate.close().finally([this] {
-        return when_all(
-            parallel_for_each(_ep_managers, [] (auto& pair) {
+        return parallel_for_each(_ep_managers, [] (auto& pair) {
                 return pair.second.stop();
-            }),
-            _space_watchdog.stop()
-        ).finally([this] {
+            }).finally([this] {
             _ep_managers.clear();
             manager_logger.info("Stopped");
         }).discard_result();
+    });
+}
+
+void manager::allow_hints() {
+    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.allow_hints(); });
+}
+
+void manager::forbid_hints() {
+    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.forbid_hints(); });
+}
+
+void manager::forbid_hints_for_eps_with_pending_hints() {
+    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
+    boost::for_each(_ep_managers, [this] (auto& pair) {
+        end_point_hints_manager& ep_man = pair.second;
+        if (has_ep_with_pending_hints(ep_man.end_point_key())) {
+            ep_man.forbid_hints();
+        } else {
+            ep_man.allow_hints();
+        }
     });
 }
 
@@ -416,118 +429,6 @@ const column_mapping& manager::end_point_hints_manager::sender::get_column_mappi
     }
 
     return cm_it->second;
-}
-
-manager::space_watchdog::space_watchdog(manager& shard_manager)
-    : _shard_manager(shard_manager)
-    , _timer([this] { on_timer(); })
-{}
-
-void manager::space_watchdog::start() {
-    _timer.arm(timer_clock_type::now());
-}
-
-future<> manager::space_watchdog::stop() noexcept {
-    try {
-        return _gate.close().finally([this] { _timer.cancel(); });
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
-}
-
-future<> manager::space_watchdog::scan_one_ep_dir(boost::filesystem::path path, ep_key_type ep_key) {
-    return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key] (lister::path dir, directory_entry de) {
-        // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
-        if (_files_count == 1) {
-            _eps_with_pending_hints.emplace(ep_key);
-        }
-        ++_files_count;
-
-        return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
-            _total_size += fsize;
-        });
-    });
-}
-
-void manager::space_watchdog::on_timer() {
-    with_gate(_gate, [this] {
-        return futurize_apply([this] {
-            _eps_with_pending_hints.clear();
-            _eps_with_pending_hints.reserve(_shard_manager._ep_managers.size());
-            _total_size = 0;
-
-            // The hints directories are organized as follows:
-            // <hints root>
-            //    |- <shard1 ID>
-            //    |  |- <EP1 address>
-            //    |     |- <hints file1>
-            //    |     |- <hints file2>
-            //    |     |- ...
-            //    |  |- <EP2 address>
-            //    |     |- ...
-            //    |  |-...
-            //    |- <shard2 ID>
-            //    |  |- ...
-            //    ...
-            //    |- <shardN ID>
-            //    |  |- ...
-            //
-
-            // This is a top level shard hints directory, let's enumerate per-end-point sub-directories...
-            return lister::scan_dir(_shard_manager._hints_dir, {directory_entry_type::directory}, [this] (lister::path dir, directory_entry de) {
-                _files_count = 0;
-                // Let's scan per-end-point directories and enumerate hints files...
-                //
-                // Let's check if there is a corresponding end point manager (may not exist if the corresponding DC is
-                // not hintable).
-                // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
-                // continue to enumeration - there is no one to change them.
-                auto it = _shard_manager.find_ep_manager(de.name);
-                if (it != _shard_manager.ep_managers_end()) {
-                    return with_lock(it->second.file_update_mutex(), [this, dir = std::move(dir), ep_name = std::move(de.name)]() mutable {
-                         return scan_one_ep_dir(dir / ep_name.c_str(), ep_key_type(ep_name));
-                    });
-                } else {
-                    return scan_one_ep_dir(dir / de.name.c_str(), ep_key_type(de.name));
-                }
-            }).then([this] {
-                // Adjust the quota to take into account the space we guarantee to every end point manager
-                size_t adjusted_quota = 0;
-                size_t delta = _shard_manager._ep_managers.size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
-                if (resource_manager::max_shard_disk_space_size > delta) {
-                    adjusted_quota = resource_manager::max_shard_disk_space_size - delta;
-                }
-
-                bool can_hint = _total_size < adjusted_quota;
-                manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
-
-                if (!can_hint) {
-                    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-                    std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [this] (auto& pair) {
-                        end_point_hints_manager& ep_man = pair.second;
-                        auto it = _eps_with_pending_hints.find(ep_man.end_point_key());
-                        if (it != _eps_with_pending_hints.end()) {
-                            ep_man.forbid_hints();
-                        } else {
-                            ep_man.allow_hints();
-                        }
-                    });
-                } else {
-                    std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [] (auto& pair) {
-                        pair.second.allow_hints();
-                    });
-                }
-            });
-        }).handle_exception([this] (auto eptr) {
-            manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
-            // Stop all hint generators if space_watchdog callback failed
-            std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [this] (auto& pair) {
-                pair.second.forbid_hints();
-            });
-        }).finally([this] {
-            _timer.arm(_watchdog_period);
-        });
-    });
 }
 
 bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {

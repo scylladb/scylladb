@@ -29,10 +29,78 @@
 #include "seastarx.hh"
 #include <unordered_set>
 #include <boost/filesystem.hpp>
-#include <gms/inet_address.hh>
+#include <gms/gossiper.hh>
+
+
+namespace service {
+class storage_proxy;
+class storage_service;
+}
 
 namespace db {
 namespace hints {
+
+using timer_clock_type = seastar::lowres_clock;
+
+class manager;
+
+class space_watchdog {
+private:
+    using ep_key_type = gms::inet_address;
+    static const std::chrono::seconds _watchdog_period;
+
+    struct manager_hash {
+        size_t operator()(const manager& manager) const {
+            return reinterpret_cast<uintptr_t>(&manager);
+        }
+    };
+    struct manager_comp {
+        bool operator()(const std::reference_wrapper<manager>& m1, const std::reference_wrapper<manager>& m2) const {
+            return std::addressof(m1.get()) == std::addressof(m2.get());
+        }
+    };
+
+public:
+    using shard_managers_set = std::unordered_set<std::reference_wrapper<manager>, manager_hash, manager_comp>;
+
+private:
+    size_t _total_size = 0;
+    shard_managers_set& _shard_managers;
+    seastar::gate _gate;
+    seastar::timer<timer_clock_type> _timer;
+    int _files_count = 0;
+
+public:
+    space_watchdog(shard_managers_set& managers);
+    void start();
+    future<> stop() noexcept;
+    size_t end_point_managers_count() const;
+
+private:
+    /// \brief Check that hints don't occupy too much disk space.
+    ///
+    /// Verifies that all \ref manager::_hints_dir dirs for all managers occupy less than \ref resource_limits::max_shard_disk_space_size.
+    ///
+    /// If they do, stop all end point managers that have more than one hints file - we don't want some DOWN Node to
+    /// prevent hints to other Nodes from being generated (e.g. due to some temporary overload and timeout).
+    ///
+    /// This is a simplistic implementation of a manager for a limited shared resource with a minimum guaranteed share for all
+    /// participants.
+    ///
+    /// This implementation guarantees at least a single hint share for all end point managers.
+    void on_timer();
+
+    /// \brief Scan files in a single end point directory.
+    ///
+    /// Add sizes of files in the directory to _total_size. If number of files is greater than 1 add this end point ID
+    /// to _eps_with_pending_hints so that we may block it if _total_size value becomes greater than the maximum allowed
+    /// value.
+    ///
+    /// \param path directory to scan
+    /// \param ep_name end point ID (as a string)
+    /// \return future that resolves when scanning is complete
+    future<> scan_one_ep_dir(boost::filesystem::path path, manager& shard_manager, ep_key_type ep_key);
+};
 
 class resource_manager {
     const size_t _max_send_in_flight_memory;
@@ -40,6 +108,8 @@ class resource_manager {
     seastar::semaphore _send_limiter;
 
     uint64_t _size_of_hints_in_progress = 0;
+    space_watchdog::shard_managers_set _shard_managers;
+    space_watchdog _space_watchdog;
 
 public:
     static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
@@ -53,6 +123,7 @@ public:
         : _max_send_in_flight_memory(std::max(memory::stats().total_memory() / 10, max_hints_send_queue_length))
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _send_limiter(_max_send_in_flight_memory)
+        , _space_watchdog(_shard_managers)
     {}
 
     future<semaphore_units<semaphore_default_exception_factory>> get_send_units_for(size_t buf_size);
@@ -72,6 +143,10 @@ public:
     inline void dec_size_of_hints_in_progress(int64_t delta) {
         _size_of_hints_in_progress -= delta;
     }
+
+    future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
+    future<> stop() noexcept;
+    void register_manager(manager& m);
 };
 
 }
