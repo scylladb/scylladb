@@ -34,14 +34,18 @@
 
 using namespace std::literals::chrono_literals;
 
-// Requires on #3362
-#if 0
+// This test checks various cases where a base table row disappears - or does
+// not disappear - when its last column is deleted (with DELETE or by setting
+// it to null). We want to confirm that the view row disappears - or does not
+// disappear - accordingly. This reproduces
+// https://issues.apache.org/jira/browse/CASSANDRA-14393
 void test_partial_delete_unselected_column(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select p, c from cf "
                   "where p is not null and c is not null "
                   "primary key (p, c)").get();
 
+    BOOST_TEST_PASSPOINT();
     e.execute_cql("update cf using timestamp 10 set b = 1 where p = 1 and c = 1").get();
     maybe_flush();
     eventually([&] {
@@ -49,20 +53,30 @@ void test_partial_delete_unselected_column(cql_test_env& e, std::function<void()
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
 
+    BOOST_TEST_PASSPOINT();
     e.execute_cql("delete b from cf using timestamp 11 where p = 1 and c = 1").get();
+    // Because above we used "update" to insert the b=1 cell, a so-called
+    // row-marker is not added, and when we delete this cell, all trace of
+    // this row disappears from the base table. Accordingly, it should
+    // disappear from the view as well:
     maybe_flush();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().is_empty();
     });
 
+    BOOST_TEST_PASSPOINT();
     e.execute_cql("update cf using timestamp 1 set a = 1 where p = 1 and c = 1").get();
+    // Above we deleted only the "b" cell, not the entire row, so when we add
+    // "a" with an earlier timestamp, it is not shadowed by the deletion, and
+    // we have a row in the base table (and accordingly, in the view).
     maybe_flush();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
 
+    BOOST_TEST_PASSPOINT();
     e.execute_cql("update cf using timestamp 18 set a = 1 where p = 1 and c = 1").get();
     maybe_flush();
     eventually([&] {
@@ -70,6 +84,12 @@ void test_partial_delete_unselected_column(cql_test_env& e, std::function<void()
         assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
 
+    // This tests the same thing as the "DELETE" test above (deleting the only
+    // cell causes no trace of the row to remain, and the row disappears from
+    // the view as well) - it's just that we delete the cell by setting it to
+    // "null" instead of using the "DELETE" command. See also
+    // https://issues.apache.org/jira/browse/CASSANDRA-11805.
+    BOOST_TEST_PASSPOINT();
     e.execute_cql("update cf using timestamp 20 set a = null where p = 1 and c = 1").get();
     maybe_flush();
     eventually([&] {
@@ -77,10 +97,16 @@ void test_partial_delete_unselected_column(cql_test_env& e, std::function<void()
         assert_that(msg).is_rows().is_empty();
     });
 
+    BOOST_TEST_PASSPOINT();
+    // We now insert a row to the base table. It's without values for the
+    // non-key columns, but the row nevertheless exists (this is implemented
+    // via a "row marker"). None of the updates we did above with higher
+    // timestamps delete this row - only its individual cells. So the row now
+    // exists in the base table, so should also exist in the view table.
     e.execute_cql("insert into cf (p, c) values (1, 1) using timestamp 15").get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
-        assert_that(msg).is_rows().is_empty();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
     });
 }
 
@@ -99,7 +125,6 @@ SEASTAR_TEST_CASE(test_partial_delete_unselected_column_with_flush) {
         });
     }, cfg);
 }
-#endif
 
 void test_partial_delete_selected_column(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, a int, b int, e int, f int, primary key (p, c))").get();
