@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <boost/dynamic_bitset.hpp>
+
 #include "bytes.hh"
 #include "key.hh"
 #include "core/temporary_buffer.hh"
@@ -31,6 +33,7 @@
 #include "liveness_info.hh"
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include "utils/chunked_vector.hh"
 #include "types.hh"
 #include "gc_clock.hh"
@@ -540,6 +543,7 @@ private:
         ROW_BODY_DELETION_2,
         ROW_BODY_DELETION_3,
         ROW_BODY_MISSING_COLUMNS,
+        ROW_BODY_MISSING_COLUMNS_2,
         COLUMN,
         SIMPLE_COLUMN,
         COMPLEX_COLUMN,
@@ -572,6 +576,7 @@ private:
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
+    boost::dynamic_bitset<uint64_t> _columns_selector;
 
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
@@ -589,10 +594,20 @@ private:
         _column_ids = boost::make_iterator_range(column_ids);
         _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
     }
+    bool is_current_column_present() {
+        return _columns_selector.test(_columns_selector.size() - _column_ids.size());
+    }
+    void skip_absent_columns() {
+        if (!no_more_columns() && !is_current_column_present()) {
+            move_to_next_column();
+        }
+    }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
-        _column_ids.advance_begin(1);
-        _column_value_fix_lengths.advance_begin(1);
+        do {
+            _column_ids.advance_begin(1);
+            _column_value_fix_lengths.advance_begin(1);
+        } while (!no_more_columns() && !is_current_column_present());
     }
     bool is_column_simple() { return true; }
     stdx::optional<column_id> get_column_id() {
@@ -637,7 +652,7 @@ public:
                 || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
                 || _state == state::ROW_BODY_DELETION_3
-                || _state == state::ROW_BODY_MISSING_COLUMNS
+                || _state == state::ROW_BODY_MISSING_COLUMNS_2
                 || _state == state::COLUMN
                 || _state == state::NEXT_COLUMN
                 || _state == state::COLUMN_TIMESTAMP
@@ -845,7 +860,14 @@ public:
         case state::ROW_BODY_MISSING_COLUMNS:
         row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
-                throw malformed_sstable_exception("unimplemented state: all columns have to be present");
+                if (read_unsigned_vint(data) != read_status::ready) {
+                    _state = state::ROW_BODY_MISSING_COLUMNS_2;
+                    break;
+                }
+                goto row_body_missing_columns_2_label;
+            } else {
+                _columns_selector = boost::dynamic_bitset<uint64_t>(_column_ids.size());
+                _columns_selector.set();
             }
         case state::COLUMN:
         column_label:
@@ -953,6 +975,20 @@ public:
             move_to_next_column();
             _state = state::COLUMN;
             goto column_label;
+        case state::ROW_BODY_MISSING_COLUMNS_2:
+        row_body_missing_columns_2_label:
+            {
+                uint64_t first_variant_read = _u64;
+                if (_column_ids.size() < 64) {
+                    _columns_selector.clear();
+                    _columns_selector.append(first_variant_read);
+                    _columns_selector.flip();
+                    _columns_selector.resize(_column_ids.size());
+                    skip_absent_columns();
+                    goto column_label;
+                }
+                throw malformed_sstable_exception("unimplemented state: column subsets bigger than 63 not supported");
+            }
         case state::COMPLEX_COLUMN:
         complex_column_label:
             throw malformed_sstable_exception("unimplemented state: complex columns not supported");
