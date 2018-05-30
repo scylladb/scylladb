@@ -541,6 +541,14 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                                   const query_options& options,
                                   gc_clock::time_point now)
 {
+    bool fast_path = !needs_post_query_ordering() && _selection->is_trivial();
+    if (fast_path) {
+        return make_shared<cql_transport::messages::result_message::rows>(result(
+            result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
+            ::make_shared<metadata>(*_selection->get_result_metadata())
+        ));
+    }
+
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
     query::result_view::consume(*results, cmd->slice,
