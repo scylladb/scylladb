@@ -52,7 +52,7 @@ logging::logger trace_state_logger("trace_state");
 struct trace_state::params_values {
     std::experimental::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
     std::experimental::optional<api::timestamp_type> user_timestamp;
-    std::experimental::optional<sstring> query;
+    std::vector<sstring> queries;
     std::experimental::optional<db::consistency_level> cl;
     std::experimental::optional<db::consistency_level> serial_cl;
     std::experimental::optional<int32_t> page_size;
@@ -89,8 +89,8 @@ void trace_state::set_page_size(int32_t val) {
     }
 }
 
-void trace_state::set_query(const sstring& val) {
-    _params_ptr->query.emplace(val);
+void trace_state::add_query(const sstring& val) {
+    _params_ptr->queries.emplace_back(val);
 }
 
 void trace_state::set_user_timestamp(api::timestamp_type val) {
@@ -121,8 +121,16 @@ void trace_state::build_parameters_map() {
         params_map.emplace("page_size", seastar::format("{:d}", *vals.page_size));
     }
 
-    if (vals.query) {
-        params_map.emplace("query", *vals.query);
+    auto& queries = vals.queries;
+    if (!queries.empty()) {
+        if (queries.size() == 1) {
+            params_map.emplace("query", queries[0]);
+        } else {
+            // BATCH
+            for (size_t i = 0; i < queries.size(); ++i) {
+                params_map.emplace(format("query[{:d}]", i), queries[i]);
+            }
+        }
     }
 
     if (vals.user_timestamp) {

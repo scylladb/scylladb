@@ -335,7 +335,7 @@ private:
      *
      * @param val the query string
      */
-    void set_query(const sstring& val);
+    void add_query(const sstring& val);
 
     /**
      * Store a user provided timestamp.
@@ -422,7 +422,7 @@ private:
     friend void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val);
     friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>&val);
-    friend void set_query(const trace_state_ptr& p, const sstring& val);
+    friend void add_query(const trace_state_ptr& p, const sstring& val);
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
     friend void set_username(const trace_state_ptr& p, const stdx::optional<auth::authenticated_user>& user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
@@ -516,9 +516,9 @@ inline void set_optional_serial_consistency_level(const trace_state_ptr& p, cons
     }
 }
 
-inline void set_query(const trace_state_ptr& p, const sstring& val) {
+inline void add_query(const trace_state_ptr& p, const sstring& val) {
     if (p) {
-        p->set_query(val);
+        p->add_query(val);
     }
 }
 
