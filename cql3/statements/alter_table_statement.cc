@@ -247,10 +247,11 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         cfm.with_column(column_name->name(), type, _is_static ? column_kind::static_column : column_kind::regular_column);
 
         // Adding a column to a table which has an include all view requires the column to be added to the view
-        // as well
+        // as well. If the view has a regular base column in its PK, then the column ID needs to be updated in
+        // view_info; for that, rebuild the schema.
         if (!_is_static) {
             for (auto&& view : cf.views()) {
-                if (view->view_info()->include_all_columns()) {
+                if (view->view_info()->include_all_columns() || view->view_info()->base_non_pk_column_in_view_pk()) {
                     schema_builder builder(view);
                     builder.with_column(column_name->name(), type);
                     view_updates.push_back(view_ptr(builder.build()));
