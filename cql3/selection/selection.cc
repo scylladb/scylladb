@@ -53,13 +53,15 @@ selection::selection(schema_ptr schema,
     std::vector<const column_definition*> columns,
     std::vector<::shared_ptr<column_specification>> metadata_,
     bool collect_timestamps,
-    bool collect_TTLs)
+    bool collect_TTLs,
+    trivial is_trivial)
         : _schema(std::move(schema))
         , _columns(std::move(columns))
         , _metadata(::make_shared<metadata>(std::move(metadata_)))
         , _collect_timestamps(collect_timestamps)
         , _collect_TTLs(collect_TTLs)
         , _contains_static_columns(std::any_of(_columns.begin(), _columns.end(), std::mem_fn(&column_definition::is_static)))
+        , _is_trivial(is_trivial)
 { }
 
 query::partition_slice::option_set selection::get_query_options() {
@@ -100,7 +102,7 @@ public:
      */
     simple_selection(schema_ptr schema, std::vector<const column_definition*> columns,
         std::vector<::shared_ptr<column_specification>> metadata, bool is_wildcard)
-            : selection(schema, std::move(columns), std::move(metadata), false, false)
+            : selection(schema, std::move(columns), std::move(metadata), false, false, trivial::yes)
             , _is_wildcard(is_wildcard)
     { }
 
