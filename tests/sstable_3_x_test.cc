@@ -539,6 +539,168 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types
     });
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/subset_of_columns
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT,
+//                                   bool_val BOOLEAN,
+//                                   double_val DOUBLE,
+//                                   float_val FLOAT,
+//                                   int_val INT,
+//                                   long_val BIGINT,
+//                                   timestamp_val TIMESTAMP,
+//                                   timeuuid_val TIMEUUID,
+//                                   uuid_val UUID,
+//                                   text_val TEXT,
+//                                   PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(1, 0.11, 0.1, 1, 11, '2015-05-01 09:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 1');
+// INSERT INTO test_ks.test_table(pk, bool_val, int_val, long_val, timestamp_val, timeuuid_val,
+//                                uuid_val, text_val)
+//                         VALUES(2, false, 2, 22, '2015-05-02 10:30:54.234+0000',
+//                                50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab,
+//                                'variable length text 2');
+// INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, long_val, timestamp_val, text_val)
+//                         VALUES(3, true, 0.33, 0.3, 33, '2015-05-03 11:30:54.234+0000', 'variable length text 3');
+// INSERT INTO test_ks.test_table(pk, bool_val, text_val)
+//                         VALUES(4, false, 'variable length text 4');
+// INSERT INTO test_ks.test_table(pk, int_val, long_val, timeuuid_val, uuid_val)
+//                         VALUES(5, 5, 55, 50554d6e-29bb-11e5-b345-feff819cdc9f, 01234567-0123-0123-0123-0123456789ab);
+
+static thread_local const sstring UNCOMPRESSED_SUBSET_OF_COLUMNS_PATH =
+    "tests/sstables/3.x/uncompressed/subset_of_columns";
+static thread_local const schema_ptr UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("bool_val", boolean_type)
+        .with_column("double_val", double_type)
+        .with_column("float_val", float_type)
+        .with_column("int_val", int32_type)
+        .with_column("long_val", long_type)
+        .with_column("timestamp_val", timestamp_type)
+        .with_column("timeuuid_val", timeuuid_type)
+        .with_column("uuid_val", uuid_type)
+        .with_column("text_val", utf8_type)
+        .build();
+
+SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
+    return seastar::async([] {
+        sstable_assertions sst(UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA,
+                               UNCOMPRESSED_SUBSET_OF_COLUMNS_PATH);
+        sst.load();
+        auto to_key = [] (int key) {
+            auto bytes = int32_type->decompose(int32_t(key));
+            auto pk = partition_key::from_single_value(*UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA, pk);
+        };
+
+        auto bool_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("bool_val"));
+        BOOST_REQUIRE(bool_cdef);
+        auto double_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("double_val"));
+        BOOST_REQUIRE(double_cdef);
+        auto float_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("float_val"));
+        BOOST_REQUIRE(float_cdef);
+        auto int_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("int_val"));
+        BOOST_REQUIRE(int_cdef);
+        auto long_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("long_val"));
+        BOOST_REQUIRE(long_cdef);
+        auto timestamp_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("timestamp_val"));
+        BOOST_REQUIRE(timestamp_cdef);
+        auto timeuuid_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("timeuuid_val"));
+        BOOST_REQUIRE(timeuuid_cdef);
+        auto uuid_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("uuid_val"));
+        BOOST_REQUIRE(uuid_cdef);
+        auto text_cdef =
+            UNCOMPRESSED_SUBSET_OF_COLUMNS_SCHEMA->get_column_definition(to_bytes("text_val"));
+        BOOST_REQUIRE(text_cdef);
+
+        auto generate = [&] (std::optional<bool> bool_val, std::optional<double> double_val,
+                             std::optional<float> float_val, std::optional<int> int_val, std::optional<long> long_val,
+                             std::optional<sstring_view> timestamp_val, std::optional<sstring_view> timeuuid_val,
+                             std::optional<sstring_view> uuid_val, std::optional<sstring_view> text_val) {
+            std::vector<flat_reader_assertions::expected_column> columns;
+
+            if (bool_val) {
+                columns.push_back({bool_cdef, boolean_type->decompose(*bool_val)});
+            }
+            if (double_val) {
+                columns.push_back({double_cdef, double_type->decompose(*double_val)});
+            }
+            if (float_val) {
+                columns.push_back({float_cdef, float_type->decompose(*float_val)});
+            }
+            if (int_val) {
+                columns.push_back({int_cdef, int32_type->decompose(*int_val)});
+            }
+            if (long_val) {
+                columns.push_back({long_cdef, long_type->decompose(*long_val)});
+            }
+            if (timestamp_val) {
+                columns.push_back({timestamp_cdef, timestamp_type->from_string(*timestamp_val)});
+            }
+            if (timeuuid_val) {
+                columns.push_back({timeuuid_cdef, timeuuid_type->from_string(*timeuuid_val)});
+            }
+            if (uuid_val) {
+                columns.push_back({uuid_cdef, uuid_type->from_string(*uuid_val)});
+            }
+            if (text_val) {
+                columns.push_back({text_cdef, utf8_type->from_string(*text_val)});
+            }
+
+            return std::move(columns);
+        };
+
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(5))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({}, {}, {}, 5, 55, {},
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   {}))
+            .produces_partition_end()
+            .produces_partition_start(to_key(1))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate({}, 0.11, 0.1, 1, 11, "2015-05-01 09:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 1"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(false, {}, {}, 2, 22, "2015-05-02 10:30:54.234+0000",
+                                   "50554d6e-29bb-11e5-b345-feff819cdc9f", "01234567-0123-0123-0123-0123456789ab",
+                                   "variable length text 2"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(4))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(false, {}, {}, {}, {}, {},
+                                   {}, {},
+                                   "variable length text 4"))
+            .produces_partition_end()
+            .produces_partition_start(to_key(3))
+            .produces_row(clustering_key_prefix::make_empty(),
+                          generate(true, 0.33, 0.3, {}, 33, "2015-05-03 11:30:54.234+0000",
+                                   {}, {},
+                                   "variable length text 3"))
+            .produces_partition_end()
+            .produces_end_of_stream();
+    });
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
