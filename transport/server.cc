@@ -943,6 +943,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
     tracing::add_query(client_state.get_trace_state(), prepared->raw_cql_statement);
+    tracing::add_prepared_statement(client_state.get_trace_state(), prepared);
 
     tracing::begin(client_state.get_trace_state(), seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
                    client_state.get_client_address());
@@ -959,6 +960,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
+        tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
@@ -1028,6 +1030,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+        tracing::add_prepared_statement(client_state.get_trace_state(), ps);
 
         modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
 
@@ -1057,6 +1060,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
         return this->make_result(stream, msg, query_state.get_trace_state());
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
+        tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
