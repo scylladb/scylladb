@@ -35,6 +35,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/commitlog/commitlog.hh"
 #include "utils/loading_shared_values.hh"
+#include "db/hints/resource_manager.hh"
 
 namespace service {
 class storage_service;
@@ -430,13 +431,8 @@ public:
     static const std::string FILENAME_PREFIX;
     static const std::chrono::seconds hints_flush_period;
     static const std::chrono::seconds hint_file_write_timeout;
-    static size_t max_shard_disk_space_size;
 
 private:
-    static constexpr uint64_t _max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
-    static constexpr size_t _hint_segment_size_in_mb = 32;
-    static constexpr size_t _max_hints_per_ep_size_mb = 128; // 4 files 32MB each
-    static constexpr size_t _max_hints_send_queue_length = 128;
     const boost::filesystem::path _hints_dir;
 
     node_to_hint_store_factory_type _store_factory;
