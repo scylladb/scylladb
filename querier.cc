@@ -45,12 +45,6 @@ static sstring cannot_use_reason(querier::can_use cu)
     return "unknown reason";
 }
 
-position_view querier::current_position() const {
-    const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
-    const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
-    return {dk, clustering_key};
-}
-
 bool querier::ring_position_matches(const dht::partition_range& range, position_view pos) const {
     const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
 

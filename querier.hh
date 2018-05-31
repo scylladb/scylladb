@@ -120,8 +120,6 @@ private:
         }
     }
 
-    position_view current_position() const;
-
     bool ring_position_matches(const dht::partition_range& range, position_view pos) const;
 
     bool clustering_position_matches(const query::partition_slice& slice, position_view pos) const;
@@ -209,6 +207,12 @@ public:
 
     schema_ptr schema() const {
         return _schema;
+    }
+
+    position_view current_position() const {
+        const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
+        const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
+        return {dk, clustering_key};
     }
 };
 
