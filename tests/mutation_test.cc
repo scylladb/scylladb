@@ -63,7 +63,21 @@ static sstring some_column_family("cf");
 static db::nop_large_partition_handler nop_lp_handler;
 
 static atomic_cell make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, std::move(value));
+    return atomic_cell::make_live(*bytes_type, 0, std::move(value));
+}
+
+static atomic_cell make_atomic_cell() {
+    return atomic_cell::make_live(*bytes_type, 0, bytes_view());
+}
+
+template<typename T>
+static atomic_cell make_atomic_cell(data_type dt, T value) {
+    return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)));
+};
+
+template<typename T>
+static atomic_cell make_collection_member(data_type dt, T value) {
+    return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)));
 };
 
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
@@ -100,16 +114,17 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
         auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
 
         mutation m(s, key);
-        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
+        auto c = make_atomic_cell(int32_type, 3);
+        m.set_clustered_cell(c_key, r1_col, std::move(c));
         mt->apply(std::move(m));
 
         auto p = get_partition(*mt, key);
         row& r = p.clustered_row(*s, c_key).cells();
         auto i = r.find_cell(r1_col.id);
         BOOST_REQUIRE(i);
-        auto cell = i->as_atomic_cell();
+        auto cell = i->as_atomic_cell(r1_col);
         BOOST_REQUIRE(cell.is_live());
-        BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
+        BOOST_REQUIRE(int32_type->equal(cell.value().linearize(), int32_type->decompose(3)));
     });
 }
 
@@ -172,6 +187,23 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
     return make_ready_future<>();
 }
 
+collection_type_impl::mutation make_collection_mutation(tombstone t, bytes key, atomic_cell cell)
+{
+    collection_type_impl::mutation m;
+    m.tomb = t;
+    m.cells.emplace_back(std::move(key), std::move(cell));
+    return m;
+}
+
+collection_type_impl::mutation make_collection_mutation(tombstone t, bytes key1, atomic_cell cell1,  bytes key2, atomic_cell cell2)
+{
+    collection_type_impl::mutation m;
+    m.tomb = t;
+    m.cells.emplace_back(std::move(key1), std::move(cell1));
+    m.cells.emplace_back(std::move(key2), std::move(cell2));
+    return m;
+}
+
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
         auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
@@ -180,19 +212,19 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
-        map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}}};
+        auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_collection_member(utf8_type, sstring("101")));
         mutation m1(s, key);
         m1.set_static_cell(column, my_map_type->serialize_mutation_form(mmut1));
         mt->apply(m1);
-        map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102")))}}};
+        auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102")));
         mutation m2(s, key);
         m2.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2));
         mt->apply(m2);
-        map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell(utf8_type->decompose(sstring("103")))}}};
+        auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_collection_member(utf8_type, sstring("103")));
         mutation m3(s, key);
         m3.set_static_cell(column, my_map_type->serialize_mutation_form(mmut3));
         mt->apply(m3);
-        map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102 override")))}}};
+        auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_collection_member(utf8_type, sstring("102 override")));
         mutation m2o(s, key);
         m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
         mt->apply(m2o);
@@ -202,7 +234,8 @@ SEASTAR_TEST_CASE(test_map_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_map_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_map_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 3);
         // FIXME: more strict tests
     });
@@ -216,19 +249,19 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         auto mt = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
-        map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell({})}}};
+        auto mmut1 = make_collection_mutation({}, int32_type->decompose(101), make_atomic_cell());
         mutation m1(s, key);
         m1.set_static_cell(column, my_set_type->serialize_mutation_form(mmut1));
         mt->apply(m1);
-        map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
+        auto mmut2 = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell());
         mutation m2(s, key);
         m2.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2));
         mt->apply(m2);
-        map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell({})}}};
+        auto mmut3 = make_collection_mutation({}, int32_type->decompose(103), make_atomic_cell());
         mutation m3(s, key);
         m3.set_static_cell(column, my_set_type->serialize_mutation_form(mmut3));
         mt->apply(m3);
-        map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
+        auto mmut2o = make_collection_mutation({}, int32_type->decompose(102), make_atomic_cell());
         mutation m2o(s, key);
         m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
         mt->apply(m2o);
@@ -238,7 +271,8 @@ SEASTAR_TEST_CASE(test_set_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_set_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_set_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 3);
         // FIXME: more strict tests
     });
@@ -253,19 +287,19 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto& column = *s->get_column_definition("s1");
         auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
-        collection_type_impl::mutation mmut1{{}, {{make_key(), make_atomic_cell(int32_type->decompose(101))}}};
+        auto mmut1 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 101));
         mutation m1(s, key);
         m1.set_static_cell(column, my_list_type->serialize_mutation_form(mmut1));
         mt->apply(m1);
-        collection_type_impl::mutation mmut2{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
+        auto mmut2 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2(s, key);
         m2.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2));
         mt->apply(m2);
-        collection_type_impl::mutation mmut3{{}, {{make_key(), make_atomic_cell(int32_type->decompose(103))}}};
+        auto mmut3 = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 103));
         mutation m3(s, key);
         m3.set_static_cell(column, my_list_type->serialize_mutation_form(mmut3));
         mt->apply(m3);
-        collection_type_impl::mutation mmut2o{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
+        auto mmut2o = make_collection_mutation({}, make_key(), make_collection_member(int32_type, 102));
         mutation m2o(s, key);
         m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
         mt->apply(m2o);
@@ -275,7 +309,8 @@ SEASTAR_TEST_CASE(test_list_mutations) {
         auto i = r.find_cell(column.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_collection_mutation();
-        auto muts = my_list_type->deserialize_mutation_form(cell);
+        auto cell_b = cell.data.linearize();
+        auto muts = my_list_type->deserialize_mutation_form(cell_b);
         BOOST_REQUIRE(muts.cells.size() == 4);
         // FIXME: more strict tests
     });
@@ -302,7 +337,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         auto insert_row = [&] (int32_t c1, int32_t r1) {
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
             mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, r1));
             cf.apply(std::move(m));
             return cf.flush();
         };
@@ -318,9 +353,9 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
                     BOOST_REQUIRE(i);
-                    auto cell = i->as_atomic_cell();
+                    auto cell = i->as_atomic_cell(r1_col);
                     BOOST_REQUIRE(cell.is_live());
-                    BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
+                    BOOST_REQUIRE(int32_type->equal(cell.value().linearize(), int32_type->decompose(r1)));
                 }
             };
             verify_row(1001, 2001);
@@ -436,7 +471,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             auto key = partition_key::from_exploded(*s, {int32_type->decompose(p1)});
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
             mutation m(s, key);
-            m.set_clustered_cell(c_key, r1_col, atomic_cell::make_live(ts++, int32_type->decompose(r1)));
+            m.set_clustered_cell(c_key, r1_col, atomic_cell::make_live(*int32_type, ts++, int32_type->decompose(r1)));
             cf.apply(std::move(m));
             shadow[p1][c1] = r1;
         };
@@ -458,7 +493,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
                     auto cell = re.row().cells().find_cell(r1_col.id);
                     if (cell) {
-                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
+                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell(r1_col).value().linearize()));
                     }
                 }
                 return true;
@@ -479,10 +514,12 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 
     auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
         if (compare_atomic_cell_for_merge(first, second) >= 0) {
-            BOOST_FAIL(sprint("Expected %s < %s", first, second));
+            BOOST_TEST_MESSAGE(sprint("Expected %s < %s", first, second));
+            abort();
         }
         if (compare_atomic_cell_for_merge(second, first) <= 0) {
-            BOOST_FAIL(sprint("Expected %s < %s", second, first));
+            BOOST_TEST_MESSAGE(sprint("Expected %s < %s", second, first));
+            abort();
         }
     };
 
@@ -492,57 +529,57 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
     };
 
     assert_equal(
-        atomic_cell::make_live(0, bytes("value")),
-        atomic_cell::make_live(0, bytes("value")));
+        atomic_cell::make_live(*bytes_type, 0, bytes("value")),
+        atomic_cell::make_live(*bytes_type, 0, bytes("value")));
 
     assert_order(
-        atomic_cell::make_live(1, bytes("value")),
-        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1));
+        atomic_cell::make_live(*bytes_type, 1, bytes("value")),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1));
 
     assert_equal(
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_1));
 
     assert_order(
-        atomic_cell::make_live(1, bytes()),
-        atomic_cell::make_live(1, bytes(), expiry_2, ttl_2));
+        atomic_cell::make_live(*bytes_type, 1, bytes()),
+        atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_2, ttl_2));
 
     // Origin doesn't compare ttl (is it wise?)
     assert_equal(
-        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_1),
-        atomic_cell::make_live(1, bytes("value"), expiry_1, ttl_2));
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_1),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_1, ttl_2));
 
     assert_order(
-        atomic_cell::make_live(0, bytes("value1")),
-        atomic_cell::make_live(0, bytes("value2")));
+        atomic_cell::make_live(*bytes_type, 0, bytes("value1")),
+        atomic_cell::make_live(*bytes_type, 0, bytes("value2")));
 
     assert_order(
-        atomic_cell::make_live(0, bytes("value12")),
-        atomic_cell::make_live(0, bytes("value2")));
+        atomic_cell::make_live(*bytes_type, 0, bytes("value12")),
+        atomic_cell::make_live(*bytes_type, 0, bytes("value2")));
 
     // Live cells are ordered first by timestamp...
     assert_order(
-        atomic_cell::make_live(0, bytes("value2")),
-        atomic_cell::make_live(1, bytes("value1")));
+        atomic_cell::make_live(*bytes_type, 0, bytes("value2")),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value1")));
 
     // ..then by value
     assert_order(
-        atomic_cell::make_live(1, bytes("value1"), expiry_2, ttl_2),
-        atomic_cell::make_live(1, bytes("value2"), expiry_1, ttl_1));
+        atomic_cell::make_live(*bytes_type, 1, bytes("value1"), expiry_2, ttl_2),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value2"), expiry_1, ttl_1));
 
     // ..then by expiry
     assert_order(
-        atomic_cell::make_live(1, bytes(), expiry_1, ttl_1),
-        atomic_cell::make_live(1, bytes(), expiry_2, ttl_1));
+        atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_1, ttl_1),
+        atomic_cell::make_live(*bytes_type, 1, bytes(), expiry_2, ttl_1));
 
     // Dead wins
     assert_order(
-        atomic_cell::make_live(1, bytes("value")),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value")),
         atomic_cell::make_dead(1, expiry_1));
 
     // Dead wins with expiring cell
     assert_order(
-        atomic_cell::make_live(1, bytes("value"), expiry_2, ttl_2),
+        atomic_cell::make_live(*bytes_type, 1, bytes("value"), expiry_2, ttl_2),
         atomic_cell::make_dead(1, expiry_1));
 
     // Deleted cells are ordered first by timestamp
@@ -621,7 +658,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
 
         mutation m(s, partition_key::from_single_value(*s, "key1"));
         m.partition().static_row().apply(*s->get_column_definition("sc1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("sc1:value")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("sc1:value")))));
 
         auto slice = partition_slice_builder(*s)
             .with_no_static_columns()
@@ -647,7 +684,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
         mutation m(s, partition_key::from_single_value(*s, "key1"));
         m.set_clustered_cell(clustering_key::from_single_value(*s, bytes("ck:A")),
             *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value")))));
 
         auto slice = partition_slice_builder(*s).build();
 
@@ -678,12 +715,12 @@ SEASTAR_TEST_CASE(test_row_counting) {
         auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("A"))));
         auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("B"))));
 
-        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v:value")))));
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v:value")))));
 
         BOOST_REQUIRE_EQUAL(1, m.live_row_count());
 
         m.partition().static_row().apply(*s->get_column_definition("sc1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("sc1:value")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("sc1:value")))));
 
         BOOST_REQUIRE_EQUAL(1, m.live_row_count());
 
@@ -704,8 +741,8 @@ SEASTAR_TEST_CASE(test_row_counting) {
 
         BOOST_REQUIRE_EQUAL(0, m.live_row_count());
 
-        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(4, bytes_type->decompose(data_value(bytes("v:value")))));
-        m.set_clustered_cell(ckey2, col_v, atomic_cell::make_live(4, bytes_type->decompose(data_value(bytes("v:value")))));
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(*bytes_type, 4, bytes_type->decompose(data_value(bytes("v:value")))));
+        m.set_clustered_cell(ckey2, col_v, atomic_cell::make_live(*bytes_type, 4, bytes_type->decompose(data_value(bytes("v:value")))));
 
         BOOST_REQUIRE_EQUAL(2, m.live_row_count());
     });
@@ -781,7 +818,7 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
             size_t fail_offset = 0;
             while (true) {
                 mutation m = target;
-                mutation_partition m2 = second.partition();
+                auto m2 = mutation_partition(*m.schema(), second.partition());
                 alloc.fail_after(fail_offset++);
                 try {
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
@@ -822,40 +859,40 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
         m1.partition().apply(tombstone { 1, gc_clock::now() });
         m1.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value1")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value1")))));
         m1.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value2")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v2:value2")))));
 
         m1.partition().clustered_row(*s, ckey2).apply(row_marker(3));
         m1.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value4")))));
-        map_type_impl::mutation mset1 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(2), make_atomic_cell({})}}};
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v2:value4")))));
+        auto mset1 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell(), int32_type->decompose(2), make_atomic_cell());
         m1.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset1));
 
         mutation m2(s, partition_key::from_single_value(*s, "key1"));
         m2.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(1, bytes_type->decompose(data_value(bytes("v1:value1a")))));
+            atomic_cell::make_live(*bytes_type, 1, bytes_type->decompose(data_value(bytes("v1:value1a")))));
         m2.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value2")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v2:value2")))));
 
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value3")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value3")))));
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
-        map_type_impl::mutation mset2 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(3), make_atomic_cell({})}}};
+            atomic_cell::make_live(*bytes_type, 3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
+        auto mset2 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell(), int32_type->decompose(3), make_atomic_cell());
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset2));
 
         mutation m3(s, partition_key::from_single_value(*s, "key1"));
         m3.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value1")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value1")))));
 
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value3")))));
+            atomic_cell::make_live(*bytes_type, 2, bytes_type->decompose(data_value(bytes("v1:value3")))));
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
-        map_type_impl::mutation mset3 {{}, {{int32_type->decompose(1), make_atomic_cell({})}}};
+            atomic_cell::make_live(*bytes_type, 3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
+        auto mset3 = make_collection_mutation({}, int32_type->decompose(1), make_atomic_cell());
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset3));
 
@@ -870,7 +907,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2));
         BOOST_REQUIRE(m2_1.find_row(*s, ckey2)->find_cell(2));
         auto cmv = m2_1.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        auto cm = my_set_type->deserialize_mutation_form(cmv);
+        auto cmv_b = cmv.data.linearize();
+        auto cm = my_set_type->deserialize_mutation_form(cmv_b);
         BOOST_REQUIRE(cm.cells.size() == 1);
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
 
@@ -887,7 +925,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(0));
         BOOST_REQUIRE(!m1_2.find_row(*s, ckey2)->find_cell(1));
         cmv = m1_2.find_row(*s, ckey2)->find_cell(2)->as_collection_mutation();
-        cm = my_set_type->deserialize_mutation_form(cmv);
+        cmv_b = cmv.data.linearize();
+        cm = my_set_type->deserialize_mutation_form(cmv_b);
         BOOST_REQUIRE(cm.cells.size() == 1);
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
 
@@ -924,29 +963,29 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
         mutation m(s, key);
-        m.set_static_cell(s1_col, make_atomic_cell(bytes_type->decompose(data_value(blob1))));
+        m.set_static_cell(s1_col, make_atomic_cell(bytes_type, data_value(blob1)));
         mt->apply(std::move(m));
 
         auto p = get_partition(*mt, key);
         row& r = p.static_row();
         auto i = r.find_cell(s1_col.id);
         BOOST_REQUIRE(i);
-        auto cell = i->as_atomic_cell();
+        auto cell = i->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell.is_live());
-        BOOST_REQUIRE(bytes_type->equal(cell.value(), bytes_type->decompose(data_value(blob1))));
+        BOOST_REQUIRE(bytes_type->equal(cell.value().linearize(), bytes_type->decompose(data_value(blob1))));
 
         // Stress managed_bytes::linearize and scatter by merging a value into the cell
         mutation m2(s, key);
-        m2.set_static_cell(s1_col, atomic_cell::make_live(7, bytes_type->decompose(data_value(blob2))));
+        m2.set_static_cell(s1_col, atomic_cell::make_live(*bytes_type, 7, bytes_type->decompose(data_value(blob2))));
         mt->apply(std::move(m2));
 
         auto p2 = get_partition(*mt, key);
         row& r2 = p2.static_row();
         auto i2 = r2.find_cell(s1_col.id);
         BOOST_REQUIRE(i2);
-        auto cell2 = i2->as_atomic_cell();
+        auto cell2 = i2->as_atomic_cell(s1_col);
         BOOST_REQUIRE(cell2.is_live());
-        BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
+        BOOST_REQUIRE(bytes_type->equal(cell2.value().linearize(), bytes_type->decompose(data_value(blob2))));
     });
 }
 
@@ -1150,6 +1189,34 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
+    auto make_builder = [] {
+        return schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck", bytes_type, column_kind::clustering_key);
+    };
+
+    auto s1 = make_builder()
+            .with_column("v1", int32_type)
+            .build();
+
+    auto s2 = make_builder()
+            .with_column("v1", bytes_type)
+            .build();
+
+    auto pk = partition_key::from_singular(*s1, data_value(bytes("key1")));
+    auto ck1 = clustering_key::from_singular(*s1, data_value(bytes("A")));
+
+    mutation m(s1, pk);
+    m.set_clustered_cell(ck1, "v1", data_value(int32_t(0x1234abcd)), 1);
+    m.upgrade(s2);
+
+    mutation m2(s2, pk);
+    m2.set_clustered_cell(ck1, "v1", data_value(from_hex("1234abcd")), 1);
+
+    assert_that(m).is_equal_to(m2);
+}
+
 SEASTAR_TEST_CASE(test_querying_expired_cells) {
     return seastar::async([] {
         auto s = schema_builder("ks", "cf")
@@ -1193,12 +1260,12 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 
         {
             mutation m(s, pk);
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
-            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
-            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize(), t3, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v3.serialize(), t3, ttl));
 
             assert_that(results_at_time(m, t0))
                     .has_only(a_row()
@@ -1229,8 +1296,8 @@ SEASTAR_TEST_CASE(test_querying_expired_cells) {
 
         {
             mutation m(s, pk);
-            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
-            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t3, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(*bytes_type, api::new_timestamp(), v1.serialize(), t3, ttl));
 
             assert_that(results_at_time(m, t2))
                     .has_only(a_row().with_column("s1", v1).and_only_that());
@@ -1251,7 +1318,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     const column_definition& col = *s->get_column_definition("value");
 
     mutation m(s, key);
-    m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type->decompose(1)));
+    m.set_clustered_cell(clustering_key::make_empty(), col, make_atomic_cell(int32_type, 1));
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
@@ -1293,7 +1360,7 @@ SEASTAR_TEST_CASE(test_slicing_mutation) {
 
     auto test_slicing = [&] (query::clustering_row_ranges ranges, std::vector<int> expected_rows) {
         mutation_partition mp1(m.partition(), *s, ranges);
-        auto mp_temp = m.partition();
+        auto mp_temp = mutation_partition(*s, m.partition());
         mutation_partition mp2(std::move(mp_temp), *s, ranges);
 
         BOOST_REQUIRE(mp1.equal(*s, mp2));
@@ -1397,19 +1464,20 @@ SEASTAR_TEST_CASE(test_collection_cell_diff) {
             {{"p", utf8_type}}, {}, {{"v", list_type_impl::get_instance(bytes_type, true)}}, {}, utf8_type));
 
         auto& col = s->column_at(column_kind::regular_column, 0);
+        auto& ctype = *static_pointer_cast<const collection_type_impl>(col.type);
         auto k = dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, to_bytes("key")));
         mutation m1(s, k);
         auto uuid = utils::UUID_gen::get_time_UUID_bytes();
         collection_type_impl::mutation mcol1;
         mcol1.cells.emplace_back(
                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
-                atomic_cell::make_live(api::timestamp_type(1), to_bytes("element")));
-        m1.set_clustered_cell(clustering_key::make_empty(), col, list_type_impl::serialize_mutation_form(mcol1));
+                atomic_cell::make_live(*bytes_type, api::timestamp_type(1), to_bytes("element")));
+        m1.set_clustered_cell(clustering_key::make_empty(), col, ctype.serialize_mutation_form(mcol1));
 
         mutation m2(s, k);
         collection_type_impl::mutation mcol2;
         mcol2.tomb = tombstone(api::timestamp_type(2), gc_clock::now());
-        m2.set_clustered_cell(clustering_key::make_empty(), col, list_type_impl::serialize_mutation_form(mcol2));
+        m2.set_clustered_cell(clustering_key::make_empty(), col, ctype.serialize_mutation_form(mcol2));
 
         mutation m12 = m1;
         m12.apply(m2);

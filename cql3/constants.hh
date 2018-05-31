@@ -210,7 +210,7 @@ public:
             if (value.is_null()) {
                 m.set_cell(prefix, column, std::move(make_dead_cell(params)));
             } else if (value.is_value()) {
-                m.set_cell(prefix, column, std::move(make_cell(*value, params)));
+                m.set_cell(prefix, column, std::move(make_cell(*column.type, *value, params)));
             }
         }
     };

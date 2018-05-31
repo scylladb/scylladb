@@ -634,7 +634,7 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
         auto r = p->find_row(*s, clustering_key);
         if (r) {
             // FIXME: remove copy if only one data source
-            return make_ready_future<const_row_ptr>(std::make_unique<row>(*r));
+            return make_ready_future<const_row_ptr>(std::make_unique<row>(*s, column_kind::regular_column, *r));
         } else {
             return make_ready_future<const_row_ptr>();
         }
@@ -3681,7 +3681,7 @@ std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
     if (acv.is_live()) {
         return fprint(os, "atomic_cell{%s;ts=%d;expiry=%d,ttl=%d}",
-            to_hex(acv.value()),
+            to_hex(acv.value().linearize()),
             acv.timestamp(),
             acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
             acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);

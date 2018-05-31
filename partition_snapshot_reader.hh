@@ -212,7 +212,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                     if (_digest_requested) {
                         e.row().cells().prepare_hash(_schema, column_kind::regular_column);
                     }
-                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), e);
+                    auto result = mutation_fragment(mutation_fragment::clustering_row_tag_t(), _schema, e);
                     while (has_more_rows() && _eq(peek_row().position(), result.as_clustering_row().position())) {
                         const rows_entry& e = pop_clustering_row();
                         if (_digest_requested) {

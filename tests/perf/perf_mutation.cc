@@ -24,8 +24,8 @@
 #include "perf.hh"
 #include <seastar/core/app-template.hh>
 
-static atomic_cell make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, value);
+static atomic_cell make_atomic_cell(data_type dt, bytes value) {
+    return atomic_cell::make_live(*dt, 0, value);
 };
 
 int main(int argc, char* argv[]) {
@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
         time_it([&] {
             mutation m(s, key);
             const column_definition& col = *s->get_column_definition("r1");
-            m.set_clustered_cell(c_key, col, make_atomic_cell(value));
+            m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
             mt.apply(std::move(m));
         });
         engine().exit(0);

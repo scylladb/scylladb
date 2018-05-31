@@ -110,6 +110,7 @@ static const char* empty_type_name     = "org.apache.cassandra.db.marshal.EmptyT
 
 template<typename T>
 struct simple_type_traits {
+    static constexpr size_t serialized_size = sizeof(T);
     static T read_nonempty(bytes_view v) {
         return read_simple_exactly<T>(v);
     }
@@ -117,6 +118,7 @@ struct simple_type_traits {
 
 template<>
 struct simple_type_traits<bool> {
+    static constexpr size_t serialized_size = 1;
     static bool read_nonempty(bytes_view v) {
         return read_simple_exactly<int8_t>(v) != 0;
     }
@@ -124,6 +126,7 @@ struct simple_type_traits<bool> {
 
 template<>
 struct simple_type_traits<db_clock::time_point> {
+    static constexpr size_t serialized_size = sizeof(uint64_t);
     static db_clock::time_point read_nonempty(bytes_view v) {
         return db_clock::time_point(db_clock::duration(read_simple_exactly<int64_t>(v)));
     }
@@ -132,7 +135,7 @@ struct simple_type_traits<db_clock::time_point> {
 template <typename T>
 struct simple_type_impl : concrete_type<T> {
     simple_type_impl(sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : concrete_type<T>(std::move(name), std::move(value_length_if_fixed)) {}
+        : concrete_type<T>(std::move(name), std::move(value_length_if_fixed), data::type_info::make_fixed_size(simple_type_traits<T>::serialized_size)) {}
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
@@ -299,7 +302,7 @@ struct long_type_impl : integer_type_impl<int64_t> {
 
 struct string_type_impl : public concrete_type<sstring> {
     string_type_impl(sstring name)
-        : concrete_type(name, { }) {}
+        : concrete_type(name, { }, data::type_info::make_variable_size()) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -379,7 +382,7 @@ struct utf8_type_impl final : public string_type_impl {
 };
 
 struct bytes_type_impl final : public concrete_type<bytes> {
-    bytes_type_impl() : concrete_type(bytes_type_name, { }) {}
+    bytes_type_impl() : concrete_type(bytes_type_name, { }, data::type_info::make_variable_size()) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -522,7 +525,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
 class date_type_impl : public concrete_type<db_clock::time_point> {
     static logging::logger _logger;
 public:
-    date_type_impl() : concrete_type(date_type_name, 8) {}
+    date_type_impl() : concrete_type(date_type_name, 8, data::type_info::make_fixed_size(sizeof(uint64_t))) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -600,7 +603,7 @@ public:
 logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
-    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name, 16) {}
+    timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1084,7 +1087,7 @@ struct time_type_impl : public simple_type_impl<int64_t> {
 };
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
-    uuid_type_impl() : concrete_type(uuid_type_name, 16) {}
+    uuid_type_impl() : concrete_type(uuid_type_name, 16, data::type_info::make_fixed_size(sizeof(uint64_t) * 2)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1177,7 +1180,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
 using inet_address = seastar::net::inet_address;
 
 struct inet_addr_type_impl : concrete_type<inet_address> {
-    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name, { }) {}
+    inet_addr_type_impl() : concrete_type<inet_address>(inet_addr_type_name, { }, data::type_info::make_variable_size()) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1295,6 +1298,7 @@ template <> struct int_of_size<float> :
 
 template <typename T>
 struct float_type_traits {
+    static constexpr size_t serialized_size = sizeof(typename int_of_size<T>::itype);
     static double read_nonempty(bytes_view v) {
         union {
             T d;
@@ -1447,7 +1451,7 @@ struct float_type_impl : floating_type_impl<float> {
 
 class varint_type_impl : public concrete_type<boost::multiprecision::cpp_int> {
 public:
-    varint_type_impl() : concrete_type{varint_type_name, { }} { }
+    varint_type_impl() : concrete_type{varint_type_name, { }, data::type_info::make_variable_size()} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1570,7 +1574,7 @@ public:
 
 class decimal_type_impl : public concrete_type<big_decimal> {
 public:
-    decimal_type_impl() : concrete_type{decimal_type_name, { }} { }
+    decimal_type_impl() : concrete_type{decimal_type_name, { }, data::type_info::make_variable_size()} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
@@ -1676,7 +1680,7 @@ public:
 
 class counter_type_impl : public abstract_type {
 public:
-    counter_type_impl() : abstract_type{counter_type_name, { }} { }
+    counter_type_impl() : abstract_type{counter_type_name, { }, data::type_info::make_variable_size()} { }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         fail(unimplemented::cause::COUNTERS);
     }
@@ -1761,7 +1765,7 @@ auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
 
 class duration_type_impl : public concrete_type<cql_duration> {
 public:
-    duration_type_impl() : concrete_type(duration_type_name, { }) {
+    duration_type_impl() : concrete_type(duration_type_name, { }, data::type_info::make_variable_size()) {
     }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (value == nullptr) {
@@ -1912,7 +1916,7 @@ private:
 };
 
 struct empty_type_impl : abstract_type {
-    empty_type_impl() : abstract_type(empty_type_name, 0) {}
+    empty_type_impl() : abstract_type(empty_type_name, 0, data::type_info::make_fixed_size(0)) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
     }
     virtual size_t serialized_size(const void* value) const override {
@@ -2094,16 +2098,18 @@ collection_type_impl::as_cql3_type() const {
 
 bytes
 collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
-    return to_value(deserialize_mutation_form(mut), sf);
+  return mut.data.with_linearized([&] (bytes_view bv) {
+    return to_value(deserialize_mutation_form(bv), sf);
+  });
 }
 
 collection_type_impl::mutation
-collection_type_impl::mutation_view::materialize() const {
+collection_type_impl::mutation_view::materialize(const collection_type_impl& ctype) const {
     collection_type_impl::mutation m;
     m.tomb = tomb;
     m.cells.reserve(cells.size());
     for (auto&& e : cells) {
-        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), e.second);
+        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), atomic_cell(*ctype.value_comparator(), e.second));
     }
     return m;
 }
@@ -2418,12 +2424,19 @@ map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 
 bytes
 map_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
+    std::vector<bytes> linearized;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
             tmp.emplace_back(e.first);
-            tmp.emplace_back(e.second.value());
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size() / 2, sf);
@@ -2473,8 +2486,7 @@ bool map_type_impl::references_duration() const {
     return _keys->references_duration() || _values->references_duration();
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) const -> mutation_view {
-    auto&& in = cm.data;
+auto collection_type_impl::deserialize_mutation_form(bytes_view in) const -> mutation_view {
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -2489,7 +2501,8 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm
         auto ksize = read_simple<uint32_t>(in);
         auto key = read_simple_bytes(in, ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        // value_comparator(), ugh
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         ret.cells.emplace_back(key, value);
     }
     assert(in.empty());
@@ -2497,13 +2510,14 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm
 }
 
 bool collection_type_impl::is_empty(collection_mutation_view cm) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) { // FIXME: we can guarantee that this is in the first fragment
     auto has_tomb = read_simple<bool>(in);
     return !has_tomb && read_simple<uint32_t>(in) == 0;
+  });
 }
 
 bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) {
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
         auto ts = read_simple<api::timestamp_type>(in);
@@ -2515,16 +2529,17 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         if (value.is_live(tomb, now, false)) {
             return true;
         }
     }
     return false;
+  });
 }
 
 api::timestamp_type collection_type_impl::last_update(collection_mutation_view cm) const {
-    auto&& in = cm.data;
+  return cm.data.with_linearized([&] (bytes_view in) {
     api::timestamp_type max = api::missing_timestamp;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -2536,15 +2551,17 @@ api::timestamp_type collection_type_impl::last_update(collection_mutation_view c
         auto ksize = read_simple<uint32_t>(in);
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(value_comparator()->imr_state().type_info(), read_simple_bytes(in, vsize));
         max = std::max(value.timestamp(), max);
     }
     return max;
+  });
 }
 
 template <typename Iterator>
 collection_mutation
 do_serialize_mutation_form(
+        const collection_type_impl& ctype,
         const tombstone& tomb,
         boost::iterator_range<Iterator> cells) {
     auto element_size = [] (size_t c, auto&& e) -> size_t {
@@ -2572,9 +2589,10 @@ do_serialize_mutation_form(
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
+
         writeb(v.serialize());
     }
-    return collection_mutation{std::move(ret)};
+    return collection_mutation(ctype, ret);
 }
 
 bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb, gc_clock::time_point query_time,
@@ -2614,26 +2632,28 @@ bool collection_type_impl::mutation::compact_and_expire(row_tombstone base_tomb,
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+collection_type_impl::serialize_mutation_form(const mutation& mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+collection_type_impl::serialize_mutation_form(mutation_view mut) const {
+    return do_serialize_mutation_form(*this, mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
+    return do_serialize_mutation_form(*this, mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
         return e.second.is_live(t, now, false);
     }));
 }
 
 collection_mutation
 collection_type_impl::merge(collection_mutation_view a, collection_mutation_view b) const {
-    auto aa = deserialize_mutation_form(a);
-    auto bb = deserialize_mutation_form(b);
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
     mutation_view merged;
     merged.cells.reserve(aa.cells.size() + bb.cells.size());
     using element_type = std::pair<bytes_view, atomic_cell_view>;
@@ -2667,13 +2687,17 @@ collection_type_impl::merge(collection_mutation_view a, collection_mutation_view
             merge);
     merged.tomb = std::max(aa.tomb, bb.tomb);
     return serialize_mutation_form(merged);
+  });
+ });
 }
 
 collection_mutation
 collection_type_impl::difference(collection_mutation_view a, collection_mutation_view b) const
 {
-    auto aa = deserialize_mutation_form(a);
-    auto bb = deserialize_mutation_form(b);
+ return a.data.with_linearized([&] (bytes_view a_in) {
+  return b.data.with_linearized([&] (bytes_view b_in) {
+    auto aa = deserialize_mutation_form(a_in);
+    auto bb = deserialize_mutation_form(b_in);
     mutation_view diff;
     diff.cells.reserve(std::max(aa.cells.size(), bb.cells.size()));
     auto key_type = name_comparator();
@@ -2693,6 +2717,8 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
         diff.tomb = aa.tomb;
     }
     return serialize_mutation_form(diff);
+  });
+ });
 }
 
 bytes_opt
@@ -3161,11 +3187,18 @@ list_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 
 bytes
 list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
+    std::vector<bytes> linearized;
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
         if (e.second.is_live(mut.tomb, false)) {
-            tmp.emplace_back(e.second.value());
+            auto value_view = e.second.value();
+            if (value_view.is_fragmented()) {
+                auto& v = linearized.emplace_back(value_view.linearize());
+                tmp.emplace_back(v);
+            } else {
+                tmp.emplace_back(value_view.first_fragment());
+            }
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
@@ -3196,14 +3229,14 @@ bool list_type_impl::references_duration() const {
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
-        : concrete_type(std::move(name), { }), _types(std::move(types)) {
+        : concrete_type(std::move(name), { }, data::type_info::make_variable_size()), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
-        : concrete_type(make_name(types), { }), _types(std::move(types)) {
+        : concrete_type(make_name(types), { }, data::type_info::make_variable_size()), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }

@@ -141,11 +141,13 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")),
             *s->get_column_definition("v1"),
-            atomic_cell::make_live(api::timestamp_type(1), bytes("A:v1"), now + 1s, 1s));
+            atomic_cell::make_live(*s->get_column_definition("v1")->type, 
+                                   api::timestamp_type(1), bytes("A:v1"), now + 1s, 1s));
 
         m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")),
             *s->get_column_definition("v1"),
-            atomic_cell::make_live(api::timestamp_type(1), bytes("B:v1")));
+            atomic_cell::make_live(*s->get_column_definition("v1")->type, 
+                                   api::timestamp_type(1), bytes("B:v1")));
 
         auto src = make_source({m1});
 

@@ -1246,7 +1246,7 @@ SEASTAR_TEST_CASE(promoted_index_write) {
                             clustering_key::from_exploded(
                                     *s, {to_bytes(sprint("%d%c%c", k, i, j))}));
                     row.cells().apply(*col,
-                            atomic_cell::make_live(2345,
+                            atomic_cell::make_live(*col->type, 2345,
                                     col->type->decompose(sstring(sprint("z%c",i)))));
                     row.apply(row_marker(1234));
                 }

@@ -59,41 +59,52 @@ std::vector<counter_id> generate_ids(unsigned count) {
 
 SEASTAR_TEST_CASE(test_counter_cell) {
     return seastar::async([] {
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
         auto id = generate_ids(3);
 
         counter_cell_builder b1;
         b1.add_shard(counter_shard(id[0], 5, 1));
         b1.add_shard(counter_shard(id[1], -4, 1));
         auto c1 = atomic_cell_or_collection(b1.build(0));
-
-        auto cv = counter_cell_view(c1.as_atomic_cell());
+        
+        atomic_cell_or_collection c2;
+      counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
         BOOST_REQUIRE_EQUAL(cv.total_value(), 1);
         verify_shard_order(cv);
 
         counter_cell_builder b2;
         b2.add_shard(counter_shard(*cv.get_shard(id[0])).update(2, 1));
         b2.add_shard(counter_shard(id[2], 1, 1));
-        auto c2 = atomic_cell_or_collection(b2.build(0));
+        c2 = atomic_cell_or_collection(b2.build(0));
+    });
 
-        cv = counter_cell_view(c2.as_atomic_cell());
+      counter_cell_view::with_linearized(c2.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
         BOOST_REQUIRE_EQUAL(cv.total_value(), 8);
         verify_shard_order(cv);
+      });
 
-        counter_cell_view::apply(c1, c2);
-        cv = counter_cell_view(c1.as_atomic_cell());
+        counter_cell_view::apply(cdef, c1, c2);
+      counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
         BOOST_REQUIRE_EQUAL(cv.total_value(), 4);
         verify_shard_order(cv);
+      });
     });
 }
 
 SEASTAR_TEST_CASE(test_apply) {
     return seastar::async([] {
-        auto verify_apply = [] (atomic_cell_or_collection dst, atomic_cell_or_collection src, int64_t value) {
-            counter_cell_view::apply(dst, src);
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
 
-            auto cv = counter_cell_view(dst.as_atomic_cell());
+        auto verify_apply = [&] (const atomic_cell_or_collection& a, const atomic_cell_or_collection& b, int64_t value) {
+            auto dst = a.copy(*cdef.type);
+            auto src = b.copy(*cdef.type);
+            counter_cell_view::apply(cdef, dst, src);
+
+          counter_cell_view::with_linearized(dst.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
             BOOST_REQUIRE_EQUAL(cv.total_value(), value);
-            BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell().timestamp(), src.as_atomic_cell().timestamp()));
+            BOOST_REQUIRE_EQUAL(cv.timestamp(), std::max(dst.as_atomic_cell(cdef).timestamp(), src.as_atomic_cell(cdef).timestamp()));
+          });
         };
         auto id = generate_ids(5);
 
@@ -103,7 +114,9 @@ SEASTAR_TEST_CASE(test_apply) {
         b1.add_shard(counter_shard(id[4], 1, 3));
         auto c1 = atomic_cell_or_collection(b1.build(1));
 
-        auto c2 = counter_cell_builder::from_single_shard(2, counter_shard(id[2], 8, 3));
+        auto c2 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(2, counter_shard(id[2], 8, 3))
+        );
 
         verify_apply(c1, c2, 12);
         verify_apply(c2, c1, 12);
@@ -116,7 +129,9 @@ SEASTAR_TEST_CASE(test_apply) {
         verify_apply(c1, c3, 15);
         verify_apply(c3, c1, 15);
 
-        auto c4 = counter_cell_builder::from_single_shard(0, counter_shard(id[2], 8, 1));
+        auto c4 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(0, counter_shard(id[2], 8, 1))
+        );
 
         verify_apply(c1, c4, 6);
         verify_apply(c4, c1, 6);
@@ -130,7 +145,9 @@ SEASTAR_TEST_CASE(test_apply) {
         verify_apply(c1, c5, 21);
         verify_apply(c5, c1, 21);
 
-        auto c6 = counter_cell_builder::from_single_shard(3, counter_shard(id[2], 8, 1));
+        auto c6 = atomic_cell_or_collection(
+            counter_cell_builder::from_single_shard(3, counter_shard(id[2], 8, 1))
+        );
 
         verify_apply(c1, c6, 6);
         verify_apply(c6, c1, 6);
@@ -152,8 +169,8 @@ atomic_cell_view get_counter_cell(mutation& m) {
     const auto& cells = mp.clustered_rows().begin()->row().cells();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     stdx::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
-        acv = ac_o_c.as_atomic_cell();
+    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        acv = ac_o_c.as_atomic_cell(m.schema()->regular_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));
     return *acv;
@@ -164,8 +181,8 @@ atomic_cell_view get_static_counter_cell(mutation& m) {
     const auto& cells = mp.static_row();
     BOOST_REQUIRE_EQUAL(cells.size(), 1);
     stdx::optional<atomic_cell_view> acv;
-    cells.for_each_cell([&] (column_id, const atomic_cell_or_collection& ac_o_c) {
-        acv = ac_o_c.as_atomic_cell();
+    cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& ac_o_c) {
+        acv = ac_o_c.as_atomic_cell(m.schema()->static_column_at(id));
     });
     BOOST_REQUIRE(bool(acv));
     return *acv;
@@ -223,15 +240,17 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         m.apply(m2);
         auto ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        counter_cell_view ccv { ac };
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -102);
         verify_shard_order(ccv);
+      });
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 20);
         verify_shard_order(ccv);
+      });
 
         m.apply(m3);
         ac = get_counter_cell(m);
@@ -251,28 +270,32 @@ SEASTAR_TEST_CASE(test_counter_mutations) {
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m2.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 2);
         verify_shard_order(ccv);
+      });
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 11);
         verify_shard_order(ccv);
+      });
 
         m = mutation(s, m1.decorated_key(), m2.partition().difference(s, m1.partition()));
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), -105);
         verify_shard_order(ccv);
+      });
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 9);
         verify_shard_order(ccv);
+      });
 
         m = mutation(s, m1.decorated_key(), m1.partition().difference(s, m3.partition()));
         BOOST_REQUIRE_EQUAL(m.partition().clustered_rows().calculate_size(), 0);
@@ -334,19 +357,19 @@ SEASTAR_TEST_CASE(test_counter_update_mutations) {
         auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
         auto s1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 4);
         mutation m1(s, pk);
-        m1.set_clustered_cell(ck, col, c1);
-        m1.set_static_cell(scol, s1);
+        m1.set_clustered_cell(ck, col, std::move(c1));
+        m1.set_static_cell(scol, std::move(s1));
 
         auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
         auto s2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 8);
         mutation m2(s, pk);
-        m2.set_clustered_cell(ck, col, c2);
-        m2.set_static_cell(scol, s2);
+        m2.set_clustered_cell(ck, col, std::move(c2));
+        m2.set_static_cell(scol, std::move(s2));
 
         auto c3 = atomic_cell::make_dead(api::new_timestamp() / 2, gc_clock::now());
         mutation m3(s, pk);
-        m3.set_clustered_cell(ck, col, c3);
-        m3.set_static_cell(scol, c3);
+        m3.set_clustered_cell(ck, col, atomic_cell(*counter_type, c3));
+        m3.set_static_cell(scol, std::move(c3));
 
         auto m12 = m1;
         m12.apply(m2);
@@ -384,19 +407,19 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
         auto c1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 5);
         auto s1 = atomic_cell::make_live_counter_update(api::new_timestamp(), 4);
         mutation m1(s, pk);
-        m1.set_clustered_cell(ck, col, c1);
-        m1.set_static_cell(scol, s1);
+        m1.set_clustered_cell(ck, col, std::move(c1));
+        m1.set_static_cell(scol, std::move(s1));
 
         auto c2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 9);
         auto s2 = atomic_cell::make_live_counter_update(api::new_timestamp(), 8);
         mutation m2(s, pk);
-        m2.set_clustered_cell(ck, col, c2);
-        m2.set_static_cell(scol, s2);
+        m2.set_clustered_cell(ck, col, std::move(c2));
+        m2.set_static_cell(scol, std::move(s2));
 
         auto c3 = atomic_cell::make_dead(api::new_timestamp() / 2, gc_clock::now());
         mutation m3(s, pk);
-        m3.set_clustered_cell(ck, col, c3);
-        m3.set_static_cell(scol, c3);
+        m3.set_clustered_cell(ck, col, atomic_cell(*counter_type, c3));
+        m3.set_static_cell(scol, std::move(c3));
 
         auto m0 = m1;
         transform_counter_updates_to_shards(m0, nullptr, 0);
@@ -408,30 +431,34 @@ SEASTAR_TEST_CASE(test_transfer_updates_to_shards) {
 
         auto ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        auto ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 5);
         verify_shard_order(ccv);
+      });
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 4);
         verify_shard_order(ccv);
+      });
 
         m = m2;
         transform_counter_updates_to_shards(m, &m0, 0);
 
         ac = get_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 14);
         verify_shard_order(ccv);
+      });
 
         ac = get_static_counter_cell(m);
         BOOST_REQUIRE(ac.is_live());
-        ccv = counter_cell_view(ac);
+      counter_cell_view::with_linearized(ac, [&] (counter_cell_view ccv) {
         BOOST_REQUIRE_EQUAL(ccv.total_value(), 12);
         verify_shard_order(ccv);
+      });
 
         m = m3;
         transform_counter_updates_to_shards(m, &m0, 0);
@@ -452,6 +479,8 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
         std::uniform_int_distribution<int64_t> value_dist(-1024 * 1024, 1024 * 1024);
 
         for (auto i = 0; i < 100; i++) {
+            auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
             auto shard_count = shard_count_dist(gen);
             auto ids = generate_ids(shard_count);
 
@@ -488,13 +517,14 @@ SEASTAR_TEST_CASE(test_sanitize_corrupted_cells) {
             auto c2 = atomic_cell_or_collection(b2.build(0));
 
             // Compare
-            auto cv1 = counter_cell_view(c1.as_atomic_cell());
-            auto cv2 = counter_cell_view(c2.as_atomic_cell());
-
+         counter_cell_view::with_linearized(c1.as_atomic_cell(cdef), [&] (counter_cell_view cv1) {
+          counter_cell_view::with_linearized(c2.as_atomic_cell(cdef), [&] (counter_cell_view cv2) {
             BOOST_REQUIRE_EQUAL(cv1, cv2);
             BOOST_REQUIRE_EQUAL(cv1.total_value(), cv2.total_value());
             verify_shard_order(cv1);
             verify_shard_order(cv2);
+          });
+         });
         }
     });
 }
@@ -537,6 +567,8 @@ SEASTAR_TEST_CASE(test_counter_id_order_1_7_4) {
 
 SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
     return seastar::async([] {
+        auto cdef = column_definition("name", counter_type, column_kind::regular_column);
+
         auto ids = generate_ids(16);
 
         counter_cell_builder ccb;
@@ -545,7 +577,7 @@ SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
         }
         auto ac = atomic_cell_or_collection(ccb.build(0));
 
-        auto cv = counter_cell_view(ac.as_atomic_cell());
+      counter_cell_view::with_linearized(ac.as_atomic_cell(cdef), [&] (counter_cell_view cv) {
 
         verify_shard_order(cv);
 
@@ -557,6 +589,7 @@ SEASTAR_TEST_CASE(test_shards_compatible_with_1_7_4) {
             }
             previous = cs.id();
         }
+      });
     });
 }
 

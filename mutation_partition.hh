@@ -104,7 +104,7 @@ class row {
             : _id(id)
         { }
         cell_entry(cell_entry&&) noexcept;
-        cell_entry(const cell_entry&);
+        cell_entry(const abstract_type&, const cell_entry&);
 
         column_id id() const { return _id; }
         const atomic_cell_or_collection& cell() const { return _cell_and_hash.cell; }
@@ -166,7 +166,7 @@ private:
 public:
     row();
     ~row();
-    row(const row&);
+    row(const schema&, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
     size_t size() const { return _size; }
@@ -335,7 +335,7 @@ public:
 
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
-    size_t external_memory_usage() const;
+    size_t external_memory_usage(const schema&, column_kind) const;
 
     cell_hash_opt cell_hash_for(column_id id) const;
 
@@ -647,8 +647,13 @@ class deletable_row final {
 public:
     deletable_row() {}
     explicit deletable_row(clustering_row&&);
-    deletable_row(row_tombstone tomb, const row_marker& marker, const row& cells)
-        : _deleted_at(tomb), _marker(marker), _cells(cells)
+    deletable_row(const schema& s, const deletable_row& other)
+        : _deleted_at(other._deleted_at)
+        , _marker(other._marker)
+        , _cells(s, column_kind::regular_column, other._cells)
+    { }
+    deletable_row(const schema& s, row_tombstone tomb, const row_marker& marker, const row& cells)
+        : _deleted_at(tomb), _marker(marker), _cells(s, column_kind::regular_column, cells)
     {}
 
     void apply(const schema&, clustering_row);
@@ -737,16 +742,16 @@ public:
     rows_entry(const clustering_key& key, deletable_row&& row)
         : _key(key), _row(std::move(row))
     { }
-    rows_entry(const clustering_key& key, const deletable_row& row)
-        : _key(key), _row(row)
+    rows_entry(const schema& s, const clustering_key& key, const deletable_row& row)
+        : _key(key), _row(s, row)
     { }
-    rows_entry(const clustering_key& key, row_tombstone tomb, const row_marker& marker, const row& row)
-        : _key(key), _row(tomb, marker, row)
+    rows_entry(const schema& s, const clustering_key& key, row_tombstone tomb, const row_marker& marker, const row& row)
+        : _key(key), _row(s, tomb, marker, row)
     { }
     rows_entry(rows_entry&& o) noexcept;
-    rows_entry(const rows_entry& e)
+    rows_entry(const schema& s, const rows_entry& e)
         : _key(e._key)
-        , _row(e._row)
+        , _row(s, e._row)
         , _flags(e._flags)
     { }
     // Valid only if !dummy()
@@ -837,7 +842,7 @@ public:
     bool equal(const schema& s, const rows_entry& other) const;
     bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 
-    size_t memory_usage() const;
+    size_t memory_usage(const schema&) const;
     void on_evicted(cache_tracker&) noexcept;
 };
 
@@ -911,12 +916,11 @@ public:
         , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
     { }
     mutation_partition(mutation_partition&&) = default;
-    mutation_partition(const mutation_partition&);
+    mutation_partition(const schema& s, const mutation_partition&);
     mutation_partition(const mutation_partition&, const schema&, query::clustering_key_filter_ranges);
     mutation_partition(mutation_partition&&, const schema&, query::clustering_key_filter_ranges);
     ~mutation_partition();
     static mutation_partition& container_of(rows_type&);
-    mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
     bool equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const;
@@ -1104,7 +1108,7 @@ public:
     bool is_static_row_live(const schema&,
         gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 
-    size_t external_memory_usage() const;
+    size_t external_memory_usage(const schema&) const;
 private:
     template<typename Func>
     void for_each_row(const schema& schema, const query::clustering_range& row_range, bool reversed, Func&& func) const;

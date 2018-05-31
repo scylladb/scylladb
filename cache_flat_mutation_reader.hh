@@ -365,7 +365,7 @@ bool cache_flat_mutation_reader::ensure_population_lower_bound() {
             rows_entry::compare less(*_schema);
             // FIXME: Avoid the copy by inserting an incomplete clustering row
             auto e = alloc_strategy_unique_ptr<rows_entry>(
-                current_allocator().construct<rows_entry>(*_last_row));
+                current_allocator().construct<rows_entry>(*_schema, *_last_row));
             e->set_continuous(false);
             auto insert_result = rows.insert_check(rows.end(), *e, less);
             auto inserted = insert_result.second;
@@ -418,7 +418,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
             cr.cells().prepare_hash(*_schema, column_kind::regular_column);
         }
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
-            current_allocator().construct<rows_entry>(cr.key(), cr.tomb(), cr.marker(), cr.cells()));
+            current_allocator().construct<rows_entry>(*_schema, cr.key(), cr.tomb(), cr.marker(), cr.cells()));
         new_entry->set_continuous(false);
         auto it = _next_row.iterators_valid() ? _next_row.get_iterator_in_latest_version()
                                               : mp.clustered_rows().lower_bound(cr.key(), less);

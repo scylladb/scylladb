@@ -24,6 +24,7 @@
 #include <experimental/optional>
 #include <boost/functional/hash.hpp>
 #include <iosfwd>
+#include "data/cell.hh"
 #include <sstream>
 
 #include "core/sstring.hh"
@@ -421,10 +422,12 @@ class user_type_impl;
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
     std::optional<uint32_t> _value_length_if_fixed;
+    data::type_imr_descriptor _imr_state;
 public:
-    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed)
-        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)) {}
+    abstract_type(sstring name, std::optional<uint32_t> value_length_if_fixed, data::type_info ti)
+        : _name(name), _value_length_if_fixed(std::move(value_length_if_fixed)), _imr_state(ti) {}
     virtual ~abstract_type() {}
+    const data::type_imr_descriptor& imr_state() const { return _imr_state; }
     virtual void serialize(const void* value, bytes::iterator& out) const = 0;
     void serialize(const data_value& value, bytes::iterator& out) const {
         return serialize(get_value_ptr(value), out);
@@ -781,7 +784,7 @@ public:
 
 protected:
     explicit collection_type_impl(sstring name, const kind& k)
-            : abstract_type(std::move(name), {}), _kind(k) {}
+            : abstract_type(std::move(name), {}, data::type_info::make_collection()), _kind(k) {}
     virtual sstring cql3_type_name() const = 0;
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
@@ -796,7 +799,7 @@ public:
     struct mutation_view {
         tombstone tomb;
         std::vector<std::pair<bytes_view, atomic_cell_view>> cells;
-        mutation materialize() const;
+        mutation materialize(const collection_type_impl&) const;
     };
     virtual data_type name_comparator() const = 0;
     virtual data_type value_comparator() const = 0;
@@ -815,26 +818,29 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    mutation_view deserialize_mutation_form(collection_mutation_view in) const;
+    // requires linearized collection_mutation_view, lifetime
+    mutation_view deserialize_mutation_form(bytes_view in) const;
     bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
     api::timestamp_type last_update(collection_mutation_view in) const;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
     // FIXME: use iterators?
-    static collection_mutation serialize_mutation_form(const mutation& mut);
-    static collection_mutation serialize_mutation_form(mutation_view mut);
-    static collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now);
+    collection_mutation serialize_mutation_form(const mutation& mut) const;
+    collection_mutation serialize_mutation_form(mutation_view mut) const;
+    collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     // Calls Func(atomic_cell_view) for each cell in this collection.
     // noexcept if Func doesn't throw.
     template<typename Func>
     void for_each_cell(collection_mutation_view c, Func&& func) const {
-        auto m_view = deserialize_mutation_form(std::move(c));
+      c.data.with_linearized([&] (bytes_view c_bv) {
+        auto m_view = deserialize_mutation_form(c_bv);
         for (auto&& c : m_view.cells) {
             func(std::move(c.second));
         }
+      });
     }
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
@@ -911,7 +917,7 @@ class reversed_type_impl : public abstract_type {
     data_type _underlying_type;
     reversed_type_impl(data_type t)
         : abstract_type("org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")",
-                        t->value_length_if_fixed())
+                        t->value_length_if_fixed(), t->imr_state().type_info())
         , _underlying_type(t)
     {}
 protected:

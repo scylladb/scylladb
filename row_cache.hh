@@ -100,7 +100,7 @@ public:
     cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
         : _schema(std::move(s))
         , _key(key)
-        , _pe(partition_entry::make_evictable(*_schema, mutation_partition(p)))
+        , _pe(partition_entry::make_evictable(*_schema, mutation_partition(*_schema, p)))
     { }
 
     cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p)

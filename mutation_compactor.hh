@@ -190,7 +190,7 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     stop_iteration consume(static_row&& sr, Consumer& consumer) {
-        _last_static_row = sr;
+        _last_static_row = static_row(_schema, sr);
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
                                                      row_tombstone(current_tombstone),

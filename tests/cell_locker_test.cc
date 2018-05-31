@@ -133,7 +133,7 @@ SEASTAR_TEST_CASE(test_disjoint_mutations) {
         });
 
         auto m3 = mutation(s, partition_key::from_single_value(*s, to_bytes("1")));
-        m3.partition() = m1.partition();
+        m3.partition() = mutation_partition(*s, m1.partition());
 
         auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
         auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get0();

@@ -51,14 +51,19 @@ using atomic_cell_variant = boost::variant<ser::live_cell_view,
                                            ser::counter_cell_view,
                                            ser::unknown_variant_type>;
 
-atomic_cell read_atomic_cell(atomic_cell_variant cv)
+atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, atomic_cell::collection_member cm = atomic_cell::collection_member::no)
 {
-    struct atomic_cell_visitor : boost::static_visitor<atomic_cell> {
+    class atomic_cell_visitor : public boost::static_visitor<atomic_cell> {
+        const abstract_type& _type;
+        atomic_cell::collection_member _collection_member;
+    public:
+        explicit atomic_cell_visitor(const abstract_type& t, atomic_cell::collection_member cm)
+            : _type(t), _collection_member(cm) { }
         atomic_cell operator()(ser::live_cell_view& lcv) const {
-            return atomic_cell::make_live(lcv.created_at(), lcv.value());
+            return atomic_cell::make_live(_type, lcv.created_at(), lcv.value(), _collection_member);
         }
         atomic_cell operator()(ser::expiring_cell_view& ecv) const {
-            return atomic_cell::make_live(ecv.c().created_at(), ecv.c().value(), ecv.expiry(), ecv.ttl());
+            return atomic_cell::make_live(_type, ecv.c().created_at(), ecv.c().value(), ecv.expiry(), ecv.ttl(), _collection_member);
         }
         atomic_cell operator()(ser::dead_cell_view& dcv) const {
             return atomic_cell::make_dead(dcv.tomb().timestamp(), dcv.tomb().deletion_time());
@@ -93,19 +98,19 @@ atomic_cell read_atomic_cell(atomic_cell_variant cv)
             throw std::runtime_error("Trying to deserialize cell in unknown state");
         }
     };
-    return boost::apply_visitor(atomic_cell_visitor(), cv);
+    return boost::apply_visitor(atomic_cell_visitor(type, cm), cv);
 }
 
-collection_mutation read_collection_cell(ser::collection_cell_view cv)
+collection_mutation read_collection_cell(const collection_type_impl& ctype, ser::collection_cell_view cv)
 {
     collection_type_impl::mutation mut;
     mut.tomb = cv.tomb();
     auto&& elements = cv.elements();
     mut.cells.reserve(elements.size());
     for (auto&& e : elements) {
-        mut.cells.emplace_back(e.key(), read_atomic_cell(e.value()));
+        mut.cells.emplace_back(e.key(), read_atomic_cell(*ctype.value_comparator(), e.value(), atomic_cell::collection_member::yes));
     }
-    return collection_type_impl::serialize_mutation_form(mut);
+    return ctype.serialize_mutation_form(mut);
 }
 
 template<typename Visitor>
@@ -130,7 +135,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 // FIXME: Pass view to cell to avoid copy
                 auto&& outer = current_allocator();
                 with_allocator(standard_allocator(), [&] {
-                    auto cell = read_atomic_cell(acv);
+                    auto cell = read_atomic_cell(*_col.type(), acv);
                     with_allocator(outer, [&] {
                         _visitor.accept_atomic_cell(_id, cell);
                     });
@@ -143,7 +148,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 // FIXME: Pass view to cell to avoid copy
                 auto&& outer = current_allocator();
                 with_allocator(standard_allocator(), [&] {
-                    auto cell = read_collection_cell(ccv);
+                    auto cell = read_collection_cell(*static_pointer_cast<const collection_type_impl>(_col.type()), ccv);
                     with_allocator(outer, [&] {
                         _visitor.accept_collection(_id, cell);
                     });
@@ -240,40 +245,46 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s)
     return seastar::visit(view.fragment(),
         [&] (ser::clustering_row_view crv) {
             class clustering_row_builder {
+                const schema& _s;
                 mutation_fragment _mf;
             public:
-                clustering_row_builder(clustering_key key, row_tombstone t, row_marker m)
-                    : _mf(mutation_fragment::clustering_row_tag_t(), std::move(key), std::move(t), std::move(m), row()) { }
+                clustering_row_builder(const schema& s, clustering_key key, row_tombstone t, row_marker m)
+                    : _s(s), _mf(mutation_fragment::clustering_row_tag_t(), std::move(key), std::move(t), std::move(m), row()) { }
                 void accept_atomic_cell(column_id id, const atomic_cell& ac) {
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(ac));
+                    auto& type = *_s.regular_column_at(id).type;
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.regular_column_at(id).type);
+                    _mf.as_mutable_clustering_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
 
             auto cr = crv.row();
             auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-            clustering_row_builder builder(cr.key(), std::move(t), read_row_marker(cr.marker()));
+            clustering_row_builder builder(s, cr.key(), std::move(t), read_row_marker(cr.marker()));
             read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
             return std::move(builder).get_mutation_fragment();
         },
         [&] (ser::static_row_view sr) {
             class static_row_builder {
+                const schema& _s;
                 mutation_fragment _mf;
             public:
-                static_row_builder() : _mf(static_row()) { }
+                explicit static_row_builder(const schema& s) : _s(s), _mf(static_row()) { }
                 void accept_atomic_cell(column_id id, const atomic_cell& ac) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(ac));
+                    auto& type = *_s.static_column_at(id).type;
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(atomic_cell(type, ac)));
                 }
                 void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(cm));
+                    auto& ctype = *static_pointer_cast<const collection_type_impl>(_s.static_column_at(id).type);
+                    _mf.as_mutable_static_row().cells().append_cell(id, atomic_cell_or_collection(collection_mutation(ctype, cm)));
                 }
                 mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
             };
 
-            static_row_builder builder;
+            static_row_builder builder(s);
             read_and_visit_row(sr.cells(), s.get_column_mapping(), column_kind::static_column, builder);
             return std::move(builder).get_mutation_fragment();
         },

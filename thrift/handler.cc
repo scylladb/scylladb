@@ -1795,7 +1795,7 @@ private:
     }
     static void add_live_cell(const schema& s, const Column& col, const column_definition& def, clustering_key_prefix ckey, mutation& m_to_apply) {
         thrift_validation::validate_column(col, def);
-        auto cell = atomic_cell::make_live(col.timestamp, to_bytes_view(col.value), maybe_ttl(s, col));
+        auto cell = atomic_cell::make_live(*def.type, col.timestamp, to_bytes_view(col.value), maybe_ttl(s, col));
         m_to_apply.set_clustered_cell(std::move(ckey), def, std::move(cell));
     }
     static void add_live_cell(const schema& s, const CounterColumn& col, const column_definition& def, clustering_key_prefix ckey, mutation& m_to_apply) {

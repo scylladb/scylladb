@@ -538,7 +538,7 @@ enum class status {
     ttl,
 };
 
-inline bool check_status_and_done(const atomic_cell &c, status expected) {
+inline bool check_status_and_done(atomic_cell_view c, status expected) {
     if (expected == status::dead) {
         BOOST_REQUIRE(c.is_live() == false);
         return true;
@@ -553,13 +553,15 @@ inline void match(const row& row, const schema& s, bytes col, const data_value& 
     auto cdef = s.get_column_definition(col);
 
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
-    auto c = row.cell_at(cdef->id).as_atomic_cell();
+    auto c = row.cell_at(cdef->id).as_atomic_cell(*cdef);
     if (check_status_and_done(c, Status)) {
         return;
     }
 
     auto expected = cdef->type->decompose(value);
-    BOOST_REQUIRE(c.value() == expected);
+    auto val = c.value().linearize();
+    assert(val == expected);
+    BOOST_REQUIRE(c.value().linearize() == expected);
     if (timestamp) {
         BOOST_REQUIRE(c.timestamp() == timestamp);
     }
@@ -592,9 +594,11 @@ match_collection(const row& row, const schema& s, bytes col, const tombstone& t)
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
     auto c = row.cell_at(cdef->id).as_collection_mutation();
     auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
-    auto&& mut = ctype->deserialize_mutation_form(c);
+  return c.data.with_linearized([&] (bytes_view c_bv) {
+    auto&& mut = ctype->deserialize_mutation_form(c_bv);
     BOOST_REQUIRE(mut.tomb == t);
-    return mut.materialize();
+    return mut.materialize(*ctype);
+  });
 }
 
 template <status Status>
@@ -612,7 +616,7 @@ inline void match_collection_element(const std::pair<bytes, atomic_cell>& elemen
     // the schema for the set type, and is enough for the purposes of this
     // test.
     if (expected_serialized_value) {
-        BOOST_REQUIRE(element.second.value() == *expected_serialized_value);
+        BOOST_REQUIRE(element.second.value().linearize() == *expected_serialized_value);
     }
 }
 

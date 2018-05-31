@@ -32,6 +32,7 @@
 #include "boost/variant/variant.hpp"
 #include "bytes_ostream.hh"
 #include "utils/input_stream.hh"
+#include "utils/fragment_range.hh"
 
 namespace ser {
 using size_type = uint32_t;

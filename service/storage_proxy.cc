@@ -2257,7 +2257,7 @@ private:
 
     static primary_key get_last_reconciled_row(const schema& s, const mutation_and_live_row_count& m_a_rc, const query::read_command& cmd, uint32_t limit, bool is_reversed) {
         const auto& m = m_a_rc.mut;
-        auto mp = m.partition();
+        auto mp = mutation_partition(s, m.partition());
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
         mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
 
@@ -2516,7 +2516,7 @@ public:
             for (const version& v : z.get<0>()) {
                 auto diff = v.par
                           ? m.partition().difference(schema, v.par->mut().unfreeze(schema).partition())
-                          : m.partition();
+                          : mutation_partition(*schema, m.partition());
                 auto it = _diffs[m.token()].find(v.from);
                 std::experimental::optional<mutation> mdiff;
                 if (!diff.empty()) {

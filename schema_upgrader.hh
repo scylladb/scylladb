@@ -35,7 +35,7 @@ private:
             const column_definition& col = _prev->column_at(kind, id);
             const column_definition* new_col = _new->get_column_definition(col.name());
             if (new_col) {
-                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col.type, std::move(cell));
+                converting_mutation_partition_applier::append_cell(new_row, kind, *new_col, col, std::move(cell));
             }
         });
         return new_row;

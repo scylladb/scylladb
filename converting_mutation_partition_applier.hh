@@ -39,16 +39,32 @@ private:
         return ::is_compatible(new_def.kind, kind) && new_def.type->is_value_compatible_with(*old_type);
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
-        if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
-            dst.apply(new_def, atomic_cell_or_collection(cell));
+        if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
+            return;
         }
+        auto new_cell = [&] {
+            if (cell.is_live() && !old_type->is_counter()) {
+                if (cell.is_live_and_has_ttl()) {
+                    return atomic_cell_or_collection(
+                        atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize(), cell.expiry(), cell.ttl())
+                    );
+                }
+                return atomic_cell_or_collection(
+                    atomic_cell::make_live(*new_def.type, cell.timestamp(), cell.value().linearize())
+                );
+            } else {
+                return atomic_cell_or_collection(*new_def.type, cell);
+            }
+        }();
+        dst.apply(new_def, std::move(new_cell));
     }
     static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
         if (!is_compatible(new_def, old_type, kind)) {
             return;
         }
+      cell.data.with_linearized([&] (bytes_view cell_bv) {
         auto&& ctype = static_pointer_cast<const collection_type_impl>(old_type);
-        auto old_view = ctype->deserialize_mutation_form(cell);
+        auto old_view = ctype->deserialize_mutation_form(cell_bv);
 
         collection_type_impl::mutation_view new_view;
         if (old_view.tomb.timestamp > new_def.dropped_at()) {
@@ -60,6 +76,7 @@ private:
             }
         }
         dst.apply(new_def, ctype->serialize_mutation_form(std::move(new_view)));
+      });
     }
 public:
     converting_mutation_partition_applier(
@@ -120,11 +137,11 @@ public:
 
     // Appends the cell to dst upgrading it to the new schema.
     // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, const atomic_cell_or_collection& cell) {
+    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell) {
         if (new_def.is_atomic()) {
-            accept_cell(dst, kind, new_def, old_type, cell.as_atomic_cell());
+            accept_cell(dst, kind, new_def, old_def.type, cell.as_atomic_cell(old_def));
         } else {
-            accept_cell(dst, kind, new_def, old_type, cell.as_collection_mutation());
+            accept_cell(dst, kind, new_def, old_def.type, cell.as_collection_mutation());
         }
     }
 };

@@ -79,7 +79,7 @@ public:
     size_t size_in_allocator(allocation_strategy& allocator) {
         auto size = size_in_allocator_without_rows(allocator);
         for (auto&& v : _pe.versions()) {
-            size += v.size_in_allocator(allocator);
+            size += v.size_in_allocator(*_schema, allocator);
         }
         return size;
     }
@@ -183,14 +183,16 @@ private:
             r.for_each_cell([this, &s, kind](column_id id, const atomic_cell_or_collection& item) {
                 auto& col = s.column_at(kind, id);
                 if (col.is_atomic()) {
-                    update(item.as_atomic_cell());
+                    update(item.as_atomic_cell(col));
                 } else {
                     auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
-                    auto mview = ctype->deserialize_mutation_form(item.as_collection_mutation());
+                  item.as_collection_mutation().data.with_linearized([&] (bytes_view bv) {
+                    auto mview = ctype->deserialize_mutation_form(bv);
                     update(mview.tomb);
                     for (auto& entry : mview.cells) {
                         update(entry.second);
                     }
+                  });
                 }
             });
         }

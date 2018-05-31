@@ -110,6 +110,7 @@ boost_tests = [
     'limiting_data_source_test',
     'sstable_test',
     'sstable_3_x_test',
+    'meta_test',
 ]
 
 other_tests = [
