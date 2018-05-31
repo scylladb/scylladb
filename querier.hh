@@ -197,7 +197,7 @@ public:
         return {dk, clustering_key};
     }
 
-    const dht::partition_range& range() const {
+    dht::partition_ranges_view ranges() const {
         return *_range;
     }
 };
@@ -288,9 +288,9 @@ public:
             }, _value);
         }
 
-        const dht::partition_range& range() const {
-            return std::visit([] (auto& q) -> const dht::partition_range& {
-                return q.range();
+        dht::partition_ranges_view ranges() const {
+            return std::visit([] (auto& q) {
+                return q.ranges();
             }, _value);
         }
 

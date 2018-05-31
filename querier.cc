@@ -120,6 +120,44 @@ static bool ranges_match(const schema& s, const dht::partition_range& original_r
     return bound_eq(original_range.end(), new_range.end());
 }
 
+static bool ranges_match(const schema& s, dht::partition_ranges_view original_ranges, dht::partition_ranges_view new_ranges) {
+    if (new_ranges.empty()) {
+        return false;
+    }
+    if (original_ranges.size() == 1) {
+        if (new_ranges.size() != 1) {
+            return false;
+        }
+        return ranges_match(s, original_ranges.front(), new_ranges.front());
+    }
+
+    // As the query progresses the number of to-be-read ranges can never surpass
+    // that of the original ranges.
+    if (original_ranges.size() < new_ranges.size()) {
+        return false;
+    }
+
+    // If there is a difference in the size of the range lists we assume we
+    // already read ranges from the original list and these ranges are missing
+    // from the head of the new list.
+    auto new_ranges_it = new_ranges.begin();
+    auto original_ranges_it = original_ranges.begin() + (original_ranges.size() - new_ranges.size());
+
+    // The first range in the new list can be partially read so we only check
+    // that one of its bounds match that of its original counterpart, just like
+    // we do with single ranges.
+    if (!ranges_match(s, *original_ranges_it++, *new_ranges_it++)) {
+        return false;
+    }
+
+    const auto cmp = dht::ring_position_comparator(s);
+
+    // The rest of the list, those ranges that we didn't even started reading
+    // yet should be *identical* to their original counterparts.
+    return std::equal(original_ranges_it, original_ranges.end(), new_ranges_it,
+            [&cmp] (const dht::partition_range& a, const dht::partition_range& b) { return a.equal(b, cmp); });
+}
+
 template <typename Querier>
 static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice) {
     if (s.version() != q.schema()->version()) {
@@ -158,7 +196,7 @@ void querier_cache::scan_cache_entries() {
 }
 
 static querier_cache::entries::iterator find_querier(querier_cache::entries& entries, querier_cache::index& index, utils::UUID key,
-        const dht::partition_range& range, tracing::trace_state_ptr trace_state) {
+        dht::partition_ranges_view ranges, tracing::trace_state_ptr trace_state) {
     const auto queriers = index.equal_range(key);
 
     if (queriers.first == index.end()) {
@@ -167,14 +205,14 @@ static querier_cache::entries::iterator find_querier(querier_cache::entries& ent
     }
 
     const auto it = std::find_if(queriers.first, queriers.second, [&] (const querier_cache::entry& e) {
-        return ranges_match(e.schema(), e.range(), range);
+        return ranges_match(e.schema(), e.ranges(), ranges);
     });
 
     if (it == queriers.second) {
-        tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range {}", key, range);
+        tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range(s) {}", key, ranges);
         return entries.end();
     }
-    tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
+    tracing::trace(trace_state, "Found cached querier for key {} and range(s) {}", key, ranges);
     return it->pos();
 }
 
@@ -240,10 +278,10 @@ static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
         querier_cache::stats& stats,
         utils::UUID key,
         const schema& s,
-        const dht::partition_range& range,
+        dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    auto it = find_querier(entries, index, key, range, trace_state);
+    auto it = find_querier(entries, index, key, ranges, trace_state);
     ++stats.lookups;
     if (it == entries.end()) {
         ++stats.misses;
@@ -254,7 +292,7 @@ static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
     entries.erase(it);
     --stats.population;
 
-    const auto can_be_used = can_be_used_for_page(q, s, range, slice);
+    const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);
     if (can_be_used == can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
         return std::optional<Querier>(std::move(q));
