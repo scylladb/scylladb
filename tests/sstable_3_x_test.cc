@@ -1240,3 +1240,38 @@ SEASTAR_TEST_CASE(test_write_empty_clustering_values) {
     });
 }
 
+SEASTAR_TEST_CASE(test_write_large_clustering_key) {
+    return seastar::async([] {
+        sstring table_name = "large_clustering_key";
+        // CREATE TABLE large_clustering_key (pk int, ck1 text, ck2 text, ..., ck35 text, rc int, PRIMARY KEY (pk, ck1, ck2, ..., ck35)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        for (auto idx: boost::irange(1, 36)) {
+            builder.with_column(to_bytes(format("ck{}", idx)), utf8_type, column_kind::clustering_key);
+        }
+        builder.with_column("rc", int32_type);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_deeply_exploded(*s, {0});
+        mutation mut{s, key};
+
+        // Clustering columns ckX are filled the following way:
+        //    - <empty> for even X
+        //    - "X" for odd X
+        // INSERT INTO large_clustering_key (pk, ck1, ck2, ck3, rc) VALUES (0, '1', '', '3',..., '', '35', 1);
+        std::vector<data_value> clustering_values;
+        for (auto idx: boost::irange(1, 36)) {
+            clustering_values.emplace_back((idx % 2 == 1) ? std::to_string(idx) : std::string{});
+        }
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, clustering_values);
+        mut.partition().apply_insert(*s, ckey, write_timestamp);
+        mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
+
+        mt->apply(std::move(mut));
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
