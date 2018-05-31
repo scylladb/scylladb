@@ -148,7 +148,7 @@ public:
         _current_block = {};
         assert (_offset % clustering_block::max_block_size == 0);
         while (_offset < limit) {
-            auto shift = _offset & clustering_block::max_block_size;
+            auto shift = _offset % clustering_block::max_block_size;
             if (_offset < _prefix.size(_schema)) {
                 bytes_view value = _prefix.get_component(_schema, _offset);
                 if (value.empty()) {
