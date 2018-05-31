@@ -23,6 +23,7 @@
 
 #include <type_traits>
 
+#include <seastar/util/bool_class.hh>
 #include "bytes.hh"
 #include "types.hh"
 #include "timestamp.hh"
@@ -51,9 +52,27 @@ inline void write_vint(file_writer& out, T value) {
     return std::is_unsigned_v<T> ? write_unsigned_vint(out, value) : write_signed_vint(out, value);
 }
 
+// There is a special case when we need to treat a non-full clustering key prefix as a full one
+// for serialization purposes. This is the case that may occur with a compact table.
+// For historical reasons a compact table may have rows with missing trailing clustering columns in their clustering keys.
+// Consider:
+//    cqlsh:test> CREATE TABLE cf (pk int, ck1 int, ck2 int, rc int, primary key (pk, ck1, ck2)) WITH COMPACT STORAGE;
+//    cqlsh:test> INSERT INTO cf (pk, ck1, rc) VALUES (1, 1, 1);
+//    cqlsh:test> SELECT * FROM cf;
+//
+//     pk | ck1 | ck2  | rc
+//    ----+-----+------+----
+//      1 |   1 | null |  1
+//
+//    (1 rows)
+// In this case, the clustering key of the row will have length 1, but for serialization purposes we want to treat
+// it as a full prefix of length 2.
+// So we use ephemerally_full_prefix to distinguish this kind of clustering keys
+using ephemerally_full_prefix = seastar::bool_class<struct ephemerally_full_prefix_tag>;
 
 // Writes clustering prefix, full or not, encoded in SSTables 3.0 format
-void write_clustering_prefix(file_writer& out, const schema& s, const clustering_key_prefix& prefix);
+void write_clustering_prefix(file_writer& out, const schema& s,
+        const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full);
 
 // Writes encoded information about missing columns in the given row
 void write_missing_columns(file_writer& out, const schema& s, const row& row);

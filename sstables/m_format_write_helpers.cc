@@ -115,7 +115,7 @@ public:
 };
 
 struct clustering_block {
-    constexpr static uint32_t max_block_size = 32;
+    constexpr static size_t max_block_size = 32;
     uint64_t header = 0;
     struct described_value {
         bytes_view value;
@@ -129,21 +129,27 @@ class clustering_blocks_input_range
 private:
     const schema& _schema;
     const clustering_key_prefix& _prefix;
+    size_t _serialization_limit_size;
     mutable clustering_block _current_block;
     mutable uint32_t _offset = 0;
 
 public:
-    clustering_blocks_input_range(const schema& s, const clustering_key_prefix& prefix)
-            : _schema(s), _prefix(prefix) {}
+    clustering_blocks_input_range(const schema& s, const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full)
+            : _schema(s)
+            , _prefix(prefix) {
+        _serialization_limit_size = is_ephemerally_full == ephemerally_full_prefix::yes
+                                    ? _schema.clustering_key_size()
+                                    : _prefix.size(_schema);
+    }
 
     bool next() const {
-        if (_offset == _schema.clustering_key_size()) {
+        if (_offset == _serialization_limit_size) {
             // No more values to encode
             return false;
         }
 
         // Each block contains up to max_block_size values
-        auto limit = std::min(_schema.clustering_key_size(), _offset + clustering_block::max_block_size);
+        auto limit = std::min(_serialization_limit_size, _offset + clustering_block::max_block_size);
 
         _current_block = {};
         assert (_offset % clustering_block::max_block_size == 0);
@@ -158,6 +164,7 @@ public:
                 }
             } else {
                 // This (and all subsequent) values of the prefix are missing (null)
+                // This branch is only ever taken for an ephemerally_full_prefix
                 _current_block.header |= (uint64_t(1) << ((shift * 2) + 1));
             }
             ++_offset;
@@ -168,7 +175,7 @@ public:
     clustering_block get_value() const { return _current_block; };
 
     explicit operator bool() const {
-        return (_offset < _schema.clustering_key_size());
+        return (_offset < _serialization_limit_size);
     }
 };
 
@@ -183,8 +190,9 @@ static void write(file_writer& out, const clustering_block& block) {
     }
 }
 
-void write_clustering_prefix(file_writer& out, const schema& s, const clustering_key_prefix& prefix) {
-    clustering_blocks_input_range range{s, prefix};
+void write_clustering_prefix(file_writer& out, const schema& s,
+        const clustering_key_prefix& prefix, ephemerally_full_prefix is_ephemerally_full) {
+    clustering_blocks_input_range range{s, prefix, is_ephemerally_full};
     for (const auto block: range) {
         write(out, block);
     }
