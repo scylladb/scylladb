@@ -944,7 +944,9 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
             auto key = partition_key::from_deeply_exploded(*s, {i});
             mutation mut{s, key};
 
-            mut.set_cell(clustering_key::make_empty(), to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
+            clustering_key ckey = clustering_key::make_empty();
+            mut.partition().apply_insert(*s, ckey, ts);
+            mut.set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
             mt->apply(std::move(mut));
             ts += 10;
         }
@@ -1050,7 +1052,7 @@ SEASTAR_TEST_CASE(test_write_multiple_rows) {
 SEASTAR_TEST_CASE(test_write_missing_columns_large_set) {
     return seastar::async([] {
         sstring table_name = "missing_columns_large_set";
-        // CREATE TABLE missing_columns_large_set (pk int, ck int, rc1 int, ..., rc64, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+        // CREATE TABLE missing_columns_large_set (pk int, ck int, rc1 int, ..., rc64 int, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
         schema_builder builder("sst3", table_name);
         builder.with_column("pk", int32_type, column_kind::partition_key);
         builder.with_column("ck", int32_type, column_kind::clustering_key);
