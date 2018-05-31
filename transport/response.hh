@@ -49,15 +49,14 @@ class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
-    std::vector<char> _body;
+    bytes_ostream _body;
 public:
     response(int16_t stream, cql_binary_opcode opcode, const tracing::trace_state_ptr& tr_state_ptr)
         : _stream{stream}
         , _opcode{opcode}
-        , _body(tracing::should_return_id_in_response(tr_state_ptr) ? utils::UUID::serialized_size() : 0)
     {
         if (tracing::should_return_id_in_response(tr_state_ptr)) {
-            auto i = _body.begin();
+            auto i = _body.write_place_holder(utils::UUID::serialized_size());
             tr_state_ptr->session_id().serialize(i);
             set_frame_flag(cql_frame_flags::tracing);
         }
@@ -92,8 +91,8 @@ public:
     }
 private:
     void compress(cql_compression compression);
-    std::vector<char> compress_lz4(const std::vector<char>& body);
-    std::vector<char> compress_snappy(const std::vector<char>& body);
+    void compress_lz4();
+    void compress_snappy();
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, size_t length) {
