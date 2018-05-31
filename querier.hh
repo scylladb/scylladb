@@ -262,7 +262,6 @@ public:
         uint64_t population = 0;
     };
 
-private:
     class entry : public boost::intrusive::set_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         // Self reference so that we can remove the entry given an `entry&`.
         std::list<entry>::iterator _pos;
@@ -326,8 +325,6 @@ private:
     std::chrono::seconds _entry_ttl;
     stats _stats;
     size_t _max_queriers_memory_usage;
-
-    entries::iterator find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state);
 
     void scan_cache_entries();
 
