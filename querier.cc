@@ -45,13 +45,13 @@ static sstring cannot_use_reason(querier::can_use cu)
     return "unknown reason";
 }
 
-querier::position querier::current_position() const {
+position querier::current_position() const {
     const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
     const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
     return {dk, clustering_key};
 }
 
-bool querier::ring_position_matches(const dht::partition_range& range, const querier::position& pos) const {
+bool querier::ring_position_matches(const dht::partition_range& range, const position& pos) const {
     const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
 
     const auto expected_start = dht::ring_position_view(*pos.partition_key);
@@ -74,7 +74,7 @@ bool querier::ring_position_matches(const dht::partition_range& range, const que
     return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
 }
 
-bool querier::clustering_position_matches(const query::partition_slice& slice, const querier::position& pos) const {
+bool querier::clustering_position_matches(const query::partition_slice& slice, const position& pos) const {
     const auto& row_ranges = slice.row_ranges(*_schema, pos.partition_key->key());
 
     if (row_ranges.empty()) {

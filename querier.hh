@@ -66,6 +66,11 @@ public:
     }
 };
 
+struct position {
+    const dht::decorated_key* partition_key;
+    const clustering_key_prefix* clustering_key;
+};
+
 /// One-stop object for serving queries.
 ///
 /// Encapsulates all state and logic for serving all pages for a given range
@@ -97,11 +102,6 @@ public:
         no_clustering_pos_mismatch
     };
 private:
-    struct position {
-        const dht::decorated_key* partition_key;
-        const clustering_key_prefix* clustering_key;
-    };
-
     schema_ptr _schema;
     std::unique_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
