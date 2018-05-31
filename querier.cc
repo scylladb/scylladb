@@ -29,7 +29,6 @@ namespace query {
 
 enum class can_use {
     yes,
-    no_emit_only_live_rows_mismatch,
     no_schema_version_mismatch,
     no_ring_pos_mismatch,
     no_clustering_pos_mismatch
@@ -41,8 +40,6 @@ static sstring cannot_use_reason(can_use cu)
     {
         case can_use::yes:
             return "can be used";
-        case can_use::no_emit_only_live_rows_mismatch:
-            return "emit only live rows mismatch";
         case can_use::no_schema_version_mismatch:
             return "schema version mismatch";
         case can_use::no_ring_pos_mismatch:
@@ -123,11 +120,8 @@ static bool ranges_match(const schema& s, const dht::partition_range& original_r
     return bound_eq(original_range.end(), new_range.end());
 }
 
-static can_use can_be_used_for_page(const querier& q, emit_only_live_rows only_live, const schema& s, const dht::partition_range& range,
-        const query::partition_slice& slice) {
-    if (only_live != q.emit_live_rows()) {
-        return can_use::no_emit_only_live_rows_mismatch;
-    }
+template <typename Querier>
+static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice) {
     if (s.version() != q.schema()->version()) {
         return can_use::no_schema_version_mismatch;
     }
@@ -191,8 +185,9 @@ querier_cache::querier_cache(size_t max_cache_size, std::chrono::seconds entry_t
     _expiry_timer.arm_periodic(entry_ttl / 2);
 }
 
+template <typename Querier>
 static void insert_querier(querier_cache::entries& entries, querier_cache::index& index, querier_cache::stats& stats,
-        size_t max_queriers_memory_usage, utils::UUID key, querier&& q, lowres_clock::time_point expires, tracing::trace_state_ptr trace_state) {
+        size_t max_queriers_memory_usage, utils::UUID key, Querier&& q, lowres_clock::time_point expires, tracing::trace_state_ptr trace_state) {
     // FIXME: see #3159
     // In reverse mode flat_mutation_reader drops any remaining rows of the
     // current partition when the page ends so it cannot be reused across
@@ -229,15 +224,21 @@ static void insert_querier(querier_cache::entries& entries, querier_cache::index
     ++stats.population;
 }
 
-void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
-    insert_querier(_entries, _index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl, std::move(trace_state));
+void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
+    insert_querier(_entries, _data_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+            std::move(trace_state));
 }
 
-static std::optional<querier> lookup_querier(querier_cache::entries& entries,
+void querier_cache::insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    insert_querier(_entries, _mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+            std::move(trace_state));
+}
+
+template <typename Querier>
+static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
         querier_cache::index& index,
         querier_cache::stats& stats,
         utils::UUID key,
-        emit_only_live_rows only_live,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
@@ -249,14 +250,14 @@ static std::optional<querier> lookup_querier(querier_cache::entries& entries,
         return std::nullopt;
     }
 
-    auto q = std::move(*it).value();
+    auto q = std::move(*it).template value<Querier>();
     entries.erase(it);
     --stats.population;
 
-    const auto can_be_used = can_be_used_for_page(q, only_live, s, range, slice);
+    const auto can_be_used = can_be_used_for_page(q, s, range, slice);
     if (can_be_used == can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
-        return std::optional<querier>(std::move(q));
+        return std::optional<Querier>(std::move(q));
     }
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
@@ -264,13 +265,20 @@ static std::optional<querier> lookup_querier(querier_cache::entries& entries,
     return std::nullopt;
 }
 
-std::optional<querier> querier_cache::lookup(utils::UUID key,
-        emit_only_live_rows only_live,
+std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
         const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
-    return lookup_querier(_entries, _index, _stats, key, only_live, s, range, slice, std::move(trace_state));
+    return lookup_querier<data_querier>(_entries, _data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+}
+
+std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
+        const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    return lookup_querier<mutation_querier>(_entries, _mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
 }
 
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
@@ -309,19 +317,34 @@ querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID k
     , _is_first_page(is_first_page) {
 }
 
-void querier_cache_context::insert(querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache_context::insert(data_querier&& q, tracing::trace_state_ptr trace_state) {
     if (_cache && _key != utils::UUID{}) {
         _cache->insert(_key, std::move(q), std::move(trace_state));
     }
 }
 
-std::optional<querier> querier_cache_context::lookup(emit_only_live_rows only_live,
-        const schema& s,
+void querier_cache_context::insert(mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{}) {
+        _cache->insert(_key, std::move(q), std::move(trace_state));
+    }
+}
+
+std::optional<data_querier> querier_cache_context::lookup_data_querier(const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state) {
     if (_cache && _key != utils::UUID{} && !_is_first_page) {
-        return _cache->lookup(_key, only_live, s, range, slice, std::move(trace_state));
+        return _cache->lookup_data_querier(_key, s, range, slice, std::move(trace_state));
+    }
+    return std::nullopt;
+}
+
+std::optional<mutation_querier> querier_cache_context::lookup_mutation_querier(const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{} && !_is_first_page) {
+        return _cache->lookup_mutation_querier(_key, s, range, slice, std::move(trace_state));
     }
     return std::nullopt;
 }

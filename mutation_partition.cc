@@ -2013,13 +2013,12 @@ future<> data_query(
         return make_ready_future<>();
     }
 
-    auto querier_opt = cache_ctx.lookup(emit_only_live_rows::yes, *s, range, slice, trace_ptr);
+    auto querier_opt = cache_ctx.lookup_data_querier(*s, range, slice, trace_ptr);
     auto q = querier_opt
             ? std::move(*querier_opt)
-            : query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
-                    emit_only_live_rows::yes);
+            : query::data_querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
 
-    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::querier& q) mutable {
+    return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
         auto qrb = query_result_builder(*s, builder);
         return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout).then(
                 [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
@@ -2126,14 +2125,13 @@ static do_mutation_query(schema_ptr s,
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
-    auto querier_opt = cache_ctx.lookup(emit_only_live_rows::no, *s, range, slice, trace_ptr);
+    auto querier_opt = cache_ctx.lookup_mutation_querier(*s, range, slice, trace_ptr);
     auto q = querier_opt
             ? std::move(*querier_opt)
-            : query::querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr),
-                    emit_only_live_rows::no);
+            : query::mutation_querier(source, s, range, slice, service::get_local_sstable_query_read_priority(), std::move(trace_ptr));
 
     return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
-                query::querier& q) mutable {
+                query::mutation_querier& q) mutable {
         auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
         return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout).then(
                 [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {

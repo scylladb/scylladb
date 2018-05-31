@@ -107,14 +107,14 @@ private:
         return mutations;
     }
 
-    query::querier make_querier(const dht::partition_range& range) {
-        return query::querier(_mutation_source,
+    template <typename Querier>
+    Querier make_querier(const dht::partition_range& range) {
+        return Querier(_mutation_source,
             _s.schema(),
             range,
             _s.schema()->full_slice(),
             service::get_local_sstable_query_read_priority(),
-            nullptr,
-            emit_only_live_rows::no);
+            nullptr);
     }
 
     static utils::UUID make_cache_key(unsigned key) {
@@ -199,11 +199,12 @@ public:
         return _s.schema()->full_slice();
     }
 
+    template <typename Querier>
     entry_info produce_first_page_and_save_querier(unsigned key, const dht::partition_range& range,
-            const query::partition_slice& slice, uint32_t row_limit = 5) {
+            const query::partition_slice& slice, uint32_t row_limit) {
         const auto cache_key = make_cache_key(key);
 
-        auto querier = make_querier(range);
+        auto querier = make_querier<Querier>(range);
         auto [dk, ck] = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(),
                 gc_clock::now(), db::no_timeout).get0();
         const auto memory_usage = querier.memory_usage();
@@ -245,31 +246,36 @@ public:
         return {key, std::move(range), std::move(slice), row_limit, memory_usage, std::move(expected_range), std::move(expected_slice)};
     }
 
-    entry_info produce_first_page_and_save_querier(unsigned key, const dht::partition_range& range, uint32_t row_limit = 5) {
-        return produce_first_page_and_save_querier(key, range, make_default_slice(), row_limit);
+    entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
+            const query::partition_slice& slice, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_querier<query::data_querier>(key, range, slice, row_limit);
+    }
+
+    entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_data_querier(key, range, make_default_slice(), row_limit);
     }
 
     // Singular overload
-    entry_info produce_first_page_and_save_querier(unsigned key, std::size_t i, uint32_t row_limit = 5) {
-        return produce_first_page_and_save_querier(key, make_singular_partition_range(i), _s.schema()->full_slice(), row_limit);
+    entry_info produce_first_page_and_save_data_querier(unsigned key, std::size_t i, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_data_querier(key, make_singular_partition_range(i), _s.schema()->full_slice(), row_limit);
     }
 
     // Use the whole range
-    entry_info produce_first_page_and_save_querier(unsigned key) {
-        return produce_first_page_and_save_querier(key, make_default_partition_range(), _s.schema()->full_slice());
+    entry_info produce_first_page_and_save_data_querier(unsigned key) {
+        return produce_first_page_and_save_data_querier(key, make_default_partition_range(), _s.schema()->full_slice());
     }
 
     // For tests testing just one insert-lookup.
-    entry_info produce_first_page_and_save_querier() {
-        return produce_first_page_and_save_querier(1);
+    entry_info produce_first_page_and_save_data_querier() {
+        return produce_first_page_and_save_data_querier(1);
     }
 
-    test_querier_cache& assert_cache_lookup(unsigned lookup_key,
+    test_querier_cache& assert_cache_lookup_data_querier(unsigned lookup_key,
             const schema& lookup_schema,
             const dht::partition_range& lookup_range,
             const query::partition_slice& lookup_slice) {
 
-        _cache.lookup(make_cache_key(lookup_key), emit_only_live_rows::no, lookup_schema, lookup_range, lookup_slice, nullptr);
+        _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
         return *this;
     }
@@ -326,8 +332,8 @@ public:
 SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_key_misses) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier();
-    t.assert_cache_lookup(90, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier();
+    t.assert_cache_lookup_data_querier(90, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .misses()
         .no_drops()
         .no_evictions();
@@ -340,8 +346,8 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_key_misses) {
 SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_clustering_row) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier(1, t.make_singular_partition_range(1), 2);
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier(1, t.make_singular_partition_range(1), 2);
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -350,8 +356,8 @@ SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_clustering_row) {
 SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_static_row) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier(1, t.make_singular_partition_range(1), 1);
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier(1, t.make_singular_partition_range(1), 1);
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -360,8 +366,8 @@ SEASTAR_THREAD_TEST_CASE(singular_range_lookup_with_stop_at_static_row) {
 SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_clustering_row) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, true}, {3, false}), 3);
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier(1, t.make_partition_range({1, true}, {3, false}), 3);
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -370,8 +376,8 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_clustering_row) {
 SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_static_row) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, true}, {3, false}), 1);
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier(1, t.make_partition_range({1, true}, {3, false}), 1);
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .no_misses()
         .no_drops()
         .no_evictions();
@@ -384,8 +390,8 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_stop_at_static_row) {
 SEASTAR_THREAD_TEST_CASE(lookup_with_original_range_drops) {
     test_querier_cache t;
 
-    const auto entry = t.produce_first_page_and_save_querier(1);
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.original_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier(1);
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.original_range, entry.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
@@ -396,32 +402,32 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_slice_drops) {
     test_querier_cache t;
 
     // Swap slices for different clustering keys.
-    const auto entry1 = t.produce_first_page_and_save_querier(1, t.make_partition_range({1, false}, {3, true}), 3);
-    const auto entry2 = t.produce_first_page_and_save_querier(2, t.make_partition_range({1, false}, {3, true}), 4);
-    t.assert_cache_lookup(entry1.key, *t.get_schema(), entry1.expected_range, entry2.expected_slice)
+    const auto entry1 = t.produce_first_page_and_save_data_querier(1, t.make_partition_range({1, false}, {3, true}), 3);
+    const auto entry2 = t.produce_first_page_and_save_data_querier(2, t.make_partition_range({1, false}, {3, true}), 4);
+    t.assert_cache_lookup_data_querier(entry1.key, *t.get_schema(), entry1.expected_range, entry2.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
-    t.assert_cache_lookup(entry2.key, *t.get_schema(), entry2.expected_range, entry1.expected_slice)
+    t.assert_cache_lookup_data_querier(entry2.key, *t.get_schema(), entry2.expected_range, entry1.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
 
     // Wrong slice.
-    const auto entry3 = t.produce_first_page_and_save_querier(3);
-    t.assert_cache_lookup(entry3.key, *t.get_schema(), entry3.expected_range, t.get_schema()->full_slice())
+    const auto entry3 = t.produce_first_page_and_save_data_querier(3);
+    t.assert_cache_lookup_data_querier(entry3.key, *t.get_schema(), entry3.expected_range, t.get_schema()->full_slice())
         .no_misses()
         .drops()
         .no_evictions();
 
     // Swap slices for stopped at clustering/static row.
-    const auto entry4 = t.produce_first_page_and_save_querier(4, t.make_partition_range({1, false}, {3, true}), 1);
-    const auto entry5 = t.produce_first_page_and_save_querier(5, t.make_partition_range({1, false}, {3, true}), 2);
-    t.assert_cache_lookup(entry4.key, *t.get_schema(), entry4.expected_range, entry5.expected_slice)
+    const auto entry4 = t.produce_first_page_and_save_data_querier(4, t.make_partition_range({1, false}, {3, true}), 1);
+    const auto entry5 = t.produce_first_page_and_save_data_querier(5, t.make_partition_range({1, false}, {3, true}), 2);
+    t.assert_cache_lookup_data_querier(entry4.key, *t.get_schema(), entry4.expected_range, entry5.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
-    t.assert_cache_lookup(entry5.key, *t.get_schema(), entry5.expected_range, entry4.expected_slice)
+    t.assert_cache_lookup_data_querier(entry5.key, *t.get_schema(), entry5.expected_range, entry4.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
@@ -432,8 +438,8 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_different_schema_version_drops) {
 
     auto new_schema = schema_builder(t.get_schema()).with_column("v1", utf8_type).build();
 
-    const auto entry = t.produce_first_page_and_save_querier();
-    t.assert_cache_lookup(entry.key, *new_schema, entry.expected_range, entry.expected_slice)
+    const auto entry = t.produce_first_page_and_save_data_querier();
+    t.assert_cache_lookup_data_querier(entry.key, *new_schema, entry.expected_range, entry.expected_slice)
         .no_misses()
         .drops()
         .no_evictions();
@@ -446,22 +452,22 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_different_schema_version_drops) {
 SEASTAR_THREAD_TEST_CASE(test_time_based_cache_eviction) {
     test_querier_cache t(1s);
 
-    const auto entry1 = t.produce_first_page_and_save_querier(1);
+    const auto entry1 = t.produce_first_page_and_save_data_querier(1);
 
     seastar::sleep(500ms).get();
 
-    const auto entry2 = t.produce_first_page_and_save_querier(2);
+    const auto entry2 = t.produce_first_page_and_save_data_querier(2);
 
     seastar::sleep(700ms).get();
 
-    t.assert_cache_lookup(entry1.key, *t.get_schema(), entry1.expected_range, entry1.expected_slice)
+    t.assert_cache_lookup_data_querier(entry1.key, *t.get_schema(), entry1.expected_range, entry1.expected_slice)
         .misses()
         .no_drops()
         .time_based_evictions();
 
     seastar::sleep(700ms).get();
 
-    t.assert_cache_lookup(entry2.key, *t.get_schema(), entry2.expected_range, entry2.expected_slice)
+    t.assert_cache_lookup_data_querier(entry2.key, *t.get_schema(), entry2.expected_range, entry2.expected_slice)
         .misses()
         .no_drops()
         .time_based_evictions();
@@ -490,19 +496,19 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
     }, 24h, cache_size);
 
     size_t i = 0;
-    const auto entry = t.produce_first_page_and_save_querier(i++);
+    const auto entry = t.produce_first_page_and_save_data_querier(i++);
 
     const size_t queriers_needed_to_fill_cache = floor(cache_size / entry.memory_usage);
 
     // Fill the cache but don't overflow.
     for (; i < queriers_needed_to_fill_cache; ++i) {
-        t.produce_first_page_and_save_querier(i);
+        t.produce_first_page_and_save_data_querier(i);
     }
 
     // Should overflow the limit and trigger the eviction of the oldest entry.
-    t.produce_first_page_and_save_querier(queriers_needed_to_fill_cache);
+    t.produce_first_page_and_save_data_querier(queriers_needed_to_fill_cache);
 
-    t.assert_cache_lookup(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .misses()
         .no_drops()
         .memory_based_evictions();
