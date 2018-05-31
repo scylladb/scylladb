@@ -30,6 +30,42 @@
 
 namespace query {
 
+template <typename Consumer>
+class clustering_position_tracker {
+    std::unique_ptr<Consumer> _consumer;
+    lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
+
+public:
+    clustering_position_tracker(std::unique_ptr<Consumer>&& consumer, lw_shared_ptr<std::optional<clustering_key_prefix>> last_ckey)
+        : _consumer(std::move(consumer))
+        , _last_ckey(std::move(last_ckey)) {
+    }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _last_ckey->reset();
+        _consumer->consume_new_partition(dk);
+    }
+    void consume(tombstone t) {
+        _consumer->consume(t);
+    }
+    stop_iteration consume(static_row&& sr, tombstone t, bool is_live) {
+        return _consumer->consume(std::move(sr), std::move(t), is_live);
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_live) {
+        *_last_ckey = cr.key();
+        return _consumer->consume(std::move(cr), std::move(t), is_live);
+    }
+    stop_iteration consume(range_tombstone&& rt) {
+        return _consumer->consume(std::move(rt));
+    }
+    stop_iteration consume_end_of_partition() {
+        return _consumer->consume_end_of_partition();
+    }
+    auto consume_end_of_stream() {
+        return _consumer->consume_end_of_stream();
+    }
+};
+
 /// One-stop object for serving queries.
 ///
 /// Encapsulates all state and logic for serving all pages for a given range
@@ -61,42 +97,6 @@ public:
         no_clustering_pos_mismatch
     };
 private:
-    template <typename Consumer>
-    class clustering_position_tracker {
-        std::unique_ptr<Consumer> _consumer;
-        lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
-
-    public:
-        clustering_position_tracker(std::unique_ptr<Consumer>&& consumer, lw_shared_ptr<std::optional<clustering_key_prefix>> last_ckey)
-            : _consumer(std::move(consumer))
-            , _last_ckey(std::move(last_ckey)) {
-        }
-
-        void consume_new_partition(const dht::decorated_key& dk) {
-            _last_ckey->reset();
-            _consumer->consume_new_partition(dk);
-        }
-        void consume(tombstone t) {
-            _consumer->consume(t);
-        }
-        stop_iteration consume(static_row&& sr, tombstone t, bool is_live) {
-            return _consumer->consume(std::move(sr), std::move(t), is_live);
-        }
-        stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_live) {
-            *_last_ckey = cr.key();
-            return _consumer->consume(std::move(cr), std::move(t), is_live);
-        }
-        stop_iteration consume(range_tombstone&& rt) {
-            return _consumer->consume(std::move(rt));
-        }
-        stop_iteration consume_end_of_partition() {
-            return _consumer->consume_end_of_partition();
-        }
-        auto consume_end_of_stream() {
-            return _consumer->consume_end_of_stream();
-        }
-    };
-
     struct position {
         const dht::decorated_key* partition_key;
         const clustering_key_prefix* clustering_key;
