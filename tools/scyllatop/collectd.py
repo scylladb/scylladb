@@ -17,6 +17,9 @@ COLLECTD_EXAMPLE_CONFIGURATION = '\n'.join(['LoadPlugin unixsock',
 
 class Collectd(object):
     _FIRST_LINE_PATTERN = re.compile('^(?P<lines>\d+)')
+    _METRIC_INFO_PATTERN = re.compile('^(?P<key>[^=]+)=(?P<value>.*)$')
+    _METRIC_DISCOVER_PATTERN_WITH_HELP = re.compile('[^ ]+ (?P<metric>.+)(?P<help>.*)$')
+    _METRIC_DISCOVER_PATTERN = re.compile('[^ ]+ (?P<metric>.+)(?P<help>.*)$')
 
     def __init__(self, socketName):
         try:
@@ -32,7 +35,13 @@ class Collectd(object):
         self._socket.connect(socketName)
         self._lineReader = os.fdopen(self._socket.fileno())
 
-    def query(self, command):
+    def query_val(self, val):
+        return self.internal_query('GETVAL "{metric}"'.format(metric=val))
+
+    def query_list(self):
+        return self.internal_query('LISTVAL')
+
+    def internal_query(self, command):
         self._send(command)
         return self._readLines()
 

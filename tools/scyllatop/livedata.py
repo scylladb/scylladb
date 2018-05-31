@@ -7,12 +7,12 @@ import defaults
 
 
 class LiveData(object):
-    def __init__(self, metricPatterns, interval, collectd):
-        logging.info('will query collectd every {0} seconds'.format(interval))
+    def __init__(self, metricPatterns, interval, metric_source):
+        logging.info('will query metric_source every {0} seconds'.format(interval))
         self._startedAt = time.time()
         self._measurements = []
         self._interval = interval
-        self._collectd = collectd
+        self._metric_source = metric_source
         self._initializeMetrics(metricPatterns)
         self._views = []
         self._stop = False
@@ -31,11 +31,11 @@ class LiveData(object):
             self._setupUserSpecifiedMetrics(defaults.DEFAULT_METRIC_PATTERNS)
 
     def _setupUserSpecifiedMetrics(self, metricPatterns):
-        availableSymbols = [m.symbol for m in metric.Metric.discover(self._collectd)]
+        availableSymbols = [m.symbol for m in metric.Metric.discover(self._metric_source)]
         symbols = [symbol for symbol in availableSymbols if self._matches(symbol, metricPatterns)]
         for symbol in symbols:
                 logging.info('adding {0}'.format(symbol))
-                self._measurements.append(metric.Metric(symbol, self._collectd))
+                self._measurements.append(metric.Metric(symbol, self._metric_source, ""))
 
     def _matches(self, symbol, metricPatterns):
         for pattern in metricPatterns:
