@@ -65,7 +65,6 @@ distributed<query_processor> _the_query_processor;
 const sstring query_processor::CQL_VERSION = "3.3.1";
 
 const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
-const std::chrono::minutes authorized_prepared_statements_cache::entry_expiry = std::chrono::minutes(60);
 
 class query_processor::internal_state {
     service::query_state _qs;
@@ -99,7 +98,10 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
         , _db(db)
         , _internal_state(new internal_state())
         , _prepared_cache(prep_cache_log)
-        , _authorized_prepared_cache(std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()), authorized_prepared_statements_cache_log) {
+        , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.local().get_config().permissions_validity_in_ms()),
+                                              std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
+                                     std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()),
+                                     authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(

@@ -98,8 +98,6 @@ private:
                                             std::equal_to<cache_key_type>,
                                             authorized_prepared_statements_cache_stats_updater>;
 
-    static const std::chrono::minutes entry_expiry;
-
 public:
     using key_type = cache_key_type;
     using value_type = checked_weak_ptr;
@@ -112,8 +110,8 @@ private:
 
 public:
     // Choose the memory budget such that would allow us ~4K entries when a shard gets 1GB of RAM
-    authorized_prepared_statements_cache(std::chrono::milliseconds entry_refresh, logging::logger& logger)
-        : _cache(memory::stats().total_memory() / 2560, entry_expiry, entry_refresh, logger, [this] (const key_type& k) {
+    authorized_prepared_statements_cache(std::chrono::milliseconds entry_expiration, std::chrono::milliseconds entry_refresh, logging::logger& logger)
+        : _cache(memory::stats().total_memory() / 2560, entry_expiration, entry_refresh, logger, [this] (const key_type& k) {
             _cache.remove(k);
             return make_ready_future<value_type>();
         })

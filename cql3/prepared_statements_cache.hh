@@ -110,9 +110,9 @@ private:
         }
     };
 
+public:
     static const std::chrono::minutes entry_expiry;
 
-public:
     using key_type = prepared_cache_key_type;
     using value_type = checked_weak_ptr;
     using statement_is_too_big = typename cache_type::entry_is_too_big;
