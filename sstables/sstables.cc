@@ -2826,7 +2826,7 @@ void sstable_writer_m::close_data_writer() {
 
 void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _c_stats.start_offset = _data_writer->offset();
-    _prev_row_start = 0;
+    _prev_row_start = _data_writer->offset();
 
     _partition_key = key::from_partition_key(_schema, dk.key());
     maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
@@ -3164,11 +3164,12 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
 stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
     ensure_tombstone_is_written();
     maybe_set_pi_first_clustering(cr.key());
-    write_clustered_row(cr, _data_writer->offset() - _prev_row_start);
+    uint64_t pos = _data_writer->offset();
+    write_clustered_row(cr, pos - _prev_row_start);
 
     _pi_write_m.last_clustering = cr.key();
 
-    _prev_row_start = _data_writer->offset();
+    _prev_row_start = pos;
     maybe_add_pi_block();
     return stop_iteration::no;
 }
