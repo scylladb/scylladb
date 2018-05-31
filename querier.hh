@@ -66,7 +66,7 @@ public:
     }
 };
 
-struct position {
+struct position_view {
     const dht::decorated_key* partition_key;
     const clustering_key_prefix* clustering_key;
 };
@@ -120,11 +120,11 @@ private:
         }
     }
 
-    position current_position() const;
+    position_view current_position() const;
 
-    bool ring_position_matches(const dht::partition_range& range, const position& pos) const;
+    bool ring_position_matches(const dht::partition_range& range, position_view pos) const;
 
-    bool clustering_position_matches(const query::partition_slice& slice, const position& pos) const;
+    bool clustering_position_matches(const query::partition_slice& slice, position_view pos) const;
 
 public:
     querier(const mutation_source& ms,
