@@ -60,7 +60,12 @@ namespace json_helpers {
 static std::unordered_map<sstring, Json::Value> handle_case_sensitivity(Json::Value&& value_map) {
     std::unordered_map<sstring, Json::Value> case_sensitive_map;
     for (auto it = value_map.begin(); it != value_map.end(); ++it) {
+#if defined(JSONCPP_VERSION_HEXA) && (JSONCPP_VERSION_HEXA >= 0x010600) // >= 1.6.0
         sstring name = it.name();
+#else
+        // NOTICE(sarna): Unsafe for strings with embedded null character
+        sstring name = it.memberName();
+#endif
         if (name.size() > 1 && *name.begin() == '"' && name.back() == '"') {
             case_sensitive_map.emplace(name.substr(1, name.size() - 2), std::move(*it));
         } else {
