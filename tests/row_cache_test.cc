@@ -3014,11 +3014,13 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
                             slice, actual, ::join(",\n", possible_versions)));
                     }
                 }
+            }).finally([&, id] {
+                done = true;
             });
         });
 
         int n_updates = 100;
-        while (!readers.available() && n_updates--) {
+        while (!done && n_updates--) {
             auto m2 = gen();
             m2.partition().make_fully_continuous();
 
@@ -3038,7 +3040,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
 
             // Don't allow backlog to grow too much to avoid bad_alloc
             const auto max_active_versions = 10;
-            while (versions.size() > max_active_versions) {
+            while (!done && versions.size() > max_active_versions) {
                 later().get();
             }
         }
