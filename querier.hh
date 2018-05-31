@@ -205,6 +205,72 @@ public:
 using data_querier = querier<emit_only_live_rows::yes>;
 using mutation_querier = querier<emit_only_live_rows::no>;
 
+/// Local state of a multishard query.
+///
+/// This querier is not intended to be used directly to read pages. Instead it
+/// is merely a shard local state of a suspended multishard query and is
+/// intended to be used for storing the state of the query on each shard where
+/// it executes. It stores the local reader and the referenced parameters it was
+/// created with (similar to other queriers).
+/// For position validation purposes (at lookup) the reader's position is
+/// considered to be the same as that of the query.
+class shard_mutation_querier {
+    dht::partition_range_vector _query_ranges;
+    std::unique_ptr<const dht::partition_range> _reader_range;
+    std::unique_ptr<const query::partition_slice> _reader_slice;
+    flat_mutation_reader _reader;
+    dht::decorated_key _nominal_pkey;
+    std::optional<clustering_key_prefix> _nominal_ckey;
+
+public:
+    shard_mutation_querier(
+            const dht::partition_range_vector query_ranges,
+            std::unique_ptr<const dht::partition_range> reader_range,
+            std::unique_ptr<const query::partition_slice> reader_slice,
+            flat_mutation_reader reader,
+            dht::decorated_key nominal_pkey,
+            std::optional<clustering_key_prefix> nominal_ckey)
+        : _query_ranges(std::move(query_ranges))
+        , _reader_range(std::move(reader_range))
+        , _reader_slice(std::move(reader_slice))
+        , _reader(std::move(reader))
+        , _nominal_pkey(std::move(nominal_pkey))
+        , _nominal_ckey(std::move(nominal_ckey)) {
+    }
+
+    bool is_reversed() const {
+        return _reader_slice->options.contains(query::partition_slice::option::reversed);
+    }
+
+    size_t memory_usage() const {
+        return _reader.buffer_size();
+    }
+
+    schema_ptr schema() const {
+        return _reader.schema();
+    }
+
+    position_view current_position() const {
+        return {&_nominal_pkey, _nominal_ckey ? &*_nominal_ckey : nullptr};
+    }
+
+    dht::partition_ranges_view ranges() const {
+        return _query_ranges;
+    }
+
+    std::unique_ptr<const dht::partition_range> reader_range() && {
+        return std::move(_reader_range);
+    }
+
+    std::unique_ptr<const query::partition_slice> reader_slice() && {
+        return std::move(_reader_slice);
+    }
+
+    flat_mutation_reader reader() && {
+        return std::move(_reader);
+    }
+};
+
 /// Special-purpose cache for saving queriers between pages.
 ///
 /// Queriers are saved at the end of the page and looked up at the beginning of
@@ -260,7 +326,7 @@ public:
         std::list<entry>::iterator _pos;
         const utils::UUID _key;
         const lowres_clock::time_point _expires;
-        std::variant<data_querier, mutation_querier> _value;
+        std::variant<data_querier, mutation_querier, shard_mutation_querier> _value;
 
     public:
         template <typename Querier>
@@ -328,6 +394,7 @@ private:
     entries _entries;
     index _data_querier_index;
     index _mutation_querier_index;
+    index _shard_mutation_querier_index;
     timer<lowres_clock> _expiry_timer;
     std::chrono::seconds _entry_ttl;
     stats _stats;
@@ -348,6 +415,8 @@ public:
     void insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state);
 
     void insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state);
+
+    void insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
 
     /// Lookup a data querier in the cache.
     ///
@@ -374,6 +443,15 @@ public:
     std::optional<mutation_querier> lookup_mutation_querier(utils::UUID key,
             const schema& s,
             const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state);
+
+    /// Lookup a shard mutation querier in the cache.
+    ///
+    /// See \ref lookup_data_querier().
+    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(utils::UUID key,
+            const schema& s,
+            const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state);
 
@@ -405,12 +483,17 @@ public:
     querier_cache_context(querier_cache& cache, utils::UUID key, bool is_first_page);
     void insert(data_querier&& q, tracing::trace_state_ptr trace_state);
     void insert(mutation_querier&& q, tracing::trace_state_ptr trace_state);
+    void insert(shard_mutation_querier&& q, tracing::trace_state_ptr trace_state);
     std::optional<data_querier> lookup_data_querier(const schema& s,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state);
     std::optional<mutation_querier> lookup_mutation_querier(const schema& s,
             const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state);
+    std::optional<shard_mutation_querier> lookup_shard_mutation_querier(const schema& s,
+            const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state);
 };
