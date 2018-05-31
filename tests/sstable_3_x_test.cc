@@ -1212,3 +1212,31 @@ SEASTAR_TEST_CASE(test_write_different_types) {
     });
 }
 
+SEASTAR_TEST_CASE(test_write_empty_clustering_values) {
+    return seastar::async([] {
+        sstring table_name = "empty_clustering_values";
+        // CREATE TABLE empty_clustering_values (pk int, ck1 text, ck2 int, ck3 text, rc int, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+        builder.with_column("ck2", int32_type, column_kind::clustering_key);
+        builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+        builder.with_column("rc", int32_type);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_deeply_exploded(*s, {0});
+        mutation mut{s, key};
+
+        // INSERT INTO empty_clustering_values (pk, ck1, ck2, ck3, rc) VALUES (0, '', 1, '', 2);
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { "", 1, "" });
+        mut.partition().apply_insert(*s, ckey, write_timestamp);
+        mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
+
+        mt->apply(std::move(mut));
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
