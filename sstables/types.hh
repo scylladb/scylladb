@@ -515,9 +515,9 @@ struct scylla_metadata {
         }
         return *ext;
     }
-    utils::UUID get_run_identifier() const {
-        auto m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
-        return m->id;
+    stdx::optional<utils::UUID> get_optional_run_identifier() const {
+        auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
+        return m ? stdx::make_optional(m->id) : stdx::nullopt;
     }
 
     template <typename Describer>
