@@ -521,6 +521,7 @@ class regular_compaction : public compaction {
     stdx::optional<compaction_weight_registration> _weight_registration;
     mutable compaction_read_monitor_generator _monitor_generator;
     std::deque<compaction_write_monitor> _active_write_monitors = {};
+    utils::UUID _run_identifier = utils::make_random_uuid();
 public:
     regular_compaction(column_family& cf, compaction_descriptor descriptor, std::function<shared_sstable()> creator, replacer_fn replacer)
         : compaction(cf, std::move(descriptor.sstables), descriptor.max_sstable_bytes, descriptor.level)
@@ -585,6 +586,7 @@ public:
             cfg.max_sstable_size = _max_sstable_size;
             cfg.monitor = &_active_write_monitors.back();
             cfg.large_partition_handler = _cf.get_large_partition_handler();
+            cfg.run_identifier = _run_identifier;
             // TODO: calculate encoding_stats based on statistics of compacted sstables
             _writer.emplace(_sst->get_writer(*_cf.schema(), partitions_per_sstable(), cfg, encoding_stats{}, priority));
         }
