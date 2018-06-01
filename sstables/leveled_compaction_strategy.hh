@@ -34,6 +34,7 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     std::vector<int> _compaction_counter;
     size_tiered_compaction_strategy_options _stcs_options;
     compaction_backlog_tracker _backlog_tracker;
+    int32_t calculate_max_sstable_size_in_mb(stdx::optional<sstring> option_value) const;
 public:
     leveled_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
