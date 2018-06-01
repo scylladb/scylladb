@@ -1275,3 +1275,29 @@ SEASTAR_TEST_CASE(test_write_large_clustering_key) {
     });
 }
 
+SEASTAR_TEST_CASE(test_write_compact_table) {
+    return seastar::async([] {
+        sstring table_name = "compact_table";
+        // CREATE TABLE compact_table (pk int, ck1 int, ck2 int, rc int, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''} AND COMPACT STORAGE;
+        schema_builder builder("sst3", table_name);
+        builder.with_column("pk", int32_type, column_kind::partition_key);
+        builder.with_column("ck1", int32_type, column_kind::clustering_key);
+        builder.with_column("ck2", int32_type, column_kind::clustering_key);
+        builder.with_column("rc", int32_type);
+        builder.set_compressor_params(compression_parameters());
+        schema_ptr s = builder.build(schema_builder::compact_storage::yes);
+
+        lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_deeply_exploded(*s, {1});
+        mutation mut{s, key};
+
+        // INSERT INTO compact_table (pk, ck1, rc) VALUES (1, 1, 1);
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
+        mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
+
+        mt->apply(std::move(mut));
+        write_and_compare_sstables(s, mt, table_name);
+    });
+}
+
