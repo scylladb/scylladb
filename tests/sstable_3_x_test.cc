@@ -2246,3 +2246,44 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     write_and_compare_sstables(s, mt, table_name);
 }
 
+// Test the case when for RTs their adjacent bounds are written as boundary RT markers.
+SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
+    sstring table_name = "adjacent_range_tombstones";
+    // CREATE TABLE adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821291};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821308};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
