@@ -162,7 +162,7 @@ static sstring hashpw(const sstring& pass) {
 }
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
-    return utf8_type->deserialize(row.get_blob(SALTED_HASH)) != data_value::make_null(utf8_type);
+    return !row.get_or<sstring>(SALTED_HASH, "").empty();
 }
 
 static const sstring update_row_query = sprint(
