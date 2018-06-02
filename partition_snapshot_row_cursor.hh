@@ -131,8 +131,8 @@ class partition_snapshot_row_cursor final {
     utils::small_vector<position_in_version, 2> _heap;
     utils::small_vector<mutation_partition::rows_type::iterator, 2> _iterators;
     utils::small_vector<position_in_version, 2> _current_row;
-    bool _continuous;
-    bool _dummy;
+    bool _continuous{};
+    bool _dummy{};
     const bool _unique_owner;
     position_in_partition _position;
     partition_snapshot::change_mark _change_mark;
