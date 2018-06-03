@@ -194,7 +194,7 @@ schema_ptr built_indexes() {
     static thread_local auto built_indexes = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
-        {{"table_name", utf8_type}},
+        {{"table_name", utf8_type}}, // table_name here is the name of the keyspace - don't be fooled
         // clustering key
         {{"index_name", utf8_type}},
         // regular columns
