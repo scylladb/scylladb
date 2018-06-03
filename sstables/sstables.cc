@@ -3137,7 +3137,7 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
         write(_sst.get_version(), *_data_writer, ext_flags);
     }
 
-    write_clustering_prefix(*_data_writer, _schema, clustered_row.key());
+    write_clustering_prefix(*_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
 
     auto write_row = [this, &clustered_row, has_complex_deletion] (file_writer& writer) {
         write_row_body(writer, clustered_row, has_complex_deletion);
@@ -3189,10 +3189,13 @@ static void write_clustering_prefix(file_writer& writer, bound_kind kind,
         const schema& s, const clustering_key_prefix& clustering) {
     assert(kind != bound_kind::static_clustering);
     write(sstable_version_types::mc, writer, kind);
+    auto is_ephemerally_full = ephemerally_full_prefix{s.is_compact_table()};
     if (kind != bound_kind::clustering) {
+        // Don't use ephemerally full for RT bounds as they're always non-full
+        is_ephemerally_full = ephemerally_full_prefix::no;
         write(sstable_version_types::mc, writer, static_cast<uint16_t>(clustering.size(s)));
     }
-    write_clustering_prefix(writer, s, clustering);
+    write_clustering_prefix(writer, s, clustering, is_ephemerally_full);
 }
 
 void sstable_writer_m::write_promoted_index(file_writer& writer) {
