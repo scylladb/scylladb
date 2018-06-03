@@ -69,6 +69,7 @@
 #include "serializer.hh"
 #include <core/enum.hh>
 #include <seastar/net/inet_address.hh>
+#include <index/secondary_index.hh>
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
@@ -77,6 +78,7 @@
 #include "sstables/sstables.hh"
 #include "db/view/build_progress_virtual_reader.hh"
 #include "db/schema_tables.hh"
+#include "index/built_indexes_virtual_reader.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1585,6 +1587,9 @@ static void maybe_add_virtual_reader(schema_ptr s, database& db) {
     }
     if (s.get() == v3::views_builds_in_progress().get()) {
         db.find_column_family(s).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
+    }
+    if (s.get() == built_indexes().get()) {
+        db.find_column_family(s).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
     }
 }
 
