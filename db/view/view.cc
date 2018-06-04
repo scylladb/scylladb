@@ -78,7 +78,18 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
 
 cql3::statements::select_statement& view_info::select_statement() const {
     if (!_select_statement) {
-        auto raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
+        shared_ptr<cql3::statements::raw::select_statement> raw;
+        if (is_index()) {
+            // Token column is the first clustering column
+            auto token_column_it = boost::range::find_if(_schema.all_columns(), std::mem_fn(&column_definition::is_clustering_key));
+            auto real_columns = _schema.all_columns() | boost::adaptors::filtered([this, token_column_it](const column_definition& cdef) {
+                return std::addressof(cdef) != std::addressof(*token_column_it);
+            });
+            schema::columns_type columns = boost::copy_range<schema::columns_type>(std::move(real_columns));
+            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), columns);
+        } else {
+            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
+        }
         raw->prepare_keyspace(_schema.ks_name());
         raw->set_bound_variables({});
         cql3::cql_stats ignored;
@@ -120,7 +131,7 @@ stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
 void view_info::initialize_base_dependent_fields(const schema& base) {
     for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
         auto* base_col = base.get_column_definition(view_col.name());
-        if (!base_col->is_primary_key()) {
+        if (base_col && !base_col->is_primary_key()) {
             _base_non_pk_column_in_view_pk.emplace(base_col->id);
             break;
         }
@@ -232,6 +243,7 @@ private:
         return _updates.emplace(std::move(key), mutation_partition(_view)).first->second;
     }
     row_marker compute_row_marker(const clustering_row& base_row) const;
+    dht::token token_for(const partition_key& base_key);
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
     void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
@@ -323,11 +335,21 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     return marker;
 }
 
+dht::token view_updates::token_for(const partition_key& base_key) {
+    return dht::global_partitioner().get_token(*_base, base_key);
+}
+
 deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
     std::vector<bytes> linearized_values;
     auto get_value = boost::adaptors::transformed([&, this] (const column_definition& cdef) -> bytes_view {
         auto* base_col = _base->get_column_definition(cdef.name());
-        assert(base_col);
+        if (!base_col) {
+            if (!_view_info.is_index()) {
+                throw std::logic_error(sprint("Column %s doesn't exist in base and this view is not backing a secondary index", cdef.name_as_text()));
+            }
+            auto& partitioner = dht::global_partitioner();
+            return linearized_values.emplace_back(partitioner.token_to_bytes(token_for(base_key)));
+        }
         switch (base_col->kind) {
         case column_kind::partition_key:
             return base_key.get_component(*_base, base_col->position());
