@@ -433,7 +433,7 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
 
 static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
     "tests/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
-static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA =
+static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
         .with_column("bool_val", boolean_type)
@@ -449,41 +449,41 @@ static thread_local const schema_ptr UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_D
 
 SEASTAR_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
     return seastar::async([] {
-        sstable_assertions sst(UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA,
+        sstable_assertions sst(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA,
                                UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH);
         sst.load();
         auto to_key = [] (int key) {
             auto bytes = int32_type->decompose(int32_t(key));
-            auto pk = partition_key::from_single_value(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, bytes);
-            return dht::global_partitioner().decorate_key(*UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, pk);
+            auto pk = partition_key::from_single_value(*PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, bytes);
+            return dht::global_partitioner().decorate_key(*PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, pk);
         };
 
         auto bool_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("bool_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("bool_val"));
         BOOST_REQUIRE(bool_cdef);
         auto double_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("double_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("double_val"));
         BOOST_REQUIRE(double_cdef);
         auto float_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("float_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("float_val"));
         BOOST_REQUIRE(float_cdef);
         auto int_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("int_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("int_val"));
         BOOST_REQUIRE(int_cdef);
         auto long_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("long_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("long_val"));
         BOOST_REQUIRE(long_cdef);
         auto timestamp_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timestamp_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timestamp_val"));
         BOOST_REQUIRE(timestamp_cdef);
         auto timeuuid_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timeuuid_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("timeuuid_val"));
         BOOST_REQUIRE(timeuuid_cdef);
         auto uuid_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("uuid_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("uuid_val"));
         BOOST_REQUIRE(uuid_cdef);
         auto text_cdef =
-            UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("text_val"));
+            PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA->get_column_definition(to_bytes("text_val"));
         BOOST_REQUIRE(text_cdef);
 
         auto generate = [&] (bool bool_val, double double_val, float float_val, int int_val, long long_val,
