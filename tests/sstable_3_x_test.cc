@@ -2287,3 +2287,45 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
     write_and_compare_sstables(s, mt, table_name);
 }
 
+// Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
+// so cannot be merged into a single boundary RT marker.
+SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
+    sstring table_name = "non_adjacent_range_tombstones";
+    // CREATE TABLE non_adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 > 'aaa' AND ck1 < 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144611};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb, bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, bytes("bbb")), bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144623};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("bbb")), tomb, bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
