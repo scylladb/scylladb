@@ -66,6 +66,49 @@ public:
     }
 };
 
+/// Consume a page worth of data from the reader.
+///
+/// Uses `compaction_state` for compacting the fragments and `consumer` for
+/// building the results.
+/// Returns a future containing the last consumed clustering key, or std::nullopt
+/// if the last row wasn't a clustering row, and whatever the consumer's
+/// `consume_end_of_stream()` method returns.
+template <emit_only_live_rows OnlyLive, typename Consumer>
+GCC6_CONCEPT(
+    requires CompactedFragmentsConsumer<Consumer>
+)
+auto consume_page(flat_mutation_reader& reader,
+        lw_shared_ptr<compact_for_query_state<OnlyLive>> compaction_state,
+        const query::partition_slice& slice,
+        Consumer&& consumer,
+        uint32_t row_limit,
+        uint32_t partition_limit,
+        gc_clock::time_point query_time,
+        db::timeout_clock::time_point timeout) {
+    // FIXME: #3158
+    // consumer cannot be moved after consume_new_partition() is called
+    // on it because it stores references to some of it's own members.
+    // Move it to the heap before any consumption begins to avoid
+    // accidents.
+    return reader.peek().then([=, &reader, consumer = std::make_unique<Consumer>(std::move(consumer)), &slice] (
+                mutation_fragment* next_fragment) mutable {
+        const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
+        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
+
+        const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(
+                slice.options.contains(query::partition_slice::option::reversed));
+
+        auto last_ckey = make_lw_shared<std::optional<clustering_key_prefix>>();
+        auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<OnlyLive, clustering_position_tracker<Consumer>>>(
+                compaction_state,
+                clustering_position_tracker(std::move(consumer), last_ckey));
+
+        return reader.consume(std::move(reader_consumer), is_reversed, timeout).then([last_ckey] (auto&&... results) mutable {
+            return make_ready_future<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>(std::move(*last_ckey), std::move(results)...);
+        });
+    });
+}
+
 struct position_view {
     const dht::decorated_key* partition_key;
     const clustering_key_prefix* clustering_key;
@@ -98,7 +141,7 @@ class querier {
     std::unique_ptr<const query::partition_slice> _slice;
     flat_mutation_reader _reader;
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> _compaction_state;
-    lw_shared_ptr<std::optional<clustering_key_prefix>> _last_ckey;
+    std::optional<clustering_key_prefix> _last_ckey;
 
     std::variant<lw_shared_ptr<compact_for_mutation_query_state>, lw_shared_ptr<compact_for_data_query_state>> make_compaction_state(
             const schema& s,
@@ -124,8 +167,7 @@ public:
         , _slice(std::make_unique<query::partition_slice>(std::move(slice)))
         , _reader(ms.make_reader(schema, *_range, *_slice, pc, std::move(trace_ptr),
                     streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
-        , _compaction_state(make_compaction_state(*schema, gc_clock::time_point{}, only_live))
-        , _last_ckey(make_lw_shared<std::optional<clustering_key_prefix>>()) {
+        , _compaction_state(make_compaction_state(*schema, gc_clock::time_point{}, only_live)) {
     }
 
     bool is_reversed() const {
@@ -146,25 +188,10 @@ public:
             gc_clock::time_point query_time,
             db::timeout_clock::time_point timeout) {
         return std::visit([=, consumer = std::move(consumer)] (auto& compaction_state) mutable {
-            // FIXME: #3158
-            // consumer cannot be moved after consume_new_partition() is called
-            // on it because it stores references to some of it's own members.
-            // Move it to the heap before any consumption begins to avoid
-            // accidents.
-            return _reader.peek().then([=, consumer = std::make_unique<Consumer>(std::move(consumer))] (mutation_fragment* next_fragment) mutable {
-                const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
-                compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
-
-                const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(
-                        _slice->options.contains(query::partition_slice::option::reversed));
-
-                using compaction_state_type = typename std::remove_reference<decltype(*compaction_state)>::type;
-                constexpr auto only_live = compaction_state_type::parameters::only_live;
-                auto reader_consumer = make_stable_flattened_mutations_consumer<compact_for_query<only_live, clustering_position_tracker<Consumer>>>(
-                        compaction_state,
-                        clustering_position_tracker(std::move(consumer), _last_ckey));
-
-                return _reader.consume(std::move(reader_consumer), is_reversed, timeout);
+            return ::query::consume_page(_reader, compaction_state, *_slice, std::move(consumer), row_limit, partition_limit, query_time,
+                    timeout).then([this] (std::optional<clustering_key_prefix> last_ckey, auto&&... results) {
+                _last_ckey = std::move(last_ckey);
+                return make_ready_future<std::decay_t<decltype(results)>...>(std::move(results)...);
             });
         }, _compaction_state);
     }
@@ -179,7 +206,7 @@ public:
 
     position_view current_position() const {
         const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
-        const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
+        const clustering_key_prefix* clustering_key = _last_ckey ? &*_last_ckey : nullptr;
         return {dk, clustering_key};
     }
 
