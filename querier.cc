@@ -175,6 +175,7 @@ querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, co
 
     if (it == queriers.second) {
         tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range {}", key, range);
+        return _entries.end();
     }
     tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
     return it->pos();
