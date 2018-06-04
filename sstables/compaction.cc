@@ -221,11 +221,13 @@ class compaction_write_monitor final : public sstables::write_monitor, public ba
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
+    unsigned _sstable_level;
 public:
-    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf, api::timestamp_type max_timestamp)
+    compaction_write_monitor(sstables::shared_sstable sst, column_family& cf, api::timestamp_type max_timestamp, unsigned sstable_level)
         : _sst(sst)
         , _cf(cf)
         , _maximum_timestamp(max_timestamp)
+        , _sstable_level(sstable_level)
     {}
 
     ~compaction_write_monitor() {
@@ -260,6 +262,10 @@ public:
 
     api::timestamp_type maximum_timestamp() const override {
         return _maximum_timestamp;
+    }
+
+    unsigned level() const override {
+        return _sstable_level;
     }
 
     virtual void on_write_completed() override { }
@@ -557,7 +563,7 @@ public:
             _sst = _creator();
             setup_new_sstable(_sst);
 
-            _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp());
+            _active_write_monitors.emplace_back(_sst, _cf, maximum_timestamp(), _sstable_level);
             auto&& priority = service::get_local_compaction_priority();
             sstable_writer_config cfg;
             cfg.max_sstable_size = _max_sstable_size;

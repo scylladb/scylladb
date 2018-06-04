@@ -57,6 +57,7 @@ class compaction_controller;
 struct backlog_write_progress_manager {
     virtual uint64_t written() const = 0;
     virtual api::timestamp_type maximum_timestamp() const = 0;
+    virtual unsigned level() const = 0;
     virtual ~backlog_write_progress_manager() {}
 };
 
