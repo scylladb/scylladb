@@ -42,26 +42,26 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
-const std::chrono::seconds manager::space_watchdog::_watchdog_period = std::chrono::seconds(1);
-// TODO: remove this when we switch to C++17
-constexpr size_t manager::_max_hints_send_queue_length;
 
-size_t db::hints::manager::max_shard_disk_space_size;
+size_t db::hints::resource_manager::max_shard_disk_space_size;
 
-manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, distributed<database>& db)
+manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager& res_manager, distributed<database>& db)
     : _hints_dir(boost::filesystem::path(hints_directory) / format("{:d}", engine().cpu_id()).c_str())
     , _hinted_dcs(hinted_dcs.begin(), hinted_dcs.end())
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
-    , _max_send_in_flight_memory(std::max(memory::stats().total_memory() / 10, _max_hints_send_queue_length))
-    , _min_send_hint_budget(_max_send_in_flight_memory / _max_hints_send_queue_length)
-    , _send_limiter(_max_send_in_flight_memory)
-    , _space_watchdog(*this)
-{
+    , _resource_manager(res_manager)
+{}
+
+manager::~manager() {
+    assert(_ep_managers.empty());
+}
+
+void manager::register_metrics(const sstring& group_name) {
     namespace sm = seastar::metrics;
 
-    _metrics.add_group("hints_manager", {
+    _metrics.add_group(group_name, {
         sm::make_gauge("size_of_hints_in_progress", _stats.size_of_hints_in_progress,
                         sm::description("Size of hinted mutations that are scheduled to be written.")),
 
@@ -79,10 +79,6 @@ manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64
     });
 }
 
-manager::~manager() {
-    assert(_ep_managers.empty());
-}
-
 future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
     _proxy_anchor = std::move(proxy_ptr);
     _gossiper_anchor = std::move(gossiper_ptr);
@@ -95,8 +91,6 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
         _strorage_service_anchor->register_subscriber(this);
-        // we are ready to store new hints...
-        _space_watchdog.start();
     });
 }
 
@@ -110,15 +104,32 @@ future<> manager::stop() {
     _stopping = true;
 
     return _draining_eps_gate.close().finally([this] {
-        return when_all(
-            parallel_for_each(_ep_managers, [] (auto& pair) {
+        return parallel_for_each(_ep_managers, [] (auto& pair) {
                 return pair.second.stop();
-            }),
-            _space_watchdog.stop()
-        ).finally([this] {
+            }).finally([this] {
             _ep_managers.clear();
             manager_logger.info("Stopped");
         }).discard_result();
+    });
+}
+
+void manager::allow_hints() {
+    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.allow_hints(); });
+}
+
+void manager::forbid_hints() {
+    boost::for_each(_ep_managers, [] (auto& pair) { pair.second.forbid_hints(); });
+}
+
+void manager::forbid_hints_for_eps_with_pending_hints() {
+    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
+    boost::for_each(_ep_managers, [this] (auto& pair) {
+        end_point_hints_manager& ep_man = pair.second;
+        if (has_ep_with_pending_hints(ep_man.end_point_key())) {
+            ep_man.forbid_hints();
+        } else {
+            ep_man.allow_hints();
+        }
     });
 }
 
@@ -128,6 +139,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
             ++_hints_in_progress;
             size_t mut_size = fm->representation().size();
             shard_stats().size_of_hints_in_progress += mut_size;
+            shard_resource_manager().inc_size_of_hints_in_progress(mut_size);
 
             return with_shared(file_update_mutex(), [this, fm, s, tr_state] () mutable -> future<> {
                 return get_or_load().then([this, fm = std::move(fm), s = std::move(s), tr_state] (hints_store_ptr log_ptr) mutable {
@@ -148,6 +160,7 @@ bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<co
             }).finally([this, mut_size, fm, s] {
                 --_hints_in_progress;
                 shard_stats().size_of_hints_in_progress -= mut_size;
+                shard_resource_manager().dec_size_of_hints_in_progress(mut_size);
             });;
         });
     } catch (...) {
@@ -280,8 +293,8 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
-            cfg.commitlog_segment_size_in_mb = _hint_segment_size_in_mb;
-            cfg.commitlog_total_space_in_mb = _max_hints_per_ep_size_mb;
+            cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
+            cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
             cfg.fname_prefix = manager::FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().get_config().extensions();
 
@@ -420,122 +433,10 @@ const column_mapping& manager::end_point_hints_manager::sender::get_column_mappi
     return cm_it->second;
 }
 
-manager::space_watchdog::space_watchdog(manager& shard_manager)
-    : _shard_manager(shard_manager)
-    , _timer([this] { on_timer(); })
-{}
-
-void manager::space_watchdog::start() {
-    _timer.arm(timer_clock_type::now());
-}
-
-future<> manager::space_watchdog::stop() noexcept {
-    try {
-        return _gate.close().finally([this] { _timer.cancel(); });
-    } catch (...) {
-        return make_exception_future<>(std::current_exception());
-    }
-}
-
-future<> manager::space_watchdog::scan_one_ep_dir(boost::filesystem::path path, ep_key_type ep_key) {
-    return lister::scan_dir(path, { directory_entry_type::regular }, [this, ep_key] (lister::path dir, directory_entry de) {
-        // Put the current end point ID to state.eps_with_pending_hints when we see the second hints file in its directory
-        if (_files_count == 1) {
-            _eps_with_pending_hints.emplace(ep_key);
-        }
-        ++_files_count;
-
-        return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
-            _total_size += fsize;
-        });
-    });
-}
-
-void manager::space_watchdog::on_timer() {
-    with_gate(_gate, [this] {
-        return futurize_apply([this] {
-            _eps_with_pending_hints.clear();
-            _eps_with_pending_hints.reserve(_shard_manager._ep_managers.size());
-            _total_size = 0;
-
-            // The hints directories are organized as follows:
-            // <hints root>
-            //    |- <shard1 ID>
-            //    |  |- <EP1 address>
-            //    |     |- <hints file1>
-            //    |     |- <hints file2>
-            //    |     |- ...
-            //    |  |- <EP2 address>
-            //    |     |- ...
-            //    |  |-...
-            //    |- <shard2 ID>
-            //    |  |- ...
-            //    ...
-            //    |- <shardN ID>
-            //    |  |- ...
-            //
-
-            // This is a top level shard hints directory, let's enumerate per-end-point sub-directories...
-            return lister::scan_dir(_shard_manager._hints_dir, {directory_entry_type::directory}, [this] (lister::path dir, directory_entry de) {
-                _files_count = 0;
-                // Let's scan per-end-point directories and enumerate hints files...
-                //
-                // Let's check if there is a corresponding end point manager (may not exist if the corresponding DC is
-                // not hintable).
-                // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
-                // continue to enumeration - there is no one to change them.
-                auto it = _shard_manager.find_ep_manager(de.name);
-                if (it != _shard_manager.ep_managers_end()) {
-                    return with_lock(it->second.file_update_mutex(), [this, dir = std::move(dir), ep_name = std::move(de.name)]() mutable {
-                         return scan_one_ep_dir(dir / ep_name.c_str(), ep_key_type(ep_name));
-                    });
-                } else {
-                    return scan_one_ep_dir(dir / de.name.c_str(), ep_key_type(de.name));
-                }
-            }).then([this] {
-                // Adjust the quota to take into account the space we guarantee to every end point manager
-                size_t adjusted_quota = 0;
-                size_t delta = _shard_manager._ep_managers.size() * _hint_segment_size_in_mb * 1024 * 1024;
-                if (max_shard_disk_space_size > delta) {
-                    adjusted_quota = max_shard_disk_space_size - delta;
-                }
-
-                bool can_hint = _total_size < adjusted_quota;
-                manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
-
-                if (!can_hint) {
-                    manager_logger.trace("space_watchdog: Going to block hints to: {}", _eps_with_pending_hints);
-                    std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [this] (auto& pair) {
-                        end_point_hints_manager& ep_man = pair.second;
-                        auto it = _eps_with_pending_hints.find(ep_man.end_point_key());
-                        if (it != _eps_with_pending_hints.end()) {
-                            ep_man.forbid_hints();
-                        } else {
-                            ep_man.allow_hints();
-                        }
-                    });
-                } else {
-                    std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [] (auto& pair) {
-                        pair.second.allow_hints();
-                    });
-                }
-            });
-        }).handle_exception([this] (auto eptr) {
-            manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
-            // Stop all hint generators if space_watchdog callback failed
-            std::for_each(_shard_manager._ep_managers.begin(), _shard_manager._ep_managers.end(), [this] (auto& pair) {
-                pair.second.forbid_hints();
-            });
-        }).finally([this] {
-            _timer.arm(_watchdog_period);
-        });
-    });
-}
-
 bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > _max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    return _resource_manager.too_many_hints_in_progress() && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(ep_key_type ep) const noexcept {
@@ -552,8 +453,8 @@ bool manager::can_hint_for(ep_key_type ep) const noexcept {
     // hints is more than the maximum allowed value.
     //
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
-    if (_stats.size_of_hints_in_progress > _max_size_of_hints_in_progress && hints_in_progress_for(ep) > 0) {
-        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
+    if (_resource_manager.too_many_hints_in_progress() && hints_in_progress_for(ep) > 0) {
+        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _resource_manager.size_of_hints_in_progress(), ep, hints_in_progress_for(ep));
         return false;
     }
 
@@ -623,6 +524,7 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
     , _shard_manager(_ep_manager._shard_manager)
+    , _resource_manager(_shard_manager._resource_manager)
     , _proxy(local_storage_proxy)
     , _db(local_db)
     , _gossiper(local_gossiper)
@@ -634,6 +536,7 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _ep_key(parent.end_point_key())
     , _ep_manager(parent)
     , _shard_manager(_ep_manager._shard_manager)
+    , _resource_manager(_shard_manager._resource_manager)
     , _proxy(other._proxy)
     , _db(other._db)
     , _gossiper(other._gossiper)
@@ -720,14 +623,7 @@ future<> manager::end_point_hints_manager::sender::send_one_mutation(mutation m)
 }
 
 future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char> buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
-    size_t hint_memory_budget = std::max(_shard_manager._min_send_hint_budget, buf.size());
-    // Allow a very big mutation to be sent out by consuming the whole shard budget
-    hint_memory_budget = std::min(hint_memory_budget, _shard_manager._max_send_in_flight_memory);
-
-    manager_logger.trace("memory budget: need {} have {}", hint_memory_budget, _shard_manager._send_limiter.available_units());
-
-    return get_units(_shard_manager._send_limiter, hint_memory_budget).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
+    return _resource_manager.get_send_units_for(buf.size()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
         with_gate(ctx_ptr->file_send_gate, [this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
             try {
                 try {

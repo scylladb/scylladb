@@ -149,8 +149,9 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
+    db::hints::resource_manager _hints_resource_manager;
     stdx::optional<db::hints::manager> _hints_manager;
-    bool _hints_enabled_for_user_writes = false;
+    db::hints::manager _hints_for_views_manager;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
@@ -180,6 +181,7 @@ private:
     template<typename Range>
     bool cannot_hint(const Range& targets, db::write_type type);
     bool hints_enabled(db::write_type type) noexcept;
+    db::hints::manager& hints_manager_for(db::write_type type);
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);

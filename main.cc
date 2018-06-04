@@ -518,12 +518,22 @@ int main(int ac, char** av) {
             directories.insert(db.local().get_config().commitlog_directory());
 
             supervisor::notify("creating hints directories");
-
-            boost::filesystem::path hints_base_dir(db.local().get_config().hints_directory());
-            dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
-            directories.insert(db.local().get_config().hints_directory());
+            if (hinted_handoff_enabled) {
+                boost::filesystem::path hints_base_dir(db.local().get_config().hints_directory());
+                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
+                directories.insert(db.local().get_config().hints_directory());
+                for (unsigned i = 0; i < smp::count; ++i) {
+                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+                    dirs.touch_and_lock(shard_dir).get();
+                    directories.insert(std::move(shard_dir));
+                }
+            }
+            boost::filesystem::path view_pending_updates_base_dir = boost::filesystem::path(db.local().get_config().data_file_directories()[0]) / "view_pending_updates";
+            sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
+            dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
+            directories.insert(view_pending_updates_base_dir_str);
             for (unsigned i = 0; i < smp::count; ++i) {
-                sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+                sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
                 dirs.touch_and_lock(shard_dir).get();
                 directories.insert(std::move(shard_dir));
             }
