@@ -270,12 +270,46 @@ public:
         return produce_first_page_and_save_data_querier(1);
     }
 
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range,
+            const query::partition_slice& slice, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_querier<query::mutation_querier>(key, range, slice, row_limit);
+    }
+
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_mutation_querier(key, range, make_default_slice(), row_limit);
+    }
+
+    // Singular overload
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key, std::size_t i, uint32_t row_limit = 5) {
+        return produce_first_page_and_save_mutation_querier(key, make_singular_partition_range(i), _s.schema()->full_slice(), row_limit);
+    }
+
+    // Use the whole range
+    entry_info produce_first_page_and_save_mutation_querier(unsigned key) {
+        return produce_first_page_and_save_mutation_querier(key, make_default_partition_range(), _s.schema()->full_slice());
+    }
+
+    // For tests testing just one insert-lookup.
+    entry_info produce_first_page_and_save_mutation_querier() {
+        return produce_first_page_and_save_mutation_querier(1);
+    }
+
     test_querier_cache& assert_cache_lookup_data_querier(unsigned lookup_key,
             const schema& lookup_schema,
             const dht::partition_range& lookup_range,
             const query::partition_slice& lookup_slice) {
 
         _cache.lookup_data_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr);
+        BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
+        return *this;
+    }
+
+    test_querier_cache& assert_cache_lookup_mutation_querier(unsigned lookup_key,
+            const schema& lookup_schema,
+            const dht::partition_range& lookup_range,
+            const query::partition_slice& lookup_slice) {
+
+        _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, nullptr);
         BOOST_REQUIRE_EQUAL(_cache.get_stats().lookups, ++_expected_stats.lookups);
         return *this;
     }
@@ -335,6 +369,53 @@ SEASTAR_THREAD_TEST_CASE(lookup_with_wrong_key_misses) {
     const auto entry = t.produce_first_page_and_save_data_querier();
     t.assert_cache_lookup_data_querier(90, *t.get_schema(), entry.expected_range, entry.expected_slice)
         .misses()
+        .no_drops()
+        .no_evictions();
+}
+
+SEASTAR_THREAD_TEST_CASE(lookup_data_querier_as_mutation_querier_misses) {
+    test_querier_cache t;
+
+    const auto entry = t.produce_first_page_and_save_data_querier();
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .misses()
+        .no_drops()
+        .no_evictions();
+
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .no_misses()
+        .no_drops()
+        .no_evictions();
+}
+
+SEASTAR_THREAD_TEST_CASE(lookup_mutation_querier_as_data_querier_misses) {
+    test_querier_cache t;
+
+    const auto entry = t.produce_first_page_and_save_mutation_querier();
+    t.assert_cache_lookup_data_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .misses()
+        .no_drops()
+        .no_evictions();
+
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .no_misses()
+        .no_drops()
+        .no_evictions();
+}
+
+SEASTAR_THREAD_TEST_CASE(data_and_mutation_querier_can_coexist) {
+    test_querier_cache t;
+
+    const auto data_entry = t.produce_first_page_and_save_data_querier(1);
+    const auto mutation_entry = t.produce_first_page_and_save_mutation_querier(1);
+
+    t.assert_cache_lookup_data_querier(data_entry.key, *t.get_schema(), data_entry.expected_range, data_entry.expected_slice)
+        .no_misses()
+        .no_drops()
+        .no_evictions();
+
+    t.assert_cache_lookup_mutation_querier(mutation_entry.key, *t.get_schema(), mutation_entry.expected_range, mutation_entry.expected_slice)
+        .no_misses()
         .no_drops()
         .no_evictions();
 }
