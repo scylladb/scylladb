@@ -601,16 +601,21 @@ private:
         return _columns_selector.test(_columns_selector.size() - _column_ids.size());
     }
     void skip_absent_columns() {
-        if (!no_more_columns() && !is_current_column_present()) {
-            move_to_next_column();
+        size_t pos = _columns_selector.find_first();
+        if (pos == boost::dynamic_bitset<uint64_t>::npos) {
+            pos = _column_ids.size();
         }
+        _column_ids.advance_begin(pos);
+        _column_value_fix_lengths.advance_begin(pos);
     }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
-        do {
-            _column_ids.advance_begin(1);
-            _column_value_fix_lengths.advance_begin(1);
-        } while (!no_more_columns() && !is_current_column_present());
+        size_t current_pos = _columns_selector.size() - _column_ids.size();
+        size_t next_pos = _columns_selector.find_next(current_pos);
+        size_t jump_to_next = (next_pos == boost::dynamic_bitset<uint64_t>::npos) ? _column_ids.size()
+                                                                                  : next_pos - current_pos;
+        _column_ids.advance_begin(jump_to_next);
+        _column_value_fix_lengths.advance_begin(jump_to_next);
     }
     bool is_column_simple() { return true; }
     stdx::optional<column_id> get_column_id() {
@@ -979,27 +984,26 @@ public:
             _state = state::COLUMN;
             goto column_label;
         case state::ROW_BODY_MISSING_COLUMNS_2:
-        row_body_missing_columns_2_label:
-            {
-                uint64_t first_variant_read = _u64;
-                if (_column_ids.size() < 64) {
-                    _columns_selector.clear();
-                    _columns_selector.append(first_variant_read);
-                    _columns_selector.flip();
-                    _columns_selector.resize(_column_ids.size());
-                    skip_absent_columns();
-                    goto column_label;
-                }
+        row_body_missing_columns_2_label: {
+            uint64_t missing_column_bitmap_or_count = _u64;
+            if (_column_ids.size() < 64) {
+                _columns_selector.clear();
+                _columns_selector.append(missing_column_bitmap_or_count);
+                _columns_selector.flip();
                 _columns_selector.resize(_column_ids.size());
-                if (_column_ids.size() - first_variant_read < _column_ids.size() / 2) {
-                    _missing_columns_to_read = _column_ids.size() - first_variant_read;
-                    _columns_selector.reset();
-                } else {
-                    _missing_columns_to_read = first_variant_read;
-                    _columns_selector.set();
-                }
-                goto row_body_missing_columns_read_columns_label;
+                skip_absent_columns();
+                goto column_label;
             }
+            _columns_selector.resize(_column_ids.size());
+            if (_column_ids.size() - missing_column_bitmap_or_count < _column_ids.size() / 2) {
+                _missing_columns_to_read = _column_ids.size() - missing_column_bitmap_or_count;
+                _columns_selector.reset();
+            } else {
+                _missing_columns_to_read = missing_column_bitmap_or_count;
+                _columns_selector.set();
+            }
+            goto row_body_missing_columns_read_columns_label;
+        }
         case state::ROW_BODY_MISSING_COLUMNS_READ_COLUMNS:
         row_body_missing_columns_read_columns_label:
             if (_missing_columns_to_read == 0) {
