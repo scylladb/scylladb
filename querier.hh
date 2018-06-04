@@ -87,21 +87,12 @@ struct position_view {
 ///     Most result builders have memory-accounters that will stop the read
 ///     once some memory limit was reached. This is called a short read as the
 ///     read stops before the row and/or partition limits are reached.
-/// (4) At the beginning of the next page use can_be_used_for_page() to
-///     determine whether it can be used with the page's schema and start
-///     position. If a schema or position mismatch is detected the querier
-///     cannot be used to produce the next page and a new one has to be created
+/// (4) At the beginning of the next page validate whether it can be used with
+///     the page's schema and start position. In case a schema or position
+///     mismatch is detected the querier shouldn't be used to produce the next
+///     page. It should be dropped instead and a new one should be created
 ///     instead.
 class querier {
-public:
-    enum class can_use {
-        yes,
-        no_emit_only_live_rows_mismatch,
-        no_schema_version_mismatch,
-        no_ring_pos_mismatch,
-        no_clustering_pos_mismatch
-    };
-private:
     schema_ptr _schema;
     std::unique_ptr<const dht::partition_range> _range;
     std::unique_ptr<const query::partition_slice> _slice;
@@ -119,10 +110,6 @@ private:
             return make_lw_shared<compact_for_query_state<emit_only_live_rows::no>>(s, query_time, *_slice, 0, 0);
         }
     }
-
-    bool ring_position_matches(const dht::partition_range& range, position_view pos) const;
-
-    bool clustering_position_matches(const query::partition_slice& slice, position_view pos) const;
 
 public:
     querier(const mutation_source& ms,
@@ -148,25 +135,6 @@ public:
     bool are_limits_reached() const {
         return std::visit([] (const auto& cs) { return cs->are_limits_reached(); }, _compaction_state);
     }
-
-    /// Does the querier's range matches `range`?
-    ///
-    /// A query can have more then one querier executing parallelly for
-    /// different sub-ranges on the same shard. This method helps identifying
-    /// the appropriate one for the `range'.
-    /// For the purposes of this identification it is enough to check that the
-    /// singulariness and end bound of the ranges matches. For non-singular
-    /// ranges the start bound may be adjusted from page-to-page as the query
-    /// progresses through it but since a query is guaranteed to be broken into
-    /// non-overlapping ranges just checking the end-bound is enough.
-    bool matches(const dht::partition_range& range) const;
-
-    /// Can the querier be used for the next page?
-    ///
-    /// The querier can only be used for the next page if the only_live, the
-    /// schema versions, the ring and the clustering positions match.
-    can_use can_be_used_for_page(emit_only_live_rows only_live, const schema& s,
-            const dht::partition_range& range, const query::partition_slice& slice) const;
 
     template <typename Consumer>
     GCC6_CONCEPT(
@@ -213,6 +181,14 @@ public:
         const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
         const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
         return {dk, clustering_key};
+    }
+
+    emit_only_live_rows emit_live_rows() const {
+        return emit_only_live_rows(std::holds_alternative<lw_shared_ptr<compact_for_data_query_state>>(_compaction_state));
+    }
+
+    const dht::partition_range& range() const {
+        return *_range;
     }
 };
 
@@ -294,6 +270,10 @@ public:
 
         const ::schema& schema() const {
             return *_value.schema();
+        }
+
+        const dht::partition_range& range() const {
+            return _value.range();
         }
 
         bool is_expired(const lowres_clock::time_point& now) const {

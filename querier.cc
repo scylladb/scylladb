@@ -27,26 +27,35 @@
 
 namespace query {
 
-static sstring cannot_use_reason(querier::can_use cu)
+enum class can_use {
+    yes,
+    no_emit_only_live_rows_mismatch,
+    no_schema_version_mismatch,
+    no_ring_pos_mismatch,
+    no_clustering_pos_mismatch
+};
+
+static sstring cannot_use_reason(can_use cu)
 {
     switch (cu)
     {
-        case querier::can_use::yes:
+        case can_use::yes:
             return "can be used";
-        case querier::can_use::no_emit_only_live_rows_mismatch:
+        case can_use::no_emit_only_live_rows_mismatch:
             return "emit only live rows mismatch";
-        case querier::can_use::no_schema_version_mismatch:
+        case can_use::no_schema_version_mismatch:
             return "schema version mismatch";
-        case querier::can_use::no_ring_pos_mismatch:
+        case can_use::no_ring_pos_mismatch:
             return "ring pos mismatch";
-        case querier::can_use::no_clustering_pos_mismatch:
+        case can_use::no_clustering_pos_mismatch:
             return "clustering pos mismatch";
     }
     return "unknown reason";
 }
 
-bool querier::ring_position_matches(const dht::partition_range& range, position_view pos) const {
-    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+static bool ring_position_matches(const schema& s, const dht::partition_range& range, const query::partition_slice& slice,
+        const position_view& pos) {
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(slice.options.contains(query::partition_slice::option::reversed));
 
     const auto expected_start = dht::ring_position_view(*pos.partition_key);
     // If there are no clustering columns or the select is distinct we don't
@@ -54,10 +63,10 @@ bool querier::ring_position_matches(const dht::partition_range& range, position_
     // anything more in the last page's partition and thus the start bound is
     // exclusive. Otherwise there migh be clustering rows still and it is
     // inclusive.
-    const auto expected_inclusiveness = _schema->clustering_key_size() > 0 &&
-        !_slice->options.contains<query::partition_slice::option::distinct>() &&
+    const auto expected_inclusiveness = s.clustering_key_size() > 0 &&
+        !slice.options.contains<query::partition_slice::option::distinct>() &&
         pos.clustering_key;
-    const auto comparator = dht::ring_position_comparator(*_schema);
+    const auto comparator = dht::ring_position_comparator(s);
 
     if (is_reversed && !range.is_singular()) {
         const auto& end = range.end();
@@ -68,8 +77,8 @@ bool querier::ring_position_matches(const dht::partition_range& range, position_
     return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
 }
 
-bool querier::clustering_position_matches(const query::partition_slice& slice, position_view pos) const {
-    const auto& row_ranges = slice.row_ranges(*_schema, pos.partition_key->key());
+static bool clustering_position_matches(const schema& s, const query::partition_slice& slice, const position_view& pos) {
+    const auto& row_ranges = slice.row_ranges(s, pos.partition_key->key());
 
     if (row_ranges.empty()) {
         // This is a valid slice on the last page of a query with
@@ -85,9 +94,9 @@ bool querier::clustering_position_matches(const query::partition_slice& slice, p
         return &row_ranges == &slice.default_row_ranges();
     }
 
-    clustering_key_prefix::equality eq(*_schema);
+    clustering_key_prefix::equality eq(s);
 
-    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(slice.options.contains(query::partition_slice::option::reversed));
 
     // If the page ended mid-partition the first partition range should start
     // with the last clustering key (exclusive).
@@ -99,41 +108,41 @@ bool querier::clustering_position_matches(const query::partition_slice& slice, p
     return !start->is_inclusive() && eq(start->value(), *pos.clustering_key);
 }
 
-bool querier::matches(const dht::partition_range& range) const {
-    const auto& qr = *_range;
-    if (qr.is_singular() != range.is_singular()) {
+static bool ranges_match(const schema& s, const dht::partition_range& original_range, const dht::partition_range& new_range) {
+    if (original_range.is_singular() != new_range.is_singular()) {
         return false;
     }
 
-    const auto cmp = dht::ring_position_comparator(*_schema);
+    const auto cmp = dht::ring_position_comparator(s);
     const auto bound_eq = [&] (const stdx::optional<dht::partition_range::bound>& a, const stdx::optional<dht::partition_range::bound>& b) {
         return bool(a) == bool(b) && (!a || a->equal(*b, cmp));
     };
-    // For singular ranges end() == start() so they are interchangable.
+
+    // For singular ranges end() == start() so they are interchangeable.
     // For non-singular ranges we check only the end().
-    return bound_eq(qr.end(), range.end());
+    return bound_eq(original_range.end(), new_range.end());
 }
 
-querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const ::schema& s,
-        const dht::partition_range& range, const query::partition_slice& slice) const {
-    if (only_live != emit_only_live_rows(std::holds_alternative<lw_shared_ptr<compact_for_data_query_state>>(_compaction_state))) {
+static can_use can_be_used_for_page(const querier& q, emit_only_live_rows only_live, const schema& s, const dht::partition_range& range,
+        const query::partition_slice& slice) {
+    if (only_live != q.emit_live_rows()) {
         return can_use::no_emit_only_live_rows_mismatch;
     }
-    if (s.version() != _schema->version()) {
+    if (s.version() != q.schema()->version()) {
         return can_use::no_schema_version_mismatch;
     }
 
-    const auto pos = current_position();
+    const auto pos = q.current_position();
 
     if (!pos.partition_key) {
         // There was nothing read so far so we assume we are ok.
         return can_use::yes;
     }
 
-    if (!ring_position_matches(range, pos)) {
+    if (!ring_position_matches(s, range, slice, pos)) {
         return can_use::no_ring_pos_mismatch;
     }
-    if (!clustering_position_matches(slice, pos)) {
+    if (!clustering_position_matches(s, slice, pos)) {
         return can_use::no_clustering_pos_mismatch;
     }
     return can_use::yes;
@@ -164,7 +173,7 @@ static querier_cache::entries::iterator find_querier(querier_cache::entries& ent
     }
 
     const auto it = std::find_if(queriers.first, queriers.second, [&] (const querier_cache::entry& e) {
-        return e.value().matches(range);
+        return ranges_match(e.schema(), e.range(), range);
     });
 
     if (it == queriers.second) {
@@ -244,8 +253,8 @@ static std::optional<querier> lookup_querier(querier_cache::entries& entries,
     entries.erase(it);
     --stats.population;
 
-    const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
-    if (can_be_used == querier::can_use::yes) {
+    const auto can_be_used = can_be_used_for_page(q, only_live, s, range, slice);
+    if (can_be_used == can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
         return std::optional<querier>(std::move(q));
     }
