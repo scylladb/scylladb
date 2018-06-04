@@ -380,6 +380,10 @@ public:
         return _shard_count;
     }
 
+    sstring cpu_sharding_algorithm_name() const {
+        return "biased-token-round-robin";
+    }
+
     friend bool operator==(token_view t1, token_view t2);
     friend bool operator<(token_view t1, token_view t2);
     friend int tri_compare(token_view t1, token_view t2);
