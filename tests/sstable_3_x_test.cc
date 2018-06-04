@@ -437,9 +437,8 @@ static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPE
         .with_column("text_val", utf8_type)
         .build();
 
-SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
-    sstable_assertions sst(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA,
-                           UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH);
+static void test_partition_key_with_values_of_different_types_read(const sstring& path) {
+    sstable_assertions sst(PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA, path);
     sst.load();
     auto to_key = [] (int key) {
         auto bytes = int32_type->decompose(int32_t(key));
@@ -525,6 +524,11 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_values_of_differen
                                "variable length text 3"))
         .produces_partition_end()
         .produces_end_of_stream();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_values_of_different_types_read) {
+    test_partition_key_with_values_of_different_types_read(
+        UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH);
 }
 
 // Following tests run on files in tests/sstables/3.x/uncompressed/subset_of_columns
