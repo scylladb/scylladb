@@ -600,11 +600,11 @@ parse(sstable_version_types v, random_access_reader& in, disk_set_of_tagged_unio
     using key_type = typename disk_set::key_type;
     using value_type = typename disk_set::value_type;
     return do_with(0u, 0u, 0u, value_type{}, [&] (key_type& nr_elements, key_type& new_key, unsigned& new_size, value_type& new_value) {
-        return parse(v, in, nr_elements).then([&] {
+        return parse(v, in, nr_elements).then([&, v] {
             auto rng = boost::irange<key_type>(0, nr_elements); // do_for_each doesn't like an rvalue range
-            return do_for_each(rng.begin(), rng.end(), [&] (key_type ignore) {
-                return parse(v, in, new_key).then([&] {
-                    return parse(v, in, new_size).then([&] {
+            return do_for_each(rng.begin(), rng.end(), [&, v] (key_type ignore) {
+                return parse(v, in, new_key).then([&, v] {
+                    return parse(v, in, new_size).then([&, v] {
                         return disk_set::s_serdes.lookup_and_parse(v, in, TagType(new_key), new_size, s, new_value);
                     });
                 });
