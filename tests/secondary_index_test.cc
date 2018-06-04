@@ -42,8 +42,8 @@ SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
             return e.execute_cql("SELECT email FROM users WHERE country = 'France';");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows({
-                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
                 { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
+                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
             });
         });
     });
@@ -65,8 +65,8 @@ SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
             return e.execute_cql("SELECT email FROM users WHERE country = 'France';");
         }).then([&e] (auto msg) {
             assert_that(msg).is_rows().with_rows({
-                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
                 { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
+                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
             });
         });
     });
@@ -256,9 +256,7 @@ SEASTAR_TEST_CASE(test_many_columns) {
         e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (0, 0, 0, 7, 0, 6)").get();
         e.execute_cql("INSERT INTO tab (a, b, c, d, e, f) VALUES (1, 2, 3, 7, 5, 0)").get();
         // We expect each search below to find two or three of the rows that
-        // we inserted above. NOTE: the order of the partitions we test below
-        // is the order which Scylla return today. We may need to change it
-        // in the future (see issue #3423).
+        // we inserted above.
         BOOST_TEST_PASSPOINT();
         eventually([&] {
             auto res = e.execute_cql("SELECT * from tab WHERE a = 1").get0();
@@ -274,9 +272,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE b = 2").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
-                {{int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -284,9 +282,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE c = 3").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(3)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(3)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -294,8 +292,8 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE d = 4").get0();
             assert_that(res).is_rows().with_size(2)
                 .with_rows({
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(4)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(4)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -303,9 +301,9 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE e = 5").get0();
             assert_that(res).is_rows().with_size(3)
                 .with_rows({
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(7)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(5)}, {int32_type->decompose(0)}},
             });
         });
         BOOST_TEST_PASSPOINT();
@@ -313,8 +311,8 @@ SEASTAR_TEST_CASE(test_many_columns) {
             auto res = e.execute_cql("SELECT * from tab WHERE f = 6").get0();
             assert_that(res).is_rows().with_size(2)
                 .with_rows({
-                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(7)}, {int32_type->decompose(0)}, {int32_type->decompose(6)}},
                 {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {int32_type->decompose(5)}, {int32_type->decompose(6)}},
+                {{int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(7)}, {int32_type->decompose(0)}, {int32_type->decompose(6)}},
             });
         });
     });
