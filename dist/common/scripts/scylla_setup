@@ -112,13 +112,15 @@ run_setup_script() {
     name=$1
     shift 1
     $* &&:
-    if [ $? -ne 0 ] && [ $INTERACTIVE -eq 1 ]; then
-        printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
-        read
-        return 1
-    else
-        printf "$name setup failed.\n"
-        exit 1
+    if [ $? -ne 0 ]; then
+        if [ $INTERACTIVE -eq 1 ]; then
+            printf "${RED}$name setup failed. press any key to continue...${NO_COLOR}\n"
+            read
+            return 1
+        else
+            printf "$name setup failed.\n"
+            exit 1
+        fi
     fi
     return 0
 }
