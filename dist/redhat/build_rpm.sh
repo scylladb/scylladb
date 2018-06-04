@@ -11,7 +11,7 @@ print_usage() {
     exit 1
 }
 JOBS=0
-DIST=0
+DIST=false
 TARGET=
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--dist")
-            DIST=1
+            DIST=true
             shift 1
             ;;
         "--target")
@@ -81,6 +81,13 @@ fi
 if [ ! -f /usr/bin/yum-builddep ]; then
     pkg_install yum-utils
 fi
+if [ ! -f /usr/bin/pystache ]; then
+    if is_redhat_variant; then
+        sudo yum install -y python2-pystache || sudo yum install -y pystache
+    elif is_debian_variant; then
+        sudo apt-get install -y python2-pystache
+    fi
+fi
 
 VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
@@ -88,16 +95,8 @@ SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION >version
 ./scripts/git-archive-all --extra version --force-submodules --prefix scylla-$SCYLLA_VERSION build/scylla-$VERSION.tar
 rm -f version
-cp dist/redhat/scylla.spec.in build/scylla.spec
-sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" build/scylla.spec
-sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" build/scylla.spec
 
-if [ $DIST -gt 0 ]; then
-  sed -i -e "s/@@HOUSEKEEPING_CONF@@/true/g" build/scylla.spec
-else
-  sed -i -e "s/@@HOUSEKEEPING_CONF@@/false/g" build/scylla.spec
-fi
-
+pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST }" > build/scylla.spec
 
 if [ $JOBS -gt 0 ]; then
     RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")

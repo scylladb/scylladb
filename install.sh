@@ -69,6 +69,12 @@ rdoc="$rprefix/share/doc"
 
 . /etc/os-release
 
+MUSTACHE_DIST="\"redhat\": true"
+pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-server.service
+pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-daily.service
+pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-restart.service
+
+
 install -m755 -d "$retc/sysconfig" "$retc/security/limits.d" "$retc/collectd.d"
 install -m755 -d "$retc/scylla.d" "$rprefix/lib/sysctl.d"
 install -m644 dist/common/sysconfig/scylla-server -Dt "$retc"/sysconfig
@@ -81,16 +87,10 @@ SYSCONFDIR="/etc/sysconfig"
 REPOFILES="'/etc/yum.repos.d/scylla*.repo'"
 
 
-
 install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin"
 install -m644 conf/scylla.yaml -Dt "$retc"/scylla
 install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
-install -m644 dist/common/systemd/scylla-server.service.in -D "$rprefix"/lib/systemd/system/scylla-server.service
-sed -i -e "s#@@SYSCONFDIR@@#$SYSCONFDIR#g" "$rprefix"/lib/systemd/system/scylla-server.service
-install -m644 dist/common/systemd/scylla-housekeeping-restart.service.in -D "$rprefix"/lib/systemd/system/scylla-housekeeping-restart.service
-sed -i -e "s#@@REPOFILES@@#$REPOFILES#g" "$rprefix"/lib/systemd/system/scylla-housekeeping-restart.service
-install -m644 dist/common/systemd/scylla-housekeeping-daily.service.in -D "$rprefix"/lib/systemd/system/scylla-housekeeping-daily.service
-sed -i -e "s#@@REPOFILES@@#$REPOFILES#g" "$rprefix"/lib/systemd/system/scylla-housekeeping-daily.service
+install -m644 build/*.service -Dt "$rprefix"/lib/systemd/system
 install -m644 dist/common/systemd/*.service -Dt "$rprefix"/lib/systemd/system
 install -m644 dist/common/systemd/*.timer -Dt "$rprefix"/lib/systemd/system
 install -m755 dist/common/scripts/* -Dt "$rprefix"/lib/scylla/

@@ -12,7 +12,12 @@ LimitMEMLOCK=infinity
 LimitNOFILE=800000
 LimitAS=infinity
 LimitNPROC=8096
-EnvironmentFile=@@SYSCONFDIR@@/scylla-server
+{{#debian}}
+EnvironmentFile=/etc/default/scylla-server
+{{/debian}}
+{{#redhat}}
+EnvironmentFile=/etc/sysconfig/scylla-server
+{{/redhat}}
 EnvironmentFile=/etc/scylla.d/*.conf
 ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE $CPUSET
@@ -25,7 +30,9 @@ OOMScoreAdjust=-950
 StandardOutput=syslog
 StandardError=syslog
 SyslogLevelPrefix=false
+{{^jessie}}
 AmbientCapabilities=CAP_SYS_NICE
+{{/jessie}}
 
 [Install]
 WantedBy=multi-user.target

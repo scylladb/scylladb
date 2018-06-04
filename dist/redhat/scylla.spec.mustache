@@ -1,13 +1,13 @@
 Name:           scylla
-Version:        @@VERSION@@
-Release:        @@RELEASE@@%{?dist}
+Version:        {{version}}
+Release:        {{release}}%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 Group:          Applications/Databases
 
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
-Requires:       scylla-server = @@VERSION@@ scylla-jmx = @@VERSION@@ scylla-tools = @@VERSION@@ scylla-tools-core = @@VERSION@@ scylla-kernel-conf = @@VERSION@@ scylla-libgcc73 scylla-libstdc++73
+Source0:        %{name}-{{version}}-{{release}}.tar
+Requires:       scylla-server = {{version}} scylla-jmx = {{version}} scylla-tools = {{version}} scylla-tools-core = {{version}} scylla-kernel-conf = {{version}} scylla-libgcc73 scylla-libstdc++73
 Obsoletes:	scylla-server < 1.1
 Obsoletes:      scylla-libgcc72
 Obsoletes:      scylla-libstdc++72
@@ -55,8 +55,8 @@ Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler systemtap-sdt-devel ninja-build cmake python ragel grep kernel-headers
-%{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
-%{?rhel:BuildRequires: scylla-libstdc++73-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc73-c++, scylla-python34-pyparsing20 yaml-cpp-static}
+%{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum python2-pystache}
+%{?rhel:BuildRequires: scylla-libstdc++73-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc73-c++, scylla-python34-pyparsing20 yaml-cpp-static pystache python-setuptools}
 Requires:       scylla-conf systemd-libs hwloc collectd PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs
 %{?rhel:Requires: python34 python34-PyYAML kernel >= 3.10.0-514}
 %{?fedora:Requires: python3 python3-PyYAML}
@@ -92,8 +92,6 @@ fi
 
 cflags="--cflags=${defines[*]}"
 
-%define is_housekeeping_conf %( if @@HOUSEKEEPING_CONF@@; then echo "1" ; else echo "0"; fi )
-%define install_housekeeping %( if @@HOUSEKEEPING_CONF@@; then echo -e "--housekeeping"; fi )
 %if 0%{?fedora}
 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags"
 %endif
@@ -104,7 +102,12 @@ python3.4 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=re
 ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 
 %install
-./install.sh --root "$RPM_BUILD_ROOT" %{install_housekeeping}
+{{#housekeeping}}
+./install.sh --root "$RPM_BUILD_ROOT" --housekeeping
+{{/housekeeping}}
+{{^housekeeping}}
+./install.sh --root "$RPM_BUILD_ROOT"
+{{/housekeeping}}
 
 %pre server
 getent group scylla || /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -221,8 +224,8 @@ if [ -n "$ver" ]; then
         # for <scylla-1.2
         if [ ! -f /usr/lib/scylla/scylla_config_get.py ]; then
             echo
-            echo "Error: Upgrading from scylla-$ver to scylla-@@VERSION@@ is not supported."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to @@VERSION@@."
+            echo "Error: Upgrading from scylla-$ver to scylla-{{version}} is not supported."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to {{version}}."
             echo
             exit 1
         fi
@@ -230,8 +233,8 @@ if [ -n "$ver" ]; then
         commitlog_files=$(ls $commitlog_directory | wc -l)
         if [ $commitlog_files -ne 0 ]; then
             echo
-            echo "Error: Upgrading from scylla-$ver to scylla-@@VERSION@@ is not supported when commitlog is not clean."
-            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to @@VERSION@@."
+            echo "Error: Upgrading from scylla-$ver to scylla-{{version}} is not supported when commitlog is not clean."
+            echo "Please upgrade to scylla-1.7.3 or later, before upgrade to {{version}}."
             echo "Also make sure $commitlog_directory is empty."
             echo
             exit 1
@@ -244,9 +247,9 @@ fi
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
-%if %is_housekeeping_conf
+{{#housekeeping}}
 %config(noreplace) %{_sysconfdir}/scylla.d/housekeeping.cfg
-%endif
+{{/housekeeping}}
 
 
 %package kernel-conf
