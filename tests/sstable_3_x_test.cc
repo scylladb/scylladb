@@ -377,7 +377,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/partition_key_with_value_of_different_types
+// Following tests run on files in tests/sstables/3.x/{uncompressed,compressed}/partition_key_with_value_of_different_types
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
@@ -394,6 +394,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
 //                                   text_val TEXT,
 //                                   PRIMARY KEY(pk))
 //      WITH compression = { 'enabled' : false };
+//
+// "WITH compression = { 'enabled' : false };" is used only for uncompressed test. Compressed test does not use it.
 //
 // INSERT INTO test_ks.test_table(pk, bool_val, double_val, float_val, int_val, long_val, timestamp_val, timeuuid_val,
 //                                uuid_val, text_val)
@@ -423,6 +425,8 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
 
 static thread_local const sstring UNCOMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
     "tests/sstables/3.x/uncompressed/partition_key_with_values_of_different_types";
+static thread_local const sstring COMPRESSED_PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_PATH =
+    "tests/sstables/3.x/compressed/partition_key_with_values_of_different_types";
 static thread_local const schema_ptr PARTITION_KEY_WITH_VALUES_OF_DIFFERENT_TYPES_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
