@@ -176,8 +176,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
         }
     }
 
-    static thread_local std::set<auth::resource> readable_system_resources = [] {
-        std::set<auth::resource> tmp;
+    static thread_local std::unordered_set<auth::resource> readable_system_resources = [] {
+        std::unordered_set<auth::resource> tmp;
         for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
             tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
