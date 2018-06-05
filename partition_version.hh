@@ -148,6 +148,7 @@ class partition_version : public anchorless_list_base_hook<partition_version> {
 
     friend class partition_version_ref;
     friend class partition_entry;
+    friend class partition_snapshot;
 public:
     static partition_version& container_of(mutation_partition& mp) {
         return *boost::intrusive::get_parent_from_member(&mp, &partition_version::_partition);
@@ -318,6 +319,16 @@ public:
         return *boost::intrusive::get_parent_from_member(ref, &partition_snapshot::_version);
     }
 
+    static const partition_snapshot& container_of(const partition_version_ref* ref) {
+        return *boost::intrusive::get_parent_from_member(ref, &partition_snapshot::_version);
+    }
+
+    // Returns a reference to the partition_snapshot which is attached to given non-latest partition version.
+    // Assumes !v.is_referenced_from_entry() && v.is_referenced().
+    static const partition_snapshot& referer_of(const partition_version& v) {
+        return container_of(v._backref);
+    }
+
     // If possible merges the version pointed to by this snapshot with
     // adjacent partition versions. Leaves the snapshot in an unspecified state.
     // Can be retried if previous merge attempt has failed.
@@ -475,13 +486,24 @@ public:
     // If this entry is evictable, cache_tracker must be provided.
     partition_version& add_version(const schema& s, cache_tracker*);
 
-    // Ensures that the latest version can be populated with data from given phase
-    // by inserting a new version if necessary.
+    // Returns a reference to existing version with an active snapshot of given phase
+    // or creates a new version and returns a reference to it.
     // Doesn't affect value or continuity of the partition.
-    // Returns a reference to the new latest version.
     partition_version& open_version(const schema& s, cache_tracker* t, partition_snapshot::phase_type phase = partition_snapshot::max_phase) {
-        if (_snapshot && _snapshot->_phase != phase) {
-            return add_version(s, t);
+        if (_snapshot) {
+            if (_snapshot->_phase == phase) {
+                return *_version;
+            } else if (phase < _snapshot->_phase) {
+                // If entry is being updated, we will get reads for non-latest phase, and
+                // they must attach to the non-current version.
+                partition_version* second = _version->next();
+                assert(second && second->is_referenced());
+                auto&& snp = partition_snapshot::referer_of(*second);
+                assert(phase == snp._phase);
+                return *second;
+            } else { // phase > _snapshot->_phase
+                add_version(s, t);
+            }
         }
         return *_version;
     }
