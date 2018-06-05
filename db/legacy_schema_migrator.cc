@@ -38,6 +38,17 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// Since Scylla 2.0, we use system tables whose schemas were introduced in
+// Cassandra 3. If Scylla boots to find a data directory with system tables
+// with older schemas - produced by pre-2.0 Scylla or by pre-3.0 Cassandra,
+// we need to migrate these old tables to the new format.
+//
+// We provide here a function, db::legacy_schema_migrator::migrate(),
+// for a one-time migration from old to new system tables. The function
+// reads old system tables, write them back in the new format, and finally
+// delete the old system tables. Scylla's main should call this function and
+// wait for the returned future, before starting to serve the database.
+
 #include <boost/iterator/filter_iterator.hpp>
 #include <seastar/core/future-util.hh>
 #include <seastar/util/log.hh>
