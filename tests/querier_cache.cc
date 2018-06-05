@@ -518,7 +518,7 @@ SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
     }, 24h);
 
     size_t i = 0;
-    const auto entry = t.produce_first_page_and_save_querier(i);
+    const auto entry = t.produce_first_page_and_save_querier(i++);
 
     const size_t queriers_needed_to_fill_cache = floor(querier_cache::max_queriers_memory_usage / entry.memory_usage);
 
