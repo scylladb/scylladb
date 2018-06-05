@@ -116,6 +116,7 @@ install -m644 licenses/* -Dt "$rdoc"/scylla/licenses/
 install -m755 -d "$root"/var/lib/scylla/
 install -m755 -d "$root"/var/lib/scylla/data
 install -m755 -d "$root"/var/lib/scylla/commitlog
+install -m755 -d "$root"/var/lib/scylla/hints
 install -m755 -d "$root"/var/lib/scylla/coredump
 install -m755 -d "$root"/var/lib/scylla-housekeeping
 install -m755 -d "$rprefix"/lib/scylla/swagger-ui
