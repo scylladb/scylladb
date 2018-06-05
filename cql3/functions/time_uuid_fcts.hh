@@ -117,7 +117,7 @@ make_date_of_fct() {
 
 inline
 shared_ptr<function>
-make_unix_timestamp_of_fcf() {
+make_unix_timestamp_of_fct() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         using namespace utils;
@@ -163,6 +163,126 @@ make_currenttimeuuid_fct() {
     return make_native_scalar_function<true>("currenttimeuuid", timeuuid_type, {},
             [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()})};
+    });
+}
+
+inline
+shared_ptr<function>
+make_timeuuidtodate_fct() {
+    return make_native_scalar_function<true>("todate", simple_date_type, { timeuuid_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
+        return {simple_date_type->decompose(to_simple_date(ts))};
+    });
+}
+
+inline
+shared_ptr<function>
+make_timestamptodate_fct() {
+    return make_native_scalar_function<true>("todate", simple_date_type, { timestamp_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto ts_obj = timestamp_type->deserialize(*bb);
+        if (ts_obj.is_null()) {
+            return {};
+        }
+        auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
+        return {simple_date_type->decompose(to_simple_date(ts_obj))};
+    });
+}
+
+inline
+shared_ptr<function>
+make_timeuuidtotimestamp_fct() {
+    return make_native_scalar_function<true>("totimestamp", timestamp_type, { timeuuid_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        return {timestamp_type->decompose(ts)};
+    });
+}
+
+inline
+shared_ptr<function>
+make_datetotimestamp_fct() {
+    return make_native_scalar_function<true>("totimestamp", timestamp_type, { simple_date_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto simple_date_obj = simple_date_type->deserialize(*bb);
+        if (simple_date_obj.is_null()) {
+            return {};
+        }
+        auto from_simple_date = get_castas_fctn(timestamp_type, simple_date_type);
+        return {timestamp_type->decompose(from_simple_date(simple_date_obj))};
+    });
+}
+
+inline
+shared_ptr<function>
+make_timeuuidtounixtimestamp_fct() {
+    return make_native_scalar_function<true>("tounixtimestamp", long_type, { timeuuid_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
+    });
+}
+
+inline
+shared_ptr<function>
+make_timestamptounixtimestamp_fct() {
+    return make_native_scalar_function<true>("tounixtimestamp", long_type, { timestamp_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto ts_obj = timestamp_type->deserialize(*bb);
+        if (ts_obj.is_null()) {
+            return {};
+        }
+        return {long_type->decompose(ts_obj)};
+    });
+}
+
+inline
+shared_ptr<function>
+make_datetounixtimestamp_fct() {
+    return make_native_scalar_function<true>("tounixtimestamp", long_type, { simple_date_type },
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        using namespace utils;
+        auto& bb = values[0];
+        if (!bb) {
+            return {};
+        }
+        auto simple_date_obj = simple_date_type->deserialize(*bb);
+        if (simple_date_obj.is_null()) {
+            return {};
+        }
+        auto from_simple_date = get_castas_fctn(timestamp_type, simple_date_type);
+        return {long_type->decompose(from_simple_date(simple_date_obj))};
     });
 }
 
