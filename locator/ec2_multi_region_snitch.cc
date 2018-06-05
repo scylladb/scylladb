@@ -100,7 +100,6 @@ future<> ec2_multi_region_snitch::gossiper_starting() {
     // Note: currently gossiper "main" instance always runs on CPU0 therefore
     // this function will be executed on CPU0 only.
     //
-    ec2_snitch::gossiper_starting();
 
     using namespace gms;
     auto& g = get_local_gossiper();
