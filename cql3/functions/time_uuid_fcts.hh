@@ -129,6 +129,43 @@ make_unix_timestamp_of_fcf() {
     });
 }
 
+inline shared_ptr<function>
+make_currenttimestamp_fct() {
+    return make_native_scalar_function<true>("currenttimestamp", timestamp_type, {},
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        return {timestamp_type->decompose(timestamp_native_type{db_clock::now()})};
+    });
+}
+
+inline shared_ptr<function>
+make_currenttime_fct() {
+    return make_native_scalar_function<true>("currenttime", time_type, {},
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        constexpr int64_t milliseconds_in_day = 3600 * 24 * 1000;
+        int64_t milliseconds_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
+        int64_t nanoseconds_today = (milliseconds_since_epoch % milliseconds_in_day) * 1000 * 1000;
+        return {time_type->decompose(time_native_type{nanoseconds_today})};
+    });
+}
+
+inline shared_ptr<function>
+make_currentdate_fct() {
+    return make_native_scalar_function<true>("currentdate", simple_date_type, {},
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
+        return {simple_date_type->decompose(to_simple_date(timestamp_native_type{db_clock::now()}))};
+    });
+}
+
+inline
+shared_ptr<function>
+make_currenttimeuuid_fct() {
+    return make_native_scalar_function<true>("currenttimeuuid", timeuuid_type, {},
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()})};
+    });
+}
+
 }
 }
 }
