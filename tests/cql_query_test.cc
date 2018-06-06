@@ -81,6 +81,29 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
     });
 }
 
+SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
+            e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
+            e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
+            e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
+            // dropping a table with materialized views is prohibited
+            assert_that_failed(e.execute_cql("DROP TABLE tbl"));
+            e.execute_cql("DROP MATERIALIZED VIEW tbl_view").get();
+            // dropping a table with secondary indexes is fine
+            e.execute_cql("DROP TABLE tbl").get();
+
+            e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
+            e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
+            e.execute_cql("CREATE INDEX idx2 ON tbl (c)").get();
+            e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
+            // dropping whole keyspace with MV and SI is fine too
+            e.execute_cql("DROP KEYSPACE ks").get();
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
@@ -2510,54 +2533,6 @@ SEASTAR_TEST_CASE(test_pg_style_string_literal) {
                 { utf8_type->decompose(sstring("Apostrophe's$ $ not$ $ '' escaped")) },
                 { utf8_type->decompose(sstring("$''valid$_$key")) },
                 { utf8_type->decompose(sstring("$normal$valid$$$$key$")) },
-            });
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("CREATE TABLE users (userid int, name text, email text, country text, PRIMARY KEY (userid));").discard_result().then([&e] {
-            return e.execute_cql("CREATE INDEX ON users (email);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("CREATE INDEX ON users (country);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (0, 'Bondie Easseby', 'beassebyv@house.gov', 'France');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (1, 'Demetri Curror', 'dcurrorw@techcrunch.com', 'France');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (2, 'Langston Paulisch', 'lpaulischm@reverbnation.com', 'United States');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (3, 'Channa Devote', 'cdevote14@marriott.com', 'Denmark');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("SELECT email FROM users WHERE country = 'France';");
-        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
-                { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
-            });
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_secondary_index_clustering_key_query) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("CREATE TABLE users (userid int, name text, email text, country text, PRIMARY KEY (userid, country));").discard_result().then([&e] {
-            return e.execute_cql("CREATE INDEX ON users (country);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (0, 'Bondie Easseby', 'beassebyv@house.gov', 'France');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (1, 'Demetri Curror', 'dcurrorw@techcrunch.com', 'France');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (2, 'Langston Paulisch', 'lpaulischm@reverbnation.com', 'United States');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("INSERT INTO users (userid, name, email, country) VALUES (3, 'Channa Devote', 'cdevote14@marriott.com', 'Denmark');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("SELECT email FROM users WHERE country = 'France';");
-        }).then([&e] (auto msg) {
-            assert_that(msg).is_rows().with_rows({
-                { utf8_type->decompose(sstring("beassebyv@house.gov")) },
-                { utf8_type->decompose(sstring("dcurrorw@techcrunch.com")) },
             });
         });
     });

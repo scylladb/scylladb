@@ -39,42 +39,39 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <set>
-#include "index_prop_defs.hh"
-#include "index/secondary_index.hh"
+#pragma once
 
-void cql3::statements::index_prop_defs::validate() {
-    static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
+#include "core/sstring.hh"
+#include "seastarx.hh"
 
-    property_definitions::validate(keywords);
+namespace db {
+namespace index {
 
-    if (is_custom && !custom_class) {
-        throw exceptions::invalid_request_exception("CUSTOM index requires specifiying the index class");
-    }
+/**
+ * Abstract base class for different types of secondary indexes.
+ *
+ * Do not extend this directly, please pick from PerColumnSecondaryIndex or PerRowSecondaryIndex
+ */
+class secondary_index {
+public:
+    static const sstring custom_index_option_name;
 
-    if (!is_custom && custom_class) {
-        throw exceptions::invalid_request_exception("Cannot specify index class for a non-CUSTOM index");
-    }
-    if (!is_custom && !_properties.empty()) {
-        throw exceptions::invalid_request_exception("Cannot specify options for a non-CUSTOM index");
-    }
-    if (get_raw_options().count(
-            db::index::secondary_index::custom_index_option_name)) {
-        throw exceptions::invalid_request_exception(
-                sprint("Cannot specify %s as a CUSTOM option",
-                        db::index::secondary_index::custom_index_option_name));
-    }
+    /**
+     * The name of the option used to specify that the index is on the collection keys.
+     */
+    static const sstring index_keys_option_name;
+
+    /**
+     * The name of the option used to specify that the index is on the collection values.
+     */
+    static const sstring index_values_option_name;
+
+    /**
+     * The name of the option used to specify that the index is on the collection (map) entries.
+     */
+    static const sstring index_entries_option_name;
+
+};
+
 }
-
-index_options_map
-cql3::statements::index_prop_defs::get_raw_options() {
-    auto options = get_map(KW_OPTIONS);
-    return !options ? std::unordered_map<sstring, sstring>() : std::unordered_map<sstring, sstring>(options->begin(), options->end());
-}
-
-index_options_map
-cql3::statements::index_prop_defs::get_options() {
-    auto options = get_raw_options();
-    options.emplace(db::index::secondary_index::custom_index_option_name, *custom_class);
-    return options;
 }

@@ -67,7 +67,7 @@ private:
     class initial_key_restrictions;
 
     template<typename T>
-    static ::shared_ptr<primary_key_restrictions<T>> get_initial_key_restrictions();
+    static ::shared_ptr<primary_key_restrictions<T>> get_initial_key_restrictions(bool allow_filtering);
 
     /**
      * Restrictions on partitioning columns
@@ -108,7 +108,7 @@ public:
      * @param cfm the column family meta data
      * @return a new empty <code>StatementRestrictions</code>.
      */
-    statement_restrictions(schema_ptr schema);
+    statement_restrictions(schema_ptr schema, bool allow_filtering);
 
     statement_restrictions(database& db,
         schema_ptr schema,
@@ -117,7 +117,8 @@ public:
         ::shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
         bool select_a_collection,
-        bool for_view = false);
+        bool for_view = false,
+        bool allow_filtering = false);
 private:
     void add_restriction(::shared_ptr<restriction> restriction);
     void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction);

@@ -871,6 +871,11 @@ schema_builder& schema_builder::without_index(const sstring& name) {
     return *this;
 }
 
+schema_builder& schema_builder::without_indexes() {
+    _raw._indices_by_name.clear();
+    return *this;
+}
+
 schema_ptr schema_builder::build() {
     schema::raw_schema new_raw = _raw; // Copy so that build() remains idempotent.
 

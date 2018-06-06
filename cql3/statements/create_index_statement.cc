@@ -252,6 +252,7 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
                     sprint("Index %s is a duplicate of existing index %s", index.name(), existing_index.value().name()));
         }
     }
+    ++_cql_stats->secondary_index_creates;
     schema_builder builder{schema};
     builder.with_index(index);
     return service::get_local_migration_manager().announce_column_family_update(
@@ -267,6 +268,7 @@ create_index_statement::announce_migration(distributed<service::storage_proxy>& 
 
 std::unique_ptr<cql3::statements::prepared_statement>
 create_index_statement::prepare(database& db, cql_stats& stats) {
+    _cql_stats = &stats;
     return std::make_unique<prepared_statement>(make_shared<create_index_statement>(*this));
 }
 
@@ -279,7 +281,7 @@ index_metadata create_index_statement::make_index_metadata(schema_ptr schema,
     index_options_map new_options = options;
     auto target_option = boost::algorithm::join(targets | boost::adaptors::transformed(
             [schema](const auto &target) -> sstring {
-                return target->as_cql_string(schema);
+                return target->as_string();
             }), ",");
     new_options.emplace(index_target::target_option_name, target_option);
     return index_metadata{name, new_options, kind};

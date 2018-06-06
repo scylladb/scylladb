@@ -146,6 +146,19 @@ public:
     auto components(const schema& s) const {
         return components();
     }
+
+    bool is_empty() const {
+        return _bytes.empty();
+    }
+
+    explicit operator bool() const {
+        return !is_empty();
+    }
+
+    // For backward compatibility with existing code.
+    bool is_empty(const schema& s) const {
+        return is_empty();
+    }
 };
 
 template <typename TopLevel, typename TopLevelView>
@@ -302,6 +315,19 @@ public:
     // See begin()
     auto end(const schema& s) const {
         return get_compound_type(s)->end(_bytes);
+    }
+
+    bool is_empty() const {
+        return _bytes.empty();
+    }
+
+    explicit operator bool() const {
+        return !is_empty();
+    }
+
+    // For backward compatibility with existing code.
+    bool is_empty(const schema& s) const {
+        return is_empty();
     }
 
     // Returns a range of bytes_view
@@ -516,10 +542,6 @@ public:
     bool is_full(const schema& s) const {
         return TopLevel::get_compound_type(s)->is_full(base::_bytes);
     }
-
-    bool is_empty(const schema& s) const {
-        return TopLevel::get_compound_type(s)->is_empty(base::_bytes);
-    }
 };
 
 template <typename TopLevel, typename TopLevelView, typename FullTopLevel>
@@ -536,10 +558,6 @@ public:
 
     bool is_full(const schema& s) const {
         return TopLevel::get_compound_type(s)->is_full(base::_bytes);
-    }
-
-    bool is_empty(const schema& s) const {
-        return TopLevel::get_compound_type(s)->is_empty(base::_bytes);
     }
 
     // Can be called only if is_full()

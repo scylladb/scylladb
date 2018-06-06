@@ -40,8 +40,10 @@
 
 #pragma once
 
+#include <optional>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include "schema.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
@@ -99,6 +101,7 @@ static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto AVAILABLE_RANGES = "available_ranges";
 static constexpr auto VIEWS_BUILDS_IN_PROGRESS = "views_builds_in_progress";
 static constexpr auto BUILT_VIEWS = "built_views";
+static constexpr auto SCYLLA_VIEWS_BUILDS_IN_PROGRESS = "scylla_views_builds_in_progress";
 }
 
 namespace legacy {
@@ -120,6 +123,14 @@ struct range_estimates {
     bytes range_end_token;
     int64_t partitions_count;
     int64_t mean_partition_size;
+};
+
+using view_name = std::pair<sstring, sstring>;
+struct view_build_progress {
+    view_name view;
+    dht::token first_token;
+    std::optional<dht::token> next_token;
+    shard_id cpu_id;
 };
 
 extern schema_ptr hints();
@@ -650,6 +661,14 @@ future<> set_bootstrap_state(bootstrap_state state);
  * Builds a mutation for SIZE_ESTIMATES_CF containing the specified estimates.
  */
 mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estimates> estimates);
+
+future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
+future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
+future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
+future<> mark_view_as_built(sstring ks_name, sstring view_name);
+future<> remove_built_view(sstring ks_name, sstring view_name);
+future<std::vector<view_name>> load_built_views();
+future<std::vector<view_build_progress>> load_view_build_progress();
 
 } // namespace system_keyspace
 } // namespace db

@@ -142,6 +142,7 @@ public:
     using row = untyped_result_set_row;
     typedef std::vector<row> rows_type;
     using const_iterator = rows_type::const_iterator;
+    using iterator = rows_type::const_iterator;
 
     untyped_result_set(::shared_ptr<cql_transport::messages::result_message>);
     untyped_result_set(untyped_result_set&&) = default;

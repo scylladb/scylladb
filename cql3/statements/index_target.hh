@@ -43,7 +43,6 @@
 
 #include "core/shared_ptr.hh"
 #include "cql3/column_identifier.hh"
-#include "db/index/secondary_index.hh"
 
 namespace cql3 {
 
@@ -65,6 +64,7 @@ struct index_target {
     }
 
     sstring as_cql_string(schema_ptr schema) const;
+    sstring as_string() const;
 
     static sstring index_option(target_type type);
     static target_type from_column_definition(const column_definition& cd);

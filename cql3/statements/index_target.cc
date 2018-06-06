@@ -41,7 +41,7 @@
 
 #include <stdexcept>
 #include "index_target.hh"
-#include "db/index/secondary_index.hh"
+#include "index/secondary_index.hh"
 
 namespace cql3 {
 
@@ -57,6 +57,10 @@ sstring index_target::as_cql_string(schema_ptr schema) const {
         return column->to_cql_string();
     }
     return sprint("%s(%s)", to_sstring(type), column->to_cql_string());
+}
+
+sstring index_target::as_string() const {
+    return column->to_string();
 }
 
 index_target::target_type index_target::from_sstring(const sstring& s)

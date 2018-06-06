@@ -314,8 +314,22 @@ public:
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    bool compact_and_expire(const schema& s, column_kind kind, row_tombstone tomb, gc_clock::time_point query_time,
-        can_gc_fn&, gc_clock::time_point gc_before);
+    bool compact_and_expire(
+            const schema& s,
+            column_kind kind,
+            row_tombstone tomb,
+            gc_clock::time_point query_time,
+            can_gc_fn&,
+            gc_clock::time_point gc_before,
+            const row_marker& marker);
+
+    bool compact_and_expire(
+            const schema& s,
+            column_kind kind,
+            row_tombstone tomb,
+            gc_clock::time_point query_time,
+            can_gc_fn&,
+            gc_clock::time_point gc_before);
 
     row difference(const schema&, column_kind, const row& other) const;
 
@@ -326,6 +340,8 @@ public:
     cell_hash_opt cell_hash_for(column_id id) const;
 
     void prepare_hash(const schema& s, column_kind kind) const;
+
+    bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };

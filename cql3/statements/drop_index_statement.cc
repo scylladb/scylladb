@@ -86,6 +86,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
     if (!cfm) {
         return make_ready_future<::shared_ptr<cql_transport::event::schema_change>>(nullptr);
     }
+    ++_cql_stats->secondary_index_drops;
     auto builder = schema_builder(cfm);
     builder.without_index(_index_name);
     return service::get_local_migration_manager().announce_column_family_update(builder.build(), false, {}, is_local_only).then([cfm] {
@@ -102,6 +103,7 @@ future<shared_ptr<cql_transport::event::schema_change>> drop_index_statement::an
 
 std::unique_ptr<cql3::statements::prepared_statement>
 drop_index_statement::prepare(database& db, cql_stats& stats) {
+    _cql_stats = &stats;
     return std::make_unique<prepared_statement>(make_shared<drop_index_statement>(*this));
 }
 

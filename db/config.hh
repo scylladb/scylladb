@@ -735,6 +735,7 @@ public:
     val(enable_sstable_data_integrity_check, bool, false, Used, "Enable interposer which checks for integrity of every sstable write." \
         " Performance is affected to some extent as a result. Useful to help debugging problems that may arise at another layers.") \
     val(cpu_scheduler, bool, true, Used, "Enable cpu scheduling") \
+    val(view_building, bool, true, Used, "Enable view building; should only be set to false when the node is experience issues due to view building") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

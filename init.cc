@@ -34,8 +34,8 @@ logging::logger startlog("init");
 // duplicated in cql_test_env.cc
 // until proper shutdown is done.
 
-void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service) {
-    service::init_storage_service(db, auth_service).get();
+void init_storage_service(distributed<database>& db, sharded<auth::service>& auth_service, sharded<db::system_distributed_keyspace>& sys_dist_ks) {
+    service::init_storage_service(db, auth_service, sys_dist_ks).get();
     // #293 - do not stop anything
     //engine().at_exit([] { return service::deinit_storage_service(); });
 }

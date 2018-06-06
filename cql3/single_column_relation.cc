@@ -116,18 +116,6 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
             throw exceptions::invalid_request_exception(sprint(
                    "IN predicates on non-primary-key columns (%s) is not yet supported", column_def.name_as_text()));
         }
-    } else if (is_slice()) {
-        // Non EQ relation is not supported without token(), even if we have a 2ndary index (since even those
-        // are ordered by partitioner).
-        // Note: In theory we could allow it for 2ndary index queries with ALLOW FILTERING, but that would
-        // probably require some special casing
-        // Note bis: This is also why we don't bother handling the 'tuple' notation of #4851 for keys. If we
-        // lift the limitation for 2ndary
-        // index with filtering, we'll need to handle it though.
-        if (column_def.is_partition_key()) {
-            throw exceptions::invalid_request_exception(
-                "Only EQ and IN relation are supported on the partition key (unless you use the token() function)");
-        }
     }
 
     if (is_contains() && !receiver->type->is_collection()) {

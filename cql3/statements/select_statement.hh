@@ -124,6 +124,19 @@ public:
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now);
 
+    struct primary_key {
+        dht::decorated_key partition;
+        clustering_key_prefix clustering;
+    };
+
+    future<::shared_ptr<cql_transport::messages::result_message>> execute(
+            distributed<service::storage_proxy>& proxy,
+            lw_shared_ptr<query::read_command> cmd,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now);
+
     shared_ptr<cql_transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now);
 
@@ -138,6 +151,9 @@ public:
 protected:
     int32_t get_limit(const query_options& options) const;
     bool needs_post_query_ordering() const;
+    virtual void update_stats_rows_read(int64_t rows_read) {
+        _stats.rows_read += rows_read;
+    }
 };
 
 class primary_key_select_statement : public select_statement {
@@ -189,6 +205,15 @@ private:
     future<dht::partition_range_vector> find_index_partition_ranges(distributed<service::storage_proxy>& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
+
+    future<std::vector<primary_key>> find_index_clustering_rows(distributed<service::storage_proxy>& proxy,
+                                                                service::query_state& state,
+                                                                const query_options& options);
+
+    virtual void update_stats_rows_read(int64_t rows_read) override {
+        _stats.rows_read += rows_read;
+        _stats.secondary_index_rows_read += rows_read;
+    }
 };
 
 }

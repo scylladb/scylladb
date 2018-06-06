@@ -48,6 +48,8 @@
 #include "service/migration_task.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
+#include "view_info.hh"
+#include "schema_builder.hh"
 
 namespace service {
 
@@ -664,19 +666,33 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
             throw exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View");
         }
         auto&& views = old_cfm.views();
-        if (!views.empty()) {
+        if (views.size() > schema->all_indices().size()) {
+            auto explicit_view_names = views
+                                       | boost::adaptors::filtered([&old_cfm](const view_ptr& v) { return !old_cfm.get_index_manager().is_index(v); })
+                                       | boost::adaptors::transformed([](const view_ptr& v) { return v->cf_name(); });
             throw exceptions::invalid_request_exception(sprint(
                         "Cannot drop table when materialized views still depend on it (%s.{%s})",
-                        ks_name, ::join(", ", views | boost::adaptors::transformed([](auto&& v) { return v->cf_name(); }))));
+                        ks_name, ::join(", ", explicit_view_names)));
         }
         mlogger.info("Drop table '{}.{}'", schema->ks_name(), schema->cf_name());
-        return db::schema_tables::make_drop_table_mutations(db.find_keyspace(ks_name).metadata(), schema, api::new_timestamp())
-            .then([announce_locally] (auto&& mutations) {
-                return announce(std::move(mutations), announce_locally);
-            });
+
+        auto maybe_drop_secondary_indexes = make_ready_future<std::vector<mutation>>();
+        if (!schema->all_indices().empty()) {
+            auto builder = schema_builder(schema).without_indexes();
+            maybe_drop_secondary_indexes = db::schema_tables::make_update_table_mutations(db.find_keyspace(ks_name).metadata(), schema, builder.build(), api::new_timestamp(), false);
+        }
+
+        return maybe_drop_secondary_indexes.then([announce_locally, ks_name, schema, &db, &old_cfm] (auto&& drop_si_mutations) {
+            return db::schema_tables::make_drop_table_mutations(db.find_keyspace(ks_name).metadata(), schema, api::new_timestamp())
+                .then([drop_si_mutations = std::move(drop_si_mutations), announce_locally] (auto&& mutations) mutable {
+                    mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
+                    return announce(std::move(mutations), announce_locally);
+                });
+        });
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
     }
+
 }
 
 future<> migration_manager::announce_type_drop(user_type dropped_type, bool announce_locally)
@@ -746,6 +762,9 @@ future<> migration_manager::announce_view_drop(const sstring& ks_name,
         auto& view = db.find_column_family(ks_name, cf_name).schema();
         if (!view->is_view()) {
             throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
+        }
+        if (db.find_column_family(view->view_info()->base_id()).get_index_manager().is_index(view_ptr(view))) {
+            throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());

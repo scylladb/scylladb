@@ -39,21 +39,35 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <vector>
+#include <deque>
 #include <functional>
+#include <optional>
+#include <unordered_set>
+#include <vector>
 
+#include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/adaptors.hpp>
 
+#include <seastar/core/future-util.hh>
+
+#include "database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"
 #include "db/view/view.hh"
+#include "db/view/view_builder.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
+#include "mutation.hh"
+#include "mutation_partition.hh"
+#include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "view_info.hh"
+
+using namespace std::chrono_literals;
 
 static logging::logger vlogger("view");
 
@@ -64,12 +78,7 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info)
 
 cql3::statements::select_statement& view_info::select_statement() const {
     if (!_select_statement) {
-        std::vector<sstring_view> included;
-        if (!include_all_columns()) {
-            included.reserve(_schema.all_columns().size());
-            boost::transform(_schema.all_columns(), std::back_inserter(included), std::mem_fn(&column_definition::name_as_text));
-        }
-        auto raw = cql3::util::build_select_statement(base_name(), where_clause(), std::move(included));
+        auto raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
         raw->prepare_keyspace(_schema.ks_name());
         raw->set_bound_variables({});
         cql3::cql_stats ignored;
@@ -97,21 +106,25 @@ const column_definition* view_info::view_column(const schema& base, column_id ba
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return _schema.get_column_definition(base.regular_column_at(base_id).name());
+    return view_column(base.regular_column_at(base_id));
 }
 
-stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk(const schema& base) const {
-    if (!_base_non_pk_column_in_view_pk) {
-        _base_non_pk_column_in_view_pk.emplace(stdx::nullopt);
-        for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
-            auto* base_col = base.get_column_definition(view_col.name());
-            if (!base_col->is_primary_key()) {
-                _base_non_pk_column_in_view_pk.emplace(base_col->id);
-                break;
-            }
+const column_definition* view_info::view_column(const column_definition& base_def) const {
+    return _schema.get_column_definition(base_def.name());
+}
+
+stdx::optional<column_id> view_info::base_non_pk_column_in_view_pk() const {
+    return _base_non_pk_column_in_view_pk;
+}
+
+void view_info::initialize_base_dependent_fields(const schema& base) {
+    for (auto&& view_col : boost::range::join(_schema.partition_key_columns(), _schema.clustering_key_columns())) {
+        auto* base_col = base.get_column_definition(view_col.name());
+        if (!base_col->is_primary_key()) {
+            _base_non_pk_column_in_view_pk.emplace(base_col->id);
+            break;
         }
     }
-    return *_base_non_pk_column_in_view_pk;
 }
 
 namespace db {
@@ -133,25 +146,7 @@ bool may_be_affected_by(const schema& base, const view_info& view, const dht::de
     //  - the primary key is excluded by the view filter (note that this isn't true of the filter on regular columns:
     //    even if an update don't match a view condition on a regular column, that update can still invalidate a
     //    pre-existing entry) - note that the upper layers should already have checked the partition key;
-    //  - the update doesn't modify any of the columns impacting the view (where "impacting" the view means that column
-    //    is neither included in the view, nor used by the view filter).
-    if (!clustering_prefix_matches(base, view, key.key(), update.key())) {
-        return false;
-    }
-
-    // We want to check if the update modifies any of the columns that are part of the view (in which case the view is
-    // affected). But iff the view includes all the base table columns, or the update has either a row deletion or a
-    // row marker, we know the view is affected right away.
-    if (view.include_all_columns() || update.row().deleted_at() || update.row().marker().is_live()) {
-        return true;
-    }
-
-    bool affected = false;
-    update.row().cells().for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell) {
-        affected = view.view_column(base, id);
-        return stop_iteration(affected);
-    });
-    return affected;
+    return clustering_prefix_matches(base, view, key.key(), update.key());
 }
 
 static bool update_requires_read_before_write(const schema& base,
@@ -160,14 +155,6 @@ static bool update_requires_read_before_write(const schema& base,
         const rows_entry& update) {
     for (auto&& v : views) {
         view_info& vf = *v->view_info();
-        // A view whose primary key contains only the base's primary key columns doesn't require a read-before-write.
-        // However, if the view has restrictions on regular columns, then a write that doesn't match those filters
-        // needs to add a tombstone (assuming a previous update matched those filter and created a view entry); for
-        // now we just do a read-before-write in that case.
-        if (!vf.base_non_pk_column_in_view_pk(base)
-                && vf.select_statement().get_restrictions()->get_non_pk_restriction().empty()) {
-            continue;
-        }
         if (may_be_affected_by(base, vf, key, update)) {
             return true;
         }
@@ -241,12 +228,12 @@ private:
     row_marker compute_row_marker(const clustering_row& base_row) const;
     deletable_row& get_view_row(const partition_key& base_key, const clustering_row& update);
     void create_entry(const partition_key& base_key, const clustering_row& update, gc_clock::time_point now);
-    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now);
-    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now);
+    void delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
+    void do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now);
     void update_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now);
     void replace_entry(const partition_key& base_key, const clustering_row& update, const clustering_row& existing, gc_clock::time_point now) {
         create_entry(base_key, update, now);
-        delete_old_entry(base_key, existing, row_tombstone(), now);
+        delete_old_entry(base_key, existing, update, now);
     }
 };
 
@@ -254,12 +241,7 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
     /*
      * We need to compute both the timestamp and expiration.
      *
-     * For the timestamp, it makes sense to use the bigger timestamp for all view PK columns.
-     *
-     * This is more complex for the expiration. We want to maintain consistency between the base and the view, so the
-     * entry should only exist as long as the base row exists _and_ has non-null values for all the columns that are part
-     * of the view PK.
-     * Which means we really have 2 cases:
+     * There are 3 cases:
      *   1) There is a column that is not in the base PK but is in the view PK. In that case, as long as that column
      *      lives, the view entry does too, but as soon as it expires (or is deleted for that matter) the entry also
      *      should expire. So the expiration for the view is the one of that column, regardless of any other expiration.
@@ -270,38 +252,53 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
      *        UPDATE t SET c = 0 WHERE a = 0 AND b = 0;
      *      then even after 3 seconds elapsed, the row will still exist (it just won't have a "row marker" anymore) and so
      *      the MV should still have a corresponding entry.
-     *   2) The columns for the base and view PKs are exactly the same. In that case, the view entry should live
-     *      as long as the base row lives. This means the view entry should only expire once *everything* in the
-     *      base row has expired. So, the row TTL should be the max of any other TTL. This is particularly important
-     *      in the case where the base row has a TTL, but a column *absent* from the view holds a greater TTL.
+     *      This cell determines the liveness of the view row.
+     *   2) The columns for the base and view PKs are exactly the same, and all base columns are selected by the view.
+     *      In that case, all components (marker, deletion and cells) are the same and trivially mapped.
+     *   3) The columns for the base and view PKs are exactly the same, but some base columns are not selected in the view.
+     *      Use the max timestamp out of the base row marker and all the unselected columns - this ensures we can keep the
+     *      view row alive. Do the same thing for the expiration, if the marker is dead or will expire, and so
+     *      will all unselected columns.
      */
 
     auto marker = base_row.marker();
-    auto col_id = _view_info.base_non_pk_column_in_view_pk(*_base);
+    auto col_id = _view_info.base_non_pk_column_in_view_pk();
     if (col_id) {
         // Note: multi-cell columns can't be part of the primary key.
         auto cell = base_row.cells().cell_at(*col_id).as_atomic_cell();
-        auto timestamp = std::max(marker.timestamp(), cell.timestamp());
-        return cell.is_live_and_has_ttl() ? row_marker(timestamp, cell.ttl(), cell.expiry()) : row_marker(timestamp);
+        return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
-    if (!marker.is_expiring()) {
+    if (_view_info.include_all_columns()) {
         return marker;
     }
 
-    auto ttl = marker.ttl();
-    auto expiry = marker.expiry();
+    auto timestamp = marker.timestamp();
+    bool has_non_expiring_live_cell = false;
+    expiry_opt biggest_expiry;
+    gc_clock::duration ttl = gc_clock::duration::min();
+    if (marker.is_expiring()) {
+        biggest_expiry = marker.expiry();
+        ttl = marker.ttl();
+    }
     auto maybe_update_expiry_and_ttl = [&] (atomic_cell_view&& cell) {
-        // Note: Cassandra compares cell.ttl() here, but that seems very wrong.
-        // See CASSANDRA-13127.
-        if (cell.is_live_and_has_ttl() && cell.expiry() > expiry) {
-            expiry = cell.expiry();
-            ttl = cell.ttl();
+        timestamp = std::max(timestamp, cell.timestamp());
+        if (cell.is_live_and_has_ttl()) {
+            if (cell.expiry() >= biggest_expiry.value_or(cell.expiry())) {
+                biggest_expiry = cell.expiry();
+                ttl = cell.ttl();
+            }
+        } else if (cell.is_live()) {
+            has_non_expiring_live_cell = true;
         }
     };
 
+    // Iterate over regular cells not in the view, as we already have the timestamps of the included columns.
     base_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
         auto& def = _base->regular_column_at(id);
+        if (_view_info.view_column(def)) {
+            return;
+        }
         if (def.is_atomic()) {
             maybe_update_expiry_and_ttl(c.as_atomic_cell());
         } else {
@@ -309,7 +306,13 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
         }
     });
 
-    return row_marker(marker.timestamp(), ttl, expiry);
+    if ((marker.is_live() && !marker.is_expiring()) || has_non_expiring_live_cell) {
+        return row_marker(timestamp);
+    }
+    if (biggest_expiry) {
+        return row_marker(timestamp, ttl, *biggest_expiry);
+    }
+    return marker;
 }
 
 deletable_row& view_updates::get_view_row(const partition_key& base_key, const clustering_row& update) {
@@ -341,11 +344,11 @@ static const column_definition* view_column(const schema& base, const schema& vi
     return view.get_column_definition(base.regular_column_at(base_id).name());
 }
 
-static void add_cells_to_view(const schema& base, const schema& view, const row& base_cells, row& view_cells) {
-    base_cells.for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
+    base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
         auto* view_col = view_column(base, view, id);
         if (view_col && !view_col->is_primary_key()) {
-            view_cells.append_cell(view_col->id, c);
+            view_cells.append_cell(view_col->id, std::move(c));
         }
     });
 }
@@ -359,7 +362,8 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
         return;
     }
     deletable_row& r = get_view_row(base_key, update);
-    r.apply(compute_row_marker(update));
+    auto marker = compute_row_marker(update);
+    r.apply(marker);
     r.apply(update.tomb());
     add_cells_to_view(*_base, *_view, update.cells(), r.cells());
 }
@@ -368,41 +372,51 @@ void view_updates::create_entry(const partition_key& base_key, const clustering_
  * Deletes the view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before bothering.
  */
-void view_updates::delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now) {
+void view_updates::delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
     // Before deleting an old entry, make sure it was matching the view filter
     // (otherwise there is nothing to delete)
     if (!is_partition_key_empty(*_base, *_view, base_key, existing) && matches_view_filter(*_base, _view_info, base_key, existing, now)) {
-        do_delete_old_entry(base_key, existing, t, now);
+        do_delete_old_entry(base_key, existing, update, now);
     }
 }
 
-void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const row_tombstone& t, gc_clock::time_point now) {
-    if (t) {
-        get_view_row(base_key, existing).apply(t);
-        return;
+void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_row& existing, const clustering_row& update, gc_clock::time_point now) {
+    auto& r = get_view_row(base_key, existing);
+    auto col_id = _view_info.base_non_pk_column_in_view_pk();
+    if (col_id) {
+        // We delete the old row using a shadowable row tombstone, making sure that
+        // the tombstone deletes everything in the row (or it might still show up).
+        // Note: multi-cell columns can't be part of the primary key.
+        auto cell = existing.cells().cell_at(*col_id).as_atomic_cell();
+        if (cell.is_live()) {
+            r.apply(shadowable_tombstone(cell.timestamp(), now));
+        }
+    } else {
+        auto ts = existing.marker().timestamp();
+        auto set_max_ts = [&ts] (atomic_cell_view&& cell) {
+            ts = std::max(ts, cell.timestamp());
+        };
+        if (!_view_info.include_all_columns()) {
+            existing.cells().for_each_cell([&, this] (column_id id, const atomic_cell_or_collection& cell) {
+                auto& def = _base->regular_column_at(id);
+                if (_view_info.view_column(def)) {
+                    return;
+                }
+                // Unselected columns are used regardless of being live or dead, since we don't know if
+                // they were used to compute the view entry's row marker.
+                if (def.is_atomic()) {
+                    set_max_ts(cell.as_atomic_cell());
+                } else {
+                    collection_type_impl::for_each_cell(cell.as_collection_mutation(), set_max_ts);
+                }
+            });
+        }
+        auto marker = row_marker(tombstone(ts, now));
+        r.apply(marker);
+        auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
+        add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
     }
-    // We delete the old row using a shadowable row tombstone, making sure that
-    // the tombstone deletes everything in the row (or it might still show up).
-    // FIXME: If the entry is "resurrected" by a later update, we would need to
-    // ensure that the timestamp for the entry then is bigger than the tombstone
-    // we're just inserting, which is not currently guaranteed. See CASSANDRA-11500
-    // for details.
-    auto ts = existing.marker().timestamp();
-    auto set_max_ts = [&ts] (atomic_cell_view&& cell) {
-        ts = std::max(ts, cell.timestamp());
-    };
-    existing.cells().for_each_cell([&, this] (column_id id, const atomic_cell_or_collection& cell) {
-        auto* def = _view_info.view_column(*_base, id);
-        if (!def) {
-            return;
-        }
-        if (def->is_atomic()) {
-            set_max_ts(cell.as_atomic_cell());
-        } else {
-            collection_type_impl::for_each_cell(cell.as_collection_mutation(), set_max_ts);
-        }
-    });
-    get_view_row(base_key, existing).apply(shadowable_tombstone(ts, now));
+    r.apply(update.tomb());
 }
 
 /**
@@ -421,16 +435,17 @@ void view_updates::update_entry(const partition_key& base_key, const clustering_
         return;
     }
     if (is_partition_key_empty(*_base, *_view, base_key, update) || !matches_view_filter(*_base, _view_info, base_key, update, now)) {
-        do_delete_old_entry(base_key, existing, row_tombstone(), now);
+        do_delete_old_entry(base_key, existing, update, now);
         return;
     }
 
     deletable_row& r = get_view_row(base_key, update);
-    r.apply(compute_row_marker(update));
+    auto marker = compute_row_marker(update);
+    r.apply(marker);
     r.apply(update.tomb());
 
     auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
-    add_cells_to_view(*_base, *_view, diff, r.cells());
+    add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
 }
 
 void view_updates::generate_update(
@@ -449,16 +464,16 @@ void view_updates::generate_update(
         return;
     }
 
-    auto col_id = _view_info.base_non_pk_column_in_view_pk(*_base);
+    auto col_id = _view_info.base_non_pk_column_in_view_pk();
     if (!col_id) {
         // The view key is necessarily the same pre and post update.
-        if (existing && !existing->empty()) {
-            if (update.empty()) {
-                delete_old_entry(base_key, *existing, update.tomb(), now);
-            } else {
+        if (existing && existing->is_live(*_base)) {
+            if (update.is_live(*_base)) {
                 update_entry(base_key, update, *existing, now);
+            } else {
+                delete_old_entry(base_key, *existing, update, now);
             }
-        }  else if (!update.empty()) {
+        } else if (update.is_live(*_base)) {
             create_entry(base_key, update, now);
         }
         return;
@@ -477,7 +492,7 @@ void view_updates::generate_update(
                     replace_entry(base_key, update, *existing, now);
                 }
             } else {
-                delete_old_entry(base_key, *existing, update.tomb(), now);
+                delete_old_entry(base_key, *existing, update, now);
             }
             return;
         }
@@ -585,13 +600,13 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
-        existing->marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before);
+        existing->marker().compact_and_expire(existing->tomb().tomb(), _now, always_gc, gc_before);
+        existing->cells().compact_and_expire(*_schema, column_kind::regular_column, existing->tomb(), _now, always_gc, gc_before, existing->marker());
         update.apply(*_schema, *existing);
     }
 
-    update.marker().compact_and_expire(tombstone(), _now, always_gc, gc_before);
-    update.cells().compact_and_expire(*_schema, column_kind::regular_column, row_tombstone(), _now, always_gc, gc_before);
+    update.marker().compact_and_expire(update.tomb().tomb(), _now, always_gc, gc_before);
+    update.cells().compact_and_expire(*_schema, column_kind::regular_column, update.tomb(), _now, always_gc, gc_before, update.marker());
 
     for (auto&& v : _view_updates) {
         v.generate_update(_key, update, existing, _now);
@@ -599,9 +614,7 @@ void view_update_builder::generate_update(clustering_row&& update, stdx::optiona
 }
 
 static void apply_tracked_tombstones(range_tombstone_accumulator& tracker, clustering_row& row) {
-    for (auto&& rt : tracker.range_tombstones_for_row(row.key())) {
-        row.apply(rt.tomb);
-    }
+    row.apply(tracker.tombstone_for_row(row.key()));
 }
 
 future<stop_iteration> view_update_builder::on_results() {
@@ -816,38 +829,8 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // for the writes to complete.
 // FIXME: I dropped a lot of parameters the Cassandra version had,
 // we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
-future<> mutate_MV(const dht::token& base_token,
-        std::vector<mutation> mutations)
+future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
-#if 0
-    Tracing.trace("Determining replicas for mutation");
-    final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
-    long startTime = System.nanoTime();
-
-    try
-    {
-        // if we haven't joined the ring, write everything to batchlog because paired replicas may be stale
-        final UUID batchUUID = UUIDGen.getTimeUUID();
-
-        if (StorageService.instance.isStarting() || StorageService.instance.isJoining() || StorageService.instance.isMoving())
-        {
-            BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(),
-                                                    mutations), writeCommitLog);
-        }
-        else
-        {
-            List<WriteResponseHandlerWrapper> wrappers = new ArrayList<>(mutations.size());
-            List<Mutation> nonPairedMutations = new LinkedList<>();
-            Token baseToken = StorageService.instance.getTokenMetadata().partitioner.getToken(dataKey);
-
-            ConsistencyLevel consistencyLevel = ConsistencyLevel.ONE;
-
-            //Since the base -> view replication is 1:1 we only need to store the BL locally
-            final Collection<InetAddress> batchlogEndpoints = Collections.singleton(FBUtilities.getBroadcastAddress());
-            BatchlogResponseHandler.BatchlogCleanup cleanup = new BatchlogResponseHandler.BatchlogCleanup(mutations.size(),
-                                                                                                          () -> asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID));
-            // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
-#endif
     auto fs = std::make_unique<std::vector<future<>>>();
     for (auto& mut : mutations) {
         auto view_token = mut.token();
@@ -855,84 +838,661 @@ future<> mutate_MV(const dht::token& base_token,
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
         if (paired_endpoint) {
-            // When local node is the endpoint and there are no pending nodes we can
-            // Just apply the mutation locally.
+            // When paired endpoint is the local node, we can just apply
+            // the mutation locally, unless there are pending endpoints, in
+            // which case we want to do an ordinary write so the view mutation
+            // is sent to them as well.
             auto my_address = utils::fb_utilities::get_broadcast_address();
-            if (*paired_endpoint == my_address && pending_endpoints.empty() &&
-                service::get_local_storage_service().is_joined()) {
-                    // Note that we start here an asynchronous apply operation, and
-                    // do not wait for it to complete.
-                    // Note also that mutate_locally(mut) copies mut (in
-                    // frozen from) so don't need to increase its lifetime.
-                    fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([] (auto ep) {
-                        vlogger.error("Error applying local view update: {}", ep);
-                        return make_exception_future<>(std::move(ep));
-                    }));
-            } else {
-#if 0
-                        wrappers.add(wrapViewBatchResponseHandler(mutation,
-                                                                  consistencyLevel,
-                                                                  consistencyLevel,
-                                                                  Collections.singletonList(pairedEndpoint.get()),
-                                                                  baseComplete,
-                                                                  WriteType.BATCH,
-                                                                  cleanup,
-                                                                  queryStartNanoTime));
-#endif
-                // FIXME: Temporary hack: send the write directly to paired_endpoint,
-                // without a batchlog, and without checking for success
-                // Note we don't wait for the asynchronous operation to complete
-                // FIXME: need to extend mut's lifetime???
-                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
-                    vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
+            bool is_endpoint_local = *paired_endpoint == my_address;
+            int64_t updates_pushed_remote = !is_endpoint_local + pending_endpoints.size();
+
+            stats.view_updates_pushed_local += is_endpoint_local;
+            stats.view_updates_pushed_remote += updates_pushed_remote;
+
+            if (is_endpoint_local && pending_endpoints.empty()) {
+                // Note that we start here an asynchronous apply operation, and
+                // do not wait for it to complete.
+                // Note also that mutate_locally(mut) copies mut (in
+                // frozen form) so don't need to increase its lifetime.
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([&stats] (auto ep) {
+                    vlogger.error("Error applying local view update: {}", ep);
+                    stats.view_updates_failed_local++;
                     return make_exception_future<>(std::move(ep));
                 }));
+            } else {
+                vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
+                // Note we don't wait for the asynchronous operation to complete
+                // without a batchlog, and without checking for success.
+                // When the ownership of the view partition is being moved to a
+                // new node (or nodes), listed in pending_enpoints, we also need
+                // to send the update there. Currently, we do this from *each* of
+                // the base replicas, but this is probably excessive - see
+                // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW)
+                        .handle_exception([paired_endpoint, is_endpoint_local, updates_pushed_remote, &stats] (auto ep) {
+                            stats.view_updates_failed_local += is_endpoint_local;
+                            stats.view_updates_failed_remote += updates_pushed_remote;
+                            vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
+                            return make_exception_future<>(std::move(ep));
+                        })
+                );
             }
-        } else {
-#if 0
-                    //if there are no paired endpoints there are probably range movements going on,
-                    //so we write to the local batchlog to replay later
-                    if (pendingEndpoints.isEmpty())
-                        vlogger.warn("Received base materialized view mutation for key {} that does not belong " +
-                                    "to this node. There is probably a range movement happening (move or decommission)," +
-                                    "but this node hasn't updated its ring metadata yet. Adding mutation to " +
-                                    "local batchlog to be replayed later.",
-                                    mutation.key());
-                    nonPairedMutations.add(mutation);
-                }
-#endif
+        } else if (!pending_endpoints.empty()) {
+            // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
+            // such that this base replica is gaining new token ranges. The current node is thus a pending_endpoint
+            // from the POV of the coordinator that sent the request. Since we only look at natural endpoints to
+            // determine base-to-view pairings, the current node won't appear in the list of base replicas. Sending
+            // view updates to the view replica this base will eventually be paired with only makes a difference when
+            // the base update didn't make it to the node which is currently being decommissioned or moved-from. Also,
+            // if HH is enabled at the coordinator, the update will either make it there before the range movement
+            // finishes, or later to this node when it becomes a natural endpoint for the token. We still ensure we
+            // send to any pending view endpoints though.
+            auto updates_pushed_remote = pending_endpoints.size();
+            stats.view_updates_pushed_remote += updates_pushed_remote;
+            auto target = pending_endpoints.back();
+            pending_endpoints.pop_back();
+            fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
+                    std::move(mut),
+                    target,
+                    std::move(pending_endpoints),
+                    db::write_type::VIEW).handle_exception([target, updates_pushed_remote, &stats] (auto ep) {
+                stats.view_updates_failed_remote += updates_pushed_remote;
+                vlogger.error("Error applying view update to {}: {}", target, ep);
+                return make_exception_future<>(std::move(ep));
+            }));
         }
     }
-#if 0
-            if (!wrappers.isEmpty())
-            {
-                // Apply to local batchlog memtable in this thread
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), Lists.transform(wrappers, w -> w.mutation)),
-                                      writeCommitLog);
-
-                    // now actually perform the writes and wait for them to complete
-                asyncWriteBatchedMutations(wrappers, localDataCenter, Stage.VIEW_MUTATION);
-            }
-#endif
-#if 0
-            if (!nonPairedMutations.isEmpty())
-            {
-                BatchlogManager.store(Batch.createLocal(batchUUID, FBUtilities.timestampMicros(), nonPairedMutations),
-                                      writeCommitLog);
-            }
-        }
-#endif
-#if 0
-    }
-    finally
-    {
-        viewWriteMetrics.addNano(System.nanoTime() - startTime);
-    }
-#endif
     auto f = seastar::when_all_succeed(fs->begin(), fs->end());
     return f.finally([fs = std::move(fs)] { });
 }
 
+view_builder::view_builder(database& db, db::system_distributed_keyspace& sys_dist_ks, service::migration_manager& mm)
+        : _db(db)
+        , _sys_dist_ks(sys_dist_ks)
+        , _mm(mm) {
+}
+
+future<> view_builder::start() {
+    _started = seastar::async([this] {
+        // Wait for schema agreement even if we're a seed node.
+        while (!_mm.have_schema_agreement()) {
+            if (_as.abort_requested()) {
+                return;
+            }
+            seastar::sleep(500ms).get();
+        }
+        auto built = system_keyspace::load_built_views().get0();
+        auto in_progress = system_keyspace::load_view_build_progress().get0();
+        calculate_shard_build_step(std::move(built), std::move(in_progress)).get();
+        _mm.register_listener(this);
+        _current_step = _base_to_build_step.begin();
+        _build_step.trigger();
+    });
+    return make_ready_future<>();
+}
+
+future<> view_builder::stop() {
+    vlogger.info("Stopping view builder");
+    _as.request_abort();
+    return _started.finally([this] {
+        _mm.unregister_listener(this);
+        return _sem.wait().then([this] {
+            _sem.broken();
+            return _build_step.join();
+        });
+    });
+}
+
+static query::partition_slice make_partition_slice(const schema& s) {
+    query::partition_slice::option_set opts;
+    opts.set(query::partition_slice::option::send_partition_key);
+    opts.set(query::partition_slice::option::send_clustering_key);
+    opts.set(query::partition_slice::option::send_timestamp);
+    opts.set(query::partition_slice::option::send_ttl);
+    return query::partition_slice(
+            {query::full_clustering_range},
+            { },
+            boost::copy_range<std::vector<column_id>>(s.regular_columns()
+                    | boost::adaptors::transformed(std::mem_fn(&column_definition::id))),
+            std::move(opts));
+}
+
+view_builder::build_step& view_builder::get_or_create_build_step(utils::UUID base_id) {
+    auto it = _base_to_build_step.find(base_id);
+    if (it == _base_to_build_step.end()) {
+        auto base = _db.find_column_family(base_id).shared_from_this();
+        auto p = _base_to_build_step.emplace(base_id, build_step{base, make_partition_slice(*base->schema())});
+        // Iterators could have been invalidated if there was rehashing, so just reset the cursor.
+        _current_step = p.first;
+        it = p.first;
+    }
+    return it->second;
+}
+
+void view_builder::initialize_reader_at_current_token(build_step& step) {
+    step.pslice = make_partition_slice(*step.base->schema());
+    step.prange = dht::partition_range(dht::ring_position::starting_at(step.current_token()), dht::ring_position::max());
+    step.reader = make_local_shard_sstable_reader(
+            step.base->schema(),
+            make_lw_shared(sstables::sstable_set(step.base->get_sstable_set())),
+            step.prange,
+            step.pslice,
+            default_priority_class(),
+            no_resource_tracking(),
+            nullptr,
+            streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no);
+}
+
+void view_builder::load_view_status(view_builder::view_build_status status, std::unordered_set<utils::UUID>& loaded_views) {
+    if (!status.next_token) {
+        // No progress was made on this view, so we'll treat it as new.
+        return;
+    }
+    vlogger.info0("Resuming to build view {}.{} at {}", status.view->ks_name(), status.view->cf_name(), *status.next_token);
+    loaded_views.insert(status.view->id());
+    if (status.first_token == *status.next_token) {
+        // Completed, so nothing to do for this shard. Consider the view
+        // as loaded and not as a new view.
+        _built_views.emplace(status.view->id());
+        return;
+    }
+    get_or_create_build_step(status.view->view_info()->base_id()).build_status.emplace_back(std::move(status));
+}
+
+void view_builder::reshard(
+        std::vector<std::vector<view_builder::view_build_status>> view_build_status_per_shard,
+        std::unordered_set<utils::UUID>& loaded_views) {
+    // We must reshard. We aim for a simple algorithm, a step above not starting from scratch.
+    // Shards build entries at different paces, so both first and last tokens will differ. We
+    // want to be conservative when selecting the range that has been built. To do that, we
+    // select the intersection of all the previous shard's ranges for each view.
+    struct view_ptr_hash {
+        std::size_t operator()(const view_ptr& v) const noexcept {
+            return std::hash<utils::UUID>()(v->id());
+        }
+    };
+    struct view_ptr_equals {
+        bool operator()(const view_ptr& v1, const view_ptr& v2) const noexcept {
+            return v1->id() == v2->id();
+        }
+    };
+    std::unordered_map<view_ptr, stdx::optional<nonwrapping_range<dht::token>>, view_ptr_hash, view_ptr_equals> my_status;
+    for (auto& shard_status : view_build_status_per_shard) {
+        for (auto& [view, first_token, next_token] : shard_status ) {
+            // We start from an open-ended range, which we'll try to restrict.
+            auto& my_range = my_status.emplace(
+                    std::move(view),
+                    nonwrapping_range<dht::token>::make_open_ended_both_sides()).first->second;
+            if (!next_token || !my_range) {
+                // A previous shard made no progress, so for this view we'll start over.
+                my_range = stdx::nullopt;
+                continue;
+            }
+            if (first_token == *next_token) {
+                // Completed, so don't consider this shard's progress. We know that if the view
+                // is marked as in-progress, then at least one shard will have a non-full range.
+                continue;
+            }
+            wrapping_range<dht::token> other_range(first_token, *next_token);
+            if (other_range.is_wrap_around(dht::token_comparator())) {
+                // The intersection of a wrapping range with a non-wrapping range may yield more
+                // multiple non-contiguous ranges. To avoid the complexity of dealing with more
+                // than one range, we'll just take one of the intersections.
+                auto [bottom_range, top_range] = other_range.unwrap();
+                if (auto bottom_int = my_range->intersection(nonwrapping_range(std::move(bottom_range)), dht::token_comparator())) {
+                    my_range = std::move(bottom_int);
+                } else {
+                    my_range = my_range->intersection(nonwrapping_range(std::move(top_range)), dht::token_comparator());
+                }
+            } else {
+                my_range = my_range->intersection(nonwrapping_range(std::move(other_range)), dht::token_comparator());
+            }
+        }
+    }
+    view_builder::base_to_build_step_type build_step;
+    for (auto& [view, opt_range] : my_status) {
+        if (!opt_range) {
+            continue; // Treat it as a new table.
+        }
+        auto start_bound = opt_range->start() ? std::move(opt_range->start()->value()) : dht::minimum_token();
+        auto end_bound = opt_range->end() ? std::move(opt_range->end()->value()) : dht::minimum_token();
+        auto s = view_build_status{std::move(view), std::move(start_bound), std::move(end_bound)};
+        load_view_status(std::move(s), loaded_views);
+    }
+}
+
+future<> view_builder::calculate_shard_build_step(
+        std::vector<system_keyspace::view_name> built,
+        std::vector<system_keyspace::view_build_progress> in_progress) {
+    // Shard 0 makes cleanup changes to the system tables, but none that could conflict
+    // with the other shards; everyone is thus able to proceed independently.
+    auto bookkeeping_ops = std::make_unique<std::vector<future<>>>();
+    auto base_table_exists = [&, this] (const view_ptr& view) {
+        // This is a safety check in case this node missed a create MV statement
+        // but got a drop table for the base, and another node didn't get the
+        // drop notification and sent us the view schema.
+        try {
+            _db.find_schema(view->view_info()->base_id());
+            return true;
+        } catch (const no_such_column_family&) {
+            return false;
+        }
+    };
+    auto maybe_fetch_view = [&, this] (system_keyspace::view_name& name) {
+        try {
+            auto s = _db.find_schema(name.first, name.second);
+            if (s->is_view()) {
+                auto view = view_ptr(std::move(s));
+                if (base_table_exists(view)) {
+                    return view;
+                }
+            }
+            // The view was dropped and a table was re-created with the same name,
+            // but the write to the view-related system tables didn't make it.
+        } catch (const no_such_column_family&) {
+            // Fall-through
+        }
+        if (engine().cpu_id() == 0) {
+            bookkeeping_ops->push_back(_sys_dist_ks.remove_view(name.first, name.second));
+            bookkeeping_ops->push_back(system_keyspace::remove_built_view(name.first, name.second));
+            bookkeeping_ops->push_back(
+                    system_keyspace::remove_view_build_progress_across_all_shards(
+                            std::move(name.first),
+                            std::move(name.second)));
+        }
+        return view_ptr(nullptr);
+    };
+
+    auto built_views = boost::copy_range<std::unordered_set<utils::UUID>>(built
+            | boost::adaptors::transformed(maybe_fetch_view)
+            | boost::adaptors::filtered([] (const view_ptr& v) { return bool(v); })
+            | boost::adaptors::transformed([] (const view_ptr& v) { return v->id(); }));
+
+    std::vector<std::vector<view_build_status>> view_build_status_per_shard;
+    for (auto& [view_name, first_token, next_token_opt, cpu_id] : in_progress) {
+        if (auto view = maybe_fetch_view(view_name)) {
+            if (built_views.find(view->id()) != built_views.end()) {
+                if (engine().cpu_id() == 0) {
+                    auto f = _sys_dist_ks.finish_view_build(std::move(view_name.first), std::move(view_name.second)).then([view = std::move(view)] {
+                        system_keyspace::remove_view_build_progress_across_all_shards(view->cf_name(), view->ks_name());
+                    });
+                    bookkeeping_ops->push_back(std::move(f));
+                }
+                continue;
+            }
+            view_build_status_per_shard.resize(std::max(view_build_status_per_shard.size(), size_t(cpu_id + 1)));
+            view_build_status_per_shard[cpu_id].emplace_back(view_build_status{
+                    std::move(view),
+                    std::move(first_token),
+                    std::move(next_token_opt)});
+        }
+    }
+
+    std::unordered_set<utils::UUID> loaded_views;
+    if (view_build_status_per_shard.size() != smp::count) {
+        reshard(std::move(view_build_status_per_shard), loaded_views);
+    } else if (!view_build_status_per_shard.empty()) {
+        for (auto& status : view_build_status_per_shard[engine().cpu_id()]) {
+            load_view_status(std::move(status), loaded_views);
+        }
+    }
+
+    for (auto& [_, build_step] : _base_to_build_step) {
+        boost::sort(build_step.build_status, [] (view_build_status s1, view_build_status s2) {
+            return *s1.next_token < *s2.next_token;
+        });
+        if (!build_step.build_status.empty()) {
+            build_step.current_key = dht::decorated_key{*build_step.build_status.front().next_token, partition_key::make_empty()};
+        }
+    }
+
+    auto all_views = _db.get_views();
+    auto is_new = [&] (const view_ptr& v) {
+        return base_table_exists(v) && loaded_views.find(v->id()) == loaded_views.end()
+                && built_views.find(v->id()) == built_views.end();
+    };
+    for (auto&& view : all_views | boost::adaptors::filtered(is_new)) {
+        bookkeeping_ops->push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
+    }
+
+    for (auto& [_, build_step] : _base_to_build_step) {
+        initialize_reader_at_current_token(build_step);
+    }
+
+    auto f = seastar::when_all_succeed(bookkeeping_ops->begin(), bookkeeping_ops->end());
+    return f.handle_exception([bookkeeping_ops = std::move(bookkeeping_ops)] (std::exception_ptr ep) {
+        vlogger.error("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+    });
+}
+
+future<> view_builder::add_new_view(view_ptr view, build_step& step) {
+    vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
+    step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
+    return when_all_succeed(
+            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()),
+            _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()));
+}
+
+static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
+    struct empty_state { };
+    return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
+        return base->flush().then_wrapped([base] (future<> f) -> stdx::optional<empty_state> {
+            if (f.failed()) {
+                vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
+                return { };
+            }
+            return { empty_state{} };
+        });
+    }).discard_result();
+}
+
+void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        auto view = view_ptr(_db.find_schema(ks_name, view_name));
+        auto& step = get_or_create_build_step(view->view_info()->base_id());
+        return step.base->await_pending_writes().then([this, &step] {
+            return flush_base(step.base, _as);
+        }).then([this, view, &step] () mutable {
+            // This resets the build step to the current token. It may result in views currently
+            // being built to receive duplicate updates, but it simplifies things as we don't have
+            // to keep around a list of new views to build the next time the reader crosses a token
+            // threshold.
+            initialize_reader_at_current_token(step);
+            return add_new_view(view, step).then_wrapped([this, view] (future<>&& f) {
+                if (f.failed()) {
+                    vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), f.get_exception());
+                }
+                _build_step.trigger();
+            });
+        });
+    }).handle_exception_type([] (no_such_column_family&) { });
+}
+
+void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        auto view = view_ptr(_db.find_schema(ks_name, view_name));
+        auto step_it = _base_to_build_step.find(view->view_info()->base_id());
+        if (step_it == _base_to_build_step.end()) {
+            return;// In case all the views for this CF have finished building already.
+        }
+        auto status_it = boost::find_if(step_it->second.build_status, [view] (const view_build_status& bs) {
+            return bs.view->id() == view->id();
+        });
+        if (status_it != step_it->second.build_status.end()) {
+            status_it->view = std::move(view);
+        }
+    }).handle_exception_type([] (no_such_column_family&) { });
+}
+
+void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
+    with_semaphore(_sem, 1, [ks_name, view_name, this] {
+        // The view is absent from the database at this point, so find it by brute force.
+        ([&, this] {
+            for (auto& [_, step] : _base_to_build_step) {
+                if (step.build_status.empty() || step.build_status.front().view->ks_name() != ks_name) {
+                    continue;
+                }
+                for (auto it = step.build_status.begin(); it != step.build_status.end(); ++it) {
+                    if (it->view->cf_name() == view_name) {
+                        _built_views.erase(it->view->id());
+                        step.build_status.erase(it);
+                        return;
+                    }
+                }
+            }
+        })();
+        if (engine().cpu_id() != 0) {
+            return make_ready_future();
+        }
+        return when_all_succeed(
+                    system_keyspace::remove_view_build_progress_across_all_shards(ks_name, view_name),
+                    system_keyspace::remove_built_view(ks_name, view_name),
+                    _sys_dist_ks.remove_view(ks_name, view_name)).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
+            vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
+        });
+    });
+}
+
+future<> view_builder::do_build_step() {
+    return seastar::async([this] {
+        exponential_backoff_retry r(1s, 1min);
+        while (!_base_to_build_step.empty() && !_as.abort_requested()) {
+            auto units = get_units(_sem, 1).get0();
+            try {
+                execute(_current_step->second, exponential_backoff_retry(1s, 1min));
+                r.reset();
+            } catch (const abort_requested_exception&) {
+                return;
+            } catch (...) {
+                auto base = _current_step->second.base->schema();
+                vlogger.warn("Error executing build step for base {}.{}: {}", base->ks_name(), base->cf_name(), std::current_exception());
+                r.retry(_as).get();
+                initialize_reader_at_current_token(_current_step->second);
+            }
+            if (_current_step->second.build_status.empty()) {
+                _current_step = _base_to_build_step.erase(_current_step);
+            } else {
+                ++_current_step;
+            }
+            if (_current_step == _base_to_build_step.end()) {
+                _current_step = _base_to_build_step.begin();
+            }
+        }
+    });
+}
+
+// Called in the context of a seastar::thread.
+class view_builder::consumer {
+public:
+    struct built_views {
+        build_step& step;
+        std::vector<view_build_status> views;
+
+        built_views(build_step& step)
+                : step(step) {
+        }
+
+        built_views(built_views&& other)
+                : step(other.step)
+                , views(std::move(other.views)) {
+        }
+
+        ~built_views() {
+            for (auto&& status : views) {
+                // Use step.current_token(), which may have wrapped around and become < first_token.
+                step.build_status.emplace_back(view_build_status{std::move(status.view), step.current_token(), step.current_token()});
+            }
+        }
+
+        void release() {
+            views.clear();
+        }
+    };
+
+private:
+    view_builder& _builder;
+    build_step& _step;
+    built_views _built_views;
+    std::vector<view_ptr> _views_to_build;
+    std::deque<mutation_fragment> _fragments;
+
+public:
+    consumer(view_builder& builder, build_step& step)
+            : _builder(builder)
+            , _step(step)
+            , _built_views{step} {
+        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
+            load_views_to_build();
+        }
+    }
+
+    void load_views_to_build() {
+        for (auto&& vs : _step.build_status) {
+            if (_step.current_token() >= vs.next_token) {
+                if (partition_key_matches(*_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
+                    _views_to_build.push_back(vs.view);
+                }
+                if (vs.next_token || _step.current_token() != vs.first_token) {
+                    vs.next_token = _step.current_key.token();
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    void check_for_built_views() {
+        for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
+            // A view starts being built at token t1. Due to resharding, that may not necessarily be a
+            // shard-owned token. We finish building the view when the next_token to build is just before
+            // (or at) the first token, but the shard-owned current token is after (or at) the first token.
+            // In the system tables, we set first_token = next_token to signal the completion of the build
+            // process in case of a restart.
+            if (it->next_token && *it->next_token <= it->first_token && _step.current_token() >= it->first_token) {
+                _built_views.views.push_back(std::move(*it));
+                it = _step.build_status.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    stop_iteration consume_new_partition(const dht::decorated_key& dk) {
+        _step.current_key = std::move(dk);
+        check_for_built_views();
+        _views_to_build.clear();
+        load_views_to_build();
+        return stop_iteration(_views_to_build.empty());
+    }
+
+    stop_iteration consume(tombstone) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(static_row&&, tombstone, bool) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+        if (_views_to_build.empty() || _builder._as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+
+        _fragments.push_back(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone&&) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume_end_of_partition() {
+        _builder._as.check();
+        if (!_fragments.empty()) {
+            _fragments.push_front(partition_start(_step.current_key, tombstone()));
+            _step.base->populate_views(
+                    _views_to_build,
+                    _step.current_token(),
+                    make_flat_mutation_reader_from_fragments(_step.base->schema(), std::move(_fragments))).get();
+            _fragments.clear();
+        }
+        return stop_iteration(_step.build_status.empty());
+    }
+
+    built_views consume_end_of_stream() {
+        if (vlogger.is_enabled(log_level::debug)) {
+            auto view_names = boost::copy_range<std::vector<sstring>>(
+                    _views_to_build | boost::adaptors::transformed([](auto v) {
+                        return v->cf_name();
+                    }));
+            vlogger.debug("Completed build step for base {}.{}, at token {}; views={}", _step.base->schema()->ks_name(),
+                          _step.base->schema()->cf_name(), _step.current_token(), view_names);
+        }
+        if (_step.reader.is_end_of_stream() && _step.reader.is_buffer_empty()) {
+            _step.current_key = {dht::minimum_token(), partition_key::make_empty()};
+            for (auto&& vs : _step.build_status) {
+                vs.next_token = dht::minimum_token();
+            }
+            _builder.initialize_reader_at_current_token(_step);
+            check_for_built_views();
+        }
+        return std::move(_built_views);
+    }
+};
+
+// Called in the context of a seastar::thread.
+void view_builder::execute(build_step& step, exponential_backoff_retry r) {
+    auto consumer = compact_for_query<emit_only_live_rows::yes, view_builder::consumer>(
+            *step.reader.schema(),
+            gc_clock::now(),
+            step.pslice,
+            batch_size,
+            query::max_partitions,
+            view_builder::consumer{*this, step});
+    consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
+    auto built = step.reader.consume_in_thread(std::move(consumer));
+
+    _as.check();
+
+    std::vector<future<>> bookkeeping_ops;
+    bookkeeping_ops.reserve(built.views.size() + step.build_status.size());
+    for (auto& [view, first_token, _] : built.views) {
+        bookkeeping_ops.push_back(maybe_mark_view_as_built(view, first_token));
+    }
+    built.release();
+    for (auto& [view, _, next_token] : step.build_status) {
+        if (next_token) {
+            bookkeeping_ops.push_back(
+                    system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), *next_token));
+        }
+    }
+    seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
+        vlogger.error("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
+    }).get();
+}
+
+future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_token) {
+    _built_views.emplace(view->id());
+    vlogger.debug("Shard finished building view {}.{}", view->ks_name(), view->cf_name());
+    return container().map_reduce0(
+            [view_id = view->id()] (view_builder& builder) {
+                return builder._built_views.count(view_id);
+            },
+            true,
+            [] (bool result, bool shard_complete) {
+                return result & shard_complete;
+            }).then([this, view, next_token = std::move(next_token)] (bool built) {
+        if (built) {
+            return container().invoke_on_all([view_id = view->id()] (view_builder& builder) {
+                if (builder._built_views.erase(view_id) == 0 || engine().cpu_id() != 0) {
+                    return make_ready_future<>();
+                }
+                auto view = builder._db.find_schema(view_id);
+                vlogger.info("Finished building view {}.{}", view->ks_name(), view->cf_name());
+                return seastar::when_all_succeed(
+                        system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()),
+                        builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then([view] {
+                    return system_keyspace::remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
+                }).then([&builder, view] {
+                    auto it = builder._build_notifiers.find(std::pair(view->ks_name(), view->cf_name()));
+                    if (it != builder._build_notifiers.end()) {
+                        it->second.set_value();
+                    }
+                });
+            });
+        }
+        return system_keyspace::update_view_build_progress(view->ks_name(), view->cf_name(), next_token);
+    });
+}
+
+future<> view_builder::wait_until_built(const sstring& ks_name, const sstring& view_name, lowres_clock::time_point timeout) {
+    return container().invoke_on(0, [ks_name, view_name, timeout] (view_builder& builder) {
+        auto v = std::pair(std::move(ks_name), std::move(view_name));
+        return builder._build_notifiers[std::move(v)].get_shared_future(timeout);
+    });
+}
+
 } // namespace view
 } // namespace db
-

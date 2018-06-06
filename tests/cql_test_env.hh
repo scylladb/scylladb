@@ -38,6 +38,10 @@
 
 class database;
 
+namespace db::view {
+class view_builder;
+}
+
 namespace auth {
 class service;
 }
@@ -95,9 +99,28 @@ public:
     virtual distributed<cql3::query_processor> & qp() = 0;
 
     virtual auth::service& local_auth_service() = 0;
+
+    virtual db::view::view_builder& local_view_builder() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func);
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config&);
+
+template<typename EventuallySucceedingFunction>
+static void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 10) {
+    size_t attempts = 0;
+    while (true) {
+        try {
+            f();
+            break;
+        } catch (...) {
+            if (++attempts < max_attempts) {
+                sleep(std::chrono::milliseconds(1 << attempts)).get0();
+            } else {
+                throw;
+            }
+        }
+    }
+}

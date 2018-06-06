@@ -70,6 +70,7 @@ public:
     view_ptr create_view_for_index(const index_metadata& index) const;
     std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
     std::vector<index> list_indexes() const;
+    bool is_index(view_ptr) const;
 private:
     void add_index(const index_metadata& im);
 };

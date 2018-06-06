@@ -42,10 +42,8 @@ const std::string manager::FILENAME_PREFIX("HintsLog" + commitlog::descriptor::S
 const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::seconds(2);
 const std::chrono::seconds manager::hints_flush_period = std::chrono::seconds(10);
 const std::chrono::seconds manager::space_watchdog::_watchdog_period = std::chrono::seconds(1);
-// TODO: remove this when we switch to C++17
-constexpr size_t manager::_max_hints_send_queue_length;
 
-size_t db::hints::manager::max_shard_disk_space_size;
+size_t db::hints::resource_manager::max_shard_disk_space_size;
 
 manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, distributed<database>& db)
     : _hints_dir(boost::filesystem::path(hints_directory) / format("{:d}", engine().cpu_id()).c_str())
@@ -53,8 +51,8 @@ manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64
     , _local_snitch_ptr(locator::i_endpoint_snitch::get_local_snitch_ptr())
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
-    , _max_send_in_flight_memory(std::max(memory::stats().total_memory() / 10, _max_hints_send_queue_length))
-    , _min_send_hint_budget(_max_send_in_flight_memory / _max_hints_send_queue_length)
+    , _max_send_in_flight_memory(std::max(memory::stats().total_memory() / 10, resource_manager::max_hints_send_queue_length))
+    , _min_send_hint_budget(_max_send_in_flight_memory / resource_manager::max_hints_send_queue_length)
     , _send_limiter(_max_send_in_flight_memory)
     , _space_watchdog(*this)
 {
@@ -256,8 +254,8 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             commitlog::config cfg;
 
             cfg.commit_log_location = _hints_dir.c_str();
-            cfg.commitlog_segment_size_in_mb = _hint_segment_size_in_mb;
-            cfg.commitlog_total_space_in_mb = _max_hints_per_ep_size_mb;
+            cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
+            cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
             cfg.fname_prefix = manager::FILENAME_PREFIX;
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
@@ -335,7 +333,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
         // to be generated as a result of hints sending.
         if (boost::range::find(natural_endpoints, end_point_key()) != natural_endpoints.end()) {
             manager_logger.trace("Sending directly to {}", end_point_key());
-            return _proxy.send_to_endpoint(std::move(m), end_point_key(), write_type::SIMPLE);
+            return _proxy.send_to_endpoint(std::move(m), end_point_key(), { }, write_type::SIMPLE);
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
             return _proxy.mutate({std::move(m)}, consistency_level::ALL, nullptr);
@@ -470,9 +468,9 @@ void manager::space_watchdog::on_timer() {
             }).then([this] {
                 // Adjust the quota to take into account the space we guarantee to every end point manager
                 size_t adjusted_quota = 0;
-                size_t delta = _shard_manager._ep_managers.size() * _hint_segment_size_in_mb * 1024 * 1024;
-                if (max_shard_disk_space_size > delta) {
-                    adjusted_quota = max_shard_disk_space_size - delta;
+                size_t delta = _shard_manager._ep_managers.size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
+                if (resource_manager::max_shard_disk_space_size > delta) {
+                    adjusted_quota = resource_manager::max_shard_disk_space_size - delta;
                 }
 
                 bool can_hint = _total_size < adjusted_quota;
@@ -510,7 +508,7 @@ void manager::space_watchdog::on_timer() {
 bool manager::too_many_in_flight_hints_for(ep_key_type ep) const noexcept {
     // There is no need to check the DC here because if there is an in-flight hint for this end point then this means that
     // its DC has already been checked and found to be ok.
-    return _stats.size_of_hints_in_progress > _max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
+    return _stats.size_of_hints_in_progress > resource_manager::max_size_of_hints_in_progress && !utils::fb_utilities::is_me(ep) && hints_in_progress_for(ep) > 0 && local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
 }
 
 bool manager::can_hint_for(ep_key_type ep) const noexcept {
@@ -527,7 +525,7 @@ bool manager::can_hint_for(ep_key_type ep) const noexcept {
     // hints is more than the maximum allowed value.
     //
     // In the worst case there's going to be (_max_size_of_hints_in_progress + N - 1) in-flight hints, where N is the total number Nodes in the cluster.
-    if (_stats.size_of_hints_in_progress > _max_size_of_hints_in_progress && hints_in_progress_for(ep) > 0) {
+    if (_stats.size_of_hints_in_progress > resource_manager::max_size_of_hints_in_progress && hints_in_progress_for(ep) > 0) {
         manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}", _stats.size_of_hints_in_progress, ep, hints_in_progress_for(ep));
         return false;
     }

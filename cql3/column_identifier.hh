@@ -123,6 +123,7 @@ public:
     bool operator!=(const raw& other) const;
 
     virtual sstring to_string() const;
+    sstring to_cql_string() const;
 
     friend std::hash<column_identifier::raw>;
     friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);

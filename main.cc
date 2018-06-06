@@ -35,10 +35,12 @@
 #include "service/load_broadcaster.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/hints/manager.hh"
 #include "db/commitlog/commitlog_replayer.hh"
+#include "db/view/view_builder.hh"
 #include "utils/runtime.hh"
 #include "utils/file_lock.hh"
 #include "log.hh"
@@ -469,9 +471,11 @@ int main(int ac, char** av) {
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;
+            static sharded<db::system_distributed_keyspace> sys_dist_ks;
             supervisor::notify("initializing storage service");
-            init_storage_service(db, auth_service);
+            init_storage_service(db, auth_service, sys_dist_ks);
             supervisor::notify("starting per-shard database core");
+
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
             auto make_sched_group = [&] (sstring name, unsigned shares) {
@@ -510,18 +514,24 @@ int main(int ac, char** av) {
                     db.local().get_config().data_file_directories().cend());
             directories.insert(db.local().get_config().commitlog_directory());
 
-            if (hinted_handoff_enabled) {
-                supervisor::notify("creating hints directories");
-                using namespace boost::filesystem;
+            supervisor::notify("creating hints directories");
 
-                path hints_base_dir(db.local().get_config().hints_directory());
-                dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
-                directories.insert(db.local().get_config().hints_directory());
-                for (unsigned i = 0; i < smp::count; ++i) {
-                    sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
-                    dirs.touch_and_lock(shard_dir).get();
-                    directories.insert(std::move(shard_dir));
-                }
+            boost::filesystem::path hints_base_dir(db.local().get_config().hints_directory());
+            dirs.touch_and_lock(db.local().get_config().hints_directory()).get();
+            directories.insert(db.local().get_config().hints_directory());
+            for (unsigned i = 0; i < smp::count; ++i) {
+                sstring shard_dir((hints_base_dir / seastar::to_sstring(i).c_str()).native());
+                dirs.touch_and_lock(shard_dir).get();
+                directories.insert(std::move(shard_dir));
+            }
+            boost::filesystem::path view_pending_updates_base_dir = boost::filesystem::path(db.local().get_config().data_file_directories()[0]) / "view_pending_updates";
+            sstring view_pending_updates_base_dir_str = view_pending_updates_base_dir.native();
+            dirs.touch_and_lock(view_pending_updates_base_dir_str).get();
+            directories.insert(view_pending_updates_base_dir_str);
+            for (unsigned i = 0; i < smp::count; ++i) {
+                sstring shard_dir((view_pending_updates_base_dir / seastar::to_sstring(i).c_str()).native());
+                dirs.touch_and_lock(shard_dir).get();
+                directories.insert(std::move(shard_dir));
             }
 
             supervisor::notify("verifying directories");
@@ -629,7 +639,7 @@ int main(int ac, char** av) {
             }
             // If the same sstable is shared by several shards, it cannot be
             // deleted until all shards decide to compact it. So we want to
-            // start thse compactions now. Note we start compacting only after
+            // start these compactions now. Note we start compacting only after
             // all sstables in this CF were loaded on all shards - otherwise
             // we will have races between the compaction and loading processes
             // We also want to trigger regular compaction on boot.
@@ -697,10 +707,17 @@ int main(int ac, char** av) {
             gms::get_local_gossiper().wait_for_gossip_to_settle().get();
             api::set_server_gossip_settle(ctx).get();
 
-            if (hinted_handoff_enabled) {
-                supervisor::notify("starting hinted handoff manager");
-                db::hints::manager::rebalance().get();
-                proxy.invoke_on_all([] (service::storage_proxy& local_proxy) { local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this()); }).get();
+            supervisor::notify("starting hinted handoff manager");
+            db::hints::manager::rebalance().get();
+            proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
+                local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this());
+            }).get();
+
+            static sharded<db::view::view_builder> view_builder;
+            if (cfg->view_building()) {
+                supervisor::notify("starting the view builder");
+                view_builder.start(std::ref(db), std::ref(sys_dist_ks), std::ref(mm)).get();
+                view_builder.invoke_on_all(&db::view::view_builder::start).get();
             }
 
             supervisor::notify("starting native transport");
@@ -731,6 +748,10 @@ int main(int ac, char** av) {
             });
             engine().at_exit([] {
                 return service::get_local_storage_service().drain_on_shutdown();
+            });
+
+            engine().at_exit([] {
+                return view_builder.stop();
             });
 
             engine().at_exit([&db] {

@@ -24,6 +24,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "database.hh"
+#include "db/view/view_builder.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/cql_test_env.hh"
@@ -33,38 +34,27 @@
 
 using namespace std::literals::chrono_literals;
 
-template<typename EventuallySucceedingFunction>
-static void eventually(EventuallySucceedingFunction&& f) {
-    constexpr unsigned max_attempts = 10;
-    unsigned attempts = 0;
-    while (true) {
-        try {
-            f();
-            break;
-        } catch (...) {
-            if (++attempts < max_attempts) {
-                sleep(std::chrono::milliseconds(1 << attempts)).get0();
-            } else {
-                throw;
-            }
-        }
-    }
-}
-
+// CQL usually folds identifier names - keyspace, table and column names -
+// to lowercase. That is, unless the identifier is enclosed in double
+// quotation marks (") then the identifier becomes case sensitive.
+// Let's test that case-sensitive (quoted) column names can be used for
+// materialized views. Test that data can be inserted and queried, and
+// that case sensitive columns in views can be renamed.
+// This test reproduces issues #3388 and #3391.
 SEASTAR_TEST_CASE(test_case_sensitivity) {
     return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (theKey int, theClustering int, theValue int, primary key (theKey, theClustering));").get();
+        e.execute_cql("create table cf (\"theKey\" int, \"theClustering\" int, \"theValue\" int, primary key (\"theKey\", \"theClustering\"));").get();
         e.execute_cql("create materialized view mv_test as select * from cf "
-                       "where theKey is not null and theClustering is not null and theValue is not null "
-                       "primary key (theKey,theClustering)").get();
-        e.execute_cql("create materialized view mv_test2 as select theKey, theClustering, theValue from cf "
-                       "where theKey is not null and theClustering is not null and theValue is not null "
-                       "primary key (theKey,theClustering)").get();
-        e.execute_cql("insert into cf (theKey, theClustering, theValue) values (0 ,0, 0);").get();
+                       "where \"theKey\" is not null and \"theClustering\" is not null and \"theValue\" is not null "
+                       "primary key (\"theKey\",\"theClustering\")").get();
+        e.execute_cql("create materialized view mv_test2 as select \"theKey\", \"theClustering\", \"theValue\" from cf "
+                       "where \"theKey\" is not null and \"theClustering\" is not null and \"theValue\" is not null "
+                       "primary key (\"theKey\",\"theClustering\")").get();
+        e.execute_cql("insert into cf (\"theKey\", \"theClustering\", \"theValue\") values (0 ,0, 0);").get();
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select theKey, theClustering, theValue from %s ", view)).get0();
+            auto msg = e.execute_cql(sprint("select \"theKey\", \"theClustering\", \"theValue\" from %s ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -75,11 +65,11 @@ SEASTAR_TEST_CASE(test_case_sensitivity) {
             });
         }
 
-        e.execute_cql("alter table cf rename theClustering to Col;").get();
+        e.execute_cql("alter table cf rename \"theClustering\" to \"Col\";").get();
 
         for (auto view : {"mv_test", "mv_test2"}) {
             eventually([&] {
-            auto msg = e.execute_cql(sprint("select theKey, Col, theValue from %s ", view)).get0();
+            auto msg = e.execute_cql(sprint("select \"theKey\", \"Col\", \"theValue\" from %s ", view)).get0();
             assert_that(msg).is_rows()
                 .with_size(1)
                 .with_row({
@@ -837,27 +827,6 @@ SEASTAR_TEST_CASE(test_ck_tombstone) {
     });
 }
 
-SEASTAR_TEST_CASE(test_primary_key_is_not_null) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p1 int, p2 int, v int, primary key ((p1, p2)))").get();
-        try {
-            e.execute_cql("create materialized view vcf as select * from cf "
-                          "where p1 is not null and p2 is not null and v is not null").get();
-            BOOST_ASSERT(false);
-        } catch (...) { }
-        assert_that_failed(e.execute_cql(
-                    "create materialized view vcf as select * from cf "
-                    "where p2 is not null and v is not null "
-                    "primary key (v, p1, p2)"));
-        e.execute_cql("drop table cf").get();
-        e.execute_cql("create table cf (p1 int, c int, v int, primary key (p1, c))").get();
-        // Can omit p1 is not null
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where c is not null and v is not null "
-                      "primary key (v, p1, c)").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_static_table) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, sv int static, v int, primary key (p, c))").get();
@@ -1330,27 +1299,6 @@ SEASTAR_TEST_CASE(test_update) {
     });
 }
 
-SEASTAR_TEST_CASE(test_ignore_update) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select p, c, v1 from cf "
-                      "where p is not null and c is not null and v1 is not null primary key (c, p)").get();
-
-        e.execute_cql("insert into cf (p, c, v2) values (0, 0, 0)").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get0();
-        assert_that(msg).is_rows()
-                .with_size(1);
-        });
-        e.execute_cql("update cf set v2 = 3 where p = 1 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get0();
-        assert_that(msg).is_rows()
-                .with_size(1);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c));").get();
@@ -1660,7 +1608,7 @@ SEASTAR_TEST_CASE(test_create_and_alter_mv_with_ttl) {
 
 SEASTAR_TEST_CASE(test_create_with_select_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d, e))").get();
+        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d))").get();
         assert_that_failed(e.execute_cql(
                 "create materialized view mv as select * from cf where b is not null and c is not null and d is not null primary key ((a, b), c, d)"));
         assert_that_failed(e.execute_cql(
@@ -1822,10 +1770,50 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_unrestricted_part) {
     });
 }
 
-// FIXME: Requires re-organization of validation around relations and restrictions (#2367)
-#if 0
+// Test that although normal SELECT queries limit the ability to query
+// for slices (ranges) of partition keys, because there is no way to implement
+// such queries efficiently, the same slices *do* work for the SELECT statement
+// defining a materialized view - there the condition is tested for each
+// partition separately, so the performance concerns do not hold.
+// This verifies part of issue #2367. See also test_clustering_key_in_restrictions.
 SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
     return do_with_cql_env_thread([] (auto& e) {
+        // Although the test below tests that slices are allowed in MV's
+        // SELECT, let's first verify that these slices are still *not*
+        // allowed in ordinary SELECT queries:
+
+        e.execute_cql("create table cf (a int, b int, primary key (a))").get();
+        try {
+            e.execute_cql("select * from cf where a > 0").get();
+            BOOST_FAIL("slice query of partition key");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "Only EQ and IN relation are supported on the
+            // partition key (unless you use the token() function)"
+        }
+        e.execute_cql("drop table cf").get();
+
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a, b, c))").get();
+        try {
+            e.execute_cql("select * from cf where a = 1 and b > 0 and c > 0").get();
+            BOOST_FAIL("slice of clustering key with non-contiguous range");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "Clustering column "c" cannot be restricted
+            // (preceding column "b" is restricted by a non-EQ relation)"
+        }
+        e.execute_cql("drop table cf").get();
+
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a, b, c))").get();
+        try {
+            e.execute_cql("select * from cf where a = 1 and c = 1 and b > 0").get();
+            BOOST_FAIL("slice of clustering key with non-contiguous range");
+        } catch (exceptions::invalid_request_exception&) {
+            // Expecting "PRIMARY KEY column "c" cannot be restricted
+            // (preceding column "b" is restricted by a non-EQ relation)
+        }
+        e.execute_cql("drop table cf").get();
+
+
+        // And now for the actual MV tests, where the slices should be allowed:
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
             e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
             e.execute_cql(sprint("create materialized view vcf as select * from cf "
@@ -1884,7 +1872,6 @@ SEASTAR_TEST_CASE(test_partition_key_filtering_with_slice) {
         }
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(test_partition_key_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
@@ -2251,8 +2238,7 @@ SEASTAR_TEST_CASE(test_clustering_key_slice_restrictions) {
     });
 }
 
-// FIXME: Requires re-organization of validation around relations and restrictions (#2367)
-#if 0
+// Another test for issue #2367.
 SEASTAR_TEST_CASE(test_clustering_key_in_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
@@ -2317,7 +2303,6 @@ SEASTAR_TEST_CASE(test_clustering_key_in_restrictions) {
         }
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(test_clustering_key_multi_column_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
@@ -2936,6 +2921,30 @@ void complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(cql_test_en
     assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(2)}, {int32_type->decompose(1)}, {}, {} }});
     });
 
+    // Reset values TS=10
+    e.execute_cql("insert into cf (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 10").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get0();
+    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(4)}, {long_type->decompose(10L)} }});
+    });
+
+    // Update values TS=20
+    e.execute_cql("update cf using timestamp 20 set v2 = 5 where p = 1 and c = 2").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get0();
+    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
+    });
+
+    // Delete row TS=10
+    e.execute_cql("delete from cf using timestamp 10 where p = 1 and c = 2").get();
+    maybe_flush();
+    eventually([&] {
+    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf").get0();
+    assert_that(msg).is_rows().with_rows({{ { }, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
+    });
+
     e.execute_cql("drop materialized view vcf").get();
     e.execute_cql("drop table cf").get();
 }
@@ -3008,4 +3017,284 @@ SEASTAR_TEST_CASE(complex_timestamp_deletion_test_with_flush) {
             e.local_db().flush_all_memtables().get();
         });
     }, cfg);
+}
+
+// Test that we are not allowed to create a view without the "is not null"
+// restrictions on all the view's primary key columns.
+// Actually, although most of Cassandra documentation suggests that IS NOT
+// NULL is needed on all of the view's primary key columns, there's actually
+// one case where this is optional: It optional on a column which is the
+// base's only partition key column, because the partition key (in its
+// entirety) is always guaranteed to be non-null. In all other cases, the
+// IS NOT NULL specification it is mandatory.
+// We want to be sure that in every case, the error is caught when creating
+// the view - not later when adding data to the base table, as we discovered
+// was happening in some cases in issue #2628.
+SEASTAR_TEST_CASE(test_is_not_null) {
+    return do_with_cql_env_thread([] (auto& e) {
+        // Test 1: with one partition column in the base table.
+        // This should work with the "where v is not null" restriction
+        // on the view's new key column, but fail without it.
+        // Adding a "where p is not null" restriction is not necessary for
+        // the base's partition key (because they cannot be null), but
+        // also not harmful.
+        e.execute_cql("create table cf (p int PRIMARY KEY, v int, w int)").get();
+        e.execute_cql("create materialized view vcf1 as select * from cf "
+                      "where v is not null "
+                      "primary key (v, p)").get();
+        e.execute_cql("create materialized view vcf2 as select * from cf "
+                      "where v is not null and p is not null "
+                      "primary key (v, p)").get();
+        try {
+            // should fail, missing restriction on v (p is also missing, but
+            // as can be seen from the success above, not mandatory).
+            e.execute_cql("create materialized view vcf3 as select * from cf "
+                          "primary key (v, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf4 as select * from cf "
+                          "where p is not null "
+                          "primary key (v, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+
+        // Test adding rows to cf and all views on it which we succeeded adding
+        // above. In issue #2628, we saw that the view creation was succeeding
+        // above despite the missing "is not null", and then the updates here
+        // were failing. This was wrong.
+        e.execute_cql("insert into cf (p, v, w) values (1, 2, 3)").get();
+
+        // Test 2: where the base table has a composite partition key.
+        // It appears (see Cassandra's CreateViewStatement.getColumnIdentifier())
+        // that when the partition key is composite (composed of multiple columns)
+        // individual columns may be null, so we must have an IS NOT NULL
+        // restriction on those (p1 and p2 below) too, and it's no longer optional.
+        e.execute_cql("create table cf2 (p1 int, p2 int, v int, primary key ((p1, p2)))").get();
+        e.execute_cql("create materialized view vcf24 as select * from cf2 "
+                      "where p1 is not null and p2 is not null and v is not null "
+                      "primary key (v, p1, p2)").get(); // this should succeed
+        try {
+            // should fail, missing restriction on p1
+            e.execute_cql("create materialized view vcf21 as select * from cf2 "
+                          "where p2 is not null and v is not null "
+                          "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on p2
+            e.execute_cql("create materialized view vcf22 as select * from cf2 "
+                          "where p1 is not null and v is not null "
+                          "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf23 as select * from cf2 "
+                         "where p1 is not null and p2 is not null "
+                         "primary key (v, p1, p2)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        e.execute_cql("insert into cf2 (p1, p2, v) values (1, 2, 3)").get();
+
+        // Test 3: this time the base has a non-composite partition key p1,
+        // but also a clustering key c. The IS NOT NULL can be omitted on p1,
+        // but necessary on c, and on the new view primary key column - v:
+        e.execute_cql("create table cf3 (p1 int, c int, v int, primary key (p1, c))").get();
+        e.execute_cql("create materialized view vcf32 as select * from cf3 "
+                      "where c is not null and v is not null and p1 is not null "
+                      "primary key (v, p1, c)").get();
+        e.execute_cql("create materialized view vcf31 as select * from cf3 "
+                      "where c is not null and v is not null "   // fine to omit p1
+                      "primary key (v, p1, c)").get();
+        try {
+            // should fail, missing restriction on c
+            e.execute_cql("create materialized view vcf33 as select * from cf3 "
+                          "where p1 is not null and v is not null "
+                          "primary key (v, p1, c)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        try {
+            // should fail, missing restriction on v
+            e.execute_cql("create materialized view vcf34 as select * from cf3 "
+                          "where p1 is not null and c is not null "
+                          "primary key (v, p1, c)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+        e.execute_cql("insert into cf3 (p1, c, v) values (1, 2, 3)").get();
+
+        // FIXME: we should also test that beyond "IS NOT NULL" being
+        // verified on view creation, it also does its job when adding
+        // rows - that those with NULL values are properly ignored.
+    });
+}
+
+// Test that it is forbidden to add more than one new column to the
+// view's primary key beyond what was in the base's primary key.
+SEASTAR_TEST_CASE(test_only_one_allowed) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int PRIMARY KEY, v int, w int)").get();
+        try {
+            e.execute_cql("create materialized view vcf as select * from cf "
+                          "where v is not null and w is not null "
+                          "primary key (v, w, p)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+    });
+}
+
+// Test that a view cannot be created without its primary key containing all
+// columns of the base's primary key. This reproduces issue #2720.
+SEASTAR_TEST_CASE(test_view_key_must_include_base_key) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (a int, b int, c int, primary key (a))").get();
+        // Adding a column (b) to cf's primary key (a) is fine:
+        e.execute_cql("create materialized view vcf1 as select * from cf "
+                      "where a is not null and b is not null "
+                      "primary key (b, a)").get();
+        // But missing any of cf's primary columns in the view, is not.
+        // Even before the fix to #2720 this case generated an error - but not
+        // the expected error because of test order.
+        try {
+            e.execute_cql("create materialized view vcf2 as select * from cf "
+                          "where b is not null "
+                          "primary key (b)").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) { }
+
+        // A slightly more elaborate case, which actually reproduces the
+        // problem we had issue #2720 - in this case we didn't detect the
+        // error of the missing key column.
+        e.execute_cql("create table cf2 (a int, b int, c int, primary key (a, b))").get();
+        try {
+            e.execute_cql("create materialized view vcf21 as select * from cf2 "
+                          "where c is not null and b is not null "
+                          "primary key (c, b)").get();  // error: "a" is missing in this key.
+        } catch (exceptions::invalid_request_exception&) { }
+    });
+}
+
+SEASTAR_TEST_CASE(test_base_non_pk_columns_in_view_partition_key_are_non_emtpy) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p1 int, p2 text, c text, v text, primary key ((p1, p2), c))").get();
+        e.execute_cql("insert into cf (p1, p2, c, v) values (1, '', '', '')").get();
+
+        size_t id = 0;
+        auto make_view_name = [&id] { return sprint("vcf_%d", id++); };
+
+        auto views_matching = {
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key (p1, v, c, p2)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((p2, v), c, p1)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((v, p2), c, p1)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((c, v), p1, p2)",
+
+            "create materialized view %s as select * from cf "
+            "where p1 is not null and p2 is not null and c is not null and v is not null "
+            "primary key ((v, c), p1, p2)"
+        };
+        for (auto&& view : views_matching) {
+            auto name = make_view_name();
+            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            e.execute_cql(sprint(view, name)).get();
+            f.get();
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                            {int32_type->decompose(1)},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
+                    });
+        }
+
+        auto views_not_matching = {
+                "create materialized view %s as select * from cf "
+                "where p1 is not null and p2 is not null and c is not null and v is not null "
+                "primary key (c, p1, p2, v)",
+
+                "create materialized view %s as select * from cf "
+                "where p1 is not null and p2 is not null and c is not null and v is not null "
+                "primary key (p2, p1, c, v)"
+        };
+        for (auto&& view : views_not_matching) {
+            auto name = make_view_name();
+            auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+            e.execute_cql(sprint(view, name)).get();
+            f.get();
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        }
+        auto name = make_view_name();
+        auto f = e.local_view_builder().wait_until_built("ks", name, lowres_clock::now() + 5s);
+        e.execute_cql(sprint("create materialized view %s as select * from cf "
+                             "where p1 is not null and p2 is not null and c is not null and v is not null "
+                             "primary key (v, p1, p2, c)", name)).get();
+        f.get();
+        auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+        assert_that(msg).is_rows().is_empty();
+
+        e.local_db().flush_all_memtables().get();
+        e.execute_cql("update cf set v = 'a' where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                            {int32_type->decompose(1)},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose(data_value(""))},
+                            {utf8_type->decompose("a")},
+                    });
+        });
+        e.execute_cql("update cf set v = '' where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+        e.execute_cql("delete v from cf where p1 = 1 and p2 = '' and c = ''").get();
+        eventually([&] {
+            auto msg = e.execute_cql(sprint("select p1, p2, c, v from %s", name)).get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_alter_table_with_updates) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c));").get();
+        e.execute_cql("create materialized view vcf as select p, c, v1, v2 from cf "
+                      "where p is not null and c is not null and v1 is not null and v2 is not null "
+                      "primary key (v1, p, c)").get();
+        e.execute_cql("update cf set v1 = 4, v2 = 5 where p = 1 and c = 1").get();
+        e.execute_cql("alter table cf add f int;").get();
+        e.execute_cql("alter table cf add o int;").get();
+        e.execute_cql("alter table cf add t int;").get();
+        e.execute_cql("alter table cf add x int;").get();
+        e.execute_cql("alter table cf add z int;").get();
+        e.execute_cql("update cf set v2 = 7 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select p, c, v1, v2 from vcf").get0();
+            assert_that(msg).is_rows()
+                    .with_size(1)
+                    .with_row({
+                        {int32_type->decompose(1)},
+                        {int32_type->decompose(1)},
+                        {int32_type->decompose(4)},
+                        {int32_type->decompose(7)},
+                    });
+        });
+    });
 }

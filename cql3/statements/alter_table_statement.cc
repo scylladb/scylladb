@@ -247,10 +247,11 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         cfm.with_column(column_name->name(), type, _is_static ? column_kind::static_column : column_kind::regular_column);
 
         // Adding a column to a table which has an include all view requires the column to be added to the view
-        // as well
+        // as well. If the view has a regular base column in its PK, then the column ID needs to be updated in
+        // view_info; for that, rebuild the schema.
         if (!_is_static) {
             for (auto&& view : cf.views()) {
-                if (view->view_info()->include_all_columns()) {
+                if (view->view_info()->include_all_columns() || view->view_info()->base_non_pk_column_in_view_pk()) {
                     schema_builder builder(view);
                     builder.with_column(column_name->name(), type);
                     view_updates.push_back(view_ptr(builder.build()));
@@ -305,14 +306,10 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             }
         }
 
-        // If a column is dropped which is included in a view, we don't allow the drop to take place.
-        auto view_names = ::join(", ", cf.views()
-                   | boost::adaptors::filtered([&] (auto&& v) { return bool(v->get_column_definition(column_name->name())); })
-                   | boost::adaptors::transformed([] (auto&& v) { return v->cf_name(); }));
-        if (!view_names.empty()) {
+        if (!cf.views().empty()) {
             throw exceptions::invalid_request_exception(sprint(
-                    "Cannot drop column %s, depended on by materialized views (%s.{%s})",
-                    column_name, keyspace(), view_names));
+                    "Cannot drop column %s on base table %s.%s with materialized views",
+                    column_name, keyspace(), column_family()));
         }
         break;
     }

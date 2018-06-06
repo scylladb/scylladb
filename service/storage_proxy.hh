@@ -221,6 +221,7 @@ private:
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
     stdx::optional<db::hints::manager> _hints_manager;
+    bool _hints_enabled_for_user_writes = false;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
@@ -247,10 +248,11 @@ private:
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
-    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, tracing::trace_state_ptr tr_state) noexcept;
+    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, db::write_type type, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
-    bool cannot_hint(gms::inet_address target);
-    bool hints_enabled() noexcept;
+    template<typename Range>
+    bool cannot_hint(const Range& targets, db::write_type type);
+    bool hints_enabled(db::write_type type) noexcept;
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
@@ -380,7 +382,7 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(mutation m, gms::inet_address target, db::write_type type);
+    future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from

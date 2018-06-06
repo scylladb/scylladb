@@ -75,6 +75,11 @@ public:
         return !_t && _marker.is_missing() && _cells.empty();
     }
 
+    bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const {
+        base_tombstone.apply(_t.tomb());
+        return _marker.is_live(base_tombstone, now) || _cells.is_live(s, column_kind::regular_column, base_tombstone, now);
+    }
+
     void apply(const schema& s, clustering_row&& cr) {
         _marker.apply(std::move(cr._marker));
         _t.apply(cr._t, _marker);
@@ -136,6 +141,10 @@ public:
 
     bool empty() const {
         return _cells.empty();
+    }
+
+    bool is_live(const schema& s, gc_clock::time_point now = gc_clock::time_point::min()) const {
+        return _cells.is_live(s, column_kind::static_column, tombstone(), now);
     }
 
     void apply(const schema& s, const row& r) {

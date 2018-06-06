@@ -1247,6 +1247,17 @@ void column_family::set_metrics() {
                 ms::make_gauge("live_sstable", ms::description("Live sstable count"), _stats.live_sstable_count)(cf)(ks),
                 ms::make_gauge("pending_compaction", ms::description("Estimated number of compactions pending for this column family"), _stats.pending_compactions)(cf)(ks)
         });
+
+        // View metrics are created only for base tables, so there's no point in adding them to views (which cannot act as base tables for other views)
+        if (!_schema->is_view()) {
+            _metrics.add_group("column_family", {
+                    ms::make_total_operations("view_updates_pushed_remote", _view_stats.view_updates_pushed_remote, ms::description("Number of updates (mutations) pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_remote", _view_stats.view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_pushed_local", _view_stats.view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"))(cf)(ks),
+                    ms::make_total_operations("view_updates_failed_local", _view_stats.view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"))(cf)(ks),
+            });
+        }
+
         if (_schema->ks_name() != db::system_keyspace::NAME && _schema->ks_name() != db::schema_tables::v3::NAME && _schema->ks_name() != "system_traces") {
             _metrics.add_group("column_family", {
                     ms::make_histogram("read_latency", ms::description("Read latency histogram"), [this] {return _stats.estimated_read.get_histogram(std::chrono::microseconds(100));})(cf)(ks),
@@ -1970,31 +1981,31 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
     // case is still an invalid case, but it is way easier for us to treat it
     // by waiting for all files to be loaded, and then checking if we saw a
     // file during scan_dir, without its corresponding TOC.
-    enum class status {
+    enum class component_status {
         has_some_file,
         has_toc_file,
         has_temporary_toc_file,
     };
 
     struct sstable_descriptor {
-        std::experimental::optional<sstables::sstable::version_types> version;
-        std::experimental::optional<sstables::sstable::format_types> format;
+        component_status status;
+        sstables::sstable::version_types version;
+        sstables::sstable::format_types format;
     };
 
-    auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
-    auto descriptor = make_lw_shared<sstable_descriptor>();
+    auto verifier = make_lw_shared<std::unordered_map<unsigned long, sstable_descriptor>>();
 
-    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, descriptor, ks, cf] (std::vector<future<>>& futures) {
-        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, descriptor, &futures] (lister::path sstdir, directory_entry de) {
+    return do_with(std::vector<future<>>(), [&db, sstdir = std::move(sstdir), verifier, ks, cf] (std::vector<future<>>& futures) {
+        return lister::scan_dir(sstdir, { directory_entry_type::regular }, [&db, verifier, &futures] (lister::path sstdir, directory_entry de) {
             // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, descriptor, sstdir, de] (auto entry) {
+            auto f = distributed_loader::probe_file(db, sstdir.native(), de.name).then([verifier, sstdir, de] (auto entry) {
                 if (entry.component == sstables::sstable::component_type::TemporaryStatistics) {
                     return remove_file(sstables::sstable::filename(sstdir.native(), entry.ks, entry.cf, entry.version, entry.generation,
                         entry.format, sstables::sstable::component_type::TemporaryStatistics));
                 }
 
                 if (verifier->count(entry.generation)) {
-                    if (verifier->at(entry.generation) == status::has_toc_file) {
+                    if (verifier->at(entry.generation).status == component_status::has_toc_file) {
                         lister::path file_path(sstdir / de.name.c_str());
                         if (entry.component == sstables::sstable::component_type::TOC) {
                             throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed", file_path.native());
@@ -2002,26 +2013,18 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                             throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed", file_path.native());
                         }
                     } else if (entry.component == sstables::sstable::component_type::TOC) {
-                        verifier->at(entry.generation) = status::has_toc_file;
+                        verifier->at(entry.generation).status = component_status::has_toc_file;
                     } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                        verifier->at(entry.generation) = status::has_temporary_toc_file;
+                        verifier->at(entry.generation).status = component_status::has_temporary_toc_file;
                     }
                 } else {
                     if (entry.component == sstables::sstable::component_type::TOC) {
-                        verifier->emplace(entry.generation, status::has_toc_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_toc_file, entry.version, entry.format});
                     } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
-                        verifier->emplace(entry.generation, status::has_temporary_toc_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_temporary_toc_file, entry.version, entry.format});
                     } else {
-                        verifier->emplace(entry.generation, status::has_some_file);
+                        verifier->emplace(entry.generation, sstable_descriptor{component_status::has_some_file, entry.version, entry.format});
                     }
-                }
-
-                // Retrieve both version and format used for this column family.
-                if (!descriptor->version) {
-                    descriptor->version = entry.version;
-                }
-                if (!descriptor->format) {
-                    descriptor->format = entry.format;
                 }
                 return make_ready_future<>();
             });
@@ -2053,14 +2056,12 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 }
                 return make_ready_future<>();
             });
-        }).then([verifier, sstdir, descriptor, ks = std::move(ks), cf = std::move(cf)] {
-            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), descriptor, verifier] (auto v) {
-                if (v.second == status::has_temporary_toc_file) {
+        }).then([verifier, sstdir, ks = std::move(ks), cf = std::move(cf)] {
+            return do_for_each(*verifier, [sstdir = std::move(sstdir), ks = std::move(ks), cf = std::move(cf), verifier] (auto v) {
+                if (v.second.status == component_status::has_temporary_toc_file) {
                     unsigned long gen = v.first;
-                    assert(descriptor->version);
-                    sstables::sstable::version_types version = descriptor->version.value();
-                    assert(descriptor->format);
-                    sstables::sstable::format_types format = descriptor->format.value();
+                    sstables::sstable::version_types version = v.second.version;
+                    sstables::sstable::format_types format = v.second.format;
 
                     if (engine().cpu_id() != 0) {
                         dblog.debug("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
@@ -2068,7 +2069,7 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                     }
                     // shard 0 is the responsible for removing a partial sstable.
                     return sstables::sstable::remove_sstable_with_temp_toc(ks, cf, sstdir, gen, version, format);
-                } else if (v.second != status::has_toc_file) {
+                } else if (v.second.status != component_status::has_toc_file) {
                     throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
                 }
                 return make_ready_future<>();
@@ -2675,6 +2676,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     auto uuid = find_uuid(ks_name, cf_name);
     auto cf = _column_families.at(uuid);
     remove(*cf);
+    cf->clear_views();
     auto& ks = find_keyspace(ks_name);
     return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
         return cf->stop();
@@ -2926,6 +2928,11 @@ bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const 
     return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
 }
 
+std::vector<view_ptr> database::get_views() const {
+    return boost::copy_range<std::vector<view_ptr>>(get_non_system_column_families()
+            | boost::adaptors::filtered([] (auto& cf) { return cf->schema()->is_view(); })
+            | boost::adaptors::transformed([] (auto& cf) { return view_ptr(cf->schema()); }));
+}
 
 void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
@@ -3271,7 +3278,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
         std::move(regular_columns), { }, { }, cql_serialization_format::internal(), query::max_rows);
 
     return do_with(std::move(slice), std::move(m), std::vector<locked_cell>(),
-                   [this, &cf, timeout, trace_state = std::move(trace_state)] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
+                   [this, &cf, timeout, trace_state = std::move(trace_state), op = cf.write_in_progress()] (const query::partition_slice& slice, mutation& m, std::vector<locked_cell>& locks) mutable {
         tracing::trace(trace_state, "Acquiring counter locks");
         return cf.lock_counter_cells(m, timeout).then([&, m_schema = cf.schema(), trace_state = std::move(trace_state), timeout, this] (std::vector<locked_cell> lcs) mutable {
             locks = std::move(lcs);
@@ -3504,16 +3511,19 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
         throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
                                  s->ks_name(), s->cf_name(), s->version()));
     }
+
+    // Signal to view building code that a write is in progress,
+    // so it knows when new writes start being sent to a new view.
+    auto op = cf.write_in_progress();
     if (cf.views().empty()) {
-        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout);
+        return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally([op = std::move(op)] { });
     }
     future<row_locker::lock_holder> f = cf.push_view_replica_updates(s, m, timeout);
-    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout] (row_locker::lock_holder lock) {
-        auto& cf = find_column_family(uuid);
+    return f.then([this, s = std::move(s), uuid = std::move(uuid), &m, timeout, &cf, op = std::move(op)] (row_locker::lock_holder lock) mutable {
         return apply_with_commitlog(std::move(s), cf, std::move(uuid), m, timeout).finally(
                 // Hold the local lock on the base-table partition or row
                 // taken before the read, until the update is done.
-                [lock = std::move(lock)] { });
+                [lock = std::move(lock), op = std::move(op)] { });
     });
 }
 
@@ -4283,10 +4293,12 @@ void column_family::set_schema(schema_ptr s) {
 
 static std::vector<view_ptr>::iterator find_view(std::vector<view_ptr>& views, const view_ptr& v) {
     return std::find_if(views.begin(), views.end(), [&v] (auto&& e) {
-        return e->cf_name() == v->cf_name();
+        return e->id() == v->id();
     });
 }
+
 void column_family::add_or_update_view(view_ptr v) {
+    v->view_info()->initialize_base_dependent_fields(*schema());
     auto existing = find_view(_views, v);
     if (existing != _views.end()) {
         *existing = std::move(v);
@@ -4300,6 +4312,10 @@ void column_family::remove_view(view_ptr v) {
     if (existing != _views.end()) {
         _views.erase(existing);
     }
+}
+
+void column_family::clear_views() {
+    _views.clear();
 }
 
 const std::vector<view_ptr>& column_family::views() const {
@@ -4337,8 +4353,8 @@ future<> column_family::generate_and_propagate_view_updates(const schema_ptr& ba
                         flat_mutation_reader_from_mutations({std::move(m)}),
                         std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
         return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
-                [base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
-            db::view::mutate_MV(std::move(base_token), std::move(updates)).handle_exception([units = std::move(units)] (auto ignored) { });
+                [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
+            db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
         });
     });
 }
@@ -4386,7 +4402,7 @@ future<row_locker::lock_holder> column_family::push_view_replica_updates(const s
         std::move(slice),
         std::move(m),
         [base, views = std::move(views), lock = std::move(lock), this, timeout] (auto& pk, auto& slice, auto& m) mutable {
-            auto reader = this->as_mutation_source().make_reader(
+            auto reader = this->make_reader(
                 base,
                 pk,
                 slice,
@@ -4476,6 +4492,31 @@ column_family::local_base_lock(const schema_ptr& s, const dht::decorated_key& pk
         // don't think this will make a practical difference.
         return _row_locker.lock_pk(pk, true);
     }
+}
+
+/**
+ * Given some updates on the base table and assuming there are no pre-existing, overlapping updates,
+ * generates the mutations to be applied to the base table's views, and sends them to the paired
+ * view replicas. The future resolves when the updates have been acknowledged by the repicas, i.e.,
+ * propagating the view updates to the view replicas happens synchronously.
+ *
+ * @param views the affected views which need to be updated.
+ * @param base_token The token to use to match the base replica with the paired replicas.
+ * @param reader the base table updates being applied, which all correspond to the base token.
+ * @return a future that resolves when the updates have been acknowledged by the view replicas
+ */
+future<> column_family::populate_views(
+        std::vector<view_ptr> views,
+        dht::token base_token,
+        flat_mutation_reader&& reader) {
+    auto& schema = reader.schema();
+    return db::view::generate_view_updates(
+            schema,
+            std::move(views),
+            std::move(reader),
+            { }).then([base_token = std::move(base_token), this] (auto&& updates) {
+        return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
+    });
 }
 
 void column_family::set_hit_rate(gms::inet_address addr, cache_temperature rate) {

@@ -395,18 +395,15 @@ operator<<(std::ostream& os, const cql3_type::raw& r) {
 
 namespace util {
 
-sstring maybe_quote(const sstring& s) {
-    static const std::regex unquoted("\\w*");
-    static const std::regex double_quote("\"");
-
-    if (std::regex_match(s.begin(), s.end(), unquoted)) {
-        return s;
+sstring maybe_quote(const sstring& identifier) {
+    static const std::regex unquoted_identifier_re("[a-z][a-z0-9_]*");
+    if (std::regex_match(identifier.begin(), identifier.end(), unquoted_identifier_re)) {
+        return identifier;
     }
-    std::ostringstream ss;
-    ss << "\"";
-    std::regex_replace(std::ostreambuf_iterator<char>(ss), s.begin(), s.end(), double_quote, "\"\"");
-    ss << "\"";
-    return ss.str();
+    static const std::regex double_quote_re("\"");
+    std::string result = identifier;
+    std::regex_replace(result, double_quote_re, "\"\"");
+    return '"' + result + '"';
 }
 
 }

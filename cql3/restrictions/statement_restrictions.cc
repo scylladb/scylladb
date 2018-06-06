@@ -41,14 +41,17 @@ using boost::adaptors::transformed;
 
 template<typename T>
 class statement_restrictions::initial_key_restrictions : public primary_key_restrictions<T> {
+    bool _allow_filtering;
 public:
+    initial_key_restrictions(bool allow_filtering)
+        : _allow_filtering(allow_filtering) {}
     using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
         if (restriction->is_multi_column()) {
             throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
         }
-        return ::make_shared<single_column_primary_key_restrictions<T>>(schema)->merge_to(schema, restriction);
+        return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(schema, restriction);
     }
     ::shared_ptr<primary_key_restrictions<T>> merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) override {
         if (restriction->is_multi_column()) {
@@ -57,7 +60,7 @@ public:
         if (restriction->is_on_token()) {
             return static_pointer_cast<token_restriction>(restriction);
         }
-        return ::make_shared<single_column_primary_key_restrictions<T>>(schema)->merge_to(restriction);
+        return ::make_shared<single_column_primary_key_restrictions<T>>(schema, _allow_filtering)->merge_to(restriction);
     }
     void merge_with(::shared_ptr<restriction> restriction) override {
         throw exceptions::unsupported_operation_exception();
@@ -122,9 +125,10 @@ statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_t
 }
 
 template<typename T>
-::shared_ptr<primary_key_restrictions<T>> statement_restrictions::get_initial_key_restrictions() {
-    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr = ::make_shared<initial_key_restrictions<T>>();
-    return initial_kr;
+::shared_ptr<primary_key_restrictions<T>> statement_restrictions::get_initial_key_restrictions(bool allow_filtering) {
+    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr_true = ::make_shared<initial_key_restrictions<T>>(true);
+    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr_false = ::make_shared<initial_key_restrictions<T>>(false);
+    return allow_filtering ? initial_kr_true : initial_kr_false;
 }
 
 std::vector<::shared_ptr<column_identifier>>
@@ -141,10 +145,10 @@ statement_restrictions::get_partition_key_unrestricted_components() const {
     return r;
 }
 
-statement_restrictions::statement_restrictions(schema_ptr schema)
+statement_restrictions::statement_restrictions(schema_ptr schema, bool allow_filtering)
     : _schema(schema)
-    , _partition_key_restrictions(get_initial_key_restrictions<partition_key>())
-    , _clustering_columns_restrictions(get_initial_key_restrictions<clustering_key_prefix>())
+    , _partition_key_restrictions(get_initial_key_restrictions<partition_key>(allow_filtering))
+    , _clustering_columns_restrictions(get_initial_key_restrictions<clustering_key_prefix>(allow_filtering))
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
 { }
 #if 0
@@ -162,8 +166,9 @@ statement_restrictions::statement_restrictions(database& db,
         ::shared_ptr<variable_specifications> bound_names,
         bool selects_only_static_columns,
         bool select_a_collection,
-        bool for_view)
-    : statement_restrictions(schema)
+        bool for_view,
+        bool allow_filtering)
+    : statement_restrictions(schema, allow_filtering)
 {
     /*
      * WHERE clause. For a given entity, rules are: - EQ relation conflicts with anything else (including a 2nd EQ)
@@ -326,6 +331,17 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
 
         _is_key_range = true;
         _uses_secondary_indexing = has_queriable_index;
+    }
+    if (_partition_key_restrictions->is_slice() && !_partition_key_restrictions->is_on_token() && !for_view) {
+        // A SELECT query may not request a slice (range) of partition keys
+        // without using token(). This is because there is no way to do this
+        // query efficiently: mumur3 turns a contiguous range of partition
+        // keys into tokens all over the token space.
+        // However, in a SELECT statement used to define a materialized view,
+        // such a slice is fine - it is used to check whether individual
+        // partitions, match, and does not present a performance problem.
+        throw exceptions::invalid_request_exception(
+                "Only EQ and IN relation are supported on the partition key (unless you use the token() function)");
     }
 }
 

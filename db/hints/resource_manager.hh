@@ -1,7 +1,5 @@
 /*
- * Copyright (C) 2015 ScyllaDB
- *
- * Modified by ScyllaDB
+ * Copyright (C) 2018 ScyllaDB
  */
 
 /*
@@ -23,24 +21,27 @@
 
 #pragma once
 
-namespace cql3 {
+#include <cstdint>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/core/future.hh>
+#include "seastarx.hh"
+#include <unordered_set>
+#include <boost/filesystem.hpp>
+#include <gms/inet_address.hh>
 
-struct cql_stats {
-    uint64_t reads = 0;
-    uint64_t inserts = 0;
-    uint64_t updates = 0;
-    uint64_t deletes = 0;
-    uint64_t batches = 0;
-    uint64_t statements_in_batches = 0;
-    uint64_t batches_pure_logged = 0;
-    uint64_t batches_pure_unlogged = 0;
-    uint64_t batches_unlogged_from_logged = 0;
-    uint64_t rows_read = 0;
+namespace db {
+namespace hints {
 
-    int64_t secondary_index_creates = 0;
-    int64_t secondary_index_drops = 0;
-    int64_t secondary_index_reads = 0;
-    int64_t secondary_index_rows_read = 0;
+class resource_manager {
+public:
+    static constexpr uint64_t max_size_of_hints_in_progress = 10 * 1024 * 1024; // 10MB
+    static constexpr size_t hint_segment_size_in_mb = 32;
+    static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
+    static constexpr size_t max_hints_send_queue_length = 128;
+    static size_t max_shard_disk_space_size;
 };
 
+}
 }
