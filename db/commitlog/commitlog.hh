@@ -111,7 +111,7 @@ public:
     struct config {
         config() = default;
         config(const config&) = default;
-        config(const db::config&);
+        static config from_db_config(const db::config&, size_t shard_available_memory);
 
         sstring commit_log_location;
         sstring metrics_category_name;
