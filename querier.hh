@@ -238,7 +238,6 @@ public:
 class querier_cache {
 public:
     static const std::chrono::seconds default_entry_ttl;
-    static const size_t max_queriers_memory_usage;
 
     struct stats {
         // The number of cache lookups.
@@ -333,13 +332,14 @@ private:
     timer<lowres_clock> _expiry_timer;
     std::chrono::seconds _entry_ttl;
     stats _stats;
+    size_t _max_queriers_memory_usage;
 
     entries::iterator find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state);
 
     void scan_cache_entries();
 
 public:
-    querier_cache(std::chrono::seconds entry_ttl = default_entry_ttl);
+    explicit querier_cache(size_t max_cache_size = 1'000'000, std::chrono::seconds entry_ttl = default_entry_ttl);
 
     querier_cache(const querier_cache&) = delete;
     querier_cache& operator=(const querier_cache&) = delete;

@@ -146,8 +146,6 @@ querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, co
 // The time-to-live of a cache-entry.
 const std::chrono::seconds querier_cache::default_entry_ttl{10};
 
-const size_t querier_cache::max_queriers_memory_usage = memory::stats().total_memory() * 0.04;
-
 void querier_cache::scan_cache_entries() {
     const auto now = lowres_clock::now();
 
@@ -181,9 +179,10 @@ querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, co
     return it;
 }
 
-querier_cache::querier_cache(std::chrono::seconds entry_ttl)
+querier_cache::querier_cache(size_t max_cache_size, std::chrono::seconds entry_ttl)
     : _expiry_timer([this] { scan_cache_entries(); })
-    , _entry_ttl(entry_ttl) {
+    , _entry_ttl(entry_ttl)
+    , _max_queriers_memory_usage(max_cache_size) {
     _expiry_timer.arm_periodic(entry_ttl / 2);
 }
 
@@ -208,10 +207,10 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     // it goes below the limit.
     memory_usage += q.memory_usage();
 
-    if (memory_usage >= max_queriers_memory_usage) {
+    if (memory_usage >= _max_queriers_memory_usage) {
         auto it = _meta_entries.begin();
         const auto end = _meta_entries.end();
-        while (it != end && memory_usage >= max_queriers_memory_usage) {
+        while (it != end && memory_usage >= _max_queriers_memory_usage) {
             if (*it) {
                 ++_stats.memory_based_evictions;
                 memory_usage -= it->get_entry().memory_usage();

@@ -159,8 +159,8 @@ public:
         query::partition_slice expected_slice;
     };
 
-    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h)
-        : _cache(entry_ttl)
+    test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h, size_t cache_size = 100000)
+        : _cache(cache_size, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr, const dht::partition_range& range) {
             auto rd = flat_mutation_reader_from_mutations(_mutations, range);
@@ -513,15 +513,16 @@ sstring make_string_blob(size_t size) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_memory_based_cache_eviction) {
+    auto cache_size = memory::stats().total_memory() * 0.04;
     test_querier_cache t([] (size_t) {
         const size_t blob_size = 1 << 1; // 1K
         return make_string_blob(blob_size);
-    }, 24h);
+    }, 24h, cache_size);
 
     size_t i = 0;
     const auto entry = t.produce_first_page_and_save_querier(i);
 
-    const size_t queriers_needed_to_fill_cache = floor(querier_cache::max_queriers_memory_usage / entry.memory_usage);
+    const size_t queriers_needed_to_fill_cache = floor(cache_size / entry.memory_usage);
 
     // Fill the cache but don't overflow.
     for (; i < queriers_needed_to_fill_cache; ++i) {
