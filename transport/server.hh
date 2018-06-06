@@ -102,6 +102,7 @@ struct cql_query_state {
 
 struct cql_server_config {
     ::timeout_config timeout_config;
+    size_t max_request_size;
 };
 
 class cql_server {
