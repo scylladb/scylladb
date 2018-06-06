@@ -555,8 +555,6 @@ private:
         COLUMN_TTL,
         COLUMN_TTL_2,
         COLUMN_VALUE,
-        COLUMN_VALUE_LENGTH,
-        COLUMN_VALUE_BYTES,
         COLUMN_END,
         RANGE_TOMBSTONE_MARKER,
     } _state = state::PARTITION_START;
@@ -664,7 +662,6 @@ public:
                 || _state == state::COLUMN_TIMESTAMP
                 || _state == state::COLUMN_DELETION_TIME_2
                 || _state == state::COLUMN_TTL_2
-                || _state == state::COLUMN_VALUE_LENGTH
                 || _state == state::COLUMN_END) && (_prestate == prestate::NONE);
     }
 
@@ -934,30 +931,23 @@ public:
             _column_ttl = parse_ttl(_header, _u64);
         case state::COLUMN_VALUE:
         column_value_label:
+        {
             if (!_column_flags.has_value()) {
                 _column_value = temporary_buffer<char>(0);
                 _state = state::COLUMN_END;
                 goto column_end_label;
             }
+            read_status status = read_status::waiting;
             if (auto len = get_column_value_length()) {
-                _column_value_length = *len;
-                _column_value = temporary_buffer<char>(_column_value_length);
-                _state = state::COLUMN_VALUE_BYTES;
-                goto column_value_bytes_label;
+                status = read_bytes(data, *len, _column_value);
+            } else {
+                status = read_unsigned_vint_length_bytes(data, _column_value);
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::COLUMN_VALUE_LENGTH;
-                break;
-            }
-        case state::COLUMN_VALUE_LENGTH:
-            _column_value_length = static_cast<uint32_t>(_u64);
-            _column_value = temporary_buffer<char>(_column_value_length);
-        case state::COLUMN_VALUE_BYTES:
-        column_value_bytes_label:
-            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+            if (status != read_status::ready) {
                 _state = state::COLUMN_END;
                 break;
             }
+        }
         case state::COLUMN_END:
         column_end_label:
             _state = state::NEXT_COLUMN;
