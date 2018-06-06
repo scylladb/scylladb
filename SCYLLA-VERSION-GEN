@@ -14,7 +14,7 @@ else
 	# where counter starts at 1 and increments for successive versions.
 	# This ensures that the package manager will select your custom
 	# package over the standard release.
-	SCYLLA_BUILD=0
+	SCYLLA_BUILD=1.mv
 	SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
 fi
 
