@@ -2399,3 +2399,34 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
     write_and_compare_sstables(s, mt, table_name);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
+    sstring table_name = "many_range_tombstones";
+    // CREATE TABLE many_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key1")});
+    mutation mut{s, key};
+
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528226962};
+    tombstone tomb{write_timestamp, tp};
+    sstring ck_base(650, 'a');
+    for (auto idx: boost::irange(1000, 1100)) {
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2))), tomb,
+                           bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2 + 1))),
+                           bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+        seastar::thread::yield();
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
