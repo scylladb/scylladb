@@ -92,12 +92,12 @@ api::timestamp_type query_processor::next_timestamp() {
     return _internal_state->next_timestamp();
 }
 
-query_processor::query_processor(service::storage_proxy& proxy, distributed<database>& db)
+query_processor::query_processor(service::storage_proxy& proxy, distributed<database>& db, query_processor::memory_config mcfg)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _internal_state(new internal_state())
-        , _prepared_cache(prep_cache_log)
+        , _prepared_cache(prep_cache_log, mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.local().get_config().permissions_validity_in_ms()),
                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
                                      std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()),

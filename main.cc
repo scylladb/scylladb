@@ -597,7 +597,8 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&mm] { return mm.stop(); });
             supervisor::notify("starting query processor");
-            qp.start(std::ref(proxy), std::ref(db)).get();
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256};
+            qp.start(std::ref(proxy), std::ref(db), qp_mcfg).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");

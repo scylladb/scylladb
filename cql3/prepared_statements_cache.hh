@@ -124,8 +124,8 @@ private:
     value_extractor_fn _value_extractor_fn;
 
 public:
-    prepared_statements_cache(logging::logger& logger)
-        : _cache(memory::stats().total_memory() / 256, entry_expiry, logger)
+    prepared_statements_cache(logging::logger& logger, size_t size)
+        : _cache(size, entry_expiry, logger)
     {}
 
     template <typename LoadFunc>

@@ -356,7 +356,8 @@ public:
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
-            qp.start(std::ref(proxy), std::ref(*db)).get();
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256};
+            qp.start(std::ref(proxy), std::ref(*db), qp_mcfg).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             bm.start(std::ref(qp)).get();

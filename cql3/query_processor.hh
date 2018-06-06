@@ -100,6 +100,9 @@ public:
 class query_processor {
 public:
     class migration_subscriber;
+    struct memory_config {
+        size_t prepared_statment_cache_size = 0;
+    };
 
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
@@ -137,7 +140,7 @@ public:
 
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
-    query_processor(service::storage_proxy& proxy, distributed<database>& db);
+    query_processor(service::storage_proxy& proxy, distributed<database>& db, memory_config mcfg);
 
     ~query_processor();
 
