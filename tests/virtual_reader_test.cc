@@ -32,13 +32,17 @@
 #include "tests/cql_assertions.hh"
 #include "tests/test_services.hh"
 
+#include "index/secondary_index_manager.hh"
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_builder.hh"
 #include "core/future-util.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "dht/i_partitioner.hh"
 #include "transport/messages/result_message.hh"
+
+using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
     return do_with_cql_env([] (auto& e) {
@@ -261,6 +265,34 @@ SEASTAR_TEST_CASE(test_query_view_built_progress_virtual_table) {
         rs = e.execute_cql("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name >= 'v2' and view_name  <= 'v3'").get0();
         assert_that(rs).is_rows().with_size(2);
         rs = e.execute_cql("select * from system.views_builds_in_progress where keyspace_name = 'ks' and view_name > 'v1' and view_name  < 'v2'").get0();
+        assert_that(rs).is_rows().with_size(0);
+    });
+}
+
+SEASTAR_TEST_CASE(test_query_built_indexes_virtual_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto idx = secondary_index::index_table_name("idx");
+        e.execute_cql("create table cf(p int PRIMARY KEY, v int);").get();
+        auto f1 = e.local_view_builder().wait_until_built("ks", "vcf", lowres_clock::now() + 10min);
+        auto f2 = e.local_view_builder().wait_until_built("ks", idx, lowres_clock::now() + 10min);
+        e.execute_cql("create materialized view vcf as select * from cf "
+                      "where v is not null and p is not null "
+                      "primary key (v, p)").get();
+        e.execute_cql("create index idx on cf (v)").get();
+        f1.get();
+        f2.get();
+        auto rs = e.execute_cql("select * from system.built_views").get0();
+        assert_that(rs).is_rows().with_rows_ignore_order({
+                { {utf8_type->decompose(sstring("ks"))}, {utf8_type->decompose(idx)} },
+                { {utf8_type->decompose(sstring("ks"))}, {"vcf"} },
+        });
+        rs = e.execute_cql("select * from system.\"IndexInfo\"").get0();
+        assert_that(rs).is_rows().with_rows_ignore_order({
+                { {utf8_type->decompose(sstring("ks"))}, {utf8_type->decompose(idx)} },
+        });
+        rs = e.execute_cql(sprint("select * from system.\"IndexInfo\" where table_name = 'ks' and index_name = '%s'", idx)).get0();
+        assert_that(rs).is_rows().with_size(1);
+        rs = e.execute_cql("select * from system.\"IndexInfo\" where table_name = 'ks' and index_name = 'vcf'").get0();
         assert_that(rs).is_rows().with_size(0);
     });
 }

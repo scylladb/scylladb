@@ -69,6 +69,7 @@
 #include "serializer.hh"
 #include <core/enum.hh>
 #include <seastar/net/inet_address.hh>
+#include <index/secondary_index.hh>
 #include "service/storage_proxy.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
@@ -77,6 +78,7 @@
 #include "sstables/sstables.hh"
 #include "db/view/build_progress_virtual_reader.hh"
 #include "db/schema_tables.hh"
+#include "index/built_indexes_virtual_reader.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -194,7 +196,7 @@ schema_ptr built_indexes() {
     static thread_local auto built_indexes = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
-        {{"table_name", utf8_type}},
+        {{"table_name", utf8_type}}, // table_name here is the name of the keyspace - don't be fooled
         // clustering key
         {{"index_name", utf8_type}},
         // regular columns
@@ -1568,30 +1570,6 @@ future<> set_bootstrap_state(bootstrap_state state) {
     });
 }
 
-future<bool>
-is_index_built(const sstring& ks_name, const sstring& index_name) {
-    auto req = sprint("SELECT index_name FROM %s.\"%s\" WHERE table_name=? AND index_name=?", NAME, BUILT_INDEXES);
-    return execute_cql(req, ks_name, index_name).then([](::shared_ptr<cql3::untyped_result_set> result) {
-        return make_ready_future<bool>(!result->empty());
-    });
-}
-
-future<>
-set_index_built(const sstring& ks_name, const sstring& index_name) {
-    auto req = sprint("INSERT INTO %s.\"%s\" (table_name, index_name) VALUES (?, ?)", NAME, BUILT_INDEXES);
-    return execute_cql(req, ks_name, index_name).discard_result().then([] {
-       return force_blocking_flush(BUILT_INDEXES);
-    });
-}
-
-future<>
-set_index_removed(const sstring& ks_name, const sstring& index_name) {
-    auto req = sprint("DELETE FROM %s.\"%s\" WHERE table_name = ? AND index_name = ?", NAME, BUILT_INDEXES);
-    return execute_cql(req, ks_name, index_name).discard_result().then([] {
-       return force_blocking_flush(BUILT_INDEXES);
-    });
-}
-
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
     auto schema_tables = db::schema_tables::all_tables();
@@ -1619,6 +1597,9 @@ static void maybe_add_virtual_reader(schema_ptr s, database& db) {
     }
     if (s.get() == v3::views_builds_in_progress().get()) {
         db.find_column_family(s).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
+    }
+    if (s.get() == built_indexes().get()) {
+        db.find_column_family(s).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
     }
 }
 

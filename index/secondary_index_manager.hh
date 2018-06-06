@@ -50,6 +50,8 @@
 
 namespace secondary_index {
 
+sstring index_table_name(const sstring& index_name);
+
 class index {
     sstring _target_column;
     index_metadata _im;

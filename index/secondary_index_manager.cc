@@ -94,7 +94,7 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     _indices.emplace(im.name(), index{index_target_name, im});
 }
 
-static sstring index_table_name(const sstring& index_name) {
+sstring index_table_name(const sstring& index_name) {
     return sprint("%s_index", index_name);
 }
 

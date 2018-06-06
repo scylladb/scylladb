@@ -585,22 +585,6 @@ public:
         return _qp.proxy().mutate_locally(std::move(mutations));
     }
 
-    future<> migrate_indexes() {
-        return parallel_for_each(_keyspaces, [](const keyspace& ks) {
-            return parallel_for_each(ks.tables, [&](const table& t) {
-                return parallel_for_each(t.metadata->indices(), [&](const index_metadata& index) {
-                    return system_keyspace::is_index_built(ks.name, t.metadata->cf_name() + "." + index.name()).then([&](bool built) {
-                        if (!built) {
-                            return make_ready_future();
-                        }
-                        return system_keyspace::set_index_built(ks.name, index.name()).then([&] {
-                            return system_keyspace::set_index_removed(ks.name, t.metadata->cf_name() + "." + index.name());
-                        });
-                    });
-                });
-            });
-        });
-    }
     future<> flush_schemas() {
         return _qp.proxy().get_db().invoke_on_all([this] (database& db) {
             return parallel_for_each(db::schema_tables::ALL, [this, &db](const sstring& cf_name) {
@@ -613,7 +597,7 @@ public:
     future<> migrate() {
         return read_all_keyspaces().then([this]() {
             // write metadata to the new schema tables
-            return store_keyspaces_in_new_schema_tables().then(std::bind(&migrator::migrate_indexes, this))
+            return store_keyspaces_in_new_schema_tables()
                                                 .then(std::bind(&migrator::flush_schemas, this))
                                                 .then(std::bind(&migrator::drop_legacy_tables, this))
                                                 .then([] { mlogger.info("Completed migration of legacy schema tables"); });
