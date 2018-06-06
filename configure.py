@@ -303,6 +303,7 @@ scylla_tests = [
     'tests/imr_test',
     'tests/partition_data_test',
     'tests/reusable_buffer_test',
+    'tests/multishard_writer_test',
 ]
 
 perf_tests = [
