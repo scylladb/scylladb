@@ -362,6 +362,7 @@ int main(int ac, char** av) {
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
 
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logging::apply_settings(cfg->logging_settings(opts));
 
             verify_rlimit(cfg->developer_mode());

@@ -282,6 +282,7 @@ public:
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
         return seastar::async([cfg_in, func] {
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
                 throw std::runtime_error("Starting more than one cql_test_env at a time not supported due to singletons.");

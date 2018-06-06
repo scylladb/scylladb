@@ -47,6 +47,11 @@ static auto x = [] {
 
 using namespace logalloc;
 
+// this test should be first in order to initialize logalloc for others
+SEASTAR_TEST_CASE(test_prime_logalloc) {
+    return prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory());
+}
+
 SEASTAR_TEST_CASE(test_compaction) {
     return seastar::async([] {
         region reg;
@@ -1244,7 +1249,7 @@ SEASTAR_TEST_CASE(test_zone_reclaiming_preserves_free_size) {
 // No point in testing contiguous memory allocation in debug mode
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
 SEASTAR_THREAD_TEST_CASE(test_can_reclaim_contiguous_memory_with_mixed_allocations) {
-    prime_segment_pool();  // if previous test cases muddied the pool
+    prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();  // if previous test cases muddied the pool
 
     region evictable;
     region non_evictable;
