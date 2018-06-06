@@ -2811,6 +2811,19 @@ void sstable_writer_m::maybe_set_pi_first_clustering(const clustering_key_prefix
     }
 }
 
+static deletion_time to_deletion_time(tombstone t) {
+    deletion_time dt;
+    if (t) {
+        dt.local_deletion_time = t.deletion_time.time_since_epoch().count();
+        dt.marked_for_delete_at = t.timestamp;
+    } else {
+        // Default values for live, non-deleted rows.
+        dt.local_deletion_time = std::numeric_limits<int32_t>::max();
+        dt.marked_for_delete_at = std::numeric_limits<int64_t>::min();
+    }
+    return dt;
+}
+
 void sstable_writer_m::add_pi_block() {
     _pi_write_m.promoted_index.push_back({
         *_pi_write_m.first_clustering,
@@ -2893,19 +2906,6 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _partition_header_length = _data_writer->offset() - _c_stats.start_offset;
 
     _tombstone_written = false;
-}
-
-deletion_time to_deletion_time(tombstone t) {
-    deletion_time dt;
-    if (t) {
-        dt.local_deletion_time = t.deletion_time.time_since_epoch().count();
-        dt.marked_for_delete_at = t.timestamp;
-    } else {
-        // Default values for live, non-deleted rows.
-        dt.local_deletion_time = std::numeric_limits<int32_t>::max();
-        dt.marked_for_delete_at = std::numeric_limits<int64_t>::min();
-    }
-    return dt;
 }
 
 void sstable_writer_m::consume(tombstone t) {
