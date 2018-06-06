@@ -626,6 +626,11 @@ public:
     void add(const schema& s, const position_range& r) {
         _set += make_interval(s, r);
     }
+    void add(const schema& s, const clustering_interval_set& other) {
+        for (auto&& r : other) {
+            add(s, r);
+        }
+    }
     position_range_iterator begin() const { return {_set.begin()}; }
     position_range_iterator end() const { return {_set.end()}; }
     friend std::ostream& operator<<(std::ostream&, const clustering_interval_set&);
