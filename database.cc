@@ -2105,9 +2105,9 @@ inline
 std::unique_ptr<compaction_manager>
 make_compaction_manager(db::config& cfg, database_config& dbcfg) {
     if (cfg.compaction_static_shares() > 0) {
-        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), cfg.compaction_static_shares());
+        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares());
     }
-    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority());
+    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory);
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
