@@ -351,7 +351,9 @@ public:
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
 
-            proxy.start(std::ref(*db), stdx::nullopt).get();
+            service::storage_proxy::config spcfg;
+            spcfg.available_memory = memory::stats().total_memory();
+            proxy.start(std::ref(*db), spcfg).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start().get();

@@ -75,6 +75,10 @@ using replicas_per_token_range = std::unordered_map<dht::token_range, std::vecto
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
+    struct config {
+        stdx::optional<std::vector<sstring>> hinted_handoff_enabled = {};
+        size_t available_memory;
+    };
 private:
     struct rh_entry {
         ::shared_ptr<abstract_write_response_handler> handler;
@@ -158,6 +162,7 @@ private:
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
+    uint64_t _background_write_throttle_threahsold;
 private:
     void uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -249,7 +254,7 @@ private:
     future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool);
     friend class mutate_executor;
 public:
-    storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled = {});
+    storage_proxy(distributed<database>& db, config cfg);
     ~storage_proxy();
     const distributed<database>& get_db() const {
         return _db;

@@ -590,7 +590,10 @@ int main(int ac, char** av) {
                     , phi
                     , cfg->listen_on_broadcast_address());
             supervisor::notify("starting storage proxy");
-            proxy.start(std::ref(db), hinted_handoff_enabled).get();
+            service::storage_proxy::config spcfg;
+            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
+            spcfg.available_memory = memory::stats().total_memory();
+            proxy.start(std::ref(db), spcfg).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
