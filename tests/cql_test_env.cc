@@ -329,7 +329,9 @@ public:
             ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            db->start(std::move(*cfg), database_config()).get();
+            database_config dbcfg;
+            dbcfg.available_memory = memory::stats().total_memory();
+            db->start(std::move(*cfg), dbcfg).get();
             auto stop_db = defer([db] {
                 db->stop().get();
             });

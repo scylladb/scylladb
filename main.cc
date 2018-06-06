@@ -493,6 +493,7 @@ int main(int ac, char** av) {
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.available_memory = memory::stats().total_memory();
             db.start(std::ref(*cfg), dbcfg).get();
             engine().at_exit([&db, &return_value] {
                 // #293 - do not stop anything - not even db (for real)

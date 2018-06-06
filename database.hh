@@ -1102,6 +1102,7 @@ struct database_config {
     seastar::scheduling_group compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
+    size_t available_memory;
 };
 
 // Policy for distributed<database>:
@@ -1113,14 +1114,14 @@ class database {
 private:
     ::cf_stats _cf_stats;
     static const size_t max_count_concurrent_reads{100};
-    static size_t max_memory_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    size_t max_memory_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     // Assume a queued read takes up 10kB of memory, and allow 2% of memory to be filled up with such reads.
-    static size_t max_inactive_queue_length() { return memory::stats().total_memory() * 0.02 / 10000; }
+    size_t max_inactive_queue_length() { return _dbcfg.available_memory * 0.02 / 10000; }
     // They're rather heavyweight, so limit more
     static const size_t max_count_streaming_concurrent_reads{10};
-    static size_t max_memory_streaming_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     static const size_t max_count_system_concurrent_reads{10};
-    static size_t max_memory_system_concurrent_reads() { return memory::stats().total_memory() * 0.02; };
+    size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
 
     struct db_stats {
@@ -1230,6 +1231,7 @@ public:
     }
 
     seastar::scheduling_group get_streaming_scheduling_group() const { return _dbcfg.streaming_scheduling_group; }
+    size_t get_available_memory() const { return _dbcfg.available_memory; }
 
     compaction_manager& get_compaction_manager() {
         return *_compaction_manager;
