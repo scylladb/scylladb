@@ -3261,7 +3261,10 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
 }
 
 stop_iteration sstable_writer_m::consume_end_of_partition() {
-    ensure_tombstone_is_written();
+    drain_tombstones();
+
+    write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
+
     if (!_pi_write_m.promoted_index.empty() && _pi_write_m.first_clustering) {
         add_pi_block();
     }
@@ -3273,8 +3276,6 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
     uint64_t pi_size = calculate_write_size(write_pi);
     write_vint(*_index_writer, pi_size);
     write_pi(*_index_writer);
-
-    write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
