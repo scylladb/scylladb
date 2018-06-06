@@ -52,6 +52,7 @@ void init_ms_fd_gossiper(sstring listen_address_in
                 , bool ms_client_auth
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
+                , size_t available_memory
                 , sstring cluster_name
                 , double phi
                 , bool sltba)
@@ -109,7 +110,8 @@ void init_ms_fd_gossiper(sstring listen_address_in
     // Init messaging_service
     // Delay listening messaging_service until gossip message handlers are registered
     bool listen_now = false;
-    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, sltba, listen_now).get();
+    netw::messaging_service::memory_config mcfg = { std::max<size_t>(0.08 * available_memory, 1'000'000) };
+    netw::get_messaging_service().start(listen, storage_port, ew, cw, tndw, ssl_storage_port, creds, mcfg, sltba, listen_now).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return netw::get_messaging_service().stop(); });

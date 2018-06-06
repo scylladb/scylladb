@@ -586,6 +586,7 @@ int main(int ac, char** av) {
                     , clauth
                     , cfg->internode_compression()
                     , seed_provider
+                    , memory::stats().total_memory()
                     , cluster_name
                     , phi
                     , cfg->listen_on_broadcast_address());

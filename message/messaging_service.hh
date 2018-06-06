@@ -180,6 +180,10 @@ public:
         all,
     };
 
+    struct memory_config {
+        size_t rpc_memory_limit = 1'000'000;
+    };
+
 private:
     gms::inet_address _listen_address;
     uint16_t _port;
@@ -198,6 +202,7 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _stopping = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
+    memory_config _mcfg;
 
 public:
     using clock_type = lowres_clock;
@@ -206,7 +211,7 @@ public:
             uint16_t port = 7000, bool listen_now = true);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            bool sltba = false, bool listen_now = true);
+            memory_config mcfg, bool sltba = false, bool listen_now = true);
     ~messaging_service();
 public:
     void start_listen();

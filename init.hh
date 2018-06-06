@@ -50,6 +50,7 @@ void init_ms_fd_gossiper(sstring listen_address
                 , bool ms_client_auth
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
+                , size_t available_memory
                 , sstring cluster_name = "Test Cluster"
                 , double phi = 8
                 , bool sltba = false);

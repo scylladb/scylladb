@@ -240,16 +240,16 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, false, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000}, false, listen_now)
 {}
 
 static
 rpc::resource_limits
-rpc_resource_limits() {
+rpc_resource_limits(size_t memory_limit) {
     rpc::resource_limits limits;
     limits.bloat_factor = 3;
     limits.basic_request_size = 1000;
-    limits.max_memory = std::max<size_t>(0.08 * memory::stats().total_memory(), 1'000'000);
+    limits.max_memory = memory_limit;
     return limits;
 }
 
@@ -266,7 +266,7 @@ void messaging_service::start_listen() {
         auto listen = [&] (const gms::inet_address& a) {
             auto addr = ipv4_addr{a.raw_addr(), _port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
-                    so, addr, rpc_resource_limits()));
+                    so, addr, rpc_resource_limits(_mcfg.rpc_memory_limit)));
         };
         _server[0] = listen(_listen_address);
         if (listen_to_bc) {
@@ -309,6 +309,7 @@ messaging_service::messaging_service(gms::inet_address ip
         , tcp_nodelay_what tnw
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
+        , messaging_service::memory_config mcfg
         , bool sltba
         , bool listen_now)
     : _listen_address(ip)
@@ -320,6 +321,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _should_listen_to_broadcast_address(sltba)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
+    , _mcfg(mcfg)
 {
     _rpc->set_logger([] (const sstring& log) {
             rpc_logger.info("{}", log);
