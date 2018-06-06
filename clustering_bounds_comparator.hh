@@ -32,10 +32,7 @@
 enum class bound_kind : uint8_t {
     excl_end = 0,
     incl_start = 1,
-    excl_end_incl_start = 2,
-    static_clustering = 3,
-    clustering = 4,
-    incl_end_excl_start = 5,
+    // values 2 to 5 are reserved for forward Origin compatibility
     incl_end = 6,
     excl_start = 7,
 };

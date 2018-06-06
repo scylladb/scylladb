@@ -2629,6 +2629,20 @@ enum class row_extended_flags : uint8_t {
     has_shadowable_deletion = 0x02,
 };
 
+// This enum corresponds to Origin's ClusteringPrefix.Kind.
+// It is a superset of values of the bound_kind enum
+// declared in clustering_bounds_comparator.hh
+enum class bound_kind_m : uint8_t {
+    excl_end = 0,
+    incl_start = 1,
+    excl_end_incl_start = 2,
+    static_clustering = 3,
+    clustering = 4,
+    incl_end_excl_start = 5,
+    incl_end = 6,
+    excl_start = 7,
+};
+
 // Used for writing SSTables in 'mc' format.
 class sstable_writer_m : public sstable_writer::writer_impl {
 private:
@@ -3206,12 +3220,12 @@ stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
 }
 
 // Write clustering prefix along with its bound kind and, if not full, its size
-static void write_clustering_prefix(file_writer& writer, bound_kind kind,
+static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
         const schema& s, const clustering_key_prefix& clustering) {
-    assert(kind != bound_kind::static_clustering);
+    assert(kind != bound_kind_m::static_clustering);
     write(sstable_version_types::mc, writer, kind);
     auto is_ephemerally_full = ephemerally_full_prefix{s.is_compact_table()};
-    if (kind != bound_kind::clustering) {
+    if (kind != bound_kind_m::clustering) {
         // Don't use ephemerally full for RT bounds as they're always non-full
         is_ephemerally_full = ephemerally_full_prefix::no;
         write(sstable_version_types::mc, writer, static_cast<uint16_t>(clustering.size(s)));
@@ -3232,8 +3246,8 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
     uint64_t start = writer.offset();
     for (const pi_block& block: _pi_write_m.promoted_index) {
         offsets.push_back(writer.offset() - start);
-        write_clustering_prefix(writer, bound_kind::clustering, _schema, block.first);
-        write_clustering_prefix(writer, bound_kind::clustering, _schema, block.last);
+        write_clustering_prefix(writer, bound_kind_m::clustering, _schema, block.first);
+        write_clustering_prefix(writer, bound_kind_m::clustering, _schema, block.last);
         write_vint(writer, block.offset);
         write_signed_vint(writer, block.width - width_base);
         // TODO: serialize end open marker here later, for now always write "false"
