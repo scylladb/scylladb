@@ -102,6 +102,7 @@ public:
     class migration_subscriber;
     struct memory_config {
         size_t prepared_statment_cache_size = 0;
+        size_t authorized_prepared_cache_size = 0;
     };
 
 private:

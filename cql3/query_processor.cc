@@ -101,7 +101,7 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
         , _authorized_prepared_cache(std::min(std::chrono::milliseconds(_db.local().get_config().permissions_validity_in_ms()),
                                               std::chrono::duration_cast<std::chrono::milliseconds>(prepared_statements_cache::entry_expiry)),
                                      std::chrono::milliseconds(_db.local().get_config().permissions_update_interval_in_ms()),
-                                     authorized_prepared_statements_cache_log) {
+                                     mcfg.authorized_prepared_cache_size, authorized_prepared_statements_cache_log) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group(
