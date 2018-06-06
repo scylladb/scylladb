@@ -3359,3 +3359,41 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_reading_progress_with_small_buffer_and_invalidation) {
+    return seastar::async([] {
+        simple_schema s;
+        cache_tracker tracker;
+        memtable_snapshot_source underlying(s.schema());
+        row_cache cache(s.schema(), snapshot_source([&] { return underlying(); }), tracker);
+
+        auto m1 = s.new_mutation("pk");
+        auto result = s.new_mutation("pk");
+
+        s.delete_range(m1, s.make_ckey_range(3, 10));
+        s.delete_range(m1, s.make_ckey_range(4, 10));
+        s.add_row(m1, s.make_ckey(6), "v");
+
+        apply(cache, underlying, m1);
+        cache.evict();
+
+        auto pkr = dht::partition_range::make_singular(m1.decorated_key());
+
+        populate_range(cache, pkr, s.make_ckey_range(5, 7));
+        populate_range(cache, pkr, s.make_ckey_range(4, 7));
+        populate_range(cache, pkr, s.make_ckey_range(3, 7));
+
+        auto rd3 = cache.make_reader(s.schema(), pkr);
+        rd3.set_max_buffer_size(1);
+
+        while (!rd3.is_end_of_stream()) {
+            tracker.allocator().invalidate_references();
+            rd3.fill_buffer().get();
+            while (!rd3.is_buffer_empty()) {
+                result.partition().apply(*s.schema(), rd3.pop_mutation_fragment());
+            }
+        }
+
+        assert_that(result).is_equal_to(m1);
+    });
+}

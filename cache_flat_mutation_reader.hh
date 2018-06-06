@@ -86,6 +86,11 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     partition_snapshot_row_cursor _next_row;
     bool _next_row_in_range = false;
 
+    // Whether _lower_bound was changed within current fill_buffer().
+    // If it did not then we cannot break out of it (e.g. on preemption) because
+    // forward progress is not guaranteed in case iterators are getting constantly invalidated.
+    bool _lower_bound_changed = false;
+
     future<> do_fill_buffer(db::timeout_clock::time_point);
     void copy_from_cache_to_buffer();
     future<> process_static_row(db::timeout_clock::time_point);
@@ -253,9 +258,13 @@ future<> cache_flat_mutation_reader::do_fill_buffer(db::timeout_clock::time_poin
         }
         _next_row.maybe_refresh();
         clogger.trace("csm {}: next={}, cont={}", this, _next_row.position(), _next_row.continuous());
-        while (!is_buffer_full() && _state == state::reading_from_cache) {
+        _lower_bound_changed = false;
+        while (_state == state::reading_from_cache) {
             copy_from_cache_to_buffer();
-            if (need_preempt()) {
+            // We need to check _lower_bound_changed even if is_buffer_full() because
+            // we may have emitted only a range tombstone which overlapped with _lower_bound
+            // and thus didn't cause _lower_bound to change.
+            if ((need_preempt() || is_buffer_full()) && _lower_bound_changed) {
                 break;
             }
         }
@@ -460,15 +469,19 @@ void cache_flat_mutation_reader::copy_from_cache_to_buffer() {
     _next_row.touch();
     position_in_partition_view next_lower_bound = _next_row.dummy() ? _next_row.position() : position_in_partition_view::after_key(_next_row.key());
     for (auto &&rts : _snp->range_tombstones(_lower_bound, _next_row_in_range ? next_lower_bound : _upper_bound)) {
+        position_in_partition::less_compare less(*_schema);
         // This guarantees that rts starts after any emitted clustering_row
         // and not before any emitted range tombstone.
-        if (rts.trim_front(*_schema, _lower_bound)) {
+        if (!less(_lower_bound, rts.position())) {
+            rts.set_start(*_schema, _lower_bound);
+        } else {
             _lower_bound = position_in_partition(rts.position());
+            _lower_bound_changed = true;
             if (is_buffer_full()) {
                 return;
             }
-            push_mutation_fragment(std::move(rts));
         }
+        push_mutation_fragment(std::move(rts));
     }
     // We add the row to the buffer even when it's full.
     // This simplifies the code. For more info see #3139.
@@ -505,6 +518,7 @@ void cache_flat_mutation_reader::move_to_range(query::clustering_row_ranges::con
     _last_row = nullptr;
     _lower_bound = std::move(lb);
     _upper_bound = std::move(ub);
+    _lower_bound_changed = true;
     _ck_ranges_curr = next_it;
     auto adjacent = _next_row.advance_to(_lower_bound);
     _next_row_in_range = !after_current_range(_next_row.position());
@@ -582,6 +596,7 @@ void cache_flat_mutation_reader::add_clustering_row_to_buffer(mutation_fragment&
     auto new_lower_bound = position_in_partition::after_key(row.key());
     push_mutation_fragment(std::move(mf));
     _lower_bound = std::move(new_lower_bound);
+    _lower_bound_changed = true;
 }
 
 inline
@@ -589,10 +604,16 @@ void cache_flat_mutation_reader::add_to_buffer(range_tombstone&& rt) {
     clogger.trace("csm {}: add_to_buffer({})", this, rt);
     // This guarantees that rt starts after any emitted clustering_row
     // and not before any emitted range tombstone.
-    if (!rt.trim_front(*_schema, _lower_bound)) {
+    position_in_partition::less_compare less(*_schema);
+    if (!less(_lower_bound, rt.end_position())) {
         return;
     }
-    _lower_bound = position_in_partition(rt.position());
+    if (!less(_lower_bound, rt.position())) {
+        rt.set_start(*_schema, _lower_bound);
+    } else {
+        _lower_bound = position_in_partition(rt.position());
+        _lower_bound_changed = true;
+    }
     push_mutation_fragment(std::move(rt));
 }
 
