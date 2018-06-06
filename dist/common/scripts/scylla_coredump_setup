@@ -31,9 +31,9 @@ done
 
 if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
     apt-get remove -y apport-noui
-    sysctl -p /etc/sysctl.d/99-scylla.conf
+    sysctl -p /etc/sysctl.d/99-scylla-coredump.conf
 elif [ "$ID" = "debian" ] || [ "$ID" = "gentoo" ]; then
-    sysctl -p /etc/sysctl.d/99-scylla.conf
+    sysctl -p /etc/sysctl.d/99-scylla-coredump.conf
 else
     if [ "$ID" = "ubuntu" ]; then
         apt-get install -y systemd-coredump
