@@ -1195,6 +1195,7 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
+    opts.insert({"SCYLLA_SHARD", sprint("%d", engine().cpu_id())});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);
     return response;
