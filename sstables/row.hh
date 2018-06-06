@@ -529,8 +529,6 @@ private:
         CK_BLOCK,
         CK_BLOCK_HEADER,
         CK_BLOCK2,
-        CK_BLOCK_VALUE_LENGTH,
-        CK_BLOCK_VALUE_BYTES,
         CK_BLOCK_END,
         CLUSTERING_ROW_CONSUME,
         ROW_BODY,
@@ -655,7 +653,6 @@ public:
                 || _state == state::EXTENDED_FLAGS
                 || _state == state::CLUSTERING_ROW
                 || _state == state::CK_BLOCK_HEADER
-                || _state == state::CK_BLOCK_VALUE_LENGTH
                 || _state == state::CK_BLOCK_END
                 || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
@@ -767,31 +764,23 @@ public:
         case state::CK_BLOCK_HEADER:
             _ck_blocks_header = _u64;
         case state::CK_BLOCK2:
-        ck_block2_label:
+        ck_block2_label: {
             if (is_block_empty()) {
                 _row_key.push_back({});
                 move_to_next_ck_block();
                 goto ck_block_label;
             }
+            read_status status = read_status::waiting;
             if (auto len = get_ck_block_value_length()) {
-                _column_value_length = *len;
-                _column_value = temporary_buffer<char>(_column_value_length);
-                _state = state::CK_BLOCK_VALUE_BYTES;
-                goto ck_block_value_bytes_label;
+                status = read_bytes(data, *len, _column_value);
+            } else {
+                status = read_unsigned_vint_length_bytes(data, _column_value);
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::CK_BLOCK_VALUE_LENGTH;
-                break;
-            }
-        case state::CK_BLOCK_VALUE_LENGTH:
-            _column_value_length = static_cast<uint32_t>(_u64);
-            _column_value = temporary_buffer<char>(_column_value_length);
-        case state::CK_BLOCK_VALUE_BYTES:
-        ck_block_value_bytes_label:
-            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+            if (status != read_status::ready) {
                 _state = state::CK_BLOCK_END;
                 break;
             }
+        }
         case state::CK_BLOCK_END:
             _row_key.push_back(std::move(_column_value));
             move_to_next_ck_block();
