@@ -2148,6 +2148,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _querier_cache(dbcfg.available_memory * 0.04)
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
+    , _result_memory_limiter(dbcfg.available_memory / 10)
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
     _compaction_manager->start();
