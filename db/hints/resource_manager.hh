@@ -119,8 +119,8 @@ public:
     static size_t max_shard_disk_space_size;
 
 public:
-    resource_manager()
-        : _max_send_in_flight_memory(std::max(memory::stats().total_memory() / 10, max_hints_send_queue_length))
+    resource_manager(size_t max_send_in_flight_memory)
+        : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _send_limiter(_max_send_in_flight_memory)
         , _space_watchdog(_shard_managers)

@@ -635,6 +635,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg)
     : _db(db)
+    , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _background_write_throttle_threahsold(cfg.available_memory / 10) {
     namespace sm = seastar::metrics;
