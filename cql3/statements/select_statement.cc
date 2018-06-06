@@ -489,10 +489,7 @@ select_statement::execute(service::storage_proxy& proxy,
 // partition are requested separately. This last case can be easily improved,
 // but to implement the general case (multiple rows from multiple partitions)
 // efficiently, we will need more support from other layers.
-// Note that currently we do not make any assumptions on the order of the keys
-// given to this function, for more efficient implementation with a large
-// list, we should probably require that the keys be ordered in token order
-// (see also issue #3423).
+// Keys are ordered in token order (see #3423)
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy,
                           lw_shared_ptr<query::read_command> cmd,
@@ -772,9 +769,8 @@ read_posting_list(service::storage_proxy& proxy,
             {timeout, state.get_trace_state()});
 }
 
-// Note: the partitions keys returned by this function will be sorted in
-// lexicographical order of the partition key columns (in the way that
-// clustering keys are sorted) - NOT in token order. See issue #3423.
+// Note: the partitions keys returned by this function are sorted
+// in token order. See issue #3423.
 future<dht::partition_range_vector>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
@@ -827,10 +823,8 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
     });
 }
 
-
-// Note: the partitions keys returned by this function will be sorted in
-// lexicographical order of the partition key columns (in the way that
-// clustering keys are sorted) - NOT in token order. See issue #3423.
+// Note: the partitions keys returned by this function are sorted
+// in token order. See issue #3423.
 future<std::vector<indexed_table_select_statement::primary_key>>
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
 {

@@ -98,6 +98,16 @@ static sstring index_table_name(const sstring& index_name) {
     return sprint("%s_index", index_name);
 }
 
+static bytes get_available_token_column_name(const schema& schema) {
+    bytes base_name = "idx_token";
+    bytes accepted_name = base_name;
+    int i = 0;
+    while (schema.get_column_definition(accepted_name)) {
+        accepted_name = base_name + to_bytes("_")+ to_bytes(std::to_string(++i));
+    }
+    return accepted_name;
+}
+
 view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
     auto schema = _cf.schema();
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
@@ -109,6 +119,9 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         throw std::runtime_error(sprint("Unsupported index target type: %s", to_sstring(target_type)));
     }
     builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
+    // Additional token column is added to ensure token order on secondary index queries
+    bytes token_column_name = get_available_token_column_name(*schema);
+    builder.with_column(token_column_name, bytes_type, column_kind::clustering_key);
     for (auto& col : schema->partition_key_columns()) {
         if (col == *index_target) {
             continue;
