@@ -2950,3 +2950,42 @@ SEASTAR_TEST_CASE(test_long_text_value) {
         assert_that(msg).is_rows().with_rows({{utf8_type->decompose(bigger_one), utf8_type->decompose(bigger_one)}});
     });
 }
+
+SEASTAR_TEST_CASE(test_time_conversions) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto prepared = e.execute_cql(
+            "CREATE TABLE time_data (id timeuuid PRIMARY KEY, d date, ts timestamp);").get();
+        e.require_table_exists("ks", "time_data").get();
+
+        e.execute_cql("INSERT INTO time_data (id, d, ts) VALUES (f4e30f80-6958-11e8-96d6-000000000000, '2017-06-11', '2018-06-05 00:00:00+0000');").get();
+
+        struct tm t = { 0 };
+        t.tm_year = 2018 - 1900;
+        t.tm_mon = 6 - 1;
+        t.tm_mday = 6;
+        t.tm_hour = 7;
+        t.tm_min = 12;
+        t.tm_sec = 22;
+        auto tp1 = db_clock::from_time_t(timegm(&t)) + std::chrono::milliseconds(136);
+        t.tm_year = 2017 - 1900;
+        t.tm_mday = 11;
+        t.tm_hour = 0;
+        t.tm_min = 0;
+        t.tm_sec = 0;
+        auto tp2 = db_clock::from_time_t(timegm(&t));
+
+        auto msg = e.execute_cql("select todate(id), todate(ts), totimestamp(id), totimestamp(d), tounixtimestamp(id),"
+                                 "tounixtimestamp(ts), tounixtimestamp(d), tounixtimestamp(totimestamp(todate(totimestamp(todate(id))))) from time_data;").get0();
+        assert_that(msg).is_rows().with_rows({{
+            simple_date_type->decompose(int32_t(0x80004518)),
+            simple_date_type->decompose(int32_t(0x80004517)),
+            timestamp_type->decompose(tp1),
+            timestamp_type->decompose(tp2),
+            long_type->decompose(int64_t(1528269142136)),
+            long_type->decompose(int64_t(1528156800000)),
+            long_type->decompose(int64_t(1497139200000)),
+            long_type->decompose(int64_t(1528243200000))
+        }});
+
+    });
+}
