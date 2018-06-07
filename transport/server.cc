@@ -1511,15 +1511,6 @@ cql3::raw_value_view cql_server::connection::read_value_view(bytes_view& buf) {
     return cql3::raw_value_view::make_value(std::move(bv));
 }
 
-scattered_message<char> cql_server::response::make_message(uint8_t version) {
-    scattered_message<char> msg;
-    sstring body{_body.data(), _body.size()};
-    sstring frame = make_frame(version, _body.size());
-    msg.append(std::move(frame));
-    msg.append(std::move(body));
-    return msg;
-}
-
 future<>
 cql_server::response::output(output_stream<char>& out, uint8_t version, cql_compression compression) {
     if (compression != cql_compression::none) {
