@@ -61,6 +61,13 @@ namespace cql_transport {
 
 static logging::logger clogger("cql_server");
 
+cql_server::connection::processing_result::processing_result(response_type r)
+    : cql_response(make_foreign(std::move(r.first)))
+    , keyspace(r.second.is_dirty() ? make_foreign(std::make_unique<sstring>(std::move(r.second.get_raw_keyspace()))) : nullptr)
+    , user(r.second.user_is_dirty() ? make_foreign(r.second.user()) : nullptr)
+    , auth_state(r.second.get_auth_state())
+{}
+
 struct cql_frame_error : std::exception {
     const char* what() const throw () override {
         return "bad cql binary frame";
@@ -770,9 +777,9 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
          tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
          return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
-    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
         /* Keep q_state alive. */
-        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
+        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
     });
 }
 
@@ -803,9 +810,9 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
             }));
             return this->make_result(stream, msg, cs.get_trace_state());
         });
-    }).then([client_state = std::move(client_state)] (auto&& response) {
+    }).then([client_state = std::move(client_state)] (std::unique_ptr<cql_server::response> response) {
         /* keep client_state alive */
-        return make_ready_future<response_type>(std::make_pair(response, *client_state));
+        return make_ready_future<response_type>(std::make_pair(std::move(response), *client_state));
     });
 }
 
@@ -861,10 +868,10 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
-    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
         /* Keep q_state alive. */
         tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
+        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
     });
 }
 
@@ -961,10 +968,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), _server._query_processor.local().get_cql_stats());
     return _server._query_processor.local().process_batch(batch, query_state, options, std::move(pending_authorization_entries)).then([this, stream, batch, &query_state] (auto msg) {
         return this->make_result(stream, msg, query_state.get_trace_state());
-    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), this] (std::unique_ptr<cql_server::response> response) {
         /* Keep q_state alive. */
         tracing::stop_foreground_prepared(query_state.get_trace_state(), q_state->options.get());
-        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
+        return make_ready_future<response_type>(std::make_pair(std::move(response), query_state.get_client_state()));
     });
 }
 
@@ -980,9 +987,9 @@ cql_server::connection::process_register(uint16_t stream, bytes_view buf, servic
     return make_ready_future<response_type>(std::make_pair(make_ready(stream, client_state.get_trace_state()), client_state));
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_consistency(cl);
@@ -991,9 +998,9 @@ shared_ptr<cql_server::response> cql_server::connection::make_unavailable_error(
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_consistency(cl);
@@ -1003,12 +1010,12 @@ shared_ptr<cql_server::response> cql_server::connection::make_read_timeout_error
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state)
 {
     if (_version < 4) {
         return make_read_timeout_error(stream, err, std::move(msg), cl, received, blockfor, data_present, tr_state);
     }
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_consistency(cl);
@@ -1019,9 +1026,9 @@ shared_ptr<cql_server::response> cql_server::connection::make_read_failure_error
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_consistency(cl);
@@ -1031,12 +1038,12 @@ shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_tim
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state)
 {
     if (_version < 4) {
         return make_mutation_write_timeout_error(stream, err, std::move(msg), cl, received, blockfor, type, tr_state);
     }
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_consistency(cl);
@@ -1047,9 +1054,9 @@ shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_fai
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_string(ks_name);
@@ -1057,55 +1064,55 @@ shared_ptr<cql_server::response> cql_server::connection::make_already_exists_err
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     response->write_short_bytes(id);
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_error(int16_t stream, exceptions::exception_code err, sstring msg, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::ERROR, tr_state);
     response->write_int(static_cast<int32_t>(err));
     response->write_string(msg);
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_ready(int16_t stream, const tracing::trace_state_ptr& tr_state)
 {
-    return make_shared<cql_server::response>(stream, cql_binary_opcode::READY, tr_state);
+    return std::make_unique<cql_server::response>(stream, cql_binary_opcode::READY, tr_state);
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_autheticate(int16_t stream, const sstring& clz, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_autheticate(int16_t stream, const sstring& clz, const tracing::trace_state_ptr& tr_state)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTHENTICATE, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::AUTHENTICATE, tr_state);
     response->write_string(clz);
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_auth_success(int16_t stream, bytes b, const tracing::trace_state_ptr& tr_state) {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTH_SUCCESS, tr_state);
+std::unique_ptr<cql_server::response> cql_server::connection::make_auth_success(int16_t stream, bytes b, const tracing::trace_state_ptr& tr_state) {
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::AUTH_SUCCESS, tr_state);
     response->write_bytes(std::move(b));
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_auth_challenge(int16_t stream, bytes b, const tracing::trace_state_ptr& tr_state) {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTH_CHALLENGE, tr_state);
+std::unique_ptr<cql_server::response> cql_server::connection::make_auth_challenge(int16_t stream, bytes b, const tracing::trace_state_ptr& tr_state) {
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::AUTH_CHALLENGE, tr_state);
     response->write_bytes(std::move(b));
     return response;
 }
 
-shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state)
+std::unique_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream, const tracing::trace_state_ptr& tr_state)
 {
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "lz4"});
     opts.insert({"COMPRESSION", "snappy"});
     opts.insert({"SCYLLA_SHARD", sprint("%d", engine().cpu_id())});
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::SUPPORTED, tr_state);
     response->write_string_multimap(opts);
     return response;
 }
@@ -1113,30 +1120,30 @@ shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t 
 class cql_server::fmt_visitor : public messages::result_message::visitor_base {
 private:
     uint8_t _version;
-    shared_ptr<cql_server::response> _response;
+    cql_server::response& _response;
     bool _skip_metadata;
 public:
-    fmt_visitor(uint8_t version, shared_ptr<cql_server::response> response, bool skip_metadata)
+    fmt_visitor(uint8_t version, cql_server::response& response, bool skip_metadata)
         : _version{version}
         , _response{response}
         , _skip_metadata{skip_metadata}
     { }
 
     virtual void visit(const messages::result_message::void_message&) override {
-        _response->write_int(0x0001);
+        _response.write_int(0x0001);
     }
 
     virtual void visit(const messages::result_message::set_keyspace& m) override {
-        _response->write_int(0x0003);
-        _response->write_string(m.get_keyspace());
+        _response.write_int(0x0003);
+        _response.write_string(m.get_keyspace());
     }
 
     virtual void visit(const messages::result_message::prepared::cql& m) override {
-        _response->write_int(0x0004);
-        _response->write_short_bytes(m.get_id());
-        _response->write(*m.metadata(), _version);
+        _response.write_int(0x0004);
+        _response.write_short_bytes(m.get_id());
+        _response.write(*m.metadata(), _version);
         if (_version > 1) {
-            _response->write(*m.result_metadata());
+            _response.write(*m.result_metadata());
         }
     }
 
@@ -1145,8 +1152,8 @@ public:
         switch (change->type) {
         case event::event_type::SCHEMA_CHANGE: {
             auto sc = static_pointer_cast<event::schema_change>(change);
-            _response->write_int(0x0005);
-            _response->serialize(*sc, _version);
+            _response.write_int(0x0005);
+            _response.serialize(*sc, _version);
             break;
         }
         default:
@@ -1155,57 +1162,57 @@ public:
     }
 
     virtual void visit(const messages::result_message::rows& m) override {
-        _response->write_int(0x0002);
+        _response.write_int(0x0002);
         auto& rs = m.rs();
-        _response->write(rs.get_metadata(), _skip_metadata);
-        _response->write_int(rs.size());
+        _response.write(rs.get_metadata(), _skip_metadata);
+        _response.write_int(rs.size());
         for (auto&& row : rs.rows()) {
             for (auto&& cell : row | boost::adaptors::sliced(0, rs.get_metadata().column_count())) {
-                _response->write_value(cell);
+                _response.write_value(cell);
             }
         }
     }
 };
 
-shared_ptr<cql_server::response>
+std::unique_ptr<cql_server::response>
 cql_server::connection::make_result(int16_t stream, shared_ptr<messages::result_message> msg, const tracing::trace_state_ptr& tr_state, bool skip_metadata)
 {
-    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
-    fmt_visitor fmt{_version, response, skip_metadata};
+    auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
+    fmt_visitor fmt{_version, *response, skip_metadata};
     msg->accept(fmt);
     return response;
 }
 
-shared_ptr<cql_server::response>
+std::unique_ptr<cql_server::response>
 cql_server::connection::make_topology_change_event(const event::topology_change& event)
 {
-    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("TOPOLOGY_CHANGE");
     response->write_string(to_string(event.change));
     response->write_inet(event.node);
     return response;
 }
 
-shared_ptr<cql_server::response>
+std::unique_ptr<cql_server::response>
 cql_server::connection::make_status_change_event(const event::status_change& event)
 {
-    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("STATUS_CHANGE");
     response->write_string(to_string(event.status));
     response->write_inet(event.node);
     return response;
 }
 
-shared_ptr<cql_server::response>
+std::unique_ptr<cql_server::response>
 cql_server::connection::make_schema_change_event(const event::schema_change& event)
 {
-    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
+    auto response = std::make_unique<cql_server::response>(-1, cql_binary_opcode::EVENT, tracing::trace_state_ptr());
     response->write_string("SCHEMA_CHANGE");
     response->serialize(event, _version);
     return response;
 }
 
-void cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response, cql_compression compression)
+void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response)] () mutable {
         return do_with(std::move(response), [this, compression] (auto& response) {

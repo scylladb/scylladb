@@ -23,6 +23,7 @@
 #include "core/gate.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
+#include "transport/response.hh"
 
 namespace cql_transport {
 
