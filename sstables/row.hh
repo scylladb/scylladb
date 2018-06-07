@@ -155,10 +155,16 @@ public:
     virtual proceed consume_static_row_start() = 0;
 
     virtual proceed consume_column(stdx::optional<column_id> column_id,
+                                   bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time) = 0;
+
+    virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
+                                                 tombstone tomb) = 0;
+
+    virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) = 0;
 
     virtual proceed consume_row_end(const sstables::liveness_info&) = 0;
 
@@ -972,6 +978,7 @@ public:
         column_end_label:
             _state = state::NEXT_COLUMN;
             if (_consumer.consume_column(get_column_id(),
+                                         to_bytes_view(_cell_path),
                                          to_bytes_view(_column_value),
                                          _column_timestamp,
                                          _column_ttl,
