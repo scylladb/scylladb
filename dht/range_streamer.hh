@@ -119,8 +119,8 @@ public:
     }
 
     void add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
-    void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families = {});
-    void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families = {});
+    void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
+    void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
 private:
     bool use_strict_sources_for_ranges(const sstring& keyspace_name);
     /**
@@ -173,7 +173,6 @@ private:
     std::unordered_multimap<sstring, std::unordered_map<inet_address, dht::token_range_vector>> _to_stream;
     std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
     stream_plan _stream_plan;
-    std::unordered_map<sstring, std::vector<sstring>> _column_families;
     // Retry the stream plan _nr_max_retry times
     unsigned _nr_retried = 0;
     unsigned _nr_max_retry = 5;

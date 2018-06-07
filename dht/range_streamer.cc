@@ -210,28 +210,20 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
 }
 
-void range_streamer::add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families) {
+void range_streamer::add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint) {
     if (_nr_rx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_tx_added++;
     _to_stream.emplace(keyspace_name, std::move(ranges_per_endpoint));
-    auto inserted = _column_families.emplace(keyspace_name, std::move(column_families)).second;
-    if (!inserted) {
-        throw std::runtime_error("Can not add column_families for the same keyspace more than once");
-    }
 }
 
-void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint, std::vector<sstring> column_families) {
+void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint) {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_rx_added++;
     _to_stream.emplace(keyspace_name, std::move(ranges_per_endpoint));
-    auto inserted = _column_families.emplace(keyspace_name, std::move(column_families)).second;
-    if (!inserted) {
-        throw std::runtime_error("Can not add column_families for the same keyspace more than once");
-    }
 }
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
@@ -307,9 +299,9 @@ future<> range_streamer::do_stream_async() {
                     logger.info("{} with {} for keyspace={}, {} out of {} ranges: ranges = {}",
                             description, source, keyspace, nr_ranges_streamed, nr_ranges_total, ranges_to_stream.size());
                     if (_nr_rx_added) {
-                        sp.request_ranges(source, keyspace, ranges_to_stream, _column_families[keyspace]);
+                        sp.request_ranges(source, keyspace, ranges_to_stream);
                     } else if (_nr_tx_added) {
-                        sp.transfer_ranges(source, keyspace, ranges_to_stream, _column_families[keyspace]);
+                        sp.transfer_ranges(source, keyspace, ranges_to_stream);
                     }
                     sp.execute().discard_result().get();
                     ranges_to_stream.clear();
