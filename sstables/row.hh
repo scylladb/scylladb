@@ -553,6 +553,11 @@ private:
         COLUMN,
         SIMPLE_COLUMN,
         COMPLEX_COLUMN,
+        COMPLEX_COLUMN_MARKED_FOR_DELETE,
+        COMPLEX_COLUMN_LOCAL_DELETION_TIME,
+        COMPLEX_COLUMN_2,
+        COMPLEX_COLUMN_SIZE,
+        COMPLEX_COLUMN_SIZE_2,
         NEXT_COLUMN,
         COLUMN_FLAGS,
         COLUMN_TIMESTAMP,
@@ -597,6 +602,9 @@ private:
     temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
+    uint64_t _subcolumns_to_read = 0;
+    api::timestamp_type _complex_column_marked_for_delete;
+    tombstone _complex_column_tombstone;
 
     void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
                        const std::vector<std::optional<uint32_t>>& column_value_fix_lengths,
@@ -882,16 +890,19 @@ public:
             }
         case state::COLUMN:
         column_label:
-            if (no_more_columns()) {
-                _state = state::FLAGS;
-                if (_consumer.consume_row_end(_liveness) == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
+            if (_subcolumns_to_read == 0) {
+                if (no_more_columns()) {
+                    _state = state::FLAGS;
+                    if (_consumer.consume_row_end(_liveness) == consumer_m::proceed::no) {
+                        return consumer_m::proceed::no;
+                    }
+                    goto flags_label;
                 }
-                goto flags_label;
-            }
-            if (!is_column_simple()) {
-                _state = state::COMPLEX_COLUMN;
-                goto complex_column_label;
+                if (!is_column_simple()) {
+                    _state = state::COMPLEX_COLUMN;
+                    goto complex_column_label;
+                }
+                _subcolumns_to_read = 0;
             }
         case state::SIMPLE_COLUMN:
             if (read_8(data) != read_status::ready) {
@@ -986,8 +997,19 @@ public:
                 return consumer_m::proceed::no;
             }
         case state::NEXT_COLUMN:
-            move_to_next_column();
-            _state = state::COLUMN;
+            if (!is_column_simple()) {
+                --_subcolumns_to_read;
+                if (_subcolumns_to_read == 0) {
+                    auto id = get_column_id();
+                    move_to_next_column();
+                    if (_consumer.consume_complex_column_end(std::move(id)) != consumer_m::proceed::yes) {
+                        _state = state::COLUMN;
+                        return consumer_m::proceed::no;
+                    }
+                }
+            } else {
+                move_to_next_column();
+            }
             goto column_label;
         case state::ROW_BODY_MISSING_COLUMNS_2:
         row_body_missing_columns_2_label: {
@@ -1026,7 +1048,36 @@ public:
             goto row_body_missing_columns_read_columns_label;
         case state::COMPLEX_COLUMN:
         complex_column_label:
-            throw malformed_sstable_exception("unimplemented state: complex columns not supported");
+            if (!_flags.has_complex_deletion()) {
+                _complex_column_tombstone = {};
+                goto complex_column_2_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
+                break;
+            }
+        case state::COMPLEX_COLUMN_MARKED_FOR_DELETE:
+            _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
+                break;
+            }
+        case state::COMPLEX_COLUMN_LOCAL_DELETION_TIME:
+            _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
+        case state::COMPLEX_COLUMN_2:
+        complex_column_2_label:
+            if (_consumer.consume_complex_column_start(get_column_id(), _complex_column_tombstone) == consumer_m::proceed::no) {
+                _state = state::COMPLEX_COLUMN_SIZE;
+                return consumer_m::proceed::no;
+            }
+        case state::COMPLEX_COLUMN_SIZE:
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_SIZE_2;
+                break;
+            }
+        case state::COMPLEX_COLUMN_SIZE_2:
+            _subcolumns_to_read = _u64;
+            goto column_label;
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
             throw malformed_sstable_exception("unimplemented state");
