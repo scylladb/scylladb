@@ -1306,6 +1306,149 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_compound_ck_read) {
         .produces_end_of_stream();
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/collections
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, set_val set<int>, list_val list<text>, map_val map<int, text>, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, set_val, list_val, map_val)
+//                         VALUES(1, {1, 2, 3}, ['Text 1', 'Text 2', 'Text 3'], {1 : 'Text 1', 2 : 'Text 2', 3 : 'Text 3'});
+// INSERT INTO test_ks.test_table(pk, set_val, list_val, map_val)
+//                         VALUES(2, {4, 5, 6}, ['Text 4', 'Text 5', 'Text 6'], {4 : 'Text 4', 5 : 'Text 5', 6 : 'Text 6'});
+// INSERT INTO test_ks.test_table(pk, set_val, list_val, map_val)
+//                         VALUES(3, {7, 8, 9}, ['Text 7', 'Text 8', 'Text 9'], {7 : 'Text 7', 8 : 'Text 8', 9 : 'Text 9'});
+// INSERT INTO test_ks.test_table(pk, set_val, list_val, map_val)
+//                         VALUES(4, {10, 11, 12}, ['Text 10', 'Text 11', 'Text 12'], {10 : 'Text 10', 11 : 'Text 11', 12 : 'Text 12'});
+// INSERT INTO test_ks.test_table(pk, set_val, list_val, map_val)
+//                         VALUES(5, {13, 14, 15}, ['Text 13', 'Text 14', 'Text 15'], {13 : 'Text 13', 14 : 'Text 14', 15 : 'Text 15'});
+
+static thread_local const sstring UNCOMPRESSED_COLLECTIONS_PATH =
+    "tests/sstables/3.x/uncompressed/collections";
+static thread_local const schema_ptr UNCOMPRESSED_COLLECTIONS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("set_val", set_type_impl::get_instance(int32_type, true))
+        .with_column("list_val", list_type_impl::get_instance(utf8_type, true))
+        .with_column("map_val", map_type_impl::get_instance(int32_type, utf8_type, true))
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
+    sstable_assertions sst(UNCOMPRESSED_COLLECTIONS_SCHEMA, UNCOMPRESSED_COLLECTIONS_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_COLLECTIONS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COLLECTIONS_SCHEMA, pk);
+    };
+
+    auto set_cdef = UNCOMPRESSED_COLLECTIONS_SCHEMA->get_column_definition(to_bytes("set_val"));
+    BOOST_REQUIRE(set_cdef);
+
+    auto list_cdef = UNCOMPRESSED_COLLECTIONS_SCHEMA->get_column_definition(to_bytes("list_val"));
+    BOOST_REQUIRE(list_cdef);
+
+    auto map_cdef = UNCOMPRESSED_COLLECTIONS_SCHEMA->get_column_definition(to_bytes("map_val"));
+    BOOST_REQUIRE(map_cdef);
+
+    auto generate = [&] (std::vector<int> set_val, std::vector<sstring> list_val, std::vector<std::pair<int, sstring>> map_val) {
+        std::vector<flat_reader_assertions::assert_function> assertions;
+
+        assertions.push_back([val = std::move(set_val)] (const column_definition& def,
+                                                         const atomic_cell_or_collection* cell) {
+            BOOST_REQUIRE(def.is_multi_cell());
+            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            int idx = 0;
+            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
+                auto m_view = ctype->deserialize_mutation_form(c_bv);
+                for (auto&& entry : m_view.cells) {
+                    auto cmp = compare_unsigned(int32_type->decompose(int32_t(val[idx])), entry.first);
+                    if (cmp != 0) {
+                        BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
+                                          def.id,
+                                          int32_type->decompose(int32_t(val[idx])),
+                                          entry.first));
+                    }
+                    ++idx;
+                }
+            });
+        });
+
+        assertions.push_back([val = std::move(list_val)] (const column_definition& def,
+                                                          const atomic_cell_or_collection* cell) {
+            BOOST_REQUIRE(def.is_multi_cell());
+            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            int idx = 0;
+            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
+                auto m_view = ctype->deserialize_mutation_form(c_bv);
+                for (auto&& entry : m_view.cells) {
+                    auto cmp = compare_unsigned(utf8_type->decompose(val[idx]), entry.second.value().linearize());
+                    if (cmp != 0) {
+                        BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
+                                          def.id,
+                                          utf8_type->decompose(val[idx]),
+                                          entry.second.value().linearize()));
+                    }
+                    ++idx;
+                }
+            });
+        });
+
+        assertions.push_back([val = std::move(map_val)] (const column_definition& def,
+                                                         const atomic_cell_or_collection* cell) {
+            BOOST_REQUIRE(def.is_multi_cell());
+            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            int idx = 0;
+            cell->as_collection_mutation().data.with_linearized([&] (bytes_view c_bv) {
+                auto m_view = ctype->deserialize_mutation_form(c_bv);
+                for (auto&& entry : m_view.cells) {
+                    auto cmp1 = compare_unsigned(int32_type->decompose(int32_t(val[idx].first)), entry.first);
+                    auto cmp2 = compare_unsigned(utf8_type->decompose(val[idx].second), entry.second.value().linearize());
+                    if (cmp1 != 0 || cmp2 != 0) {
+                        BOOST_FAIL(
+                            sprint("Expected row with column %s having value (%s, %s), but it has value (%s, %s)",
+                                   def.id,
+                                   int32_type->decompose(int32_t(val[idx].first)),
+                                   utf8_type->decompose(val[idx].second),
+                                   entry.first,
+                                   entry.second.value().linearize()));
+                    }
+                    ++idx;
+                }
+            });
+        });
+
+        return std::move(assertions);
+    };
+
+    std::vector<column_id> ids{set_cdef->id, list_cdef->id, map_cdef->id};
+
+    assert_that(sst.read_rows_flat())
+    .produces_partition_start(to_key(5))
+    .produces_row(clustering_key_prefix::make_empty(), ids,
+            generate({13, 14, 15}, {"Text 13", "Text 14", "Text 15"}, {{13,"Text 13"}, {14,"Text 14"}, {15,"Text 15"}}))
+    .produces_partition_end()
+    .produces_partition_start(to_key(1))
+    .produces_row(clustering_key_prefix::make_empty(), ids,
+            generate({1, 2, 3}, {"Text 1", "Text 2", "Text 3"}, {{1,"Text 1"}, {2,"Text 2"}, {3,"Text 3"}}))
+    .produces_partition_end()
+    .produces_partition_start(to_key(2))
+    .produces_row(clustering_key_prefix::make_empty(), ids,
+            generate({4, 5, 6}, {"Text 4", "Text 5", "Text 6"}, {{4,"Text 4"}, {5,"Text 5"}, {6, "Text 6"}}))
+    .produces_partition_end()
+    .produces_partition_start(to_key(4))
+    .produces_row(clustering_key_prefix::make_empty(), ids,
+            generate({10, 11, 12}, {"Text 10", "Text 11", "Text 12"}, {{10,"Text 10"}, {11,"Text 11"}, {12,"Text 12"}}))
+    .produces_partition_end()
+    .produces_partition_start(to_key(3))
+    .produces_row(clustering_key_prefix::make_empty(), ids,
+            generate({7, 8, 9}, {"Text 7", "Text 8", "Text 9"}, {{7,"Text 7"}, {8,"Text 8"}, {9,"Text 9"}}))
+    .produces_partition_end()
+    .produces_end_of_stream();
+}
+
 static void compare_files(sstring filename1, sstring filename2) {
     std::ifstream ifs1(filename1);
     std::ifstream ifs2(filename2);
