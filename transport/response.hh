@@ -22,6 +22,7 @@
 #pragma once
 
 #include "server.hh"
+#include "utils/reusable_buffer.hh"
 
 namespace cql_transport {
 
@@ -90,9 +91,17 @@ public:
         return _opcode;
     }
 private:
+    // Reusable buffers for compression. Cleared every _clear_buffers_trigger
+    // uses.
+    static constexpr size_t _clear_buffers_trigger = 100'000;
+    static thread_local size_t _buffer_use_count;
+    static thread_local utils::reusable_buffer _input_buffer;
+    static thread_local utils::reusable_buffer _output_buffer;
+
     void compress(cql_compression compression);
     void compress_lz4();
     void compress_snappy();
+    void on_compression_buffer_use();
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, size_t length) {
