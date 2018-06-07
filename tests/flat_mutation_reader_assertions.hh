@@ -25,6 +25,7 @@
 #include <seastar/util/backtrace.hh>
 #include "flat_mutation_reader.hh"
 #include "mutation_assertions.hh"
+#include "schema.hh"
 
 // Intended to be called in a seastar thread
 class flat_reader_assertions {
@@ -150,13 +151,46 @@ public:
                 BOOST_FAIL(sprint("Expected row with column %s, but it is not present", columns[i].name));
             }
             auto& cdef = _reader.schema()->regular_column_at(columns[i].id);
+            assert (!cdef.is_multi_cell());
             auto cmp = compare_unsigned(columns[i].value, cell->as_atomic_cell(cdef).value().linearize());
             if (cmp != 0) {
                 BOOST_FAIL(sprint("Expected row with column %s having value %s, but it has value %s",
                                   columns[i].name,
                                   columns[i].value,
-                                  cell->as_atomic_cell(cdef).value()));
+                                  cell->as_atomic_cell(cdef).value().linearize()));
             }
+        }
+        return *this;
+    }
+
+    using assert_function = noncopyable_function<void(const column_definition&, const atomic_cell_or_collection*)>;
+
+    flat_reader_assertions& produces_row(const clustering_key& ck,
+                                         const std::vector<column_id>& column_ids,
+                                         const std::vector<assert_function>& column_assert) {
+        BOOST_TEST_MESSAGE(sprint("Expect %s", ck));
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got end of stream", ck));
+        }
+        if (!mfopt->is_clustering_row()) {
+            BOOST_FAIL(sprint("Expected row with key %s, but got %s", ck, *mfopt));
+        }
+        auto& actual = mfopt->as_clustering_row().key();
+        if (!actual.equal(*_reader.schema(), ck)) {
+            BOOST_FAIL(sprint("Expected row with key %s, but key is %s", ck, actual));
+        }
+        auto& cells = mfopt->as_clustering_row().cells();
+        if (cells.size() != column_ids.size()) {
+            BOOST_FAIL(sprint("Expected row with %s columns, but has %s", column_ids.size(), cells.size()));
+        }
+        for (size_t i = 0; i < column_ids.size(); ++i) {
+            const atomic_cell_or_collection* cell = cells.find_cell(column_ids[i]);
+            if (!cell) {
+                BOOST_FAIL(sprint("Expected row with column %d, but it is not present", column_ids[i]));
+            }
+            auto& cdef = _reader.schema()->regular_column_at(column_ids[i]);
+            column_assert[i](cdef, cell);
         }
         return *this;
     }
