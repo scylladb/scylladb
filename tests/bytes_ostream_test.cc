@@ -21,9 +21,15 @@
 
 #define BOOST_TEST_MODULE core
 
+#include <boost/range/algorithm/for_each.hpp>
+
+#include <seastar/util/variant_utils.hh>
+
 #include "bytes_ostream.hh"
 #include <boost/test/unit_test.hpp>
 #include "serializer_impl.hh"
+
+#include "tests/random-utils.hh"
 
 void append_sequence(bytes_ostream& buf, int count) {
     for (int i = 0; i < count; i++) {
@@ -274,4 +280,45 @@ BOOST_AUTO_TEST_CASE(test_append_big_and_small_chunks) {
     buf.append(small);
     buf.append(big);
     buf.append(small);
+}
+
+BOOST_AUTO_TEST_CASE(test_remove_suffix) {
+    auto test = [] (size_t length, size_t suffix) {
+        BOOST_TEST_MESSAGE("Testing buffer size " << length << " and suffix size " << suffix);
+
+        auto data = tests::random::get_bytes(length);
+        bytes_view view = data;
+
+        bytes_ostream bo;
+        bo.write(data);
+
+        bo.remove_suffix(suffix);
+        view.remove_suffix(suffix);
+
+        BOOST_REQUIRE(view == bytes_ostream(bo).linearize());
+        for (bytes_view fragment : bo) {
+            BOOST_REQUIRE_LE(fragment.size(), view.size());
+            BOOST_REQUIRE(fragment == bytes_view(view.data(), fragment.size()));
+            view.remove_prefix(fragment.size());
+        }
+        BOOST_REQUIRE_EQUAL(view.size(), 0);
+    };
+
+    test(0, 0);
+    test(16, 0);
+    test(1'000'000, 0);
+
+    test(16, 16);
+    test(1'000'000, 1'000'000);
+
+    test(16, 1);
+    test(16, 15);
+    test(1'000'000, 1);
+    test(1'000'000, 999'999);
+
+    for (auto i = 0; i < 25; i++) {
+        auto a = tests::random::get_int(128 * 1024);
+        auto b = tests::random::get_int(128 * 1024);
+        test(std::max(a, b), std::min(a, b));
+    }
 }

@@ -290,6 +290,24 @@ public:
         }
     }
 
+    // Removes n bytes from the end of the bytes_ostream.
+    // Beware of O(n) algorithm.
+    void remove_suffix(size_t n) {
+        _size -= n;
+        auto left = _size;
+        auto current = _begin.get();
+        while (current) {
+            if (current->offset >= left) {
+                current->offset = left;
+                _current = current;
+                current->next.reset();
+                return;
+            }
+            left -= current->offset;
+            current = current->next.get();
+        }
+    }
+
     // begin() and end() form an input range to bytes_view representing fragments.
     // Any modification of this instance invalidates iterators.
     fragment_iterator begin() const { return { _begin.get() }; }
