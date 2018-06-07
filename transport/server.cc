@@ -1636,6 +1636,10 @@ void cql_server::response::write_int(int32_t n)
     _body.write(bytes_view(s, sizeof(u)));
 }
 
+cql_server::response::placeholder<int32_t> cql_server::response::write_int_placeholder() {
+    return placeholder<int32_t>(_body.write_place_holder(sizeof(int32_t)));
+}
+
 void cql_server::response::write_long(int64_t n)
 {
     auto u = htonq(n);

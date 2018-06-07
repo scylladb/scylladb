@@ -52,6 +52,9 @@ class cql_server::response {
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
     bytes_ostream _body;
 public:
+    template<typename T>
+    class placeholder;
+
     response(int16_t stream, cql_binary_opcode opcode, const tracing::trace_state_ptr& tr_state_ptr)
         : _stream{stream}
         , _opcode{opcode}
@@ -70,6 +73,7 @@ public:
     void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
     void write_int(int32_t n);
+    placeholder<int32_t> write_int_placeholder();
     void write_long(int64_t n);
     void write_short(uint16_t n);
     void write_string(const sstring& s);
@@ -129,6 +133,18 @@ private:
         } else {
             return make_frame_one<cql_binary_frame_v1>(version, length);
         }
+    }
+};
+
+template<>
+class cql_server::response::placeholder<int32_t> {
+    int8_t* _pointer;
+public:
+    explicit placeholder(int8_t* ptr) : _pointer(ptr) { }
+    void write(int32_t n) {
+        auto u = htonl(n);
+        auto* s = reinterpret_cast<const int8_t*>(&u);
+        std::copy_n(s, sizeof(u), _pointer);
     }
 };
 
