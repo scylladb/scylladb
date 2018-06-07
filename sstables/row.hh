@@ -574,6 +574,7 @@ private:
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
+    boost::iterator_range<std::vector<bool>::const_iterator> _column_is_collection;
     boost::dynamic_bitset<uint64_t> _columns_selector;
     uint64_t _missing_columns_to_read;
 
@@ -589,9 +590,11 @@ private:
     uint32_t _ck_blocks_header_offset;
 
     void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
-                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
+                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths,
+                       const std::vector<bool>& column_is_collection) {
         _column_ids = boost::make_iterator_range(column_ids);
         _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        _column_is_collection = boost::make_iterator_range(column_is_collection);
     }
     bool is_current_column_present() {
         return _columns_selector.test(_columns_selector.size() - _column_ids.size());
@@ -603,6 +606,7 @@ private:
         }
         _column_ids.advance_begin(pos);
         _column_value_fix_lengths.advance_begin(pos);
+        _column_is_collection.advance_begin(pos);
     }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
@@ -612,8 +616,9 @@ private:
                                                                                   : next_pos - current_pos;
         _column_ids.advance_begin(jump_to_next);
         _column_value_fix_lengths.advance_begin(jump_to_next);
+        _column_is_collection.advance_begin(jump_to_next);
     }
-    bool is_column_simple() { return true; }
+    bool is_column_simple() { return !_column_is_collection.front(); }
     stdx::optional<column_id> get_column_id() {
         return _column_ids.front();
     }
@@ -719,7 +724,8 @@ public:
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
                 setup_columns(_column_translation.regular_columns(),
-                              _column_translation.regular_column_value_fix_legths());
+                              _column_translation.regular_column_value_fix_legths(),
+                              _column_translation.regular_column_is_collection());
                 goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
@@ -731,7 +737,8 @@ public:
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
                     setup_columns(_column_translation.static_columns(),
-                                  _column_translation.static_column_value_fix_legths());
+                                  _column_translation.static_column_value_fix_legths(),
+                                  _column_translation.static_column_is_collection());
                     _is_first_unfiltered = false;
                     _consumer.consume_static_row_start();
                     goto row_body_label;
@@ -740,7 +747,8 @@ public:
                 }
             }
             setup_columns(_column_translation.regular_columns(),
-                          _column_translation.regular_column_value_fix_legths());
+                          _column_translation.regular_column_value_fix_legths(),
+                          _column_translation.regular_column_is_collection());
         case state::CLUSTERING_ROW:
         clustering_row_label:
             _is_first_unfiltered = false;
