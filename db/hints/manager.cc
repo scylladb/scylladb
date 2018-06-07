@@ -20,9 +20,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/gate.hh>
+#include <boost/range/adaptors.hpp>
 #include "service/storage_service.hh"
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
@@ -775,6 +777,158 @@ void manager::end_point_hints_manager::sender::send_hints_maybe() noexcept {
     }
 
     manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
+}
+
+// runs in seastar::async context
+manager::hints_segments_map manager::get_current_hints_segments(const sstring& hints_directory) {
+    hints_segments_map current_hints_segments;
+
+    // shards level
+    lister::scan_dir(hints_directory, { directory_entry_type::directory }, [&current_hints_segments] (lister::path dir, directory_entry de) {
+        unsigned shard_id = std::stoi(de.name.c_str());
+
+        manager_logger.trace("shard_id = {}", shard_id);
+        // IPs level
+        return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory }, [&current_hints_segments, shard_id] (lister::path dir, directory_entry de) {
+            manager_logger.trace("\tIP: {}", de.name);
+            // hints files
+            return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::regular }, [&current_hints_segments, shard_id, ep_addr = de.name] (lister::path dir, directory_entry de) {
+                manager_logger.trace("\t\tfile: {}", de.name);
+                current_hints_segments[ep_addr][shard_id].emplace_back(dir / de.name.c_str());
+                return make_ready_future<>();
+            });
+        });
+    }).get();
+
+    return current_hints_segments;
+}
+
+// runs in seastar::async context
+void manager::rebalance_segments(const sstring& hints_directory, hints_segments_map& segments_map) {
+    // Count how many hints segments to each destination we have.
+    std::unordered_map<sstring, size_t> per_ep_hints;
+    for (auto& ep_info : segments_map) {
+        per_ep_hints[ep_info.first] = boost::accumulate(ep_info.second | boost::adaptors::map_values | boost::adaptors::transformed(std::mem_fn(&std::list<lister::path>::size)), 0);
+        manager_logger.trace("{}: total files: {}", ep_info.first, per_ep_hints[ep_info.first]);
+    }
+
+    // Create a map of lists of segments that we will move (for each destination end point): if a shard has segments
+    // then we will NOT move q = int(N/S) segments out of them, where N is a total number of segments to the current
+    // destination and S is a current number of shards.
+    std::unordered_map<sstring, std::list<lister::path>> segments_to_move;
+    for (auto& [ep, ep_segments] : segments_map) {
+        size_t q = per_ep_hints[ep] / smp::count;
+        auto& current_segments_to_move = segments_to_move[ep];
+
+        for (auto& [shard_id, shard_segments] : ep_segments) {
+            // Move all segments from the shards that are no longer relevant (re-sharding to the lower number of shards)
+            if (shard_id >= smp::count) {
+                current_segments_to_move.splice(current_segments_to_move.end(), shard_segments);
+            } else if (shard_segments.size() > q) {
+                current_segments_to_move.splice(current_segments_to_move.end(), shard_segments, std::next(shard_segments.begin(), q), shard_segments.end());
+            }
+        }
+    }
+
+    // Since N (a total number of segments to a specific destination) may be not a multiple of S (a current number of
+    // shards) we will distribute files in two passes:
+    //    * if N = S * q + r, then
+    //       * one pass for segments_per_shard = q
+    //       * another one for segments_per_shard = q + 1.
+    //
+    // This way we will ensure as close to the perfect distribution as possible.
+    //
+    // Right till this point we haven't moved any segments. However we have created a logical separation of segments
+    // into two groups:
+    //    * Segments that are not going to be moved: segments in the segments_map.
+    //    * Segments that are going to be moved: segments in the segments_to_move.
+    //
+    // rebalance_segments_for() is going to consume segments from segments_to_move and move them to corresponding
+    // lists in the segments_map AND actually move segments to the corresponding shard's sub-directory till the requested
+    // segments_per_shard level is reached (see more details in the description of rebalance_segments_for()).
+    for (auto& [ep, N] : per_ep_hints) {
+        size_t q = N / smp::count;
+        size_t r = N - q * smp::count;
+        auto& current_segments_to_move = segments_to_move[ep];
+        auto& current_segments_map = segments_map[ep];
+
+        if (q) {
+            rebalance_segments_for(ep, q, hints_directory, current_segments_map, current_segments_to_move);
+        }
+
+        if (r) {
+            rebalance_segments_for(ep, q + 1, hints_directory, current_segments_map, current_segments_to_move);
+        }
+    }
+}
+
+// runs in seastar::async context
+void manager::rebalance_segments_for(
+        const sstring& ep,
+        size_t segments_per_shard,
+        const sstring& hints_directory,
+        hints_ep_segments_map& ep_segments,
+        std::list<lister::path>& segments_to_move)
+{
+    manager_logger.trace("{}: segments_per_shard: {}, total number of segments to move: {}", ep, segments_per_shard, segments_to_move.size());
+
+    // sanity check
+    if (segments_to_move.empty() || !segments_per_shard) {
+        return;
+    }
+
+    for (unsigned i = 0; i < smp::count && !segments_to_move.empty(); ++i) {
+        lister::path shard_path_dir(lister::path(hints_directory.c_str()) / seastar::format("{:d}", i).c_str() / ep.c_str());
+        std::list<lister::path>& current_shard_segments = ep_segments[i];
+
+        // Make sure that the shard_path_dir exists and if not - create it
+        io_check(recursive_touch_directory, shard_path_dir.c_str()).get();
+
+        while (current_shard_segments.size() < segments_per_shard && !segments_to_move.empty()) {
+            auto seg_path_it = segments_to_move.begin();
+            lister::path new_path(shard_path_dir / seg_path_it->filename());
+
+            // Don't move the file to the same location - it's pointless.
+            if (*seg_path_it != new_path) {
+                manager_logger.trace("going to move: {} -> {}", *seg_path_it, new_path);
+                io_check(rename_file, seg_path_it->native(), new_path.native()).get();
+            } else {
+                manager_logger.trace("skipping: {}", *seg_path_it);
+            }
+            current_shard_segments.splice(current_shard_segments.end(), segments_to_move, seg_path_it, std::next(seg_path_it));
+        }
+    }
+}
+
+// runs in seastar::async context
+void manager::remove_irrelevant_shards_directories(const sstring& hints_directory) {
+    // shards level
+    lister::scan_dir(hints_directory, { directory_entry_type::directory }, [] (lister::path dir, directory_entry de) {
+        unsigned shard_id = std::stoi(de.name.c_str());
+
+        if (shard_id >= smp::count) {
+            // IPs level
+            return lister::scan_dir(dir / de.name.c_str(), { directory_entry_type::directory, directory_entry_type::regular }, lister::show_hidden::yes, [] (lister::path dir, directory_entry de) {
+                return io_check(remove_file, (dir / de.name.c_str()).native());
+            }).then([shard_base_dir = dir, shard_entry = de] {
+                return io_check(remove_file, (shard_base_dir / shard_entry.name.c_str()).native());
+            });
+        }
+        return make_ready_future<>();
+    }).get();
+}
+
+future<> manager::rebalance(sstring hints_directory) {
+    return seastar::async([hints_directory = std::move(hints_directory)] {
+        // Scan currently present hints segments.
+        hints_segments_map current_hints_segments = get_current_hints_segments(hints_directory);
+
+        // Move segments to achieve an even distribution of files among all present shards.
+        rebalance_segments(hints_directory, current_hints_segments);
+
+        // Remove the directories of shards that are not present anymore - they should not have any segments by now
+        remove_irrelevant_shards_directories(hints_directory);
+    });
 }
 
 }
