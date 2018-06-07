@@ -4723,3 +4723,26 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
         BOOST_REQUIRE(sst->get_stats_metadata().max_timestamp == 5);
     });
 }
+
+SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
+    BOOST_REQUIRE(smp::count == 1);
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto s = schema_builder("tests", "ts_correcness_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type).build();
+
+        mutation mut(s, partition_key::from_exploded(*s, {to_bytes("alpha")}));
+        mut.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 0);
+
+        auto tmp = make_lw_shared<tmpdir>();
+        sstable_writer_config cfg;
+        cfg.run_identifier = utils::make_random_uuid();
+        cfg.large_partition_handler = &nop_lp_handler;
+        auto sst = make_sstable_easy(tmp->path,  flat_mutation_reader_from_mutations({ std::move(mut) }), cfg, la);
+
+        BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
+    });
+}
