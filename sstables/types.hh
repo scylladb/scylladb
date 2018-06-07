@@ -563,7 +563,8 @@ class unfiltered_flags_m final {
     static const uint8_t HAS_TIMESTAMP = 0x04u;
     static const uint8_t HAS_TTL = 0x08u;
     static const uint8_t HAS_DELETION = 0x10u;
-    static const uint8_t HAS_ALL_COLUMNS = 0x20;
+    static const uint8_t HAS_ALL_COLUMNS = 0x20u;
+    static const uint8_t HAS_COMPLEX_DELETION = 0x40u;
     static const uint8_t HAS_EXTENDED_FLAGS = 0x80u;
     uint8_t _flags;
     bool check_flag(const uint8_t flag) const {
@@ -591,6 +592,9 @@ public:
     }
     bool has_all_columns() const {
         return check_flag(HAS_ALL_COLUMNS);
+    }
+    bool has_complex_deletion() const {
+        return check_flag(HAS_COMPLEX_DELETION);
     }
 };
 
