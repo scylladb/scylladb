@@ -554,6 +554,8 @@ private:
         COLUMN_DELETION_TIME_2,
         COLUMN_TTL,
         COLUMN_TTL_2,
+        COLUMN_CELL_PATH,
+        CELL_PATH_SIZE,
         COLUMN_VALUE,
         COLUMN_END,
         RANGE_TOMBSTONE_MARKER,
@@ -586,6 +588,7 @@ private:
     gc_clock::duration _column_ttl;
     uint32_t _column_value_length;
     temporary_buffer<char> _column_value;
+    temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
 
@@ -925,11 +928,11 @@ public:
             if (_column_flags.use_row_timestamp()) {
                 _column_ttl = _liveness.ttl();
                 _state = state::COLUMN_VALUE;
-                goto column_value_label;
+                goto column_cell_path_label;
             } else if (!_column_flags.is_expiring()) {
                 _column_ttl = gc_clock::duration::zero();
                 _state = state::COLUMN_VALUE;
-                goto column_value_label;
+                goto column_cell_path_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::COLUMN_TTL_2;
@@ -937,8 +940,17 @@ public:
             }
         case state::COLUMN_TTL_2:
             _column_ttl = parse_ttl(_header, _u64);
+        case state::COLUMN_CELL_PATH:
+        column_cell_path_label:
+            if (!is_column_simple()) {
+                if (read_unsigned_vint_length_bytes(data, _cell_path) != read_status::ready) {
+                    _state = state::COLUMN_VALUE;
+                    break;
+                }
+            } else {
+                _cell_path = temporary_buffer<char>(0);
+            }
         case state::COLUMN_VALUE:
-        column_value_label:
         {
             if (!_column_flags.has_value()) {
                 _column_value = temporary_buffer<char>(0);
