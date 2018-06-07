@@ -62,6 +62,8 @@ private:
     /* fields below do not get serialized */
     clk::time_point _update_timestamp;
     bool _is_alive;
+    bool _is_normal = false;
+
 public:
     bool operator==(const endpoint_state& other) const {
         return _heart_beat_state  == other._heart_beat_state &&
@@ -74,20 +76,23 @@ public:
         : _heart_beat_state(0)
         , _update_timestamp(clk::now())
         , _is_alive(true) {
+        update_is_normal();
     }
 
     endpoint_state(heart_beat_state initial_hb_state)
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(clk::now())
         , _is_alive(true) {
+        update_is_normal();
     }
 
     endpoint_state(heart_beat_state&& initial_hb_state,
             const std::map<application_state, versioned_value>& application_state)
         : _heart_beat_state(std::move(initial_hb_state))
-          ,_application_state(application_state)
+        , _application_state(application_state)
         , _update_timestamp(clk::now())
         , _is_alive(true) {
+        update_is_normal();
     }
 
     // Valid only on shard 0
@@ -121,6 +126,7 @@ public:
 
     void add_application_state(application_state key, versioned_value value) {
         _application_state[key] = std::move(value);
+        update_is_normal();
     }
 
     void apply_application_state(application_state key, versioned_value&& value) {
@@ -128,6 +134,7 @@ public:
         if (e.version < value.version) {
             e = std::move(value);
         }
+        update_is_normal();
     }
 
     void apply_application_state(application_state key, const versioned_value& value) {
@@ -135,12 +142,14 @@ public:
         if (e.version < value.version) {
             e = value;
         }
+        update_is_normal();
     }
 
     void apply_application_state(const endpoint_state& es) {
         for (auto&& e : es._application_state) {
             apply_application_state(e.first, e.second);
         }
+        update_is_normal();
     }
 
     /* getters and setters */
@@ -173,18 +182,30 @@ public:
         set_alive(false);
     }
 
-    bool is_shutdown() const {
+    sstring get_status() const {
         auto* app_state = get_application_state_ptr(application_state::STATUS);
         if (!app_state) {
-            return false;
+            return "";
         }
         auto value = app_state->value;
         std::vector<sstring> pieces;
         boost::split(pieces, value, boost::is_any_of(","));
         if (pieces.empty()) {
-            return false;
+            return "";
         }
-        return pieces[0] == sstring(versioned_value::SHUTDOWN);
+        return pieces[0];
+    }
+
+    bool is_shutdown() const {
+        return get_status() == sstring(versioned_value::SHUTDOWN);
+    }
+
+    bool is_normal() const {
+        return _is_normal;
+    }
+
+    void update_is_normal() {
+        _is_normal = get_status() == sstring(versioned_value::STATUS_NORMAL);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
