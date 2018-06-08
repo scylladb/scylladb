@@ -2118,3 +2118,30 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     write_and_compare_sstables(s, mt, table_name);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
+    // CREATE TYPE ut (my_int int, my_boolean boolean, my_text text);
+    auto ut = user_type_impl::get_instance("sst3", to_bytes("ut"),
+            {to_bytes("my_int"), to_bytes("my_boolean"), to_bytes("my_text")},
+            {int32_type, boolean_type, utf8_type});
+
+    sstring table_name = "user_defined_type_table";
+    // CREATE TABLE user_defined_type_table (pk int, rc frozen <ut>, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("rc", ut);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+
+    // INSERT INTO user_defined_type_table (pk, rc) VALUES (0, {my_int: 1703, my_boolean: true, my_text: 'Санкт-Петербург'}) USING TIMESTAMP 1525385507816568;
+    clustering_key ckey = clustering_key::make_empty();
+    mut.partition().apply_insert(*s, ckey, write_timestamp);
+    auto ut_val = make_user_value(ut, user_type_impl::native_type({int32_t(1703), true, sstring("Санкт-Петербург")}));
+    mut.set_cell(ckey, "rc", ut_val, write_timestamp);
+    mt->apply(std::move(mut));
+    write_and_compare_sstables(s, mt, table_name);
+}
