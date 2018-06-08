@@ -4746,3 +4746,137 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
         BOOST_REQUIRE(sst->run_identifier() == cfg.run_identifier);
     });
 }
+
+SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
+    return seastar::async([] {
+        storage_service_for_tests ssft;
+        cell_locker_stats cl_stats;
+
+        auto builder = schema_builder("tests", "sstable_run_based_compaction_test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+
+        auto tmp = make_lw_shared<tmpdir>();
+        auto sst_gen = [s, tmp, gen = make_lw_shared<unsigned>(1)] () mutable {
+            auto sst = make_sstable(s, tmp->path, (*gen)++, la, big);
+            sst->set_unshared();
+            return sst;
+        };
+
+        auto cm = make_lw_shared<compaction_manager>();
+        auto tracker = make_lw_shared<cache_tracker>();
+        auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, cl_stats, *tracker);
+        cf->mark_ready_for_writes();
+        auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
+            return sstables::compact_sstables(sstables::compaction_descriptor(std::move(all), 1, 0), *cf, sst_gen, replacer).get0().new_sstables;
+        };
+        auto make_insert = [&] (auto p) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(p.first)});
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), 1 /* ts */);
+            BOOST_REQUIRE(m.decorated_key().token() == p.second);
+            return m;
+        };
+
+        auto tokens = token_generation_for_current_shard(16);
+        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::null, s->compaction_strategy_options());
+        sstables::sstable_set set = cs.make_sstable_set(s);
+        std::unordered_set<shared_sstable> sstables;
+
+        auto do_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst) {
+            // that's because each sstable will contain only 1 mutation.
+            BOOST_REQUIRE(old_sstables.size() == 1);
+            BOOST_REQUIRE(new_sstables.size() == 1);
+            // check that sstable replacement follows token order
+            BOOST_REQUIRE(*expected_sst == old_sstables.front()->generation());
+            expected_sst++;
+            BOOST_REQUIRE(sstables.count(old_sstables.front()));
+            BOOST_REQUIRE(!sstables.count(new_sstables.front()));
+            sstables.erase(old_sstables.front());
+            sstables.insert(new_sstables.front());
+            set = cs.make_sstable_set(s);
+            for (auto& sst : sstables) {
+                set.insert(sst);
+            }
+            BOOST_TEST_MESSAGE(sprint("Removing sstable of generation %d, refcnt: %d", old_sstables.front()->generation(), old_sstables.front().use_count()));
+        };
+
+        auto get_similar_sized_runs = [&] (std::vector<shared_sstable> uncompacting_sstables) -> sstables::compaction_descriptor {
+            std::vector<sstable_run> runs = set.select(uncompacting_sstables);
+            std::map<uint64_t, std::vector<sstable_run>> similar_sized_runs;
+
+            for (auto& run : runs) {
+                bool found = false;
+                for (auto& e : similar_sized_runs) {
+                    if (run.data_size() >= e.first*0.5 && run.data_size() <= e.first*1.5) {
+                        e.second.push_back(run);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    similar_sized_runs[run.data_size()].push_back(run);
+                }
+            }
+            for (auto& entry : similar_sized_runs) {
+                auto& runs = entry.second;
+                if (runs.size() < size_t(s->min_compaction_threshold())) {
+                    continue;
+                }
+
+                auto all = boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>& v, const sstable_run& run) {
+                   v.insert(v.end(), run.all().begin(), run.all().end());
+                   return std::move(v);
+                });
+                return sstables::compaction_descriptor(std::move(all));
+            }
+            return sstables::compaction_descriptor();
+        };
+
+        auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {
+            auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
+            auto desc = get_similar_sized_runs(std::move(input_ssts));
+
+            // nothing to compact, move on.
+            if (desc.sstables.empty()) {
+                return {};
+            }
+
+            BOOST_REQUIRE(desc.sstables.size() == expected_input);
+            auto sstable_run = boost::copy_range<std::set<int64_t>>(desc.sstables
+                | boost::adaptors::transformed([] (auto& sst) { return sst->generation(); }));
+            auto expected_sst = sstable_run.begin();
+            auto replacer = [&] (auto old_sstables, auto new_sstables) {
+                BOOST_REQUIRE(expected_sst != sstable_run.end());
+                do_replace(std::move(old_sstables), std::move(new_sstables), expected_sst);
+            };
+
+            auto result = compact(std::move(desc.sstables), replacer);
+            BOOST_REQUIRE_EQUAL(expected_output, result.size());
+            BOOST_REQUIRE(expected_sst == sstable_run.end());
+            return result;
+        };
+
+        // Generate 4 sstable runs composed of 4 fragments each after 4 compactions.
+        // All fragments non-overlapping.
+        for (auto i = 0U; i < tokens.size(); i++) {
+            auto sst = make_sstable_containing(sst_gen, { make_insert(tokens[i]) });
+            sst->set_sstable_level(1);
+            BOOST_REQUIRE(sst->get_sstable_level() == 1);
+            set.insert(sst);
+            sstables.insert(std::move(sst));
+            do_compaction(4, 4);
+        };
+        BOOST_REQUIRE(sstables.size() == 16);
+
+        // Generate 1 sstable run from 4 sstables runs of similar size
+        auto result = do_compaction(16, 16);
+        BOOST_REQUIRE(result.size() == 16);
+        for (auto i = 0U; i < tokens.size(); i++) {
+            assert_that(sstable_reader(result[i], s))
+                .produces(make_insert(tokens[i]))
+                .produces_end_of_stream();
+        }
+    });
+}
