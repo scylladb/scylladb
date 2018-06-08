@@ -23,6 +23,7 @@
 
 #include "serializer.hh"
 #include <seastar/util/bool_class.hh>
+#include <boost/range/algorithm/for_each.hpp>
 
 namespace ser {
 
@@ -361,6 +362,15 @@ struct serializer<bytes> {
             out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
         }
     }
+    template<typename Output, typename FragmentedBuffer>
+    GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+    static void write_fragmented(Output& out, FragmentedBuffer&& fragments) {
+        safe_serialize_as_uint32(out, uint32_t(fragments.size_bytes()));
+        using boost::range::for_each;
+        for_each(fragments, [&out] (bytes_view frag) {
+            out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+        });
+    }
     template<typename Input>
     static void skip(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
@@ -379,6 +389,11 @@ void serialize(Output& out, const managed_bytes& v) {
 template<typename Output>
 void serialize(Output& out, const bytes_ostream& v) {
     serializer<bytes>::write(out, v);
+}
+template<typename Output, typename FragmentedBuffer>
+GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
+    serializer<bytes>::write_fragmented(out, std::forward<FragmentedBuffer>(v));
 }
 
 template<typename T>
