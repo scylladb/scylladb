@@ -1556,6 +1556,29 @@ int64_t column_family::get_unleveled_sstables() const {
     return 0;
 }
 
+future<std::unordered_set<sstring>> column_family::get_sstables_by_partition_key(const sstring& key) const {
+    return do_with(std::unordered_set<sstring>(), lw_shared_ptr<sstables::sstable_set::incremental_selector>(make_lw_shared(get_sstable_set().make_incremental_selector())),
+            partition_key(partition_key::from_nodetool_style_string(_schema, key)),
+            [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
+        return do_with(dht::decorated_key(dht::global_partitioner().decorate_key(*_schema, pk)),
+                [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
+            auto sst = sel->select(dk.token()).sstables;
+            auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
+
+            return do_for_each(sst, [this, &filenames, &dk, hk = std::move(hk)] (std::vector<sstables::shared_sstable>::const_iterator::reference s) mutable {
+                auto name = s->get_filename();
+                return s->has_partition_key(hk, dk).then([name = std::move(name), &filenames] (bool contains) mutable {
+                    if (contains) {
+                        filenames.insert(name);
+                    }
+                });
+            });
+        }).then([&filenames] {
+            return make_ready_future<std::unordered_set<sstring>>(filenames);
+        });
+    });
+}
+
 const sstables::sstable_set& column_family::get_sstable_set() const {
     return *_sstables;
 }

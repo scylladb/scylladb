@@ -455,7 +455,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of filenames that contain the given key on this node",
+               "summary":"Returns a list of sstable filenames that contain the given partition key on this node",
                "type":"array",
                "items":{
                   "type":"string"
@@ -475,7 +475,7 @@
                   },
                   {
                      "name":"key",
-                     "description":"The key",
+                     "description":"The partition key. In a composite-key scenario, use ':' to separate the columns in the key.",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",

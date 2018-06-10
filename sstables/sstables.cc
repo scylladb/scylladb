@@ -4028,6 +4028,17 @@ sstable::compute_shards_for_this_sstable() const {
     return boost::copy_range<std::vector<unsigned>>(shards);
 }
 
+future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk) {
+    shared_sstable s = shared_from_this();
+    if (!filter_has_key(hk)) {
+        return make_ready_future<bool>(false);
+    }
+    seastar::shared_ptr<sstables::index_reader> lh_index = seastar::make_shared<sstables::index_reader>(s, default_priority_class());
+    return lh_index->advance_lower_and_check_if_present(dk).then([lh_index, s, this] (bool present) {
+        return make_ready_future<bool>(present);
+    });
+}
+
 utils::hashed_key sstable::make_hashed_key(const schema& s, const partition_key& key) {
     return utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, key)));
 }

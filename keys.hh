@@ -657,6 +657,15 @@ public:
         return partition_key(managed_bytes(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))));
     }
 
+    /*!
+     * \brief create a partition_key from a nodetool style string
+     * takes a nodetool style string representation of a partition key and returns a partition_key.
+     * With composite keys, columns are concatenate using ':'.
+     * For example if a composite key is has two columns (col1, col2) to get the partition key that
+     * have col1=val1 and col2=val2 use the string 'val1:val2'
+     */
+    static partition_key from_nodetool_style_string(const schema_ptr s, const sstring& key);
+
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }

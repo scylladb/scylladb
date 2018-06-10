@@ -606,6 +606,14 @@ public:
         return _components->filter->is_present(bytes_view(key));
     }
 
+    /*!
+     * \brief check if the sstable contains the given key.
+     * The method would search that the key is actually
+     * found in the sstable not just in the filter.
+     *
+     */
+    future<bool> has_partition_key(const utils::hashed_key& hk, const dht::decorated_key& dk);
+
     bool filter_has_key(utils::hashed_key key) {
         return _components->filter->is_present(key);
     }
