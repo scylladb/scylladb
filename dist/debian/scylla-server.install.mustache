@@ -20,7 +20,7 @@ conf/housekeeping.cfg etc/scylla.d
 dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
 dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
 dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d
+dist/debian/sysctl.d/99-scylla-coredump.conf etc/sysctl.d
 dist/debian/scripts/scylla_save_coredump usr/lib/scylla
 dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
 {{/jessie}}
@@ -28,13 +28,11 @@ dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
 dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
 dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
 dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d
-dist/debian/scripts/scylla_save_coredump usr/lib/scylla
 dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
 {{/stretch}}
 {{#trusty}}
 dist/debian/sudoers.d/scylla etc/sudoers.d
-dist/debian/sysctl.d/99-scylla.conf etc/sysctl.d
+dist/debian/sysctl.d/99-scylla-coredump.conf etc/sysctl.d
 dist/debian/scripts/scylla_save_coredump usr/lib/scylla
 dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
 {{/trusty}}

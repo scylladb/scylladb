@@ -101,7 +101,7 @@ if [ ! -f /usr/bin/pystache ]; then
     if is_redhat_variant; then
         sudo yum install -y python2-pystache || sudo yum install -y pystache
     elif is_debian_variant; then
-        sudo apt-get install -y python2-pystache
+        sudo apt-get install -y python-pystache
     fi
 fi
 
