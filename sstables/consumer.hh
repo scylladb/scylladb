@@ -73,7 +73,9 @@ protected:
         READING_BYTES,
         READING_U16_BYTES,
         READING_UNSIGNED_VINT,
+        READING_UNSIGNED_VINT_LENGTH_BYTES,
         READING_UNSIGNED_VINT_WITH_LEN,
+        READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN,
     } _prestate = prestate::NONE;
 
     // state for non-NONE prestates
@@ -188,6 +190,29 @@ protected:
             }
         }
     }
+    inline read_status read_unsigned_vint_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
+        if (data.empty()) {
+            _prestate = prestate::READING_UNSIGNED_VINT_LENGTH_BYTES;
+            _read_bytes_where = &where;
+            return read_status::waiting;
+        } else {
+            const vint_size_type len = unsigned_vint::serialized_size_from_first_byte(*data.begin());
+            if (data.size() >= len) {
+                _u64 = unsigned_vint::deserialize(
+                    bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
+                data.trim_front(len);
+                return read_bytes(data, static_cast<uint32_t>(_u64), where);
+            } else {
+                _read_bytes = temporary_buffer<char>(len);
+                std::copy(data.begin(), data.end(), _read_bytes.get_write());
+                _pos = data.size();
+                data.trim(0);
+                _read_bytes_where = &where;
+                _prestate = prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN;
+                return read_status::waiting;
+            }
+        }
+    }
 
     inline void process_buffer(temporary_buffer<char>& data) {
         if (__builtin_expect((_prestate != prestate::NONE), 0)) {
@@ -205,6 +230,10 @@ private:
             if (read_unsigned_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
+        } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES) {
+            if (read_unsigned_vint_length_bytes(data, *_read_bytes_where) == read_status::ready) {
+                _prestate = prestate::NONE;
+            }
         } else if (_prestate == prestate::READING_UNSIGNED_VINT_WITH_LEN) {
             const auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
@@ -214,6 +243,18 @@ private:
                 _u64 = unsigned_vint::deserialize(
                         bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
                 _prestate = prestate::NONE;
+            }
+        } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN) {
+            const auto n = std::min(_read_bytes.size() - _pos, data.size());
+            std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
+            data.trim_front(n);
+            _pos += n;
+            if (_pos == _read_bytes.size()) {
+                _u64 = unsigned_vint::deserialize(
+                        bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
+                if (read_bytes(data, _u64, *_read_bytes_where) == read_status::ready) {
+                    _prestate = prestate::NONE;
+                }
             }
         } else if (_prestate == prestate::READING_BYTES) {
             auto n = std::min(_read_bytes.size() - _pos, data.size());

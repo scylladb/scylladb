@@ -155,10 +155,16 @@ public:
     virtual proceed consume_static_row_start() = 0;
 
     virtual proceed consume_column(stdx::optional<column_id> column_id,
+                                   bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time) = 0;
+
+    virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
+                                                 tombstone tomb) = 0;
+
+    virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) = 0;
 
     virtual proceed consume_row_end(const sstables::liveness_info&) = 0;
 
@@ -529,8 +535,6 @@ private:
         CK_BLOCK,
         CK_BLOCK_HEADER,
         CK_BLOCK2,
-        CK_BLOCK_VALUE_LENGTH,
-        CK_BLOCK_VALUE_BYTES,
         CK_BLOCK_END,
         CLUSTERING_ROW_CONSUME,
         ROW_BODY,
@@ -549,6 +553,11 @@ private:
         COLUMN,
         SIMPLE_COLUMN,
         COMPLEX_COLUMN,
+        COMPLEX_COLUMN_MARKED_FOR_DELETE,
+        COMPLEX_COLUMN_LOCAL_DELETION_TIME,
+        COMPLEX_COLUMN_2,
+        COMPLEX_COLUMN_SIZE,
+        COMPLEX_COLUMN_SIZE_2,
         NEXT_COLUMN,
         COLUMN_FLAGS,
         COLUMN_TIMESTAMP,
@@ -556,9 +565,9 @@ private:
         COLUMN_DELETION_TIME_2,
         COLUMN_TTL,
         COLUMN_TTL_2,
+        COLUMN_CELL_PATH,
+        CELL_PATH_SIZE,
         COLUMN_VALUE,
-        COLUMN_VALUE_LENGTH,
-        COLUMN_VALUE_BYTES,
         COLUMN_END,
         RANGE_TOMBSTONE_MARKER,
     } _state = state::PARTITION_START;
@@ -578,6 +587,7 @@ private:
 
     boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
+    boost::iterator_range<std::vector<bool>::const_iterator> _column_is_collection;
     boost::dynamic_bitset<uint64_t> _columns_selector;
     uint64_t _missing_columns_to_read;
 
@@ -589,13 +599,19 @@ private:
     gc_clock::duration _column_ttl;
     uint32_t _column_value_length;
     temporary_buffer<char> _column_value;
+    temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
+    uint64_t _subcolumns_to_read = 0;
+    api::timestamp_type _complex_column_marked_for_delete;
+    tombstone _complex_column_tombstone;
 
     void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
-                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
+                       const std::vector<std::optional<uint32_t>>& column_value_fix_lengths,
+                       const std::vector<bool>& column_is_collection) {
         _column_ids = boost::make_iterator_range(column_ids);
         _column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        _column_is_collection = boost::make_iterator_range(column_is_collection);
     }
     bool is_current_column_present() {
         return _columns_selector.test(_columns_selector.size() - _column_ids.size());
@@ -607,6 +623,7 @@ private:
         }
         _column_ids.advance_begin(pos);
         _column_value_fix_lengths.advance_begin(pos);
+        _column_is_collection.advance_begin(pos);
     }
     bool no_more_columns() { return _column_ids.empty(); }
     void move_to_next_column() {
@@ -616,8 +633,9 @@ private:
                                                                                   : next_pos - current_pos;
         _column_ids.advance_begin(jump_to_next);
         _column_value_fix_lengths.advance_begin(jump_to_next);
+        _column_is_collection.advance_begin(jump_to_next);
     }
-    bool is_column_simple() { return true; }
+    bool is_column_simple() { return !_column_is_collection.front(); }
     stdx::optional<column_id> get_column_id() {
         return _column_ids.front();
     }
@@ -655,7 +673,6 @@ public:
                 || _state == state::EXTENDED_FLAGS
                 || _state == state::CLUSTERING_ROW
                 || _state == state::CK_BLOCK_HEADER
-                || _state == state::CK_BLOCK_VALUE_LENGTH
                 || _state == state::CK_BLOCK_END
                 || _state == state::CLUSTERING_ROW_CONSUME
                 || _state == state::ROW_BODY_TIMESTAMP_DELTIME
@@ -667,7 +684,6 @@ public:
                 || _state == state::COLUMN_TIMESTAMP
                 || _state == state::COLUMN_DELETION_TIME_2
                 || _state == state::COLUMN_TTL_2
-                || _state == state::COLUMN_VALUE_LENGTH
                 || _state == state::COLUMN_END) && (_prestate == prestate::NONE);
     }
 
@@ -725,7 +741,8 @@ public:
                 _extended_flags = unfiltered_extended_flags_m(uint8_t{0u});
                 _state = state::CLUSTERING_ROW;
                 setup_columns(_column_translation.regular_columns(),
-                              _column_translation.regular_column_value_fix_legths());
+                              _column_translation.regular_column_value_fix_legths(),
+                              _column_translation.regular_column_is_collection());
                 goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
@@ -737,7 +754,8 @@ public:
             if (_extended_flags.is_static()) {
                 if (_is_first_unfiltered) {
                     setup_columns(_column_translation.static_columns(),
-                                  _column_translation.static_column_value_fix_legths());
+                                  _column_translation.static_column_value_fix_legths(),
+                                  _column_translation.static_column_is_collection());
                     _is_first_unfiltered = false;
                     _consumer.consume_static_row_start();
                     goto row_body_label;
@@ -746,7 +764,8 @@ public:
                 }
             }
             setup_columns(_column_translation.regular_columns(),
-                          _column_translation.regular_column_value_fix_legths());
+                          _column_translation.regular_column_value_fix_legths(),
+                          _column_translation.regular_column_is_collection());
         case state::CLUSTERING_ROW:
         clustering_row_label:
             _is_first_unfiltered = false;
@@ -767,31 +786,23 @@ public:
         case state::CK_BLOCK_HEADER:
             _ck_blocks_header = _u64;
         case state::CK_BLOCK2:
-        ck_block2_label:
+        ck_block2_label: {
             if (is_block_empty()) {
                 _row_key.push_back({});
                 move_to_next_ck_block();
                 goto ck_block_label;
             }
+            read_status status = read_status::waiting;
             if (auto len = get_ck_block_value_length()) {
-                _column_value_length = *len;
-                _column_value = temporary_buffer<char>(_column_value_length);
-                _state = state::CK_BLOCK_VALUE_BYTES;
-                goto ck_block_value_bytes_label;
+                status = read_bytes(data, *len, _column_value);
+            } else {
+                status = read_unsigned_vint_length_bytes(data, _column_value);
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::CK_BLOCK_VALUE_LENGTH;
-                break;
-            }
-        case state::CK_BLOCK_VALUE_LENGTH:
-            _column_value_length = static_cast<uint32_t>(_u64);
-            _column_value = temporary_buffer<char>(_column_value_length);
-        case state::CK_BLOCK_VALUE_BYTES:
-        ck_block_value_bytes_label:
-            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+            if (status != read_status::ready) {
                 _state = state::CK_BLOCK_END;
                 break;
             }
+        }
         case state::CK_BLOCK_END:
             _row_key.push_back(std::move(_column_value));
             move_to_next_ck_block();
@@ -879,16 +890,19 @@ public:
             }
         case state::COLUMN:
         column_label:
-            if (no_more_columns()) {
-                _state = state::FLAGS;
-                if (_consumer.consume_row_end(_liveness) == consumer_m::proceed::no) {
-                    return consumer_m::proceed::no;
+            if (_subcolumns_to_read == 0) {
+                if (no_more_columns()) {
+                    _state = state::FLAGS;
+                    if (_consumer.consume_row_end(_liveness) == consumer_m::proceed::no) {
+                        return consumer_m::proceed::no;
+                    }
+                    goto flags_label;
                 }
-                goto flags_label;
-            }
-            if (!is_column_simple()) {
-                _state = state::COMPLEX_COLUMN;
-                goto complex_column_label;
+                if (!is_column_simple()) {
+                    _state = state::COMPLEX_COLUMN;
+                    goto complex_column_label;
+                }
+                _subcolumns_to_read = 0;
             }
         case state::SIMPLE_COLUMN:
             if (read_8(data) != read_status::ready) {
@@ -931,11 +945,11 @@ public:
             if (_column_flags.use_row_timestamp()) {
                 _column_ttl = _liveness.ttl();
                 _state = state::COLUMN_VALUE;
-                goto column_value_label;
+                goto column_cell_path_label;
             } else if (!_column_flags.is_expiring()) {
                 _column_ttl = gc_clock::duration::zero();
                 _state = state::COLUMN_VALUE;
-                goto column_value_label;
+                goto column_cell_path_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::COLUMN_TTL_2;
@@ -943,36 +957,39 @@ public:
             }
         case state::COLUMN_TTL_2:
             _column_ttl = parse_ttl(_header, _u64);
+        case state::COLUMN_CELL_PATH:
+        column_cell_path_label:
+            if (!is_column_simple()) {
+                if (read_unsigned_vint_length_bytes(data, _cell_path) != read_status::ready) {
+                    _state = state::COLUMN_VALUE;
+                    break;
+                }
+            } else {
+                _cell_path = temporary_buffer<char>(0);
+            }
         case state::COLUMN_VALUE:
-        column_value_label:
+        {
             if (!_column_flags.has_value()) {
                 _column_value = temporary_buffer<char>(0);
                 _state = state::COLUMN_END;
                 goto column_end_label;
             }
+            read_status status = read_status::waiting;
             if (auto len = get_column_value_length()) {
-                _column_value_length = *len;
-                _column_value = temporary_buffer<char>(_column_value_length);
-                _state = state::COLUMN_VALUE_BYTES;
-                goto column_value_bytes_label;
+                status = read_bytes(data, *len, _column_value);
+            } else {
+                status = read_unsigned_vint_length_bytes(data, _column_value);
             }
-            if (read_unsigned_vint(data) != read_status::ready) {
-                _state = state::COLUMN_VALUE_LENGTH;
-                break;
-            }
-        case state::COLUMN_VALUE_LENGTH:
-            _column_value_length = static_cast<uint32_t>(_u64);
-            _column_value = temporary_buffer<char>(_column_value_length);
-        case state::COLUMN_VALUE_BYTES:
-        column_value_bytes_label:
-            if (read_bytes(data, _column_value_length, _column_value) != read_status::ready) {
+            if (status != read_status::ready) {
                 _state = state::COLUMN_END;
                 break;
             }
+        }
         case state::COLUMN_END:
         column_end_label:
             _state = state::NEXT_COLUMN;
             if (_consumer.consume_column(get_column_id(),
+                                         to_bytes_view(_cell_path),
                                          to_bytes_view(_column_value),
                                          _column_timestamp,
                                          _column_ttl,
@@ -980,8 +997,19 @@ public:
                 return consumer_m::proceed::no;
             }
         case state::NEXT_COLUMN:
-            move_to_next_column();
-            _state = state::COLUMN;
+            if (!is_column_simple()) {
+                --_subcolumns_to_read;
+                if (_subcolumns_to_read == 0) {
+                    auto id = get_column_id();
+                    move_to_next_column();
+                    if (_consumer.consume_complex_column_end(std::move(id)) != consumer_m::proceed::yes) {
+                        _state = state::COLUMN;
+                        return consumer_m::proceed::no;
+                    }
+                }
+            } else {
+                move_to_next_column();
+            }
             goto column_label;
         case state::ROW_BODY_MISSING_COLUMNS_2:
         row_body_missing_columns_2_label: {
@@ -1020,7 +1048,36 @@ public:
             goto row_body_missing_columns_read_columns_label;
         case state::COMPLEX_COLUMN:
         complex_column_label:
-            throw malformed_sstable_exception("unimplemented state: complex columns not supported");
+            if (!_flags.has_complex_deletion()) {
+                _complex_column_tombstone = {};
+                goto complex_column_2_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_MARKED_FOR_DELETE;
+                break;
+            }
+        case state::COMPLEX_COLUMN_MARKED_FOR_DELETE:
+            _complex_column_marked_for_delete = parse_timestamp(_header, _u64);
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_LOCAL_DELETION_TIME;
+                break;
+            }
+        case state::COMPLEX_COLUMN_LOCAL_DELETION_TIME:
+            _complex_column_tombstone = {_complex_column_marked_for_delete, parse_expiry(_header, _u64)};
+        case state::COMPLEX_COLUMN_2:
+        complex_column_2_label:
+            if (_consumer.consume_complex_column_start(get_column_id(), _complex_column_tombstone) == consumer_m::proceed::no) {
+                _state = state::COMPLEX_COLUMN_SIZE;
+                return consumer_m::proceed::no;
+            }
+        case state::COMPLEX_COLUMN_SIZE:
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::COMPLEX_COLUMN_SIZE_2;
+                break;
+            }
+        case state::COMPLEX_COLUMN_SIZE_2:
+            _subcolumns_to_read = _u64;
+            goto column_label;
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
             throw malformed_sstable_exception("unimplemented state");

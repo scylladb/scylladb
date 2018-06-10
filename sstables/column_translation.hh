@@ -39,21 +39,25 @@ class column_translation {
 
     struct state {
 
-        static std::pair<std::vector<stdx::optional<column_id>>, std::vector<std::optional<uint32_t>>> build(
-            const schema& s,
-            const utils::chunked_vector<serialization_header::column_desc>& src,
-            bool is_static) {
+        static std::tuple<std::vector<stdx::optional<column_id>>,
+                          std::vector<std::optional<uint32_t>>,
+                          std::vector<bool>> build(
+                const schema& s,
+                const utils::chunked_vector<serialization_header::column_desc>& src,
+                bool is_static) {
             std::vector<stdx::optional<column_id>> ids;
             std::vector<std::optional<column_id>> lens;
+            std::vector<bool> is_collection;
             if (s.is_dense()) {
                 if (is_static) {
                     ids.push_back(s.static_begin()->id);
                     lens.push_back(s.static_begin()->type->value_length_if_fixed());
+                    is_collection.push_back(s.static_begin()->is_multi_cell());
                 } else {
                     ids.push_back(s.regular_begin()->id);
                     lens.push_back(s.regular_begin()->type->value_length_if_fixed());
+                    is_collection.push_back(s.regular_begin()->is_multi_cell());
                 }
-
             } else {
                 ids.reserve(src.size());
                 lens.reserve(src.size());
@@ -62,13 +66,15 @@ class column_translation {
                     if (def) {
                         ids.push_back(def->id);
                         lens.push_back(def->type->value_length_if_fixed());
+                        is_collection.push_back(def->is_multi_cell());
                     } else {
                         ids.push_back(stdx::nullopt);
                         lens.push_back(std::nullopt);
+                        is_collection.push_back(false);
                     }
                 }
             }
-            return std::make_pair(std::move(ids), std::move(lens));
+            return std::make_tuple(std::move(ids), std::move(lens), std::move(is_collection));
         }
 
         utils::UUID schema_uuid;
@@ -77,6 +83,8 @@ class column_translation {
         std::vector<std::optional<uint32_t>> regular_column_value_fix_lengths;
         std::vector<std::optional<uint32_t>> static_column_value_fix_lengths;
         std::vector<std::optional<uint32_t>> clustering_column_value_fix_lengths;
+        std::vector<bool> static_column_is_collection;
+        std::vector<bool> regular_column_is_collection;
 
         state() = default;
         state(const state&) = delete;
@@ -87,9 +95,13 @@ class column_translation {
         state(const schema& s, const serialization_header& header)
             : schema_uuid(s.version())
         {
-            std::tie(regular_schema_column_id_from_sstable, regular_column_value_fix_lengths) =
+            std::tie(regular_schema_column_id_from_sstable,
+                     regular_column_value_fix_lengths,
+                     regular_column_is_collection) =
                     build(s, header.regular_columns.elements, false);
-            std::tie(static_schema_column_id_from_sstable, static_column_value_fix_lengths) =
+            std::tie(static_schema_column_id_from_sstable,
+                     static_column_value_fix_lengths,
+                     static_column_is_collection) =
                     build(s, header.static_columns.elements, true);
             clustering_column_value_fix_lengths.reserve(header.clustering_key_types_names.elements.size());
             for (auto&& t : header.clustering_key_types_names.elements) {
@@ -123,6 +135,12 @@ public:
     }
     const std::vector<std::optional<uint32_t>>& clustering_column_value_fix_legths() const {
         return _state->clustering_column_value_fix_lengths;
+    }
+    const std::vector<bool>& static_column_is_collection() const {
+        return _state->static_column_is_collection;
+    }
+    const std::vector<bool>& regular_column_is_collection() const {
+        return _state->regular_column_is_collection;
     }
 };
 

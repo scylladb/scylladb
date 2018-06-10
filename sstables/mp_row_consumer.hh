@@ -838,6 +838,7 @@ class mp_row_consumer_m : public consumer_m {
         atomic_cell_or_collection val;
     };
     std::vector<cell> _cells;
+    collection_type_impl::mutation _cm;
 
     void set_up_ck_ranges(const partition_key& pk) {
         _ck_ranges = query::clustering_key_filter_ranges::get_ranges(*_schema, _slice, pk);
@@ -846,6 +847,10 @@ class mp_row_consumer_m : public consumer_m {
         _out_of_range = false;
     }
 
+    const column_definition& get_column_definition(stdx::optional<column_id> column_id) {
+        auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
+        return _schema->column_at(column_type, *column_id);
+    }
 public:
     mp_row_consumer_m(mp_row_consumer_reader* reader,
                         const schema_ptr schema,
@@ -959,6 +964,7 @@ public:
     }
 
     virtual proceed consume_column(stdx::optional<column_id> column_id,
+                                   bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
@@ -966,13 +972,43 @@ public:
         if (!column_id) {
             return proceed::yes;
         }
-        auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
-        const column_definition& column_def = _schema->column_at(column_type, *column_id);
+        const column_definition& column_def = get_column_definition(column_id);
         if (timestamp <= column_def.dropped_at()) {
             return proceed::yes;
         }
-        auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time, atomic_cell::collection_member::no);
-        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        if (column_def.is_multi_cell()) {
+            auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
+            auto ac = make_atomic_cell(*ctype->value_comparator(),
+                                       timestamp,
+                                       value,
+                                       ttl,
+                                       local_deletion_time,
+                                       atomic_cell::collection_member::yes);
+            _cm.cells.emplace_back(to_bytes(cell_path), std::move(ac));
+        } else {
+            auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
+                                       atomic_cell::collection_member::no);
+            _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        }
+        return proceed::yes;
+    }
+
+    virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
+                                                 tombstone tomb) override {
+        _cm.tomb = tomb;
+        _cm.cells.clear();
+        return proceed::yes;
+    }
+
+    virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) override {
+        if (column_id) {
+            const column_definition& column_def = get_column_definition(column_id);
+            auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
+            auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(_cm));
+            _cells.push_back({column_def.id, atomic_cell_or_collection(std::move(ac))});
+            _cm.tomb = {};
+            _cm.cells.clear();
+        }
         return proceed::yes;
     }
 
