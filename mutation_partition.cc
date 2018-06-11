@@ -314,6 +314,12 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
         } else {
             auto continuous = i->continuous() || src_e.continuous();
             auto dummy = i->dummy() && src_e.dummy();
+            i->set_continuous(continuous);
+            i->set_dummy(dummy);
+            // Clear continuity in the source first, so that in case of exception
+            // we don't end up with the range up to src_e being marked as continuous,
+            // violating exception guarantees.
+            src_e.set_continuous(false);
             if (tracker) {
                 tracker->on_remove(*i);
                 i->_lru_link.swap_nodes(src_e._lru_link);
@@ -323,8 +329,6 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 memory::on_alloc_point();
                 i->_row.apply_monotonically(s, std::move(src_e._row));
             }
-            i->set_continuous(continuous);
-            i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
         if (preemptible && need_preempt() && p_i != p._rows.end()) {
