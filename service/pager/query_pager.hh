@@ -44,6 +44,7 @@
 #include "paging_state.hh"
 #include "cql3/result_set.hh"
 #include "cql3/selection/selection.hh"
+#include "service/storage_proxy.hh"
 
 namespace service {
 
@@ -141,7 +142,12 @@ private:
     template<typename Base>
     class query_result_visitor;
     
-   void handle_result(cql3::selection::result_set_builder& builder,
+    future<service::storage_proxy::coordinator_query_result>
+    do_fetch_page(uint32_t page_size, gc_clock::time_point now);
+
+    template<typename Visitor>
+    GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
+    void handle_result(Visitor&& visitor,
                       foreign_ptr<lw_shared_ptr<query::result>> results,
                       uint32_t page_size, gc_clock::time_point now);
 };

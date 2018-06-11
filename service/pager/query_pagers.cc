@@ -72,7 +72,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     , _ranges(std::move(ranges))
     {}
 
-    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {
+    future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now) {
         auto state = _options.get_paging_state();
 
         if (!_last_pkey && state) {
@@ -221,12 +221,16 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision}).then(
-                [this, &builder, page_size, now](service::storage_proxy::coordinator_query_result qr) {
-                    _last_replicas = std::move(qr.last_replicas);
-                    _query_read_repair_decision = qr.read_repair_decision;
-                    handle_result(builder, std::move(qr.query_result), page_size, now);
-                });
+                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
+    }
+
+    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {
+        return do_fetch_page(page_size, now).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+            _last_replicas = std::move(qr.last_replicas);
+            _query_read_repair_decision = qr.read_repair_decision;
+            handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
+                          std::move(qr.query_result), page_size, now);
+        });
     }
 
     future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_size,
@@ -249,7 +253,7 @@ public:
     std::experimental::optional<partition_key> last_pkey;
     std::experimental::optional<clustering_key> last_ckey;
 
-    using Base::Base;
+    query_result_visitor(Base&& v) : Base(std::move(v)) { }
 
     void accept_new_partition(uint32_t) {
         throw std::logic_error("Should not reach!");
@@ -276,12 +280,14 @@ public:
     }
 };
 
+    template<typename Visitor>
+    GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
     void query_pager::handle_result(
-            cql3::selection::result_set_builder& builder,
+            Visitor&& visitor,
             foreign_ptr<lw_shared_ptr<query::result>> results,
             uint32_t page_size, gc_clock::time_point now) {
 
-        query_result_visitor<cql3::selection::result_set_builder::visitor> v(builder, *_schema, *_selection);
+        query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
         query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {
