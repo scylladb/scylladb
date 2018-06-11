@@ -218,11 +218,12 @@ void compaction_manager::deregister_compacting_sstables(const std::vector<sstabl
 
 class user_initiated_backlog_tracker final : public compaction_backlog_tracker::impl {
 public:
-    explicit user_initiated_backlog_tracker(float added_backlog) : _added_backlog(added_backlog) {}
+    explicit user_initiated_backlog_tracker(float added_backlog, size_t available_memory) : _added_backlog(added_backlog), _available_memory(available_memory) {}
 private:
     float _added_backlog;
+    size_t _available_memory;
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
-        return _added_backlog * memory::stats().total_memory();
+        return _added_backlog * _available_memory;
     }
     virtual void add_sstable(sstables::shared_sstable sst)  override { }
     virtual void remove_sstable(sstables::shared_sstable sst)  override { }
@@ -254,7 +255,7 @@ future<> compaction_manager::submit_major_compaction(column_family* cf) {
             auto compacting = compacting_sstable_registration(this, sstables);
 
             cmlog.info0("User initiated compaction started on behalf of {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
-            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+            compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
             return do_with(std::move(user_initiated), [this, cf, sstables = std::move(sstables)] (compaction_backlog_tracker& bt) mutable {
                 register_backlog_tracker(bt);
                 return with_scheduling_group(_scheduling_group, [this, cf, sstables = std::move(sstables)] () mutable {
@@ -327,9 +328,9 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> t
     });
 }
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop)
-    : _compaction_controller(sg, iop, 250ms, [this] () -> float {
-        auto b = backlog() / memory::stats().total_memory();
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory)
+    : _compaction_controller(sg, iop, 250ms, [this, available_memory] () -> float {
+        auto b = backlog() / available_memory;
         // This means we are using an unimplemented strategy
         if (compaction_controller::backlog_disabled(b)) {
             // returning the normalization factor means that we'll return the maximum
@@ -341,12 +342,14 @@ compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_
     })
     , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
+    , _available_memory(available_memory)
 {}
 
-compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares)
+compaction_manager::compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares)
     : _compaction_controller(sg, iop, shares)
     , _backlog_manager(_compaction_controller)
     , _scheduling_group(_compaction_controller.sg())
+, _available_memory(available_memory)
 {}
 
 compaction_manager::compaction_manager()
@@ -566,7 +569,7 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
-        compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200)));
+        compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
         return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
             return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
                 return cf.cleanup_sstables(std::move(descriptor));

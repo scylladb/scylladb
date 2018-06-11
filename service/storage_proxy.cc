@@ -438,7 +438,7 @@ endpoints_to_replica_ids(const std::vector<gms::inet_address>& endpoints) {
 }
 
 bool storage_proxy::need_throttle_writes() const {
-    return _stats.background_write_bytes > memory::stats().total_memory() / 10 || _stats.queued_write_bytes > 6*1024*1024;
+    return _stats.background_write_bytes > _background_write_throttle_threahsold || _stats.queued_write_bytes > 6*1024*1024;
 }
 
 void storage_proxy::unthrottle() {
@@ -633,9 +633,11 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
 }
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vector<sstring>> hinted_handoff_enabled)
+storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg)
     : _db(db)
-    , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db) {
+    , _hints_resource_manager(cfg.available_memory / 10)
+    , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
+    , _background_write_throttle_threahsold(cfg.available_memory / 10) {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),
@@ -727,13 +729,13 @@ storage_proxy::storage_proxy(distributed<database>& db, stdx::optional<std::vect
 
     _stats.register_metrics_local();
 
-    const db::config& cfg = _db.local().get_config();
+    const db::config& dbcfg = _db.local().get_config();
     // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
-    db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(cfg.hints_directory().c_str()).capacity / (10 * smp::count);
-    if (hinted_handoff_enabled) {
+    db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(dbcfg.hints_directory().c_str()).capacity / (10 * smp::count);
+    if (cfg.hinted_handoff_enabled) {
         supervisor::notify("creating hints manager");
-        slogger.trace("hinted DCs: {}", *hinted_handoff_enabled);
-        _hints_manager.emplace(cfg.hints_directory(), *hinted_handoff_enabled, cfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
+        slogger.trace("hinted DCs: {}", *cfg.hinted_handoff_enabled);
+        _hints_manager.emplace(dbcfg.hints_directory(), *cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
         _hints_manager->register_metrics("hints_manager");
         _hints_resource_manager.register_manager(*_hints_manager);
     }

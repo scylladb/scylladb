@@ -362,6 +362,7 @@ int main(int ac, char** av) {
             read_config(opts, *cfg).get();
             configurable::init_all(opts, *cfg, *ext).get();
 
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             logging::apply_settings(cfg->logging_settings(opts));
 
             verify_rlimit(cfg->developer_mode());
@@ -493,6 +494,7 @@ int main(int ac, char** av) {
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
+            dbcfg.available_memory = memory::stats().total_memory();
             db.start(std::ref(*cfg), dbcfg).get();
             engine().at_exit([&db, &return_value] {
                 // #293 - do not stop anything - not even db (for real)
@@ -585,11 +587,15 @@ int main(int ac, char** av) {
                     , clauth
                     , cfg->internode_compression()
                     , seed_provider
+                    , memory::stats().total_memory()
                     , cluster_name
                     , phi
                     , cfg->listen_on_broadcast_address());
             supervisor::notify("starting storage proxy");
-            proxy.start(std::ref(db), hinted_handoff_enabled).get();
+            service::storage_proxy::config spcfg;
+            spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
+            spcfg.available_memory = memory::stats().total_memory();
+            proxy.start(std::ref(db), spcfg).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
             supervisor::notify("starting migration manager");
@@ -597,7 +603,8 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([&mm] { return mm.stop(); });
             supervisor::notify("starting query processor");
-            qp.start(std::ref(proxy), std::ref(db)).get();
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            qp.start(std::ref(proxy), std::ref(db), qp_mcfg).get();
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             supervisor::notify("initializing batchlog manager");

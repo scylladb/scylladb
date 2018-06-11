@@ -730,9 +730,7 @@ public:
     }
 };
 
-// for tests, make sure a new test is started with a primed segment pool (all segments
-// allocated so segregated allocation can work)
-void prime_segment_pool();
+future<> prime_segment_pool(size_t available_memory, size_t min_free_memory);
 
 uint64_t memory_allocated();
 uint64_t memory_compacted();

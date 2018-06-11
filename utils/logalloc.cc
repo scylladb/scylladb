@@ -474,7 +474,7 @@ private:
     }
 public:
     segment_pool();
-    void prime();
+    void prime(size_t available_memory, size_t min_free_memory);
     segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
@@ -712,10 +712,9 @@ segment_pool::segment_pool()
     , _lsa_owned_segments_bitmap(max_segments())
     , _lsa_free_segments_bitmap(max_segments())
 {
-    prime();
 }
 
-void segment_pool::prime() {
+void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
     auto old_emergency_reserve = std::exchange(_emergency_reserve_max, std::numeric_limits<size_t>::max());
     try {
         // Allocate all of memory so that we occupy the top part. Afterwards, we'll start
@@ -729,8 +728,8 @@ void segment_pool::prime() {
     // the frequency of expensive segment-migrating reclaim() called by the seastar allocator.
     size_t min_gap = 1 * 1024 * 1024;
     size_t max_gap = 64 * 1024 * 1024;
-    size_t gap = std::min(max_gap, std::max(memory::stats().total_memory() / 16, min_gap));
-    _non_lsa_reserve = memory::min_free_memory() + gap;
+    size_t gap = std::min(max_gap, std::max(available_memory / 16, min_gap));
+    _non_lsa_reserve = min_free_memory + gap;
     // Since the reclaimer is not yet in place, free some low memory for general use
     reclaim_segments(_non_lsa_reserve / segment::size);
 }
@@ -759,7 +758,7 @@ class segment_pool {
     size_t _std_memory_available = size_t(1) << 30; // emulate 1GB per shard
     friend segment_deleter;
 public:
-    void prime() {}
+    void prime(size_t available_memory, size_t min_free_memory) {}
     segment* new_segment(region::impl* r) {
         if (_free_segments.empty()) {
             if (_std_memory_available < segment::size) {
@@ -2240,8 +2239,10 @@ void region_group::on_request_expiry::operator()(std::unique_ptr<allocating_func
     func->fail(std::make_exception_ptr(timed_out_error()));
 }
 
-void prime_segment_pool() {
-    shard_segment_pool.prime();
+future<> prime_segment_pool(size_t available_memory, size_t min_free_memory) {
+    return smp::invoke_on_all([=] {
+        shard_segment_pool.prime(available_memory, min_free_memory);
+    });
 }
 
 uint64_t memory_allocated() {

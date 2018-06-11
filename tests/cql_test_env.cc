@@ -282,6 +282,7 @@ public:
 
     static future<> do_with(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
         return seastar::async([cfg_in, func] {
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             bool old_active = false;
             if (!active.compare_exchange_strong(old_active, true)) {
                 throw std::runtime_error("Starting more than one cql_test_env at a time not supported due to singletons.");
@@ -329,7 +330,9 @@ public:
             ss.start(std::ref(*db), std::ref(*auth_service), std::ref(sys_dist_ks)).get();
             auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
-            db->start(std::move(*cfg), database_config()).get();
+            database_config dbcfg;
+            dbcfg.available_memory = memory::stats().total_memory();
+            db->start(std::move(*cfg), dbcfg).get();
             auto stop_db = defer([db] {
                 db->stop().get();
             });
@@ -349,14 +352,17 @@ public:
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
 
-            proxy.start(std::ref(*db), stdx::nullopt).get();
+            service::storage_proxy::config spcfg;
+            spcfg.available_memory = memory::stats().total_memory();
+            proxy.start(std::ref(*db), spcfg).get();
             auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
 
             mm.start().get();
             auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
-            qp.start(std::ref(proxy), std::ref(*db)).get();
+            cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
+            qp.start(std::ref(proxy), std::ref(*db), qp_mcfg).get();
             auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             bm.start(std::ref(qp)).get();

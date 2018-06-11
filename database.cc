@@ -2105,9 +2105,9 @@ inline
 std::unique_ptr<compaction_manager>
 make_compaction_manager(db::config& cfg, database_config& dbcfg) {
     if (cfg.compaction_static_shares() > 0) {
-        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), cfg.compaction_static_shares());
+        return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory, cfg.compaction_static_shares());
     }
-    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority());
+    return std::make_unique<compaction_manager>(dbcfg.compaction_scheduling_group, service::get_local_compaction_priority(), dbcfg.available_memory);
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
@@ -2121,8 +2121,8 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit())
-    , _dirty_memory_manager(*this, memory::stats().total_memory() * 0.45, cfg.virtual_dirty_soft_limit())
-    , _streaming_dirty_memory_manager(*this, memory::stats().total_memory() * 0.10, cfg.virtual_dirty_soft_limit())
+    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit())
+    , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit())
     , _dbcfg(dbcfg)
     , _memtable_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
@@ -2146,7 +2146,9 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _querier_cache(dbcfg.available_memory * 0.04)
     , _large_partition_handler(std::make_unique<db::cql_table_large_partition_handler>(_cfg->compaction_large_partition_warning_threshold_mb()*1024*1024))
+    , _result_memory_limiter(dbcfg.available_memory / 10)
 {
     local_schema_registry().init(*this); // TODO: we're never unbound.
     _compaction_manager->start();
@@ -2561,7 +2563,7 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
 
 future<>
 database::init_commitlog() {
-    return db::commitlog::create_commitlog(*_cfg).then([this](db::commitlog&& log) {
+    return db::commitlog::create_commitlog(db::commitlog::config::from_db_config(*_cfg, _dbcfg.available_memory)).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
         _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
             if (_column_families.count(id) == 0) {

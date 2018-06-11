@@ -115,15 +115,19 @@ public:
     virtual void release_cf_count(const cf_id_type&) = 0;
 };
 
-db::commitlog::config::config(const db::config& cfg)
-    : commit_log_location(cfg.commitlog_directory())
-    , metrics_category_name("commitlog")
-    , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (memory::stats().total_memory() * smp::count) >> 20)
-    , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
-    , commitlog_sync_period_in_ms(cfg.commitlog_sync_period_in_ms())
-    , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
-    , extensions(&cfg.extensions())
-{}
+db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, size_t shard_available_memory) {
+    config c;
+
+    c.commit_log_location = cfg.commitlog_directory();
+    c.metrics_category_name = "commitlog";
+    c.commitlog_total_space_in_mb = cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : (shard_available_memory * smp::count) >> 20;
+    c.commitlog_segment_size_in_mb = cfg.commitlog_segment_size_in_mb();
+    c.commitlog_sync_period_in_ms = cfg.commitlog_sync_period_in_ms();
+    c.mode = cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC;
+    c.extensions = &cfg.extensions();
+
+    return c;
+}
 
 db::commitlog::descriptor::descriptor(segment_id_type i, const std::string& fname_prefix, uint32_t v)
         : id(i), ver(v), filename_prefix(fname_prefix) {

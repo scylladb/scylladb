@@ -141,9 +141,10 @@ private:
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     seastar::scheduling_group _scheduling_group;
+    size_t _available_memory;
 public:
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop);
-    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, uint64_t shares);
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory);
+    compaction_manager(seastar::scheduling_group sg, const ::io_priority_class& iop, size_t available_memory, uint64_t shares);
     compaction_manager();
     ~compaction_manager();
 

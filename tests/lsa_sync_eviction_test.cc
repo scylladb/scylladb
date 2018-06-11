@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
 
         return seastar::async([reg_obj_size, std_obj_size, obj_count] {
             logalloc::region r;
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
 
             with_allocator(r.allocator(), [&] {
                 std::deque<managed_bytes> refs;

@@ -52,8 +52,8 @@ public:
     static constexpr size_t minimum_result_size = 4 * 1024;
     static constexpr size_t maximum_result_size = 1 * 1024 * 1024;
 public:
-    result_memory_limiter()
-        : _maximum_total_result_memory(memory::stats().total_memory() / 10)
+    explicit result_memory_limiter(size_t maximum_total_result_memory)
+        : _maximum_total_result_memory(maximum_total_result_memory)
         , _memory_limiter(_maximum_total_result_memory)
     { }
 
