@@ -241,17 +241,15 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 });
     }
 
-class query_pager::query_result_visitor : public cql3::selection::result_set_builder::visitor {
+template<typename Base>
+class query_pager::query_result_visitor : public Base {
+    using visitor = Base;
 public:
     uint32_t total_rows = 0;
     std::experimental::optional<partition_key> last_pkey;
     std::experimental::optional<clustering_key> last_ckey;
 
-    query_result_visitor(cql3::selection::result_set_builder& builder,
-                         const schema& s,
-                         const cql3::selection::selection& selection)
-        : visitor(builder, s, selection)
-    { }
+    using Base::Base;
 
     void accept_new_partition(uint32_t) {
         throw std::logic_error("Should not reach!");
@@ -283,7 +281,7 @@ public:
             foreign_ptr<lw_shared_ptr<query::result>> results,
             uint32_t page_size, gc_clock::time_point now) {
 
-        query_result_visitor v(builder, *_schema, *_selection);
+        query_result_visitor<cql3::selection::result_set_builder::visitor> v(builder, *_schema, *_selection);
         query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {

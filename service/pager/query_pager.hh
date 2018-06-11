@@ -136,8 +136,9 @@ public:
      * beginning. If the pager is exhausted, the result is undefined.
      */
     ::shared_ptr<const paging_state> state() const;
-    
+
 private:
+    template<typename Base>
     class query_result_visitor;
     
    void handle_result(cql3::selection::result_set_builder& builder,
