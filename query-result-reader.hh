@@ -144,6 +144,20 @@ struct result_visitor {
     void accept_partition_end(const result_row_view& static_row) {}
 };
 
+GCC6_CONCEPT(
+template<typename Visitor>
+concept bool ResultVisitor = requires(Visitor visitor, const partition_key& pkey,
+                                      uint32_t row_count, const clustering_key& ckey,
+                                      const result_row_view& static_row, const result_row_view& row)
+{
+    visitor.accept_new_partition(pkey, row_count);
+    visitor.accept_new_partition(row_count);
+    visitor.accept_new_row(ckey, static_row, row);
+    visitor.accept_new_row(static_row, row);
+    visitor.accept_partition_end(static_row);
+};
+)
+
 class result_view {
     ser::query_result_view _v;
     friend class result_merger;
@@ -164,8 +178,9 @@ public:
         });
     }
 
-    template <typename ResultVisitor>
-    void consume(const partition_slice& slice, ResultVisitor&& visitor) {
+    template <typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void consume(const partition_slice& slice, Visitor&& visitor) {
         for (auto&& p : _v.partitions()) {
             auto rows = p.rows();
             auto row_count = rows.size();
