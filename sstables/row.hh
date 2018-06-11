@@ -566,7 +566,6 @@ private:
         COLUMN_TTL,
         COLUMN_TTL_2,
         COLUMN_CELL_PATH,
-        CELL_PATH_SIZE,
         COLUMN_VALUE,
         COLUMN_END,
         RANGE_TOMBSTONE_MARKER,
