@@ -812,8 +812,29 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
     auto do_test = [](auto&& gen) {
         auto&& alloc = standard_allocator();
         with_allocator(alloc, [&] {
-            auto target = gen();
-            auto second = gen();
+            auto&& s = *gen.schema();
+            mutation target = gen();
+            mutation second = gen();
+
+            target.partition().set_continuity(s, position_range::all_clustered_rows(), is_continuous::no);
+            second.partition().set_continuity(s, position_range::all_clustered_rows(), is_continuous::no);
+
+            // Mark random ranges as continuous in target and second.
+            // Note that continuity merging rules mandate that the ranges are discjoint
+            // between the two.
+            {
+                int which = 0;
+                for (auto&& ck_range : gen.make_random_ranges(7)) {
+                    bool use_second = which++ % 2;
+                    mutation& dst = use_second ? second : target;
+                    dst.partition().set_continuity(s, position_range::from_range(ck_range), is_continuous::yes);
+                    // Continutiy merging rules mandate that continuous range in the newer verison
+                    // contains all rows which are in the old versions.
+                    if (use_second) {
+                        second.partition().apply(s, target.partition().sliced(s, {ck_range}));
+                    }
+                }
+            }
 
             auto expected = target + second;
 
@@ -827,6 +848,18 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                     injector.cancel();
                 } catch (const std::bad_alloc&) {
+                    auto&& s = *gen.schema();
+                    auto c1 = m.partition().get_continuity(s);
+                    auto c2 = m2.get_continuity(s);
+                    clustering_interval_set actual;
+                    actual.add(s, c1);
+                    actual.add(s, c2);
+                    auto expected_cont = expected.partition().get_continuity(s);
+                    if (!actual.equals(s, expected_cont)) {
+                        BOOST_FAIL(sprint("Continuity differs, expected %s (%s + %s), got %s (%s + %s)",
+                            expected_cont, target.partition().get_continuity(s), second.partition().get_continuity(s),
+                            actual, c1, c2));
+                    }
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                 }
                 assert_that(m).is_equal_to(expected)
