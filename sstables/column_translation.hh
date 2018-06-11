@@ -41,6 +41,7 @@ class column_translation {
 
         static std::tuple<std::vector<stdx::optional<column_id>>,
                           std::vector<std::optional<uint32_t>>,
+                          std::vector<bool>,
                           std::vector<bool>> build(
                 const schema& s,
                 const utils::chunked_vector<serialization_header::column_desc>& src,
@@ -48,15 +49,18 @@ class column_translation {
             std::vector<stdx::optional<column_id>> ids;
             std::vector<std::optional<column_id>> lens;
             std::vector<bool> is_collection;
+            std::vector<bool> is_counter;
             if (s.is_dense()) {
                 if (is_static) {
                     ids.push_back(s.static_begin()->id);
                     lens.push_back(s.static_begin()->type->value_length_if_fixed());
                     is_collection.push_back(s.static_begin()->is_multi_cell());
+                    is_counter.push_back(s.static_begin()->is_counter());
                 } else {
                     ids.push_back(s.regular_begin()->id);
                     lens.push_back(s.regular_begin()->type->value_length_if_fixed());
                     is_collection.push_back(s.regular_begin()->is_multi_cell());
+                    is_counter.push_back(s.regular_begin()->is_counter());
                 }
             } else {
                 ids.reserve(src.size());
@@ -67,14 +71,16 @@ class column_translation {
                         ids.push_back(def->id);
                         lens.push_back(def->type->value_length_if_fixed());
                         is_collection.push_back(def->is_multi_cell());
+                        is_counter.push_back(def->is_counter());
                     } else {
                         ids.push_back(stdx::nullopt);
                         lens.push_back(std::nullopt);
                         is_collection.push_back(false);
+                        is_counter.push_back(false);
                     }
                 }
             }
-            return std::make_tuple(std::move(ids), std::move(lens), std::move(is_collection));
+            return std::make_tuple(std::move(ids), std::move(lens), std::move(is_collection), std::move(is_counter));
         }
 
         utils::UUID schema_uuid;
@@ -85,6 +91,8 @@ class column_translation {
         std::vector<std::optional<uint32_t>> clustering_column_value_fix_lengths;
         std::vector<bool> static_column_is_collection;
         std::vector<bool> regular_column_is_collection;
+        std::vector<bool> static_column_is_counter;
+        std::vector<bool> regular_column_is_counter;
 
         state() = default;
         state(const state&) = delete;
@@ -97,11 +105,13 @@ class column_translation {
         {
             std::tie(regular_schema_column_id_from_sstable,
                      regular_column_value_fix_lengths,
-                     regular_column_is_collection) =
+                     regular_column_is_collection,
+                     regular_column_is_counter) =
                     build(s, header.regular_columns.elements, false);
             std::tie(static_schema_column_id_from_sstable,
                      static_column_value_fix_lengths,
-                     static_column_is_collection) =
+                     static_column_is_collection,
+                     static_column_is_counter) =
                     build(s, header.static_columns.elements, true);
             clustering_column_value_fix_lengths.reserve(header.clustering_key_types_names.elements.size());
             for (auto&& t : header.clustering_key_types_names.elements) {
@@ -141,6 +151,12 @@ public:
     }
     const std::vector<bool>& regular_column_is_collection() const {
         return _state->regular_column_is_collection;
+    }
+    const std::vector<bool>& static_column_is_counter() const {
+        return _state->static_column_is_counter;
+    }
+    const std::vector<bool>& regular_column_is_counter() const {
+        return _state->regular_column_is_counter;
     }
 };
 
