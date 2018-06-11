@@ -810,28 +810,28 @@ SEASTAR_TEST_CASE(test_marker_apply) {
 
 SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
     auto do_test = [](auto&& gen) {
-        failure_injecting_allocation_strategy alloc(standard_allocator());
+        auto&& alloc = standard_allocator();
         with_allocator(alloc, [&] {
             auto target = gen();
             auto second = gen();
 
             auto expected = target + second;
 
+            auto& injector = memory::local_failure_injector();
             size_t fail_offset = 0;
-            while (true) {
+            do {
                 mutation m = target;
                 auto m2 = mutation_partition(*m.schema(), second.partition());
-                alloc.fail_after(fail_offset++);
+                injector.fail_after(fail_offset++);
                 try {
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
-                    alloc.stop_failing();
-                    break;
+                    injector.cancel();
                 } catch (const std::bad_alloc&) {
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                 }
                 assert_that(m).is_equal_to(expected)
                     .has_same_continuity(expected);
-            }
+            } while (injector.failed());
         });
     };
 
