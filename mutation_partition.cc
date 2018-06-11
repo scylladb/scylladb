@@ -1296,7 +1296,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
     }
 
     _row_tombstones.erase_where([&] (auto&& rt) {
-        return should_purge_tombstone(rt.tomb) || rt.tomb.timestamp <= _tombstone.timestamp;
+        return should_purge_tombstone(rt.tomb) || rt.tomb <= _tombstone;
     });
     if (should_purge_tombstone(_tombstone)) {
         _tombstone = tombstone();
