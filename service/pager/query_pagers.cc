@@ -48,9 +48,14 @@
 
 static logging::logger qlogger("paging");
 
-class service::pager::query_pagers::impl : public query_pager {
-public:
-    impl(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+namespace service::pager {
+
+static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
+    return s.clustering_key_size() > 0
+            && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
+}
+
+    query_pager::query_pager(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
                     db::timeout_clock::duration timeout,
@@ -67,13 +72,7 @@ public:
                     , _ranges(std::move(ranges))
     {}
 
-private:
-    static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
-        return s.clustering_key_size() > 0
-               && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
-    }
-
-    future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) override {
+    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {
         auto state = _options.get_paging_state();
 
         if (!_last_pkey && state) {
@@ -230,8 +229,8 @@ private:
                 });
     }
 
-    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size,
-            gc_clock::time_point now) override {
+    future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_size,
+            gc_clock::time_point now) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
@@ -242,7 +241,7 @@ private:
                 });
     }
 
-    void handle_result(
+    void query_pager::handle_result(
             cql3::selection::result_set_builder& builder,
             foreign_ptr<lw_shared_ptr<query::result>> results,
             uint32_t page_size, gc_clock::time_point now) {
@@ -311,38 +310,12 @@ private:
         }
     }
 
-    bool is_exhausted() const override {
-        return _exhausted;
-    }
-
-    int max_remaining() const override {
-        return _max;
-    }
-
-    ::shared_ptr<const service::pager::paging_state> state() const override {
+    shared_ptr<const service::pager::paging_state> query_pager::state() const {
         return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
                 _last_ckey, _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
     }
 
-private:
-    // remember if we use clustering. if not, each partition == one row
-    const bool _has_clustering_keys;
-    bool _exhausted = false;
-    uint32_t _max;
-
-    std::experimental::optional<partition_key> _last_pkey;
-    std::experimental::optional<clustering_key> _last_ckey;
-
-    schema_ptr _schema;
-    ::shared_ptr<cql3::selection::selection> _selection;
-    service::query_state& _state;
-    const cql3::query_options& _options;
-    db::timeout_clock::duration _timeout;
-    lw_shared_ptr<query::read_command> _cmd;
-    dht::partition_range_vector _ranges;
-    paging_state::replicas_per_token_range _last_replicas;
-    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
-};
+}
 
 bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         const query::read_command& cmd,
@@ -379,7 +352,7 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges) {
-    return ::make_shared<impl>(std::move(s), std::move(selection), state,
+    return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
             options, timeout, std::move(cmd), std::move(ranges));
 }
 

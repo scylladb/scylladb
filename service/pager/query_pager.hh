@@ -69,8 +69,31 @@ namespace pager {
  * is done even though it is.
  */
 class query_pager {
+private:
+    // remember if we use clustering. if not, each partition == one row
+    const bool _has_clustering_keys;
+    bool _exhausted = false;
+    uint32_t _max;
+
+    std::experimental::optional<partition_key> _last_pkey;
+    std::experimental::optional<clustering_key> _last_ckey;
+
+    schema_ptr _schema;
+    ::shared_ptr<cql3::selection::selection> _selection;
+    service::query_state& _state;
+    const cql3::query_options& _options;
+    db::timeout_clock::duration _timeout;
+    lw_shared_ptr<query::read_command> _cmd;
+    dht::partition_range_vector _ranges;
+    paging_state::replicas_per_token_range _last_replicas;
+    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
 public:
-    virtual ~query_pager() {}
+    query_pager(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+                service::query_state& state,
+                const cql3::query_options& options,
+                db::timeout_clock::duration timeout,
+                lw_shared_ptr<query::read_command> cmd,
+                dht::partition_range_vector ranges);
 
     /**
      * Fetches the next page.
@@ -78,12 +101,12 @@ public:
      * @param pageSize the maximum number of elements to return in the next page.
      * @return the page of result.
      */
-    virtual future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, gc_clock::time_point) = 0;
+    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, gc_clock::time_point);
 
     /**
      * For more than one page.
      */
-    virtual future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point) = 0;
+    future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point);
 
     /**
      * Whether or not this pager is exhausted, i.e. whether or not a call to
@@ -91,7 +114,9 @@ public:
      *
      * @return whether the pager is exhausted.
      */
-    virtual bool is_exhausted() const = 0;
+    bool is_exhausted() const {
+        return _exhausted;
+    }
 
     /**
      * The maximum number of cells/CQL3 row that we may still have to return.
@@ -99,7 +124,9 @@ public:
      * returned (note that it's not how many we *will* return, just the upper
      * limit on it).
      */
-    virtual int max_remaining() const = 0;
+    int max_remaining() const {
+        return _max;
+    }
 
     /**
      * Get the current state (snapshot) of the pager. The state can allow to restart the
@@ -108,7 +135,12 @@ public:
      * @return the current paging state. Will return null if paging is at the
      * beginning. If the pager is exhausted, the result is undefined.
      */
-    virtual ::shared_ptr<const paging_state> state() const = 0;
+    ::shared_ptr<const paging_state> state() const;
+
+private:
+   void handle_result(cql3::selection::result_set_builder& builder,
+                      foreign_ptr<lw_shared_ptr<query::result>> results,
+                      uint32_t page_size, gc_clock::time_point now);
 };
 
 }

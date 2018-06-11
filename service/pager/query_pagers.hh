@@ -67,8 +67,6 @@ public:
             db::timeout_clock::duration timeout,
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector);
-private:
-    class impl;
 };
 
 }
