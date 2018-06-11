@@ -4783,14 +4783,18 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::null, s->compaction_strategy_options());
         sstables::sstable_set set = cs.make_sstable_set(s);
         std::unordered_set<shared_sstable> sstables;
+        std::optional<utils::observer<sstable&>> observer;
 
-        auto do_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst) {
+        auto do_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
             // that's because each sstable will contain only 1 mutation.
             BOOST_REQUIRE(old_sstables.size() == 1);
             BOOST_REQUIRE(new_sstables.size() == 1);
             // check that sstable replacement follows token order
             BOOST_REQUIRE(*expected_sst == old_sstables.front()->generation());
             expected_sst++;
+            // check that previously released sstable was already closed
+            BOOST_REQUIRE(*closed_sstables_tracker == old_sstables.front()->generation());
+
             BOOST_REQUIRE(sstables.count(old_sstables.front()));
             BOOST_REQUIRE(!sstables.count(new_sstables.front()));
             sstables.erase(old_sstables.front());
@@ -4799,6 +4803,11 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             for (auto& sst : sstables) {
                 set.insert(sst);
             }
+            observer = old_sstables.front()->add_on_closed_handler([&] (sstable& sst) {
+                BOOST_TEST_MESSAGE(sprint("Closing sstable of generation %d", sst.generation()));
+                closed_sstables_tracker++;
+            });
+
             BOOST_TEST_MESSAGE(sprint("Removing sstable of generation %d, refcnt: %d", old_sstables.front()->generation(), old_sstables.front().use_count()));
         };
 
@@ -4847,12 +4856,14 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
             auto sstable_run = boost::copy_range<std::set<int64_t>>(desc.sstables
                 | boost::adaptors::transformed([] (auto& sst) { return sst->generation(); }));
             auto expected_sst = sstable_run.begin();
+            auto closed_sstables_tracker = sstable_run.begin();
             auto replacer = [&] (auto old_sstables, auto new_sstables) {
                 BOOST_REQUIRE(expected_sst != sstable_run.end());
-                do_replace(std::move(old_sstables), std::move(new_sstables), expected_sst);
+                do_replace(std::move(old_sstables), std::move(new_sstables), expected_sst, closed_sstables_tracker);
             };
 
             auto result = compact(std::move(desc.sstables), replacer);
+            observer->disconnect();
             BOOST_REQUIRE_EQUAL(expected_output, result.size());
             BOOST_REQUIRE(expected_sst == sstable_run.end());
             return result;
