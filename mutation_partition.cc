@@ -2233,6 +2233,40 @@ void mutation_partition::make_fully_continuous() {
     }
 }
 
+void mutation_partition::set_continuity(const schema& s, const position_range& pr, is_continuous cont) {
+    auto less = rows_entry::compare(s);
+
+    if (!less(pr.start(), pr.end())) {
+        return; // empty range
+    }
+
+    auto end = _rows.lower_bound(pr.end(), less);
+    if (end == _rows.end() || less(pr.end(), end->position())) {
+        end = _rows.insert_before(end, *current_allocator().construct<rows_entry>(s, pr.end(), is_dummy::yes,
+            end == _rows.end() ? is_continuous::yes : end->continuous()));
+    }
+
+    auto i = _rows.lower_bound(pr.start(), less);
+    if (less(pr.start(), i->position())) {
+        i = _rows.insert_before(i, *current_allocator().construct<rows_entry>(s, pr.start(), is_dummy::yes, i->continuous()));
+    }
+
+    assert(i != end);
+    ++i;
+
+    while (1) {
+        i->set_continuous(cont);
+        if (i == end) {
+            break;
+        }
+        if (i->dummy()) {
+            i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
+        } else {
+            ++i;
+        }
+    }
+}
+
 clustering_interval_set mutation_partition::get_continuity(const schema& s, is_continuous cont) const {
     clustering_interval_set result;
     auto i = _rows.begin();
