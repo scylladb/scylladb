@@ -136,8 +136,10 @@ public:
      * beginning. If the pager is exhausted, the result is undefined.
      */
     ::shared_ptr<const paging_state> state() const;
-
+    
 private:
+    class query_result_visitor;
+    
    void handle_result(cql3::selection::result_set_builder& builder,
                       foreign_ptr<lw_shared_ptr<query::result>> results,
                       uint32_t page_size, gc_clock::time_point now);

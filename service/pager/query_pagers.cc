@@ -241,49 +241,49 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 });
     }
 
+class query_pager::query_result_visitor : public cql3::selection::result_set_builder::visitor {
+public:
+    uint32_t total_rows = 0;
+    std::experimental::optional<partition_key> last_pkey;
+    std::experimental::optional<clustering_key> last_ckey;
+
+    query_result_visitor(cql3::selection::result_set_builder& builder,
+                         const schema& s,
+                         const cql3::selection::selection& selection)
+        : visitor(builder, s, selection)
+    { }
+
+    void accept_new_partition(uint32_t) {
+        throw std::logic_error("Should not reach!");
+    }
+    void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        qlogger.trace("Accepting partition: {} ({})", key, row_count);
+        total_rows += std::max(row_count, 1u);
+        last_pkey = key;
+        last_ckey = { };
+        visitor::accept_new_partition(key, row_count);
+    }
+    void accept_new_row(const clustering_key& key,
+            const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        last_ckey = key;
+        visitor::accept_new_row(key, static_row, row);
+    }
+    void accept_new_row(const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        visitor::accept_new_row(static_row, row);
+    }
+    void accept_partition_end(const query::result_row_view& static_row) {
+        visitor::accept_partition_end(static_row);
+    }
+};
+
     void query_pager::handle_result(
             cql3::selection::result_set_builder& builder,
             foreign_ptr<lw_shared_ptr<query::result>> results,
             uint32_t page_size, gc_clock::time_point now) {
 
-        class myvisitor : public cql3::selection::result_set_builder::visitor {
-        public:
-            uint32_t total_rows = 0;
-            std::experimental::optional<partition_key> last_pkey;
-            std::experimental::optional<clustering_key> last_ckey;
-
-            myvisitor(cql3::selection::result_set_builder& builder,
-                    const schema& s,
-                    const cql3::selection::selection& selection)
-                    : visitor(builder, s, selection) {
-            }
-
-            void accept_new_partition(uint32_t) {
-                throw std::logic_error("Should not reach!");
-            }
-            void accept_new_partition(const partition_key& key, uint32_t row_count) {
-                qlogger.trace("Accepting partition: {} ({})", key, row_count);
-                total_rows += std::max(row_count, 1u);
-                last_pkey = key;
-                last_ckey = { };
-                visitor::accept_new_partition(key, row_count);
-            }
-            void accept_new_row(const clustering_key& key,
-                    const query::result_row_view& static_row,
-                    const query::result_row_view& row) {
-                last_ckey = key;
-                visitor::accept_new_row(key, static_row, row);
-            }
-            void accept_new_row(const query::result_row_view& static_row,
-                    const query::result_row_view& row) {
-                visitor::accept_new_row(static_row, row);
-            }
-            void accept_partition_end(const query::result_row_view& static_row) {
-                visitor::accept_partition_end(static_row);
-            }
-        };
-
-        myvisitor v(builder, *_schema, *_selection);
+        query_result_visitor v(builder, *_schema, *_selection);
         query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {
