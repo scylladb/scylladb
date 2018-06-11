@@ -3036,7 +3036,7 @@ SEASTAR_TEST_CASE(test_concurrent_reads_and_eviction) {
             tracker.region().evict_some();
 
             // Don't allow backlog to grow too much to avoid bad_alloc
-            const auto max_active_versions = 10;
+            const auto max_active_versions = 7;
             while (!done && versions.size() > max_active_versions) {
                 later().get();
             }
