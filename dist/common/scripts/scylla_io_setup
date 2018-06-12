@@ -64,7 +64,7 @@ if __name__ == "__main__":
             properties_file = file("/etc/scylla.d/io_properties.yaml", "w")
             yaml.dump({ "disks": disk_properties }, properties_file,  default_flow_style=False)
             ioconf = file("/etc/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file))
+            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
         else:
             if os.environ.has_key("SCYLLA_CONF"):
                 conf_dir = os.environ["SCYLLA_CONF"]
