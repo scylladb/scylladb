@@ -987,6 +987,21 @@ public:
         return proceed::yes;
     }
 
+    virtual proceed consume_counter_column(stdx::optional<column_id> column_id,
+                                           bytes_view value,
+                                           api::timestamp_type timestamp) override {
+        if (!column_id) {
+            return proceed::yes;
+        }
+        const column_definition& column_def = get_column_definition(column_id);
+        if (timestamp <= column_def.dropped_at()) {
+            return proceed::yes;
+        }
+        auto ac = make_counter_cell(timestamp, value);
+        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
+        return proceed::yes;
+    }
+
     virtual proceed consume_row_end(const liveness_info& liveness_info) override {
         auto fill_cells = [this] (column_kind kind, row& cells) {
             auto max_id = boost::max_element(_cells, [](auto &&a, auto &&b) {

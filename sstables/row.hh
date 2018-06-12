@@ -168,6 +168,9 @@ public:
 
     virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) = 0;
 
+    virtual proceed consume_counter_column(stdx::optional<column_id> column_id, bytes_view value,
+                                           api::timestamp_type timestamp) = 0;
+
     virtual proceed consume_row_end(const sstables::liveness_info&) = 0;
 
     // Called when the reader is fast forwarded to given element.
