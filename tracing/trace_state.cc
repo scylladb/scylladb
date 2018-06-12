@@ -49,6 +49,54 @@ namespace tracing {
 
 logging::logger trace_state_logger("trace_state");
 
+struct trace_state::params_values {
+    std::experimental::optional<std::unordered_set<gms::inet_address>> batchlog_endpoints;
+    std::experimental::optional<api::timestamp_type> user_timestamp;
+    std::experimental::optional<sstring> query;
+    std::experimental::optional<db::consistency_level> cl;
+    std::experimental::optional<db::consistency_level> serial_cl;
+    std::experimental::optional<int32_t> page_size;
+};
+
+trace_state::params_values* trace_state::params_ptr::get_ptr_safe() {
+    if (!_vals) {
+        _vals = std::unique_ptr<params_values, params_values_deleter>{};
+    }
+    return _vals.get();
+}
+
+void trace_state::params_values_deleter::operator()(params_values* pv) {
+    delete pv;
+}
+
+void trace_state::set_batchlog_endpoints(const std::unordered_set<gms::inet_address>& val) {
+    _params_ptr->batchlog_endpoints.emplace(val);
+}
+
+void trace_state::set_consistency_level(db::consistency_level val) {
+    _params_ptr->cl.emplace(val);
+}
+
+void trace_state::set_optional_serial_consistency_level(const std::experimental::optional<db::consistency_level>& val) {
+    if (val) {
+        _params_ptr->serial_cl.emplace(*val);
+    }
+}
+
+void trace_state::set_page_size(int32_t val) {
+    if (val > 0) {
+        _params_ptr->page_size.emplace(val);
+    }
+}
+
+void trace_state::set_query(const sstring& val) {
+    _params_ptr->query.emplace(val);
+}
+
+void trace_state::set_user_timestamp(api::timestamp_type val) {
+    _params_ptr->user_timestamp.emplace(val);
+}
+
 void trace_state::build_parameters_map() {
     if (!_params_ptr) {
         return;
