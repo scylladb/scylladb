@@ -63,7 +63,7 @@ if __name__ == "__main__":
                 disk_properties["write_iops"] = 57100 * nr_disks
                 disk_properties["write_bandwidth"] = 483141731 * nr_disks
             properties_file = file("/etc/scylla.d/io_properties.yaml", "w")
-            yaml.dump({ "disks": disk_properties }, properties_file,  default_flow_style=False)
+            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
             ioconf = file("/etc/scylla.d/io.conf", "w")
             ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
         else:
