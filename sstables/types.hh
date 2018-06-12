@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <type_traits>
 #include "version.hh"
+#include "encoding_stats.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -413,6 +414,11 @@ struct serialization_header : public metadata_base<serialization_header> {
         }
         // Should never reach here - compiler will complain if switch above does not cover all sstable versions
         abort();
+    }
+    void adjust() {
+        min_timestamp.value += encoding_stats::timestamp_epoch;
+        min_local_deletion_time.value += encoding_stats::deletion_time_epoch;
+        min_ttl.value += encoding_stats::ttl_epoch;
     }
 };
 
