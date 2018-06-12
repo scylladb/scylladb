@@ -66,6 +66,8 @@ inline atomic_cell make_atomic_cell(const abstract_type& type,
     }
 }
 
+atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value);
+
 class mp_row_consumer_k_l : public row_consumer {
 private:
     mp_row_consumer_reader* _reader;
@@ -458,37 +460,6 @@ public:
 
     proceed flush_if_needed(clustering_key_prefix&& ck) {
         return flush_if_needed(false, position_in_partition(position_in_partition::clustering_row_tag_t(), std::move(ck)));
-    }
-
-    atomic_cell make_counter_cell(int64_t timestamp, bytes_view value) {
-        static constexpr size_t shard_size = 32;
-
-        data_input in(value);
-
-        auto header_size = in.read<int16_t>();
-        for (auto i = 0; i < header_size; i++) {
-            auto idx = in.read<int16_t>();
-            if (idx >= 0) {
-                throw marshal_exception("encountered a local shard in a counter cell");
-            }
-        }
-        auto shard_count = value.size() / shard_size;
-        if (shard_count != size_t(header_size)) {
-            throw marshal_exception("encountered remote shards in a counter cell");
-        }
-
-        std::vector<counter_shard> shards;
-        shards.reserve(shard_count);
-        counter_cell_builder ccb(shard_count);
-        for (auto i = 0u; i < shard_count; i++) {
-            auto id_hi = in.read<int64_t>();
-            auto id_lo = in.read<int64_t>();
-            auto clock = in.read<int64_t>();
-            auto value = in.read<int64_t>();
-            ccb.add_maybe_unsorted_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
-        }
-        ccb.sort_and_remove_duplicates();
-        return ccb.build(timestamp);
     }
 
     template<typename CreateCell>
