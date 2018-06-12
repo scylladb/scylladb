@@ -263,6 +263,10 @@ public:
         return _range_tombstones;
     }
 
+    std::deque<range_tombstone> range_tombstones() && {
+        return std::move(_range_tombstones);
+    }
+
     void apply(range_tombstone rt);
 
     void clear();

@@ -54,6 +54,12 @@ GCC6_CONCEPT(
     };
 )
 
+struct detached_compaction_state {
+    ::partition_start partition_start;
+    std::optional<::static_row> static_row;
+    std::deque<range_tombstone> range_tombstones;
+};
+
 // emit_only_live::yes will cause compact_for_query to emit only live
 // static and clustering rows. It doesn't affect the way range tombstones are
 // emitted.
@@ -322,6 +328,18 @@ public:
 
     bool are_limits_reached() const {
         return _row_limit == 0 || _partition_limit == 0;
+    }
+
+    /// Detach the internal state of the compactor
+    ///
+    /// The state is represented by the last seen partition header, static row
+    /// and active range tombstones. Replaying these fragments through a new
+    /// compactor will result in the new compactor being in the same state *this
+    /// is (given the same outside parameters of course). Practically this
+    /// allows the compaction state to be stored in the compacted reader.
+    detached_compaction_state detach_state() && {
+        partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
+        return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
 };
 
