@@ -193,10 +193,7 @@ flat_mutation_reader make_delegating_reader(flat_mutation_reader& r) {
 flat_mutation_reader make_forwardable(flat_mutation_reader m) {
     class reader : public flat_mutation_reader::impl {
         flat_mutation_reader _underlying;
-        position_range _current = {
-            position_in_partition(position_in_partition::partition_start_tag_t()),
-            position_in_partition(position_in_partition::after_static_row_tag_t())
-        };
+        position_range _current;
         mutation_fragment_opt _next;
         // When resolves, _next is engaged or _end_of_stream is set.
         future<> ensure_next() {
@@ -211,7 +208,10 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             });
         }
     public:
-        reader(flat_mutation_reader r) : impl(r.schema()), _underlying(std::move(r)) { }
+        reader(flat_mutation_reader r) : impl(r.schema()), _underlying(std::move(r)), _current({
+            position_in_partition(position_in_partition::partition_start_tag_t()),
+            position_in_partition(position_in_partition::after_static_row_tag_t())
+        }) { }
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
             return repeat([this] {
                 if (is_buffer_full()) {
