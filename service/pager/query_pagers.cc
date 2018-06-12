@@ -55,7 +55,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
 }
 
-    query_pager::query_pager(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+    query_pager::query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
                     db::timeout_clock::duration timeout,
@@ -347,7 +347,7 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
 }
 
 ::shared_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
-        schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+        schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
         db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
