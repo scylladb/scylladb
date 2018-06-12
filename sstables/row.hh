@@ -1001,13 +1001,21 @@ public:
         case state::COLUMN_END:
         column_end_label:
             _state = state::NEXT_COLUMN;
-            if (_consumer.consume_column(get_column_id(),
-                                         to_bytes_view(_cell_path),
-                                         to_bytes_view(_column_value),
-                                         _column_timestamp,
-                                         _column_ttl,
-                                         _column_local_deletion_time) == consumer_m::proceed::no) {
-                return consumer_m::proceed::no;
+            if (is_column_counter()) {
+                if (_consumer.consume_counter_column(get_column_id(),
+                                                     to_bytes_view(_column_value),
+                                                     _column_timestamp) == consumer_m::proceed::no) {
+                    return consumer_m::proceed::no;
+                }
+            } else {
+                if (_consumer.consume_column(get_column_id(),
+                                             to_bytes_view(_cell_path),
+                                             to_bytes_view(_column_value),
+                                             _column_timestamp,
+                                             _column_ttl,
+                                             _column_local_deletion_time) == consumer_m::proceed::no) {
+                    return consumer_m::proceed::no;
+                }
             }
         case state::NEXT_COLUMN:
             if (!is_column_simple()) {
