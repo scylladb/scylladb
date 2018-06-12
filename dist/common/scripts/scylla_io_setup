@@ -39,6 +39,7 @@ if __name__ == "__main__":
             idata = scylla_util.aws_instance()
 
             disk_properties = {}
+            disk_properties["mountpoint"] = "/var/lib/scylla"
             nr_disks = len(idata.ephemeral_disks())
             ## both i3 and i2 can run with 1 I/O Queue per shard
             if idata.instance() == "i3.large":
