@@ -377,6 +377,81 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_partition_key_with_value_read) {
         .produces_end_of_stream();
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/counters
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_table (pk INT, val COUNTER, PRIMARY KEY(pk))
+//      WITH compression = { 'enabled' : false };
+//
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 1;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 1;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 1;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 2;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 2;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+// UPDATE test_ks.test_table SET val = val + 1 WHERE pk = 3;
+
+static thread_local const sstring UNCOMPRESSED_COUNTERS_PATH =
+    "tests/sstables/3.x/uncompressed/counters";
+static thread_local const schema_ptr UNCOMPRESSED_COUNTERS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("val", counter_type)
+        .build();
+
+static thread_local const counter_id HOST_ID = counter_id(utils::UUID("59b82720-99b0-4033-885c-e94d62106a35"));
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_counters_read) {
+    sstable_assertions sst(UNCOMPRESSED_COUNTERS_SCHEMA,
+                           UNCOMPRESSED_COUNTERS_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_COUNTERS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_COUNTERS_SCHEMA, pk);
+    };
+
+    auto cdef = UNCOMPRESSED_COUNTERS_SCHEMA->get_column_definition(to_bytes("val"));
+    BOOST_REQUIRE(cdef);
+
+    auto generate = [&] (api::timestamp_type timestamp, int64_t value, int64_t clock) {
+        std::vector<flat_reader_assertions::assert_function> assertions;
+
+        assertions.push_back([&, timestamp, value, clock] (const column_definition& def,
+                                                           const atomic_cell_or_collection* cell) {
+            BOOST_REQUIRE(def.is_counter());
+            counter_cell_view::with_linearized(cell->as_atomic_cell(def), [&] (counter_cell_view cv) {
+                BOOST_REQUIRE_EQUAL(timestamp, cv.timestamp());
+                BOOST_REQUIRE_EQUAL(1, cv.shard_count());
+                auto shard = cv.get_shard(HOST_ID);
+                BOOST_REQUIRE(shard);
+                BOOST_REQUIRE_EQUAL(value, shard->value());
+                BOOST_REQUIRE_EQUAL(clock, shard->logical_clock());
+            });
+        });
+
+        return assertions;
+    };
+
+    assert_that(sst.read_rows_flat())
+    .produces_partition_start(to_key(1))
+    .produces_row(clustering_key_prefix::make_empty(), {cdef->id}, generate(1528799884266910, 3, 1528799884268000))
+    .produces_partition_end()
+    .produces_partition_start(to_key(2))
+    .produces_row(clustering_key_prefix::make_empty(), {cdef->id}, generate(1528799884272645, 2, 1528799884274000))
+    .produces_partition_end()
+    .produces_partition_start(to_key(3))
+    .produces_row(clustering_key_prefix::make_empty(), {cdef->id}, generate(1528799885105152, 6, 1528799885107000))
+    .produces_partition_end()
+    .produces_end_of_stream();
+}
+
 // Following tests run on files in tests/sstables/3.x/{uncompressed,compressed}/partition_key_with_value_of_different_types
 // They were created using following CQL statements:
 //
