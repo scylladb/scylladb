@@ -278,6 +278,7 @@ int main(int argc, char** argv) {
                 cancelled = true;
                 return make_ready_future();
             });
+            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             test_small_partitions();
             test_partition_with_few_small_rows();
             test_partition_with_lots_of_small_rows();
