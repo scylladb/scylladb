@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <random>
 
+#include <boost/range/algorithm/generate.hpp>
+
 namespace tests::random {
 
 static std::random_device rd;
