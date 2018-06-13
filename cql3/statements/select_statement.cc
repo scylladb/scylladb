@@ -435,6 +435,19 @@ select_statement::do_execute(service::storage_proxy& proxy,
                         " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
+    if (_selection->is_trivial()) {
+        return p->fetch_page_generator(page_size, now, _stats).then([this, p, limit] (result_generator generator) {
+            auto meta = make_shared<metadata>(*_selection->get_result_metadata());
+            if (!p->is_exhausted()) {
+                meta->set_has_more_pages(p->state());
+            }
+
+            return shared_ptr<cql_transport::messages::result_message>(
+                make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
+            );
+        });
+    }
+
     return p->fetch_page(page_size, now).then(
             [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
