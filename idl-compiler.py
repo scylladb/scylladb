@@ -439,10 +439,7 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
         GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
         after_${base_state}__$name<Output> write_fragmented_$name$var_type(FragmentedBuffer&& fragments) && {
             $set_varient_index
-            using boost::range::for_each;
-            for_each(fragments, [&] ($typ t) {
-                serialize(_out, t);
-            });
+            serialize_fragmented(_out, std::forward<FragmentedBuffer>(fragments));
             $set_command
             return $return_command;
         }""")).substitute(locals())
