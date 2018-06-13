@@ -118,6 +118,37 @@ struct empty_struct { };
 
 struct empty_final_struct { };
 
+class fragment_generator {
+    std::vector<bytes> data;
+public:
+    using fragment_Type = bytes_view;
+    using iterator = std::vector<bytes>::iterator;
+    using const_iterator = std::vector<bytes>::const_iterator;
+    fragment_generator(size_t fragment_count, size_t fragment_size) : data(fragment_count, bytes(fragment_size, 'x')) {
+    }
+    iterator begin() {
+        return data.begin();
+    }
+    iterator end() {
+        return data.end();
+    }
+    const_iterator begin() const {
+        return data.begin();
+    }
+    const_iterator end() const {
+        return data.end();
+    }
+    size_t size_bytes() const {
+        return data.empty() ? 0 : data.size() * data.front().size();
+    }
+    bool empty() const {
+        return data.empty();
+    }
+    bytes to_bytes() const {
+        return data.empty() ? bytes() : bytes(data.size() * data.front().size(), 'x');
+    }
+};
+
 #include "serialization_visitors.hh"
 #include "idl/idl_test.dist.hh"
 #include "serializer_impl.hh"
@@ -406,4 +437,15 @@ BOOST_AUTO_TEST_CASE(test_just_a_variant)
         [&] (ser::unknown_variant_type) { BOOST_FAIL("should not reach"); }
     );
     BOOST_CHECK(fired);
+}
+
+BOOST_AUTO_TEST_CASE(test_fragmented_write)
+{
+    for (auto [fragment_count, fragment_size] : {std::pair<size_t, size_t>{9, 1025}, {6, 8999}, {2, 29521}, {1, 60001}, {0, 0}}) {
+        bytes_ostream buf;
+        ser::serialize_fragmented(buf, fragment_generator(fragment_count, fragment_size));
+        auto in = ser::as_input_stream(buf);
+        bytes deserialized = ser::deserialize(in, boost::type<bytes>());
+        BOOST_CHECK_EQUAL(deserialized, fragment_generator(fragment_count, fragment_size).to_bytes());
+    }
 }
