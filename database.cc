@@ -4578,16 +4578,14 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         }
         return reader;
     };
-    return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
-                    std::move(sstables),
-                    pr,
-                    slice,
-                    pc,
-                    std::move(resource_tracker),
-                    std::move(trace_state),
-                    fwd,
-                    fwd_mr,
-                    std::move(reader_factory_fn)),
+    auto all_readers = boost::copy_range<std::vector<flat_mutation_reader>>(
+            *sstables->all()
+            | boost::adaptors::transformed([&] (sstables::shared_sstable sst) -> flat_mutation_reader {
+                return reader_factory_fn(sst, pr);
+            })
+    );
+    return make_combined_reader(s,
+            std::move(all_readers),
             fwd,
             fwd_mr);
 }
@@ -4606,16 +4604,14 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
         return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr, monitor_generator(sst));
     };
-    return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
-                    std::move(sstables),
-                    pr,
-                    slice,
-                    pc,
-                    std::move(resource_tracker),
-                    std::move(trace_state),
-                    fwd,
-                    fwd_mr,
-                    std::move(reader_factory_fn)),
+    auto sstable_readers = boost::copy_range<std::vector<flat_mutation_reader>>(
+            *sstables->all()
+            | boost::adaptors::transformed([&] (sstables::shared_sstable sst) {
+                return reader_factory_fn(sst, pr);
+            })
+    );
+    return make_combined_reader(s,
+            std::move(sstable_readers),
             fwd,
             fwd_mr);
 }
