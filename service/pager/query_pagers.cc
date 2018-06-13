@@ -245,6 +245,23 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 });
     }
 
+future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats) {
+    return do_fetch_page(page_size, now).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
+        struct noop_visitor {
+            void accept_new_partition(uint32_t) { }
+            void accept_new_partition(const partition_key& key, uint32_t row_count) { }
+            void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) { }
+            void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) { }
+            void accept_partition_end(const query::result_row_view& static_row) { }
+        };
+
+        _last_replicas = std::move(qr.last_replicas);
+        _query_read_repair_decision = qr.read_repair_decision;
+        handle_result(noop_visitor(), qr.query_result, page_size, now);
+        return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats);
+    });
+}
+
 template<typename Base>
 class query_pager::query_result_visitor : public Base {
     using visitor = Base;
@@ -284,7 +301,7 @@ public:
     GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
     void query_pager::handle_result(
             Visitor&& visitor,
-            foreign_ptr<lw_shared_ptr<query::result>> results,
+            const foreign_ptr<lw_shared_ptr<query::result>>& results,
             uint32_t page_size, gc_clock::time_point now) {
 
         query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));

@@ -109,6 +109,8 @@ public:
      */
     future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point);
 
+    future<cql3::result_generator> fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats);
+
     /**
      * Whether or not this pager is exhausted, i.e. whether or not a call to
      * fetchPage may return more result.
@@ -148,7 +150,7 @@ private:
     template<typename Visitor>
     GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
     void handle_result(Visitor&& visitor,
-                      foreign_ptr<lw_shared_ptr<query::result>> results,
+                      const foreign_ptr<lw_shared_ptr<query::result>>& results,
                       uint32_t page_size, gc_clock::time_point now);
 };
 
