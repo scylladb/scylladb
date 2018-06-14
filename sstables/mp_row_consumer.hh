@@ -23,10 +23,14 @@
 #pragma once
 
 
+#include "flat_mutation_reader.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "mutation_fragment.hh"
 #include "schema.hh"
+#include "row.hh"
+#include "clustering_ranges_walker.hh"
+#include "utils/data_input.hh"
 
 namespace sstables {
 

@@ -40,6 +40,8 @@
 #include "timestamp.hh"
 #include "column_translation.hh"
 
+#include "sstables.hh"
+
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
 //
