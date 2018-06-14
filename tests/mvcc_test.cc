@@ -237,8 +237,9 @@ public:
 void mvcc_partition::apply_to_evictable(partition_entry&& src, schema_ptr src_schema) {
     with_allocator(region().allocator(), [&] {
         logalloc::allocating_section as;
+        mutation_cleaner src_cleaner(region(), no_cache_tracker);
         auto c = as(region(), [&] {
-            return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, as, region(),
+            return _e.apply_to_incomplete(*schema(), std::move(src), *src_schema, src_cleaner, as, region(),
                 _container.tracker(), _container.next_phase(), _container.accounter());
         });
         repeat([&] {

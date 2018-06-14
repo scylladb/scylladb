@@ -480,8 +480,15 @@ public:
     //
     // Returns a coroutine object representing the operation.
     // The coroutine must be resumed with the region being unlocked.
-    coroutine apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema, logalloc::allocating_section&,
-        logalloc::region&, cache_tracker&, partition_snapshot::phase_type, real_dirty_memory_accounter&);
+    coroutine apply_to_incomplete(const schema& s,
+        partition_entry&& pe,
+        const schema& pe_schema,
+        mutation_cleaner& pe_cleaner,
+        logalloc::allocating_section&,
+        logalloc::region&,
+        cache_tracker& this_tracker,
+        partition_snapshot::phase_type,
+        real_dirty_memory_accounter&);
 
     // If this entry is evictable, cache_tracker must be provided.
     partition_version& add_version(const schema& s, cache_tracker*);

@@ -431,8 +431,14 @@ public:
     }
 };
 
-coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&& pe, const schema& pe_schema,
-    logalloc::allocating_section& alloc, logalloc::region& reg, cache_tracker& tracker, partition_snapshot::phase_type phase,
+coroutine partition_entry::apply_to_incomplete(const schema& s,
+    partition_entry&& pe,
+    const schema& pe_schema,
+    mutation_cleaner& pe_cleaner,
+    logalloc::allocating_section& alloc,
+    logalloc::region& reg,
+    cache_tracker& tracker,
+    partition_snapshot::phase_type phase,
     real_dirty_memory_accounter& acc)
 {
     // This flag controls whether this operation may defer. It is more
@@ -448,12 +454,12 @@ coroutine partition_entry::apply_to_incomplete(const schema& s, partition_entry&
     const bool preemptible = s.clustering_key_size() > 0;
 
     if (s.version() != pe_schema.version()) {
-        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), tracker.cleaner(), &tracker);
+        pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), pe_cleaner, no_cache_tracker);
     }
 
     bool can_move = !pe._snapshot;
 
-    auto src_snp = pe.read(reg, tracker.cleaner(), s.shared_from_this(), &tracker);
+    auto src_snp = pe.read(reg, pe_cleaner, s.shared_from_this(), no_cache_tracker);
     lw_shared_ptr<partition_snapshot> prev_snp;
     if (preemptible) {
         // Reads must see prev_snp until whole update completes so that writes
