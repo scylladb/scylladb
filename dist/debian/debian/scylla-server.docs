@@ -2,4 +2,3 @@
 NOTICE.txt
 ORIGIN
 licenses
-dist/debian/collectd/collectd.conf.example

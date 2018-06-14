@@ -75,11 +75,10 @@ pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUST
 pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-restart.service
 
 
-install -m755 -d "$retc/sysconfig" "$retc/security/limits.d" "$retc/collectd.d"
+install -m755 -d "$retc/sysconfig" "$retc/security/limits.d"
 install -m755 -d "$retc/scylla.d" "$rprefix/lib/sysctl.d"
 install -m644 dist/common/sysconfig/scylla-server -Dt "$retc"/sysconfig
 install -m644 dist/common/limits.d/scylla.conf -Dt "$retc"/security/limits.d
-install -m644 dist/common/collectd.d/scylla.conf -Dt "$retc"/collectd.d
 install -m644 dist/common/scylla.d/*.conf -Dt "$retc"/scylla.d
 install -m644 dist/common/sysctl.d/*.conf -Dt "$rprefix"/lib/sysctl.d
 
