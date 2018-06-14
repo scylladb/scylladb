@@ -2430,3 +2430,57 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
     write_and_compare_sstables(s, mt, table_name);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
+    sstring table_name = "adjacent_range_tombstones_with_rows";
+    // CREATE TABLE adjacent_range_tombstones_with_rows (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007036};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO adjacent_range_tombstones_with_rows (pk, ck1, ck2, ck3) VALUES ('key', 'aaa', 'aaa', 'aaa') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "aaa", "aaa"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    ts += 10;
+
+    // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007103};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO adjacent_range_tombstones_with_rows (pk, ck1, ck2, ck3) VALUES ('key', 'aaa', 'ccc', 'ccc') USING TIMESTAMP 1525385507816598;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "ccc", "ccc"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
