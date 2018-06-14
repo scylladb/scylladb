@@ -315,6 +315,11 @@ public:
             boost::filesystem::create_directories((data_dir.path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
             boost::filesystem::create_directories(cfg->hints_directory().c_str());
+            boost::filesystem::create_directories((data_dir.path + "/view_pending_updates").c_str());
+            for (unsigned i = 0; i < smp::count; ++i) {
+                boost::filesystem::create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
+                boost::filesystem::create_directories((data_dir.path + "/view_pending_updates/" + std::to_string(i)).c_str());
+            }
 
             const gms::inet_address listen("127.0.0.1");
             auto& ms = netw::get_messaging_service();

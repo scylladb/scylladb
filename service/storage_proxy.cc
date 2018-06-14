@@ -729,10 +729,12 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
 
     _stats.register_metrics_local();
 
-    const db::config& dbcfg = _db.local().get_config();
     // Give each hints manager 10% of the available disk space. Give each shard an equal share of the available space.
-    db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(dbcfg.hints_directory().c_str()).capacity / (10 * smp::count);
+    // TODO(sarna): if hints_directory() resides on another device, it would make sense to have separate space_watchdogs
+    // for hints_manager and hints_for_views_manager (or making the space_watchdog aware of multiple devices)
+    db::hints::resource_manager::max_shard_disk_space_size = boost::filesystem::space(_hints_for_views_manager.hints_dir().c_str()).capacity / (10 * smp::count);
     if (cfg.hinted_handoff_enabled) {
+        const db::config& dbcfg = _db.local().get_config();
         supervisor::notify("creating hints manager");
         slogger.trace("hinted DCs: {}", *cfg.hinted_handoff_enabled);
         _hints_manager.emplace(dbcfg.hints_directory(), *cfg.hinted_handoff_enabled, dbcfg.max_hint_window_in_ms(), _hints_resource_manager, _db);
