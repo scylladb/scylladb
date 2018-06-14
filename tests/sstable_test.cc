@@ -1233,7 +1233,7 @@ static future<> compare_files(sstring file1, sstring file2) {
 // writing code, because the promoted index points to offsets in the data).
 SEASTAR_TEST_CASE(promoted_index_write) {
     auto s = large_partition_schema();
-    return test_setup::do_with_test_directory([s] {
+    return test_setup::do_with_tmp_directory([s] (auto dirname) {
         auto mtp = make_lw_shared<memtable>(s);
         auto key = partition_key::from_exploded(*s, {to_bytes("v1")});
         mutation m(s, key);
@@ -1253,16 +1253,13 @@ SEASTAR_TEST_CASE(promoted_index_write) {
             }
         }
         mtp->apply(std::move(m));
-        auto sst = make_sstable(s,
-                get_test_dir("tests-temporary", s), 100,
+        auto sst = make_sstable(s, dirname, 100,
                 sstables::sstable::version_types::la, big);
-        return write_memtable_to_sstable_for_test(*mtp, sst).then([s] {
+        return write_memtable_to_sstable_for_test(*mtp, sst).then([s, dirname] {
             auto large_partition_file = seastar::sprint("%s/la-3-big-Index.db", get_test_dir("large_partition", s));
-            return compare_files(
-                    large_partition_file,
-                    get_test_dir("tests-temporary", s) + "/la-100-big-Index.db");
+            return compare_files(large_partition_file, dirname + "/la-100-big-Index.db");
         }).then([sst, mtp] {});
-    }, get_test_dir("tests-temporary", s));
+    });
 }
 
 SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
