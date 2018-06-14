@@ -3720,6 +3720,9 @@ data_value::data_value(simple_date_native_type v) : data_value(make_new(simple_d
 data_value::data_value(timestamp_native_type v) : data_value(make_new(timestamp_type, v.tp)) {
 }
 
+data_value::data_value(time_native_type v) : data_value(make_new(time_type, v.nanoseconds)) {
+}
+
 data_value::data_value(timeuuid_native_type v) : data_value(make_new(timeuuid_type, v.uuid)) {
 }
 
