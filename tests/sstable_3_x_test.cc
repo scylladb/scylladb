@@ -3067,9 +3067,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_static_row) {
     mutation mut{s, key};
     mut.set_static_cell("st1", data_value{1135}, write_timestamp);
     mut.set_static_cell("st2", data_value{"hello"}, write_timestamp);
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_composite_partition_key) {
