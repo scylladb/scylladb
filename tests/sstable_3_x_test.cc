@@ -3124,9 +3124,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_composite_clustering_key) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "e", data_value{3}, write_timestamp);
     mut.set_cell(ckey, "f", data_value{"world"}, write_timestamp);
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
