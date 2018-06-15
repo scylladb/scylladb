@@ -23,10 +23,14 @@
 #pragma once
 
 
+#include "flat_mutation_reader.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
 #include "mutation_fragment.hh"
 #include "schema.hh"
+#include "row.hh"
+#include "clustering_ranges_walker.hh"
+#include "utils/data_input.hh"
 
 namespace sstables {
 
@@ -61,6 +65,8 @@ inline atomic_cell make_atomic_cell(const abstract_type& type,
         return atomic_cell::make_live(type, timestamp, value, cm);
     }
 }
+
+atomic_cell make_counter_cell(api::timestamp_type timestamp, bytes_view value);
 
 class mp_row_consumer_k_l : public row_consumer {
 private:
@@ -454,37 +460,6 @@ public:
 
     proceed flush_if_needed(clustering_key_prefix&& ck) {
         return flush_if_needed(false, position_in_partition(position_in_partition::clustering_row_tag_t(), std::move(ck)));
-    }
-
-    atomic_cell make_counter_cell(int64_t timestamp, bytes_view value) {
-        static constexpr size_t shard_size = 32;
-
-        data_input in(value);
-
-        auto header_size = in.read<int16_t>();
-        for (auto i = 0; i < header_size; i++) {
-            auto idx = in.read<int16_t>();
-            if (idx >= 0) {
-                throw marshal_exception("encountered a local shard in a counter cell");
-            }
-        }
-        auto shard_count = value.size() / shard_size;
-        if (shard_count != size_t(header_size)) {
-            throw marshal_exception("encountered remote shards in a counter cell");
-        }
-
-        std::vector<counter_shard> shards;
-        shards.reserve(shard_count);
-        counter_cell_builder ccb(shard_count);
-        for (auto i = 0u; i < shard_count; i++) {
-            auto id_hi = in.read<int64_t>();
-            auto id_lo = in.read<int64_t>();
-            auto clock = in.read<int64_t>();
-            auto value = in.read<int64_t>();
-            ccb.add_maybe_unsorted_shard(counter_shard(counter_id(utils::UUID(id_hi, id_lo)), value, clock));
-        }
-        ccb.sort_and_remove_duplicates();
-        return ccb.build(timestamp);
     }
 
     template<typename CreateCell>
@@ -1009,6 +984,21 @@ public:
             _cm.tomb = {};
             _cm.cells.clear();
         }
+        return proceed::yes;
+    }
+
+    virtual proceed consume_counter_column(stdx::optional<column_id> column_id,
+                                           bytes_view value,
+                                           api::timestamp_type timestamp) override {
+        if (!column_id) {
+            return proceed::yes;
+        }
+        const column_definition& column_def = get_column_definition(column_id);
+        if (timestamp <= column_def.dropped_at()) {
+            return proceed::yes;
+        }
+        auto ac = make_counter_cell(timestamp, value);
+        _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
         return proceed::yes;
     }
 

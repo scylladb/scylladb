@@ -1285,7 +1285,11 @@ double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_befor
 }
 
 future<> sstable::read_statistics(const io_priority_class& pc) {
-    return read_simple<component_type::Statistics>(_components->statistics, pc);
+    return read_simple<component_type::Statistics>(_components->statistics, pc).then([this] {
+        if (_version == version_types::mc) {
+            adjust_serialization_header();
+        }
+    });
 }
 
 void sstable::write_statistics(const io_priority_class& pc) {

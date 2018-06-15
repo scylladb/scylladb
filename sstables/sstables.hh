@@ -579,6 +579,22 @@ private:
     stdx::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);
 
     std::vector<unsigned> compute_shards_for_this_sstable() const;
+    template <typename Components>
+    static auto& get_mutable_serialization_header(Components& components) {
+        auto entry = components.statistics.contents.find(metadata_type::Serialization);
+        if (entry == components.statistics.contents.end()) {
+            throw std::runtime_error("Serialization header metadata not available");
+        }
+        auto& p = entry->second;
+        if (!p) {
+            throw std::runtime_error("Statistics is malformed");
+        }
+        serialization_header& s = *static_cast<serialization_header *>(p.get());
+        return s;
+    }
+    void adjust_serialization_header() {
+        get_mutable_serialization_header(*_components).adjust();
+    }
 public:
     future<> read_toc();
 
@@ -668,16 +684,7 @@ public:
         return s;
     }
     const serialization_header& get_serialization_header() const {
-        auto entry = _components->statistics.contents.find(metadata_type::Serialization);
-        if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error("Serialization header metadata not available");
-        }
-        auto& p = entry->second;
-        if (!p) {
-            throw std::runtime_error("Statistics is malformed");
-        }
-        const serialization_header& s = *static_cast<serialization_header *>(p.get());
-        return s;
+        return get_mutable_serialization_header(*_components);
     }
     column_translation get_column_translation(const schema& s, const serialization_header& h) {
         return _column_translation.get_for_schema(s, h);
