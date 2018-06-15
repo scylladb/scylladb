@@ -3222,9 +3222,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
     bytes value = column_def->type->decompose(data_value{1});
     auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
     mut.set_clustered_cell(clustering_key::make_empty(), *column_def, std::move(cell));
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
