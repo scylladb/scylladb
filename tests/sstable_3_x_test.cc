@@ -3192,11 +3192,19 @@ SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
     gc_clock::duration ttl{1135};
-    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, write_time_point + ttl);
-    mut.set_cell(ckey, "rc", data_value{3}, write_timestamp);
-    mt->apply(std::move(mut));
 
-    write_and_compare_sstables(s, mt, table_name);
+    auto column_def = s->get_column_definition("rc");
+    if (!column_def) {
+        throw std::runtime_error("no column definition found");
+    }
+    mut.partition().apply_insert(*s, ckey, write_timestamp, ttl, write_time_point + ttl);
+    bytes value = column_def->type->decompose(data_value{3});
+    auto cell = atomic_cell::make_live(*column_def->type, write_timestamp, value, write_time_point + ttl, ttl);
+    mut.set_clustered_cell(ckey, *column_def, std::move(cell));
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_column) {
