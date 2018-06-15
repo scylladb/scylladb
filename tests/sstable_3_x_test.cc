@@ -3143,37 +3143,36 @@ SEASTAR_THREAD_TEST_CASE(test_write_wide_partitions) {
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
     api::timestamp_type ts = write_timestamp;
+    sstring ck_base(1024, 'a');
+    sstring rc_base(1024, 'b');
+    auto key1 = make_dkey(s, {to_bytes("key1")});
+    mutation mut1{s, key1};
     {
-        auto key = make_dkey(s, {to_bytes("key1")});
-        mutation mut{s, key};
-        mut.set_static_cell("st", data_value{"hello"}, ts);
-        sstring ck_base(1024, 'a');
-        sstring rc_base(1024, 'b');
+        mut1.set_static_cell("st", data_value{"hello"}, ts);
         for (auto idx: boost::irange(0, 1024)) {
             clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
-            mut.partition().apply_insert(*s, ckey, ts);
-            mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+            mut1.partition().apply_insert(*s, ckey, ts);
+            mut1.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
             seastar::thread::yield();
         }
-        mt->apply(std::move(mut));
+        mt->apply(mut1);
         ts += 10;
     }
+    auto key2 = make_dkey(s, {to_bytes("key2")});
+    mutation mut2{s, key2};
     {
-        auto key = make_dkey(s, {to_bytes("key2")});
-        mutation mut{s, key};
-        mut.set_static_cell("st", data_value{"goodbye"}, ts);
-        sstring ck_base(1024, 'a');
-        sstring rc_base(1024, 'b');
+        mut2.set_static_cell("st", data_value{"goodbye"}, ts);
         for (auto idx: boost::irange(0, 1024)) {
             clustering_key ckey = clustering_key::from_deeply_exploded(*s, {format("{}{}", ck_base, idx)});
-            mut.partition().apply_insert(*s, ckey, ts);
-            mut.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
+            mut2.partition().apply_insert(*s, ckey, ts);
+            mut2.set_cell(ckey, "rc", data_value{format("{}{}", rc_base, idx)}, ts);
             seastar::thread::yield();
         }
-        mt->apply(std::move(mut));
+        mt->apply(mut2);
     }
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut1, mut2});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_ttled_row) {
