@@ -41,54 +41,107 @@
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
 
+#include <random>
+
 namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
 
 namespace {
 
+#ifdef DEBUG_LSA_SANITIZER
+
+class migrators : public enable_lw_shared_from_this<migrators> {
+public:
+    static constexpr uint32_t maximum_id_value = std::numeric_limits<uint32_t>::max() / 2;
+private:
+    struct migrator_entry {
+        const migrate_fn_type* _migrator;
+        saved_backtrace _registration;
+        saved_backtrace _deregistration;
+    };
+    std::unordered_map<uint32_t, migrator_entry> _migrators;
+    std::default_random_engine _random_engine { std::random_device()() };
+    std::uniform_int_distribution<uint32_t> _id_distribution { 0, maximum_id_value };
+
+    static logging::logger _logger;
+private:
+    void on_error() { abort(); }
+public:
+    uint32_t add(const migrate_fn_type* m) {
+        while (true) {
+            auto id = _id_distribution(_random_engine);
+            if (_migrators.count(id)) {
+                continue;
+            }
+            _migrators.emplace(id, migrator_entry { m, current_backtrace(), {} });
+            return id;
+        }
+    }
+    void remove(uint32_t idx) {
+        auto it = _migrators.find(idx);
+        if (it == _migrators.end()) {
+            _logger.error("Attempting to deregister migrator id {} which was never registered:\n{}",
+                          idx, current_backtrace());
+            on_error();
+        }
+        if (!it->second._migrator) {
+            _logger.error("Attempting to double deregister migrator id {}:\n{}\n"
+                          "Previously deregistered at:\n{}\nRegistered at:\n{}",
+                          idx, current_backtrace(), it->second._deregistration,
+                          it->second._registration);
+            on_error();
+        }
+        it->second._migrator = nullptr;
+        it->second._deregistration = current_backtrace();
+    }
+    const migrate_fn_type*& operator[](uint32_t idx) {
+        auto it = _migrators.find(idx);
+        if (it == _migrators.end()) {
+            _logger.error("Attempting to use migrator id {} that was never registered:\n{}",
+                          idx, current_backtrace());
+            on_error();
+        }
+        if (!it->second._migrator) {
+            _logger.error("Attempting to use deregistered migrator id {}:\n{}\n"
+                          "Deregistered at:\n{}\nRegistered at:\n{}",
+                          idx, current_backtrace(), it->second._deregistration,
+                          it->second._registration);
+            on_error();
+        }
+        return it->second._migrator;
+    }
+};
+
+logging::logger migrators::_logger("lsa-migrator-sanitizer");
+
+#else
+
 class migrators : public enable_lw_shared_from_this<migrators> {
     std::vector<const migrate_fn_type*> _migrators;
     std::deque<uint32_t> _unused_ids;
-#ifdef DEBUG_LSA_SANITIZER
-    static constexpr uint32_t offset = 0x00ab'1234;
-#else
-    static constexpr uint32_t offset = 0;
-#endif
 public:
     static constexpr uint32_t maximum_id_value = std::numeric_limits<uint32_t>::max() / 2;
 
     uint32_t add(const migrate_fn_type* m) {
-#ifndef DEBUG_LSA_SANITIZER
         if (!_unused_ids.empty()) {
             auto idx = _unused_ids.front();
             _unused_ids.pop_front();
-            _migrators[idx - offset] = m;
+            _migrators[idx] = m;
             return idx;
         }
-#endif
         _migrators.push_back(m);
-        return _migrators.size() - 1 + offset;
+        return _migrators.size() - 1;
     }
     void remove(uint32_t idx) {
-#ifdef DEBUG_LSA_SANITIZER
-        assert(idx >= offset);
-        assert(idx - offset < _migrators.size());
-        assert(_migrators[idx - offset]);
-        _migrators[idx - offset] = nullptr;
-#else
         _unused_ids.push_back(idx);
-#endif
     }
     const migrate_fn_type*& operator[](uint32_t idx) {
-#ifdef DEBUG_LSA_SANITIZER
-        assert(idx >= offset);
-        assert(idx - offset < _migrators.size());
-        assert(_migrators[idx - offset]);
-#endif
-        return _migrators[idx - offset];
+        return _migrators[idx];
     }
 };
+
+#endif
 
 static
 migrators&
