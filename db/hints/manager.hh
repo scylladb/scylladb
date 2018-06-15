@@ -398,6 +398,7 @@ public:
 
 private:
     const boost::filesystem::path _hints_dir;
+    dev_t _hints_dir_device_id = 0;
 
     node_to_hint_store_factory_type _store_factory;
     std::unordered_set<sstring> _hinted_dcs;
@@ -488,6 +489,10 @@ public:
         return _hints_dir;
     }
 
+    dev_t hints_dir_device_id() const {
+        return _hints_dir_device_id;
+    }
+
     void allow_hints();
     void forbid_hints();
     void forbid_hints_for_eps_with_pending_hints();
@@ -507,6 +512,8 @@ public:
     virtual void on_move(const gms::inet_address& endpoint) override {}
 
 private:
+    future<> compute_hints_dir_device_id();
+
     node_to_hint_store_factory_type& store_factory() noexcept {
         return _store_factory;
     }
