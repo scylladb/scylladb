@@ -2989,6 +2989,10 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
+static sstring get_write_test_path(sstring table_name, bool compressed = false) {
+    return format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un", table_name);
+}
+
 static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed = false) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
@@ -2996,7 +3000,7 @@ static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed =
                            component_type::Digest,
                            component_type::Filter}) {
         auto orig_filename =
-                sstable::filename(format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un",table_name),
+                sstable::filename(get_write_test_path(table_name, compressed),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
                 sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
