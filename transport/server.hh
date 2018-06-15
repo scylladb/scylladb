@@ -140,7 +140,6 @@ public:
 private:
     class fmt_visitor;
     friend class connection;
-    friend class process_request_executor;
     class connection : public boost::intrusive::list_base_hook<> {
         struct processing_result {
             foreign_ptr<shared_ptr<cql_server::response>> cql_response;
@@ -175,6 +174,16 @@ private:
             no_write_on_close,
             write_on_close
         };
+    private:
+        using execution_stage_type = inheriting_concrete_execution_stage<
+                future<cql_server::connection::processing_result>,
+                cql_server::connection*,
+                bytes_view,
+                uint8_t,
+                uint16_t,
+                service::client_state,
+                tracing_request_type>;
+        static thread_local execution_stage_type _process_request_stage;
     public:
         connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();

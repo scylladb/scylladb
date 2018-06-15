@@ -628,10 +628,8 @@ future<> cql_server::connection::shutdown()
     return make_ready_future<>();
 }
 
-struct process_request_executor {
-    static auto get() { return &cql_server::connection::process_request_one; }
-};
-static thread_local auto process_request_stage = seastar::make_execution_stage("transport", process_request_executor::get());
+thread_local cql_server::connection::execution_stage_type
+        cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
 
 void cql_server::connection::update_client_state(processing_result& response) {
     if (response.keyspace) {
@@ -707,10 +705,10 @@ future<> cql_server::connection::process_request() {
                 auto cpu = pick_request_cpu();
                 return [&] {
                     if (cpu == engine().cpu_id()) {
-                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
+                        return _process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
                     } else {
                         return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
+                            return _process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
                 }().then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
