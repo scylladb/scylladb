@@ -34,6 +34,8 @@
 #include "data/schema_info.hh"
 #include "imr/utils.hh"
 
+#include "serializer.hh"
+
 class abstract_type;
 class collection_type_impl;
 
@@ -186,12 +188,16 @@ public:
     static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time);
     static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, bytes_view value,
                                  collection_member = collection_member::no);
+    static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, ser::buffer_view<bytes_ostream::fragment_iterator> value,
+                                 collection_member = collection_member::no);
     static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value,
                                  collection_member cm = collection_member::no) {
         return make_live(type, timestamp, bytes_view(value), cm);
     }
     static atomic_cell make_live_counter_update(api::timestamp_type timestamp, int64_t value);
     static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, bytes_view value,
+        gc_clock::time_point expiry, gc_clock::duration ttl, collection_member = collection_member::no);
+    static atomic_cell make_live(const abstract_type&, api::timestamp_type timestamp, ser::buffer_view<bytes_ostream::fragment_iterator> value,
         gc_clock::time_point expiry, gc_clock::duration ttl, collection_member = collection_member::no);
     static atomic_cell make_live(const abstract_type& type, api::timestamp_type timestamp, const bytes& value,
                                  gc_clock::time_point expiry, gc_clock::duration ttl, collection_member cm = collection_member::no)
