@@ -121,7 +121,7 @@ struct empty_final_struct { };
 class fragment_generator {
     std::vector<bytes> data;
 public:
-    using fragment_Type = bytes_view;
+    using fragment_type = bytes_view;
     using iterator = std::vector<bytes>::iterator;
     using const_iterator = std::vector<bytes>::const_iterator;
     fragment_generator(size_t fragment_count, size_t fragment_size) : data(fragment_count, bytes(fragment_size, 'x')) {
