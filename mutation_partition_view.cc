@@ -62,10 +62,10 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
         explicit atomic_cell_visitor(const abstract_type& t, atomic_cell::collection_member cm)
             : _type(t), _collection_member(cm) { }
         atomic_cell operator()(ser::live_cell_view& lcv) const {
-            return atomic_cell::make_live(_type, lcv.created_at(), lcv.value(), _collection_member);
+            return atomic_cell::make_live(_type, lcv.created_at(), lcv.value().view(), _collection_member);
         }
         atomic_cell operator()(ser::expiring_cell_view& ecv) const {
-            return atomic_cell::make_live(_type, ecv.c().created_at(), ecv.c().value(), ecv.expiry(), ecv.ttl(), _collection_member);
+            return atomic_cell::make_live(_type, ecv.c().created_at(), ecv.c().value().view(), ecv.expiry(), ecv.ttl(), _collection_member);
         }
         atomic_cell operator()(ser::dead_cell_view& dcv) const {
             return atomic_cell::make_dead(dcv.tomb().timestamp(), dcv.tomb().deletion_time());
