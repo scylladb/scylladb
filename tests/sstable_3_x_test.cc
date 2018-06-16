@@ -3475,20 +3475,21 @@ SEASTAR_THREAD_TEST_CASE(test_write_missing_columns_large_set) {
         for (auto idx: boost::irange(1, 63)) {
             mut.set_cell(ckey, to_bytes(format("rc{}", idx)), data_value{idx}, ts);
         }
-        mt->apply(std::move(mut));
     }
     ts += 10;
+
     // INSERT INTO missing_columns_large_set (pk, ck, rc63, rc64) VALUES (0, 1, 63, 64);
     // For missing columns, the present ones will be written as majority are missing.
     {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {1});
         mut.partition().apply_insert(*s, ckey, ts);
-        mut.set_cell(ckey, to_bytes(format("rc63", 63)), data_value{63}, ts);
-        mut.set_cell(ckey, to_bytes(format("rc64", 63)), data_value{64}, ts);
-        mt->apply(std::move(mut));
+        mut.set_cell(ckey, to_bytes("rc63"), data_value{63}, ts);
+        mut.set_cell(ckey, to_bytes("rc64"), data_value{64}, ts);
     }
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_counter_table) {
