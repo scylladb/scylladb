@@ -294,6 +294,12 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs,
         return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
+    // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
+    if (!cfs.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
+        std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
+        return sstables::compaction_descriptor(std::move(most_interesting));
+    }
+
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
     // prefer oldest sstables from biggest size tiers because they will be easier to satisfy conditions for

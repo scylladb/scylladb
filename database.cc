@@ -2826,6 +2826,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
+    cfg.compaction_enforce_min_threshold = _config.compaction_enforce_min_threshold;
     cfg.dirty_memory_manager = _config.dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = _config.streaming_dirty_memory_manager;
     cfg.read_concurrency_semaphore = _config.read_concurrency_semaphore;
@@ -3604,6 +3605,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
     }
+    cfg.compaction_enforce_min_threshold = _cfg->compaction_enforce_min_threshold();
     cfg.dirty_memory_manager = &_dirty_memory_manager;
     cfg.streaming_dirty_memory_manager = &_streaming_dirty_memory_manager;
     cfg.read_concurrency_semaphore = &_read_concurrency_sem;

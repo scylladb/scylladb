@@ -300,6 +300,7 @@ public:
         bool enable_cache = true;
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
+        bool compaction_enforce_min_threshold = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* read_concurrency_semaphore;
@@ -744,6 +745,10 @@ public:
         _config.enable_incremental_backups = val;
     }
 
+    bool compaction_enforce_min_threshold() const {
+        return _config.compaction_enforce_min_threshold;
+    }
+
     /*!
      * \brief get sstables by key
      * Return a set of the sstables names that contain the given
@@ -1012,6 +1017,7 @@ public:
         bool enable_disk_writes = true;
         bool enable_cache = true;
         bool enable_incremental_backups = false;
+        bool compaction_enforce_min_threshold = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* read_concurrency_semaphore;
