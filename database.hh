@@ -297,6 +297,7 @@ public:
         bool enable_cache = true;
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
+        bool compaction_enforce_min_threshold = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* read_concurrency_semaphore;
@@ -735,6 +736,10 @@ public:
         _config.enable_incremental_backups = val;
     }
 
+    bool compaction_enforce_min_threshold() const {
+        return _config.compaction_enforce_min_threshold;
+    }
+
     const sstables::sstable_set& get_sstable_set() const;
     lw_shared_ptr<sstable_list> get_sstables() const;
     lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted() const;
@@ -979,6 +984,7 @@ public:
         bool enable_disk_writes = true;
         bool enable_cache = true;
         bool enable_incremental_backups = false;
+        bool compaction_enforce_min_threshold = false;
         ::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
         ::dirty_memory_manager* streaming_dirty_memory_manager = &default_dirty_memory_manager;
         reader_concurrency_semaphore* read_concurrency_semaphore;

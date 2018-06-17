@@ -125,6 +125,9 @@ public:
     val(compaction_static_shares, float, 0, Used, \
             "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity" \
     )   \
+    val(compaction_enforce_min_threshold, bool, false, Used, \
+            "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold" \
+    )   \
     /* Initialization properties */             \
     /* The minimal properties needed for configuring a cluster. */  \
     val(cluster_name, sstring, "", Used,   \
