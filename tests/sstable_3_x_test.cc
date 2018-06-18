@@ -3032,6 +3032,18 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
     compare_sstables(std::move(tmp), table_name, compressed);
 }
 
+static void validate_read(schema_ptr s, sstring table_name, std::vector<mutation> mutations, bool compressed = false) {
+    sstable_assertions sst(s, get_write_test_path(table_name, compressed));
+    sst.load();
+
+    auto assertions = assert_that(sst.read_rows_flat());
+    for (const auto &mut : mutations) {
+        assertions.produces(mut);
+    }
+
+    assertions.produces_end_of_stream();
+}
+
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
 static constexpr gc_clock::time_point write_time_point = gc_clock::time_point{} + gc_clock::duration{1525385507};
 
