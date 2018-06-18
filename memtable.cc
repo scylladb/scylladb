@@ -27,10 +27,11 @@
 #include "schema_upgrader.hh"
 #include "partition_builder.hh"
 
-memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list,
+    seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _cleaner(*this, no_cache_tracker)
+        , _cleaner(*this, no_cache_tracker, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {

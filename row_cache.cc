@@ -92,6 +92,11 @@ cache_tracker::~cache_tracker() {
     clear();
 }
 
+void cache_tracker::set_compaction_scheduling_group(seastar::scheduling_group sg) {
+    _memtable_cleaner.set_scheduling_group(sg);
+    _garbage.set_scheduling_group(sg);
+}
+
 void
 cache_tracker::setup_metrics() {
     namespace sm = seastar::metrics;

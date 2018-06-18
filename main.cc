@@ -490,6 +490,7 @@ int main(int ac, char** av) {
                 }
             };
             dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
+            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
             dbcfg.streaming_scheduling_group = make_sched_group("streaming", 200);
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);

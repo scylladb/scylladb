@@ -2365,6 +2365,10 @@ void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
 
 void mutation_cleaner_impl::start_worker() {
     auto f = repeat([w = _worker_state, this] () mutable noexcept {
+      if (w->done) {
+          return make_ready_future<stop_iteration>(stop_iteration::yes);
+      }
+      return with_scheduling_group(_scheduling_group, [w, this] {
         return w->cv.wait([w] {
             return w->done || !w->snapshots.empty();
         }).then([this, w] () noexcept {
@@ -2374,6 +2378,7 @@ void mutation_cleaner_impl::start_worker() {
             merge_some();
             return stop_iteration::no;
         });
+      });
     });
     if (f.failed()) {
         f.get();

@@ -253,7 +253,8 @@ private:
     void clear() noexcept;
     uint64_t dirty_size() const;
 public:
-    explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr);
+    explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr,
+        seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);
     ~memtable();
