@@ -730,9 +730,13 @@ int main(int ac, char** av) {
             }
 
             supervisor::notify("starting native transport");
-            service::get_local_storage_service().start_native_transport().get();
+            with_scheduling_group(dbcfg.statement_scheduling_group, [] {
+                return service::get_local_storage_service().start_native_transport();
+            }).get();
             if (start_thrift) {
-                service::get_local_storage_service().start_rpc_server().get();
+                with_scheduling_group(dbcfg.statement_scheduling_group, [] {
+                    return service::get_local_storage_service().start_rpc_server();
+                }).get();
             }
             if (cfg->defragment_memory_on_idle()) {
                 smp::invoke_on_all([] () {
