@@ -17,6 +17,7 @@
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "sstable_utils.hh"
+#include "service/storage_proxy.hh"
 
 using namespace sstables;
 
@@ -63,6 +64,7 @@ static schema_ptr get_schema() {
 }
 
 void run_sstable_resharding_test() {
+    cache_tracker tracker;
   for (const auto version : all_sstable_versions) {
     storage_service_for_tests ssft;
     auto tmp = make_lw_shared<tmpdir>();
@@ -71,7 +73,7 @@ void run_sstable_resharding_test() {
     auto cl_stats = make_lw_shared<cell_locker_stats>();
     column_family::config cfg;
     cfg.large_partition_handler = &nop_lp_handler;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, tracker);
     cf->mark_ready_for_writes();
     std::unordered_map<shard_id, std::vector<mutation>> muts;
     static constexpr auto keys_per_shard = 1000u;

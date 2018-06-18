@@ -937,13 +937,14 @@ SEASTAR_TEST_CASE(reshuffle) {
             auto cm = make_lw_shared<compaction_manager>();
             cm->start();
 
+            auto tracker = make_lw_shared<cache_tracker>();
             column_family::config cfg;
             cfg.datadir = generation_dir;
             cfg.enable_commitlog = false;
             cfg.enable_incremental_backups = false;
             cfg.large_partition_handler = &nop_lp_handler;
             auto cl_stats = make_lw_shared<cell_locker_stats>();
-            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm, *cl_stats);
+            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
             cf->start();
             cf->mark_ready_for_writes();
             std::set<int64_t> existing_sstables = { 1, 5 };
@@ -961,7 +962,9 @@ SEASTAR_TEST_CASE(reshuffle) {
                 ).discard_result().then([cm] {
                     return cm->stop();
                 });
-            }).then([cm, cf, cl_stats] {});
+            }).then([cm, cf, cl_stats, tracker] () mutable {
+                cf = { };
+            });
         });
     });
 }

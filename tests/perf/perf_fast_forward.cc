@@ -47,6 +47,8 @@ reactor::io_stats s;
 
 static bool errors_found = false;
 
+cql_test_env* cql_env;
+
 static void print_error(const sstring& msg) {
     std::cerr << "^^^ ERROR: " << msg << "\n";
     errors_found = true;
@@ -67,7 +69,7 @@ struct metrics_snapshot {
         idle_time = r.total_idle_time();
         hr_clock = std::chrono::high_resolution_clock::now();
         index = sstables::shared_index_lists::shard_stats();
-        cache = global_cache_tracker().get_stats();
+        cache = cql_env->local_db().row_cache_tracker().get_stats();
     }
 };
 
@@ -857,7 +859,7 @@ int_range live_range;
 std::unique_ptr<output_manager> output_mgr;
 
 void clear_cache() {
-    global_cache_tracker().clear();
+    cql_env->local_db().row_cache_tracker().clear();
 }
 
 void on_test_group() {
@@ -1291,6 +1293,7 @@ int main(int argc, char** argv) {
 
         return do_with_cql_env([] (cql_test_env& env) {
             return seastar::async([&env] {
+                cql_env = &env;
                 sstring name = app.configuration()["name"].as<std::string>();
 
                 if (app.configuration().count("populate")) {

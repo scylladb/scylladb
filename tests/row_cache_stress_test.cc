@@ -52,12 +52,13 @@ struct table {
     lw_shared_ptr<memtable> mt;
     lw_shared_ptr<memtable> prev_mt;
     memtable_snapshot_source underlying;
+    cache_tracker tracker;
     row_cache cache;
 
     table(unsigned partitions, unsigned rows)
         : mt(make_lw_shared<memtable>(s.schema()))
         , underlying(s.schema())
-        , cache(s.schema(), snapshot_source([this] { return underlying(); }), global_cache_tracker())
+        , cache(s.schema(), snapshot_source([this] { return underlying(); }), tracker)
     {
         p_keys = s.make_pkeys(partitions);
         p_writetime.resize(p_keys.size());
@@ -282,8 +283,8 @@ int main(int argc, char** argv) {
                 auto MB = 1024 * 1024;
                 test_log.info("reads/s: {}, scans/s: {}, mutations/s: {}, flushes/s: {}, Cache: {}/{} [MB], LSA: {}/{} [MB], std free: {} [MB]",
                     reads.change(), scans.change(), mutations.change(), flushes.change(),
-                    global_cache_tracker().region().occupancy().used_space() / MB,
-                    global_cache_tracker().region().occupancy().total_space() / MB,
+                    t.tracker.region().occupancy().used_space() / MB,
+                    t.tracker.region().occupancy().total_space() / MB,
                     logalloc::shard_tracker().region_occupancy().used_space() / MB,
                     logalloc::shard_tracker().region_occupancy().total_space() / MB,
                     seastar::memory::stats().free_memory() / MB);

@@ -98,12 +98,14 @@ int main(int argc, char** argv) {
             utils::estimated_histogram reads_hist;
             utils::estimated_histogram writes_hist;
 
+            auto& tracker = env.local_db().row_cache_tracker();
+
             timer<> stats_printer;
             monotonic_counter<uint64_t> reads_ctr([&] { return reads; });
             monotonic_counter<uint64_t> mutations_ctr([&] { return mutations; });
-            monotonic_counter<uint64_t> pmerges_ctr([&] { return global_cache_tracker().get_stats().partition_merges; });
-            monotonic_counter<uint64_t> eviction_ctr([&] { return global_cache_tracker().get_stats().row_evictions; });
-            monotonic_counter<uint64_t> miss_ctr([&] { return global_cache_tracker().get_stats().reads_with_misses; });
+            monotonic_counter<uint64_t> pmerges_ctr([&] { return tracker.get_stats().partition_merges; });
+            monotonic_counter<uint64_t> eviction_ctr([&] { return tracker.get_stats().row_evictions; });
+            monotonic_counter<uint64_t> miss_ctr([&] { return tracker.get_stats().reads_with_misses; });
             stats_printer.set_callback([&] {
                 auto MB = 1024 * 1024;
                 std::cout << sprint("rd/s: %d, wr/s: %d, ev/s: %d, pmerge/s: %d, miss/s: %d, cache: %d/%d [MB], LSA: %d/%d [MB], std free: %d [MB]",
@@ -112,8 +114,8 @@ int main(int argc, char** argv) {
                     eviction_ctr.change(),
                     pmerges_ctr.change(),
                     miss_ctr.change(),
-                    global_cache_tracker().region().occupancy().used_space() / MB,
-                    global_cache_tracker().region().occupancy().total_space() / MB,
+                    tracker.region().occupancy().used_space() / MB,
+                    tracker.region().occupancy().total_space() / MB,
                     logalloc::shard_tracker().region_occupancy().used_space() / MB,
                     logalloc::shard_tracker().region_occupancy().total_space() / MB,
                     seastar::memory::stats().free_memory() / MB) << "\n\n";

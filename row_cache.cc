@@ -52,11 +52,6 @@ row_cache::create_underlying_reader(read_context& ctx, mutation_source& src, con
     return src.make_reader(_schema, pr, ctx.slice(), ctx.pc(), ctx.trace_state(), streamed_mutation::forwarding::yes);
 }
 
-cache_tracker& global_cache_tracker() {
-    static thread_local cache_tracker instance;
-    return instance;
-}
-
 cache_tracker::cache_tracker()
     : _garbage(_region, this)
     , _memtable_cleaner(_region, nullptr)
