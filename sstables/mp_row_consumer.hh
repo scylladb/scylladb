@@ -31,6 +31,7 @@
 #include "row.hh"
 #include "clustering_ranges_walker.hh"
 #include "utils/data_input.hh"
+#include "liveness_info.hh"
 
 namespace sstables {
 
@@ -928,6 +929,12 @@ public:
         _in_progress_row = clustering_row(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
         _cells.clear();
+        return proceed::yes;
+    }
+
+    virtual proceed consume_row_marker_and_tombstone(const liveness_info& info, tombstone t) override {
+        _in_progress_row.apply(t);
+        _in_progress_row.apply(info.to_row_marker());
         return proceed::yes;
     }
 

@@ -35,6 +35,11 @@ class liveness_info {
     api::timestamp_type _timestamp;
     gc_clock::duration _ttl;
     gc_clock::time_point _local_deletion_time;
+    bool is_set() const {
+        return _timestamp != api::missing_timestamp
+               || _ttl != gc_clock::duration::zero()
+               || _local_deletion_time != gc_clock::time_point::max();
+    }
 public:
     explicit liveness_info(const serialization_header& header)
         : _header(header)
@@ -56,12 +61,10 @@ public:
     api::timestamp_type timestamp() const { return _timestamp; }
     gc_clock::duration ttl() const { return _ttl; }
     gc_clock::time_point local_deletion_time() const { return _local_deletion_time; }
-    bool is_set() const {
-        return _timestamp != api::missing_timestamp
-               || _ttl != gc_clock::duration::zero()
-               || _local_deletion_time != gc_clock::time_point::max();
-    }
     row_marker to_row_marker() const {
+        if (!is_set()) {
+            return row_marker();
+        }
         return _ttl != gc_clock::duration::zero() || _local_deletion_time != gc_clock::time_point::max()
             ? row_marker(_timestamp, _ttl, _local_deletion_time)
             : row_marker(_timestamp);

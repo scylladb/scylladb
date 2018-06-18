@@ -41,6 +41,7 @@
 #include "column_translation.hh"
 
 #include "sstables.hh"
+#include "tombstone.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -153,6 +154,8 @@ public:
     virtual proceed consume_partition_end() = 0;
 
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
+
+    virtual proceed consume_row_marker_and_tombstone(const sstables::liveness_info& info, tombstone t) = 0;
 
     virtual proceed consume_static_row_start() = 0;
 
