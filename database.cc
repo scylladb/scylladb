@@ -2694,8 +2694,10 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     remove(*cf);
     cf->clear_views();
     auto& ks = find_keyspace(ks_name);
-    return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
-        return cf->stop();
+    return cf->await_pending_writes().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
+        return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
+            return cf->stop();
+        });
     }).finally([cf] {});
 }
 
