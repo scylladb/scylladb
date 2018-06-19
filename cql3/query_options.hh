@@ -168,6 +168,11 @@ public:
     ::shared_ptr<service::pager::paging_state> get_paging_state() const;
     /**  Serial consistency for conditional updates. */
     std::experimental::optional<db::consistency_level> get_serial_consistency() const;
+
+    const std::experimental::optional<std::vector<sstring_view>>& get_names() const noexcept {
+        return _names;
+    }
+
     api::timestamp_type get_timestamp(service::query_state& state) const;
     /**
      * The protocol version for the query. Will be 3 if the object don't come from
