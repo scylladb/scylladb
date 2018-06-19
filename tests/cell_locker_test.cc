@@ -27,6 +27,8 @@
 #include "mutation.hh"
 #include "schema_builder.hh"
 
+using namespace std::literals::chrono_literals;
+
 static schema_ptr make_schema()
 {
     return schema_builder("ks", "cf")
@@ -238,7 +240,8 @@ SEASTAR_TEST_CASE(test_timed_out) {
 
             auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get0();
 
-            auto timeout = saturating_subtract(db::timeout_clock::now(), std::chrono::hours(1));
+            auto timeout = db::timeout_clock::now();
+            forward_jump_clocks(1h);
             BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout).get0(),
                                 timed_out_error);
 
