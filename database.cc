@@ -2159,6 +2159,11 @@ database::database(const db::config& cfg, database_config dbcfg)
 void backlog_controller::adjust() {
     auto backlog = _current_backlog();
 
+    if (backlog >= _control_points.back().input) {
+        update_controller(_control_points.back().output);
+        return;
+    }
+
     // interpolate to find out which region we are. This run infrequently and there are a fixed
     // number of points so a simple loop will do.
     size_t idx = 1;
