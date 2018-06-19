@@ -18,3 +18,4 @@ CMakeLists.txt.user
 *.egg-info
 __pycache__CMakeLists.txt.user
 .gdbinit
+resources
