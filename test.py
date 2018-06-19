@@ -167,6 +167,10 @@ def alarm_handler(signum, frame):
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
+    sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    testmem = 2e9
+    default_num_jobs = ((sysmem - 4e9) // testmem)
+
     parser = argparse.ArgumentParser(description="Scylla test runner")
     parser.add_argument('--fast',  action="store_true",
                         help="Run only fast tests")
@@ -180,6 +184,8 @@ if __name__ == "__main__":
                         help="jenkins output file prefix")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
+    parser.add_argument('--jobs', '-j', action="store", default=default_num_jobs, type=int,
+                        help="Number of jobs to use for running the tests")
     args = parser.parse_args()
 
     print_progress = print_status_verbose if args.verbose else print_progress_succint
@@ -266,9 +272,7 @@ if __name__ == "__main__":
                 print('  with error {e}\n'.format(e=e), file=file)
             report_error(e, report_subcause=report_subcause)
         return (path, boost_args + exec_args, success, file.getvalue())
-    sysmem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-    testmem = 2e9
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=((sysmem - 4e9) // testmem))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs)
     futures = []
     for n, test in enumerate(test_to_run):
         path = test[0]
