@@ -253,7 +253,9 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             for (auto&& view : cf.views()) {
                 if (view->view_info()->include_all_columns() || view->view_info()->base_non_pk_column_in_view_pk()) {
                     schema_builder builder(view);
-                    builder.with_column(column_name->name(), type);
+                    if (view->view_info()->include_all_columns()) {
+                        builder.with_column(column_name->name(), type);
+                    }
                     view_updates.push_back(view_ptr(builder.build()));
                 }
             }
