@@ -39,32 +39,33 @@ if __name__ == "__main__":
             idata = scylla_util.aws_instance()
 
             disk_properties = {}
+            disk_properties["mountpoint"] = "/var/lib/scylla"
             nr_disks = len(idata.ephemeral_disks())
             ## both i3 and i2 can run with 1 I/O Queue per shard
             if idata.instance() == "i3.large":
                 disk_properties["read_iops"] = 111000
                 disk_properties["read_bandwidth"] = 653925080
                 disk_properties["write_iops"] = 36800
-                disk_properties["write_bandwdith"] = 215066473
+                disk_properties["write_bandwidth"] = 215066473
             elif idata.instance() == "i3.xlarge":
                 disk_properties["read_iops"] = 200800
                 disk_properties["read_bandwidth"] = 1185106376
                 disk_properties["write_iops"] = 53180
-                disk_properties["write_bandwdith"] = 423621267
+                disk_properties["write_bandwidth"] = 423621267
             elif idata.instance_class() == "i3":
                 disk_properties["read_iops"] = 411200 * nr_disks
                 disk_properties["read_bandwidth"] = 2015342735 * nr_disks
                 disk_properties["write_iops"] = 181500 * nr_disks
-                disk_properties["write_bandwdith"] = 808775652 * nr_disks
+                disk_properties["write_bandwidth"] = 808775652 * nr_disks
             elif idata.instance_class() == "i2":
                 disk_properties["read_iops"] = 64000 * nr_disks
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
                 disk_properties["write_iops"] = 57100 * nr_disks
-                disk_properties["write_bandwdith"] = 483141731 * nr_disks
+                disk_properties["write_bandwidth"] = 483141731 * nr_disks
             properties_file = file("/etc/scylla.d/io_properties.yaml", "w")
-            yaml.dump({ "disks": disk_properties }, properties_file,  default_flow_style=False)
+            yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
             ioconf = file("/etc/scylla.d/io.conf", "w")
-            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file))
+            ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
         else:
             if os.environ.has_key("SCYLLA_CONF"):
                 conf_dir = os.environ["SCYLLA_CONF"]

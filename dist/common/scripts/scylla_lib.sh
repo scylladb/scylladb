@@ -47,6 +47,21 @@ verify_args() {
 }
 
 #
+#  get_mode_cpu_set <mode name, e.g. 'mq', 'sq', 'sq_split'>
+#
+get_mode_cpu_set() {
+    local mode=$1
+    local mode_cpu_mask=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode "$mode" --get-cpu-mask` 2>&-
+
+    # If the given mode is not supported - return invalid CPU set
+    if [[ "$?" -ne "0" ]]; then
+        echo "-1"
+    else
+        echo "$mode_cpu_mask" | /usr/lib/scylla/hex2list.py
+    fi
+}
+
+#
 # check_cpuset_conf <NIC name>
 #
 get_tune_mode() {
@@ -56,9 +71,9 @@ get_tune_mode() {
     [[ ! -e '/etc/scylla.d/cpuset.conf' ]] && return
 
     local cur_cpuset=`cat /etc/scylla.d/cpuset.conf | cut -d "\"" -f2- | cut -d" " -f2`
-    local mq_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode mq --get-cpu-mask | /usr/lib/scylla/hex2list.py`
-    local sq_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode sq --get-cpu-mask | /usr/lib/scylla/hex2list.py`
-    local sq_split_cpuset=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode sq_split --get-cpu-mask | /usr/lib/scylla/hex2list.py`
+    local mq_cpuset=`get_mode_cpu_set 'mq'`
+    local sq_cpuset=`get_mode_cpu_set 'sq'`
+    local sq_split_cpuset=`get_mode_cpu_set 'sq_split'`
     local tune_mode=""
 
     case "$cur_cpuset" in
