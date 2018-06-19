@@ -235,43 +235,21 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
     size_t warn_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_warn_threshold_in_kb() * 1024;
     size_t fail_threshold = service::get_local_storage_proxy().get_db().local().get_config().batch_size_fail_threshold_in_kb() * 1024;
 
-    class my_partition_visitor : public mutation_partition_visitor {
-    public:
-        void accept_partition_tombstone(tombstone) override {}
-        void accept_static_cell(column_id, atomic_cell_view v)  override {
-            size += v.value().size_bytes();
-        }
-        void accept_static_cell(column_id, collection_mutation_view v) override {
-            size += v.data.size_bytes();
-        }
-        void accept_row_tombstone(const range_tombstone&) override {}
-        void accept_row(position_in_partition_view, const row_tombstone&, const row_marker&, is_dummy, is_continuous) override {}
-        void accept_row_cell(column_id, atomic_cell_view v) override {
-            size += v.value().size_bytes();
-        }
-        void accept_row_cell(column_id id, collection_mutation_view v) override {
-            size += v.data.size_bytes();
-        }
-
-        size_t size = 0;
-    };
-
-    my_partition_visitor v;
-
+    size_t size = 0;
     for (auto&m : mutations) {
-        m.partition().accept(*m.schema(), v);
+        size += m.partition().external_memory_usage(*m.schema());
     }
 
-    if (v.size > warn_threshold) {
+    if (size > warn_threshold) {
         auto error = [&] (const char* type, size_t threshold) -> sstring {
             std::unordered_set<sstring> ks_cf_pairs;
             for (auto&& m : mutations) {
                 ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
             return sprint("Batch of prepared statements for %s is of size %d, exceeding specified %s threshold of %d by %d.",
-                    join(", ", ks_cf_pairs), v.size, type, threshold, v.size - threshold);
+                    join(", ", ks_cf_pairs), size, type, threshold, size - threshold);
         };
-        if (v.size > fail_threshold) {
+        if (size > fail_threshold) {
             _logger.error(error("FAIL", fail_threshold).c_str());
             throw exceptions::invalid_request_exception("Batch too large");
         } else {
