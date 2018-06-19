@@ -56,6 +56,8 @@ class migrators : public enable_lw_shared_from_this<migrators> {
     static constexpr uint32_t offset = 0;
 #endif
 public:
+    static constexpr uint32_t maximum_id_value = std::numeric_limits<uint32_t>::max() / 2;
+
     uint32_t add(const migrate_fn_type* m) {
 #ifndef DEBUG_LSA_SANITIZER
         if (!_unused_ids.empty()) {
@@ -960,6 +962,9 @@ class region_impl final : public basic_region_impl {
     private:
         explicit object_descriptor(uint32_t n) : _n(n) {}
     public:
+        static_assert(migrators::maximum_id_value <= std::numeric_limits<uint32_t>::max()
+            && uint64_t(migrators::maximum_id_value) * 2 + 1 <= std::numeric_limits<uint32_t>::max());
+
         object_descriptor(allocation_strategy::migrate_fn migrator)
                 : _n(migrator->index() * 2 + 1)
         { }
