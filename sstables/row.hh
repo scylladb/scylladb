@@ -41,6 +41,7 @@
 #include "column_translation.hh"
 
 #include "sstables.hh"
+#include "tombstone.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -153,6 +154,8 @@ public:
     virtual proceed consume_partition_end() = 0;
 
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) = 0;
+
+    virtual proceed consume_row_marker_and_tombstone(const sstables::liveness_info& info, tombstone t) = 0;
 
     virtual proceed consume_static_row_start() = 0;
 
@@ -551,6 +554,7 @@ private:
         ROW_BODY_DELETION,
         ROW_BODY_DELETION_2,
         ROW_BODY_DELETION_3,
+        ROW_BODY_MARKER,
         ROW_BODY_MISSING_COLUMNS,
         ROW_BODY_MISSING_COLUMNS_2,
         ROW_BODY_MISSING_COLUMNS_READ_COLUMNS,
@@ -597,6 +601,8 @@ private:
     uint64_t _missing_columns_to_read;
 
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
+
+    tombstone _row_tombstone;
 
     column_flags_m _column_flags{0};
     api::timestamp_type _column_timestamp;
@@ -732,6 +738,7 @@ public:
         case state::FLAGS:
         flags_label:
             _liveness.reset();
+            _row_tombstone = {};
             if (read_8(data) != read_status::ready) {
                 _state = state::FLAGS_2;
                 break;
@@ -874,23 +881,28 @@ public:
         case state::ROW_BODY_DELETION:
         row_body_deletion_label:
             if (!_flags.has_deletion()) {
-                _state = state::ROW_BODY_MISSING_COLUMNS;
-                goto row_body_missing_columns_label;
+                _state = state::ROW_BODY_MARKER;
+                goto row_body_marker_label;
             }
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_DELETION_2;
                 break;
             }
         case state::ROW_BODY_DELETION_2:
-            // TODO consume mark_for_deleted_at
+            _row_tombstone.timestamp = parse_timestamp(_header, _u64);
             if (read_unsigned_vint(data) != read_status::ready) {
                 _state = state::ROW_BODY_DELETION_3;
                 break;
             }
         case state::ROW_BODY_DELETION_3:
-            // TODO consume local_deletion_time
+            _row_tombstone.deletion_time = parse_expiry(_header, _u64);
+        case state::ROW_BODY_MARKER:
+        row_body_marker_label:
+            if (_consumer.consume_row_marker_and_tombstone(_liveness, std::move(_row_tombstone)) == consumer_m::proceed::no) {
+                _state = state::ROW_BODY_MISSING_COLUMNS;
+                break;
+            }
         case state::ROW_BODY_MISSING_COLUMNS:
-        row_body_missing_columns_label:
             if (!_flags.has_all_columns()) {
                 if (read_unsigned_vint(data) != read_status::ready) {
                     _state = state::ROW_BODY_MISSING_COLUMNS_2;
