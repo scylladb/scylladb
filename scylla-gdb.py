@@ -392,7 +392,7 @@ class scylla_memory(gdb.Command):
         gdb.write('Page spans:\n')
         gdb.write('{index:5} {size:>13} {total}\n'.format(index="index", size="size [B]", total="free [B]"))
         for index in range(int(cpu_mem['nr_span_lists'])):
-            span_list = cpu_mem['fsu']['free_spans'][index]
+            span_list = cpu_mem['free_spans'][index]
             front = int(span_list['_front'])
             pages = cpu_mem['pages']
             total = 0
@@ -640,7 +640,7 @@ class scylla_ptr(gdb.Command):
 
         def is_page_free(page_index):
             for index in range(int(cpu_mem['nr_span_lists'])):
-                span_list = cpu_mem['fsu']['free_spans'][index]
+                span_list = cpu_mem['free_spans'][index]
                 span_page_idx = span_list['_front']
                 while span_page_idx:
                     span_page = pages[span_page_idx]
