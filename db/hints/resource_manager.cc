@@ -35,6 +35,14 @@ static logging::logger resource_manager_logger("hints_resource_manager");
 
 size_t db::hints::resource_manager::max_shard_disk_space_size;
 
+future<dev_t> get_device_id(boost::filesystem::path path) {
+    return open_directory(path.native()).then([](file f) {
+        return f.stat().then([f = std::move(f)](struct stat st) {
+            return st.st_dev;
+        });
+    });
+}
+
 future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);

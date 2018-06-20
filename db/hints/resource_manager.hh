@@ -40,6 +40,8 @@ class storage_service;
 namespace db {
 namespace hints {
 
+future<dev_t> get_device_id(boost::filesystem::path path);
+
 using timer_clock_type = seastar::lowres_clock;
 
 class manager;
