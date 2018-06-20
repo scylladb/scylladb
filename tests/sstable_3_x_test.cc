@@ -1533,12 +1533,7 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
-static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
-    storage_service_for_tests ssft;
-    tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
-    write_memtable_to_sstable_for_test(*mt, sst).get();
-
+static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed = false) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Statistics,
@@ -1551,6 +1546,30 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
                 sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         compare_files(orig_filename, result_filename);
     }
+}
+
+// Can be useful if we want, e.g., to avoid range tombstones de-overlapping
+// that otherwise takes place for RTs put into one and the same memtable
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
+                                       sstring table_name, bool compressed = false) {
+    static db::nop_large_partition_handler nop_lp_handler;
+    storage_service_for_tests ssft;
+    tmpdir tmp;
+    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    sstable_writer_config cfg;
+    cfg.large_partition_handler = &nop_lp_handler;
+    sst->write_components(make_combined_reader(s,
+        mt1->make_flat_reader(s),
+        mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_stats()).get();
+    compare_sstables(std::move(tmp), table_name, compressed);
+}
+
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
+    storage_service_for_tests ssft;
+    tmpdir tmp;
+    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    write_memtable_to_sstable_for_test(*mt, sst).get();
+    compare_sstables(std::move(tmp), table_name, compressed);
 }
 
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
