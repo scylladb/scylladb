@@ -17,6 +17,8 @@ class ScyllaSetup:
         self._overprovisioned = arguments.overprovisioned
         self._housekeeping = not arguments.disable_housekeeping
         self._experimental = arguments.experimental
+        self._authenticator = arguments.authenticator
+        self._authorizer = arguments.authorizer
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -85,6 +87,12 @@ class ScyllaSetup:
 
         if self._apiAddress is not None:
             args += ["--api-address %s" %self._apiAddress ]
+
+        if self._authenticator is not None:
+            args += ["--authenticator %s" %self._authenticator ]
+
+        if self._authorizer is not None:
+            args += ["--authorizer %s" %self._authorizer ]
 
         if self._experimental == "1":
             args += [ "--experimental=on" ]

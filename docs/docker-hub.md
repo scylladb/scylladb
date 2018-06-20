@@ -214,6 +214,18 @@ The `--disable-version-check` disable the version validation check.
 
 **Since: 2.2**
 
+### `--authenticator AUTHENTICATOR`
+
+The `--authenticator` command lines option allows to provide the authenticator class Scylla will use. By default Scylla uses the `AllowAllAuthenticator` which performs no credentials checks. The second option is using the `PasswordAuthenticator` parameter, which relies on username/password pairs to authenticate users.
+
+**Since: 2.3**
+
+### `--authorizer AUTHORIZER`
+
+The `--authorizer` command lines option allows to provide the authorizer class Scylla will use. By default Scylla uses the `AllowAllAuthorizer` which allows any action to any user. The second option is using the `CassandraAuthorizer` parameter, which stores permissions in `system_auth.permissions` table.
+
+**Since: 2.3**
+
 ## Related Links
 
 * [Best practices for running Scylla on docker](http://docs.scylladb.com/procedures/best_practices_scylla_on_docker/)

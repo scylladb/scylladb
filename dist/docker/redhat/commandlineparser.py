@@ -16,4 +16,6 @@ def parse():
     parser.add_argument('--broadcast-rpc-address', default=None, dest='broadcastRpcAddress')
     parser.add_argument('--api-address', default=None, dest='apiAddress')
     parser.add_argument('--disable-version-check', default=False, action='store_true', dest='disable_housekeeping', help="Disable version check")
+    parser.add_argument('--authenticator', default=None, dest='authenticator', help="Set authenticator class")
+    parser.add_argument('--authorizer', default=None, dest='authorizer', help="Set authorizer class")
     return parser.parse_args()
