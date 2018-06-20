@@ -1735,6 +1735,7 @@ future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::descr
         auto f0 = netw::get_messaging_service().local().send_schema_check(netw::msg_addr{ host, 0 });
         return std::move(f0).then_wrapped([host] (auto f) {
             if (f.failed()) {
+                f.ignore_ready_future();
                 return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, stdx::nullopt);
             }
             return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, f.get0());
