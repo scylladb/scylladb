@@ -200,10 +200,19 @@ future<> resource_manager::prepare_per_device_limits() {
         dev_t device_id = shard_manager.hints_dir_device_id();
         auto it = _per_device_limits_map.find(device_id);
         if (it == _per_device_limits_map.end()) {
-            size_t max_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
-            _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+            return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
+                // By default, give each device 10% of the available disk space. Give each shard an equal share of the available space.
+                size_t max_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
+                // Then, reserve 90% of all space instead of 10% above.
+                if (is_mountpoint) {
+                    max_size *= 9;
+                }
+                _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+            });
         } else {
             it->second.managers.emplace_back(std::ref(shard_manager));
+            return make_ready_future<>();
         }
     });
 }
