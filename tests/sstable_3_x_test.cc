@@ -3345,18 +3345,20 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_partitions) {
     // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10);
     // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20);
     // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30);
+    std::vector<mutation> muts;
     for (auto i : boost::irange(1, 4)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
-        mutation mut{s, key};
+        muts.emplace_back(s, key);
 
         clustering_key ckey = clustering_key::make_empty();
-        mut.partition().apply_insert(*s, ckey, ts);
-        mut.set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
-        mt->apply(std::move(mut));
+        muts.back().partition().apply_insert(*s, ckey, ts);
+        muts.back().set_cell(ckey, to_bytes(format("rc{}", i)), data_value{i * 10}, ts);
+        mt->apply(muts.back());
         ts += 10;
     }
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, muts);
 }
 
 static void test_write_many_partitions(sstring table_name, tombstone partition_tomb, compression_parameters cp) {
