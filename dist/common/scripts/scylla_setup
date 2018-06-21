@@ -1,525 +1,362 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NO_COLOR='\033[0m' # No Color
+import os
+import sys
+import argparse
+import logging
+import glob
+import shutil
+import io
+import stat
+from scylla_util import *
 
-if [ "`id -u`" -ne 0 ]; then
-    echo "Requires root permission."
-    exit 1
-fi
+interactive = False
 
-print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --setup-nic --developer-mode --no-ec2-check --no-kernel-check --no-verify-package --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup --no-cpuscaling-setup --no-fstrim-setup"
-    echo "  --disks			specify disks for RAID"
-    echo "  --nic				specify NIC"
-    echo "  --ntp-domain			specify NTP domain"
-    echo "  --ami				setup AMI instance"
-    echo "  --setup-nic				optimize NIC queue"
-    echo "  --developer-mode			enable developer mode"
-    echo "  --no-ec2-check			skip EC2 configuration check(only on EC2)"
-    echo "  --no-kernel-check           skip kernel version check"
-    echo "  --no-verify-package          skip verifying packages"
-    echo "  --no-enable-service		skip enabling service"
-    echo "  --no-selinux-setup		skip selinux setup"
-    echo "  --no-bootparam-setup		skip bootparam setup"
-    echo "  --no-ntp-setup		skip ntp setup"
-    echo "  --no-raid-setup		skip raid setup"
-    echo "  --no-coredump-setup		skip coredump setup"
-    echo "  --no-sysconfig-setup		skip sysconfig setup"
-    echo "  --no-io-setup		skip IO configuration setup"
-    echo "  --no-version-check		skip daily version check"
-    echo "  --no-node-exporter        do not install the node exporter"
-    echo "  --no-cpuscaling-setup      skip cpu scaling setup"
-    echo "  --no-fstrim-setup           skip fstrim setup"
-    exit 1
-}
+def interactive_ask_service(msg1, msg2, default = None):
+    print(msg1)
+    print(msg2)
+    while True:
+        if default == 'yes':
+            prompt = '[YES/no]'
+        elif default == 'no':
+            prompt = '[yes/NO]'
+        else:
+            prompt = '[yes/no]'
+        ans = input(prompt).lower()
+        if len(ans) == 0:
+            ans = default
+        if ans == 'yes' or ans == 'y':
+            return True
+        elif ans == 'no' or ans =='n':
+            return False
 
-interactive_ask_service() {
-    echo $1
-    echo $2
-    while true; do
-        if [ "$3" == "yes" ]; then
-        prompt="[YES/no]"
-        elif [ "$3" == "no" ]; then
-        prompt="[yes/NO]"
-        else
-        prompt="[yes/no]"
-        fi
-        result=""
-        while [ x == x"$result" ]; do
-            read -p $prompt ans
-            if [ x == x"$ans" ]; then
-                result="$3"
-            else
-                result="$ans"
-            fi
-        done
-        case $(echo $result | tr '[:upper:]' '[:lower:]') in
-            "y" | "yes")
-                return 1
-                ;;
-            "n" | "no")
-                return 0
-                ;;
-        esac
-    done
-}
+def do_verify_package(pkg):
+    if is_debian_variant():
+        res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
+    elif is_redhat_variant():
+        res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
+    if res != 0:
+        print('{} package is not installed.'.format(pkg))
+        sys.exit(1)
 
-verify_package() {
-    if is_debian_variant; then
-        dpkg -s $1 > /dev/null 2>&1 &&:
-    elif is_gentoo_variant; then
-        find /var/db/pkg/app-admin -type d -name "${1}-*" | egrep -q ".*"
-    else
-        rpm -q $1 > /dev/null 2>&1 &&:
-    fi
-    if [ $? -eq 1 ]; then
-        echo "$1 package is not installed."
-        exit 1
-    fi
-}
+def list_block_devices():
+    s = out('lsblk --help')
+    if re.match(r'\s*-p', s, flags=re.MULTILINE):
+        s = out('lsblk -pnr -e 7,252')
+        devices = re.findall(r'^(\S+) ', s, flags=re.MULTILINE)
+    else:
+        devices = []
+        for p in ['/dev/sd*', '/dev/hd*', '/dev/xvd*', '/dev/nvme*', '/dev/mapper/*']:
+            devices.extend([d for d in glob.glob(p) if d != '/dev/mapper/control'])
+        return devices
 
-list_block_devices() {
-    if lsblk --help | grep -q -e '^\s*-p'; then
-        # to skip ROM devices, drop 'rom'
-        lsblk -pnr | awk '$6 != "rom" { print $1 }'
-    else
-        ls -1 /dev/sd* /dev/hd* /dev/xvd* /dev/nvme* /dev/mapper/*  2>/dev/null|grep -v control
-    fi
-}
+def get_unused_disks():
+    unused = []
+    for dev in list_block_devices():
+        with open('/proc/mounts') as f:
+            s = f.read().strip()
+        count_raw = len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE))
+        count_pvs = 0
+        if shutil.which('pvs'):
+            s = out('pvs -o pv_name --nohead')
+            count_pvs = len(re.findall(dev, s, flags=re.MULTILINE))
+        s = out('swapon --show=NAME --noheadings')
+        count_swap = len(re.findall(dev, s, flags=re.MULTILINE))
+        if count_raw + count_pvs + count_swap == 0:
+            unused.append(dev)
+    return unused
 
-get_unused_disks() {
-    list_block_devices|grep -v loop|while read dev
-    do
-        count_raw=$(grep $dev /proc/mounts|wc -l)
-        count_pvs=0
-        if [ -f /usr/sbin/pvs ]; then
-            count_pvs=$(pvs|grep $dev|wc -l)
-        fi
-        count_swap=$(swapon -s |grep `realpath $dev`|wc -l)
-        if [ $count_raw -eq 0 -a $count_pvs -eq 0 -a $count_swap -eq 0 ]; then
-            echo -n "$dev "
-        fi
-    done
-}
+def run_setup_script(name, script):
+    global interactive
+    res = run(script, exception=False)
+    if res != 0:
+        if interactive:
+            print('{red}{name} setup failed. Press any key to continue...{no_color}'.format(red=concolor.BOLD_RED, name=name, no_color=concolor.NO_COLOR))
+            input()
+        else:
+            print('{} setup failed.'.format(name))
+            sys.exit(1)
+    return res
 
-run_setup_script() {
-    name=$1
-    shift 1
-    $* &&:
-    if [ $? -ne 0 ]; then
-        if [ $INTERACTIVE -eq 1 ]; then
-            printf "${RED}$name setup failed. Press any key to continue...${NO_COLOR}\n"
-            read
-            return 1
-        else
-            printf "$name setup failed.\n"
-            exit 1
-        fi
-    fi
-    return 0
-}
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        logging.error('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
+    parser.add_argument('--disks',
+                        help='specify disks for RAID')
+    parser.add_argument('--nic',
+                        help='specify NIC')
+    parser.add_argument('--ntp-domain',
+                        help='specify NTP domain')
+    parser.add_argument('--ami', action='store_true', default=False,
+                        help='setup AMI instance')
+    parser.add_argument('--setup-nic', action='store_true', default=False,
+                        help='optimize NIC queue')
+    parser.add_argument('--developer-mode', action='store_true', default=False,
+                        help='enable developer mode')
+    parser.add_argument('--no-ec2-check', action='store_true', default=False,
+                        help='skip EC2 configuration check(only on EC2)')
+    parser.add_argument('--no-kernel-check', action='store_true', default=False,
+                        help='skip kernel version check')
+    parser.add_argument('--no-verify-package', action='store_true', default=False,
+                        help='skip verifying packages')
+    parser.add_argument('--no-enable-service', action='store_true', default=False,
+                        help='skip enabling service')
+    if is_redhat_variant():
+        parser.add_argument('--no-selinux-setup', action='store_true', default=False,
+                            help='skip selinux setup')
+    parser.add_argument('--no-bootparam-setup', action='store_true', default=False,
+                        help='skip bootparam setup')
+    parser.add_argument('--no-ntp-setup', action='store_true', default=False,
+                        help='skip ntp setup')
+    parser.add_argument('--no-raid-setup', action='store_true', default=False,
+                        help='skip raid setup')
+    parser.add_argument('--no-coredump-setup', action='store_true', default=False,
+                        help='skip coredump setup')
+    parser.add_argument('--no-sysconfig-setup', action='store_true', default=False,
+                        help='skip sysconfig setup')
+    parser.add_argument('--no-io-setup', action='store_true', default=False,
+                        help='skip IO configuration setup')
+    parser.add_argument('--no-version-check', action='store_true', default=False,
+                        help='skip daily version check')
+    parser.add_argument('--no-node-exporter', action='store_true', default=False,
+                        help='do not install the node exporter')
+    parser.add_argument('--no-cpuscaling-setup', action='store_true', default=False,
+                        help='skip cpu scaling setup')
+    parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
+                        help='skip fstrim setup')
+    args = parser.parse_args()
 
-AMI=0
-SET_NIC=0
-DEV_MODE=0
-EC2_CHECK=1
-KERNEL_CHECK=1
-VERIFY_PACKAGE=1
-ENABLE_SERVICE=1
-ENABLE_CHECK_VERSION=1
-SELINUX_SETUP=1
-BOOTPARAM_SETUP=1
-NTP_SETUP=1
-RAID_SETUP=1
-COREDUMP_SETUP=1
-SYSCONFIG_SETUP=1
-IO_SETUP=1
-NODE_EXPORTER=1
-CPUSCALING_SETUP=1
-FSTRIM_SETUP=1
-SELINUX_REBOOT_REQUIRED=0
+    if len(sys.argv) == 1:
+        interactive = True
 
-if [ $# -ne 0 ]; then
-    INTERACTIVE=0
-else
-    INTERACTIVE=1
-fi
+    if not interactive and not args.no_raid_setup and not args.disks:
+        parser.print_help()
+        sys.exit(1)
+    if not interactive and not args.no_sysconfig_setup and not args.nic:
+        parser.print_help()
+        sys.exit(1)
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--disks")
-            verify_args $@
-            DISKS="$2"
-            shift 2
-            ;;
-        "--nic")
-            verify_args $@
-            NIC="$2"
-            shift 2
-            ;;
-        "--ntp-domain")
-            verify_args $@
-            NTP_DOMAIN="$2"
-            shift 2
-            ;;
-        "--ami")
-            AMI=1
-            shift 1
-            ;;
-        "--setup-nic")
-            SET_NIC=1
-            shift 1
-            ;;
-        "--developer-mode")
-            DEV_MODE=1
-            shift 1
-            ;;
-        "--no-ec2-check")
-            EC2_CHECK=0
-            shift 1
-            ;;
-        "--no-kernel-check")
-            KERNEL_CHECK=0
-            shift 1
-            ;;
-        "--no-verify-package")
-            VERIFY_PACKAGE=0
-            shift 1
-            ;;
-        "--no-enable-service")
-            ENABLE_SERVICE=0
-            shift 1
-            ;;
-        "--no-version-check")
-            ENABLE_CHECK_VERSION=0
-            shift 1
-            ;;
-        "--no-selinux-setup")
-            SELINUX_SETUP=0
-            shift 1
-            ;;
-        "--no-bootparam-setup")
-            BOOTPARAM_SETUP=0
-            shift 1
-            ;;
-        "--no-ntp-setup")
-            NTP_SETUP=0
-            shift 1
-            ;;
-        "--no-raid-setup")
-            RAID_SETUP=0
-            shift 1
-            ;;
-        "--no-coredump-setup")
-            COREDUMP_SETUP=0
-            shift 1
-            ;;
-        "--no-sysconfig-setup")
-            SYSCONFIG_SETUP=0
-            shift 1
-            ;;
-        "--no-io-setup")
-            IO_SETUP=0
-            shift 1
-            ;;
-        "--no-node-exporter")
-            NODE_EXPORTER=0
-            shift 1
-            ;;
-        "--no-cpuscaling-setup")
-            CPUSCALING_SETUP=0
-            shift 1
-            ;;
-        "--no-fstrim-setup")
-            FSTRIM_SETUP=0
-            shift 1
-            ;;
-        "-h" | "--help")
-            print_usage
-            shift 1
-            ;;
-        *)
-            echo "Invalid option: $@"
-            print_usage
-    esac
-done
+    disks = args.disks
+    nic = args.nic
+    set_nic = args.setup_nic
+    ec2_check = not args.no_ec2_check
+    kernel_check = not args.no_kernel_check
+    verify_package = not args.no_verify_package
+    enable_service = not args.no_enable_service
+    if is_redhat_variant():
+        selinux_setup = not args.no_selinux_setup
+    bootparam_setup = not args.no_bootparam_setup
+    ntp_setup = not args.no_ntp_setup
+    raid_setup = not args.no_raid_setup
+    coredump_setup = not args.no_coredump_setup
+    sysconfig_setup = not args.no_sysconfig_setup
+    io_setup = not args.no_io_setup
+    version_check = not args.no_version_check
+    node_exporter = not args.no_node_exporter
+    cpuscaling_setup = not args.no_cpuscaling_setup
+    fstrim_setup = not args.no_fstrim_setup
+    selinux_reboot_required = False
 
-if [ $INTERACTIVE -eq 0 ] && [ $RAID_SETUP -eq 1 ] && [ "$DISKS" = "" ]; then
-    print_usage
-fi
-if [ $INTERACTIVE -eq 0 ] && [ $SYSCONFIG_SETUP -eq 1 ] && [ "$NIC" = "" ]; then
-    print_usage
-fi
+    print('{green}Skip any of the following steps by answering \'no\'{no_color}'.format(green=concolor.GREEN, no_color=concolor.NO_COLOR))
 
-printf "${GREEN}Skip any of the following steps by answering 'no'${NO_COLOR}\n"
+    if is_ec2():
+        if interactive:
+            ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylls. No - skips the configuration check.', 'yes')
+        if ec2_check:
+            run('/usr/lib/scylla/scylla_ec2_check')
 
-if is_ec2; then
-    if [ $INTERACTIVE -eq 1 ]; then
-        interactive_ask_service "Do you want to run Amazon EC2 configuration check?" "Yes - runs a script to verify that this instance is optimized for running Scylls. No - skips the configuration check." "yes" &&:
-        EC2_CHECK=$?
-    fi
-    if [ $EC2_CHECK -eq 1 ]; then
-        /usr/lib/scylla/scylla_ec2_check
-    fi
-fi
+    if interactive:
+        kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', 'yes')
+    if kernel_check:
+        run('/usr/lib/scylla/scylla_kernel_check')
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to run check your kernel version?" "Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check." "yes" &&:
-    KERNEL_CHECK=$?
-fi
-if [ $KERNEL_CHECK -eq 1 ]; then
-    /usr/lib/scylla/scylla_kernel_check
-fi
+    if interactive:
+        verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', 'yes')
+    if verify_package:
+        do_verify_package('scylla-jmx')
+        do_verify_package('scylla-tools')
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to verify the ScyllaDB packages are installed?" "Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check." "yes" &&:
-    VERIFY_PACKAGE=$?
-fi
+    if interactive:
+        enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', 'yes')
+    if enable_service:
+        if is_systemd():
+            systemd_unit('scylla-server.service').enable()
+            systemd_unit('scylla-fstrim.timer').unmask()
+        elif is_gentoo_variant():
+            run('rc-update add scylla-server default')
 
-if [ $VERIFY_PACKAGE -eq 1 ]; then
-    verify_package scylla-jmx
-    verify_package scylla-tools
-fi
+    if interactive:
+        version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', 'yes')
+    if version_check:
+        with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
+            f.write('[housekeeping]\ncheck-version: True\n')
+        if is_systemd():
+            systemd_unit('scylla-housekeeping-daily.timer').unmask()
+            systemd_unit('scylla-housekeeping-restart.timer').unmask()
+    else:
+        with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
+            f.write('[housekeeping]\ncheck-version: False\n')
+        if is_systemd():
+            hk_daily = systemd_unit('scylla-housekeeping-daily.timer')
+            hk_daily.mask()
+            hk_daily.stop()
+            hk_restart = systemd_unit('scylla-housekeeping-restart.timer')
+            hk_restart.mask()
+            hk_restart.stop()
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want the Scylla server service to automatically start when the Scylla node boots?" "Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually." "yes" &&:
-    ENABLE_SERVICE=$?
-fi
+    cur_version=out('scylla --version', exception=False)
+    if len(cur_version) > 0:
+        if is_debian_variant():
+            new_version=out('sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version {} --mode i'.format(cur_version), shell=True, exception=False)
+        else:
+            new_version=out('sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version {} --mode i'.format(cur_version), shell=True, exception=False)
+        if len(new_version) > 0:
+            print(new_version)
+    else:
+        if is_debian_variant():
+            new_version=out('sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/apt/sources.list.d/scylla*.list\' version --version unknown --mode u', shell=True, exception=False)
+        else:
+            new_version=out('sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files \'/etc/yum.repos.d/scylla*.repo\' version --version unknown --mode u', shell=True, exception=False)
+        print('A Scylla executable was not found, please check your installation {}'.format(new_version))
 
-if [ $ENABLE_SERVICE -eq 1 ]; then
-    if is_systemd; then
-        systemctl enable scylla-server.service
-        systemctl unmask scylla-fstrim.timer
-    elif is_gentoo_variant; then
-        rc-update add scylla-server default
-    fi
-    if [ $INTERACTIVE -eq 1 ] && [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
-        interactive_ask_service "Do you want to enable Scylla to check if there is a newer version of Scylla available?" "Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step." "yes" &&:
-        ENABLE_CHECK_VERSION=$?
-    fi
-    if [ $ENABLE_CHECK_VERSION -eq 1 ]; then
-        if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
-           printf "[housekeeping]\ncheck-version: True\n" > /etc/scylla.d/housekeeping.cfg
-        fi
-        if is_systemd; then
-            systemctl unmask scylla-housekeeping-daily.timer
-            systemctl unmask scylla-housekeeping-restart.timer
-        fi
-    else
-        if [ ! -f /etc/scylla.d/housekeeping.cfg ]; then
-           printf "[housekeeping]\ncheck-version: False\n" > /etc/scylla.d/housekeeping.cfg
-        fi
-        if is_systemd; then
-            systemctl mask scylla-housekeeping-daily.timer
-            systemctl mask scylla-housekeeping-restart.timer
-            systemctl stop scylla-housekeeping-daily.timer || true
-            systemctl stop scylla-housekeeping-restart.timer || true
-        fi
-    fi
-fi
+    if is_redhat_variant():
+        if interactive:
+            selinux_setup = interactive_ask_service('Do you want to disable SELinux?', 'Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated.', 'yes')
+        if selinux_setup:
+            res = run_setup_script('SELinux', '/usr/lib/scylla/scylla_selinux_setup')
+            if res != 0:
+                selinux_reboot_required=True
 
-CUR_VERSION=`scylla --version` || true
-if [ "$CUR_VERSION" != "" ]; then
-    if is_debian_variant; then
-        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' version --version $CUR_VERSION --mode i` || true
-    else
-        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/yum.repos.d/scylla*.repo' version --version $CUR_VERSION --mode i` || true
-    fi
-    if [ "$NEW_VERSION" != "" ]; then
-       echo $NEW_VERSION
-    fi
-else
-    if is_debian_variant; then
-        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' version --version unknown --mode u` || true
-    else
-        NEW_VERSION=`sudo -u scylla /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/yum.repos.d/scylla*.repo' version --version unknown --mode u` || true
-    fi
-    echo "A Scylla executable was not found, please check your installation" $NEW_VERSION
-fi
+    if args.ami:
+        if interactive:
+            bootparam_setup = interactive_ask_service('Do you want add hugepages capability to the bootloader options?', 'Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step.', 'yes')
+        if bootparam_setup:
+            run_setup_script('boot parameter', '/usr/lib/scylla/scylla_bootparam_setup --ami')
 
-# scylla_selinux_setup only supports Red Hat variants
-if is_debian_variant || is_gentoo_variant; then
-    echo "scylla_selinux_setup only supports Red Hat variants"
-else
-    if ! is_selinux_enabled; then
-        if [ $INTERACTIVE -eq 1 ]; then
-            interactive_ask_service "Do you want to disable SELinux?" "Yes - disables SELinux. Choosing Yes greatly improves performance. No - keeps SELinux activated." "yes" &&:
-            SELINUX_SETUP=$?
-        fi
-        if [ $SELINUX_SETUP -eq 1 ]; then
-            run_setup_script "SELinux" /usr/lib/scylla/scylla_selinux_setup &&:
-            if [ $? -eq 0 ]; then
-                SELINUX_REBOOT_REQUIRED=1
-            fi
-        fi
-    fi
-fi
+    if interactive:
+        ntp_setup = interactive_ask_service('Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?', 'Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step.', 'yes')
+    if ntp_setup:
+        if args.ntp_domain:
+            run_setup_script('NTP', '/usr/lib/scylla/scylla_ntp_setup --subdomain {}'.format(args.ntp_domain))
 
-if [ $AMI -eq 1 ]; then
-    if [ $INTERACTIVE -eq 1 ]; then
-        interactive_ask_service "Do you want add hugepages capability to the bootloader options?" "Yes - enable hugepages at boot time. Choosing yes greatly improves performance. No - skips this step." "yes" &&:
-        BOOTPARAM_SETUP=$?
-    fi
-    if [ $BOOTPARAM_SETUP -eq 1 ]; then
-        run_setup_script "boot parameter" /usr/lib/scylla/scylla_bootparam_setup --ami
-    fi
-fi
+        else:
+            run_setup_script('NTP', '/usr/lib/scylla/scylla_ntp_setup')
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup Network Time Protocol(NTP) to auto-synchronize the current time on the node?" "Yes - enables time-synchronization. This keeps the correct time on the node. No - skips this step." "yes" &&:
-    NTP_SETUP=$?
-fi
-if [ $NTP_SETUP -eq 1 ]; then
-    if [ "$NTP_DOMAIN" != "" ]; then
-        run_setup_script "NTP" /usr/lib/scylla/scylla_ntp_setup --subdomain $NTP_DOMAIN
-    else
-        run_setup_script "NTP" /usr/lib/scylla/scylla_ntp_setup
-    fi
-fi
-
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup RAID0 and XFS?" "It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process." "Yes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step." "yes" &&:
-    if [ $? -eq 1 ]; then
-        interactive_ask_service "Are you sure you want to setup RAID0 and XFS?" "If you choose Yes, the selected drive will be reformated, erasing all existing data in the process." "yes" &&:
-        RAID_SETUP=$?
-    else
-        RAID_SETUP=0
-    fi
-    if [ $RAID_SETUP -eq 1 ]; then
-        DEVS=`get_unused_disks`
-        if [ "$DEVS" = "" ]; then
-            echo "No free disks were detected, abort RAID/XFS setup. Disks must be unmounted before proceeding."
-            echo
-            RAID_SETUP=0
-        else
-            echo "Please select unmounted disks from the following list: $DEVS"
-        fi
-        while [ "$DEVS" != "" ]; do
-            echo "type 'cancel' to cancel RAID/XFS setup."
-            echo "type 'done' to finish selection. Selected: $DISKS"
-            echo -n "> "
-            read dsk
-            if [ "$dsk" = "cancel" ]; then
-                RAID_SETUP=0
-                break
-            fi
-            if [ "$dsk" = "done" ]; then
-                if [ "$DISKS" = "" ]; then
-                    continue
-                fi
-                break
-            fi
-            if [ "$dsk" = "" ]; then
-                continue
-            fi
-            if [ -b $dsk ]; then
-                if [ "$DISKS" = "" ]; then
-                    DISKS=$dsk
-                else
-                    DISKS="$DISKS,$dsk"
-                fi
-            else
-                echo "$dsk not found"
-            fi
-        done
-    fi
-fi
-if [ $RAID_SETUP -eq 1 ]; then
-    run_setup_script "RAID" /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
-fi
-
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable coredumps?" "Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step." "yes" &&:
-    COREDUMP_SETUP=$?
-fi
-if [ $COREDUMP_SETUP -eq 1 ]; then
-    if [ "$DISKS" != "" ]; then
-        run_setup_script "coredump" /usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir
-    else
-        run_setup_script "coredump" /usr/lib/scylla/scylla_coredump_setup
-    fi
-fi
-
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to setup a system-wide customized configuration for Scylla?" "Yes - setup the sysconfig file. No - skips this step." "yes" &&:
-    SYSCONFIG_SETUP=$?
-    if [ $SYSCONFIG_SETUP -eq 1 ]; then
-        NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
-        NR_NICS=`echo $NICS|wc -w`
-        if [ $NR_NICS -eq 0 ]; then
-            echo "A NIC was not found."
-            exit 1
-        elif [ $NR_NICS -eq 1 ]; then
-            NIC=$NICS
-        else
-            echo "Please select a NIC from the following list: "
-            while true; do
-                echo $NICS
-                echo -n "> "
-                read NIC
-                if [ -e /sys/class/net/$NIC ]; then
+    if interactive:
+        res = interactive_ask_service('Do you want to setup RAID0 and XFS?', 'It is recommended to use RAID0 and XFS for Scylla data. If you select yes, you will be prompted to choose the unmounted disks to use for Scylla data. Selected disks are formatted as part of the process.\nYes - choose a disk/disks to format and setup for RAID0 and XFS. No - skip this step.', 'yes')
+        if res:
+            raid_setup = interactive_ask_service('Are you sure you want to setup RAID0 and XFS?', 'If you choose Yes, the selected drive will be reformated, erasing all existing data in the process.', 'yes')
+        else:
+            raid_setup = False
+        if raid_setup:
+            devices = get_unused_disks()
+            if len(devices) == 0:
+                print('No free disks were detected, abort RAID/XFS setup. Disks must be unmounted before proceeding.\n')
+                raid_setup = False
+            else:
+                print('Please select unmounted disks from the following list: {}'.format(devices))
+            selected = []
+            while len(devices):
+                print('type \'cancel\' to cancel RAID/XFS setup.')
+                print('type \'done\' to finish selection. Selected: {}'.format(selected))
+                dsk = input('> ')
+                if dsk == 'cancel':
+                    raid_setup = 0
                     break
-                fi
-            done
-        fi
-        interactive_ask_service "Do you want to enable Network Interface Card (NIC) optimization?" "Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step." "yes" &&:
-        SET_NIC=$?
-    fi
-fi
-if [ $SYSCONFIG_SETUP -eq 1 ]; then
-    SETUP_ARGS=
-    if [ $SET_NIC -eq 1 ]; then
-        SETUP_ARGS="--setup-nic"
-    fi
-    run_setup_script "NIC queue" /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC $SETUP_ARGS
-fi
+                if dsk == 'done':
+                    if len(selected) == 0:
+                        continue
+                    break
+                if dsk == '':
+                    continue
+                if not os.path.exists(dsk):
+                    print('{} not found'.format(dsk))
+                    continue
+                if not stat.S_ISBLK(os.stat(dsk).st_mode):
+                    print('{} is not block device'.format(dsk))
+                selected += dsk
+                devices.remove(dsk)
+            disks = ','.join(selected)
+    if raid_setup:
+        run_setup_script('RAID', '/usr/lib/scylla/scylla_raid_setup --disks {} --update-fstab'.format(disks))
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want iotune to study your disks IO profile and adapt Scylla to it?" "Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step." "yes" &&:
-    IO_SETUP=$?
-fi
+    if interactive:
+        coredump_setup = interactive_ask_service('Do you want to enable coredumps?', 'Yes - sets up coredump to allow a post-mortem analysis of the Scylla state just prior to a crash. No - skips this step.', 'yes')
+    if coredump_setup:
+        if disks:
+            run_setup_script('coredump', '/usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir')
+        else:
+            run_setup_script('coredump', '/usr/lib/scylla/scylla_coredump_setup')
 
-if [ $IO_SETUP -eq 1 ]; then
-    run_setup_script "IO configuration" /usr/lib/scylla/scylla_io_setup
-fi
+    if interactive:
+        sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', 'yes')
+    if sysconfig_setup:
+        nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if n != '/sys/class/net/lo']
+        if len(nics) == 0:
+            print('A NIC was not found.')
+            sys.exit(1)
+        elif len(nics) == 1:
+            nic=nics[0]
+        else:
+            print('Please select a NIC from the following list:')
+            while True:
+                print(nics)
+                n = input('> ')
+                if os.path.exists('/sys/class/net/{}'.format(n)):
+                    nic = n
+                    break
+        set_nic = interactive_ask_service('Do you want to enable Network Interface Card (NIC) optimization?', 'Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
+    if sysconfig_setup:
+        setup_args = '--setup-nic' if set_nic else ''
+        run_setup_script('NIC queue', '/usr/lib/scylla/scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data" "Yes - install node exporter. No - skip this  step." "yes" &&:
-    NODE_EXPORTER=$?
-fi
+    if interactive:
+        io_setup = interactive_ask_service('Do you want iotune to study your disks IO profile and adapt Scylla to it?', 'Yes - let iotune study my disk(s). Note that this action will take a few minutes. No - skip this step.', 'yes')
+    if io_setup:
+        run_setup_script('IO configuration', '/usr/lib/scylla/scylla_io_setup')
 
-if [ $NODE_EXPORTER -eq 1 ]; then
-    run_setup_script "node exporter" /usr/lib/scylla/node_exporter_install
-fi
+    if interactive:
+        node_exporter = interactive_ask_service('Do you want to install node exporter to export Prometheus data from the node? Note that the Scylla monitoring stack uses this data', 'Yes - install node exporter. No - skip this  step.', 'yes')
+    if node_exporter:
+        run_setup_script('node exporter', '/usr/lib/scylla/node_exporter_install')
 
-if [ $DEV_MODE -eq 1 ]; then
-    /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
-fi
+    if args.developer_mode:
+        run_setup_script('developer mode', '/usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1')
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to set the CPU scaling governor to Performance level on boot?" "Yes - sets the CPU scaling governor to performance level. No - skip this step." "yes" &&:
-    CPUSCALING_SETUP=$?
-fi
-if [ $CPUSCALING_SETUP -eq 1 ]; then
-    run_setup_script "CPU scaling" /usr/lib/scylla/scylla_cpuscaling_setup
-fi
+    if interactive:
+        cpuscaling_setup = interactive_ask_service('Do you want to set the CPU scaling governor to Performance level on boot?', 'Yes - sets the CPU scaling governor to performance level. No - skip this step.', 'yes')
+    if cpuscaling_setup:
+        run_setup_script('CPU scaling', '/usr/lib/scylla/scylla_cpuscaling_setup')
 
-if [ $INTERACTIVE -eq 1 ]; then
-    interactive_ask_service "Do you want to enable fstrim service?" "Yes - runs fstrim on your SSD. No - skip this step." "yes" &&:
-    FSTRIM_SETUP=$?
-fi
-if [ $FSTRIM_SETUP -eq 1 ]; then
-    run_setup_script "fstrim" /usr/lib/scylla/scylla_fstrim_setup
-fi
+    if interactive:
+        fstrim_setup = interactive_ask_service('Do you want to enable fstrim service?', 'Yes - runs fstrim on your SSD. No - skip this step.', 'yes')
+    if fstrim_setup:
+        run_setup_script('fstrim', '/usr/lib/scylla/scylla_fstrim_setup')
 
-echo "ScyllaDB setup finished."
-if [ $SELINUX_REBOOT_REQUIRED -eq 1 ]; then
-    echo "Please restart your machine before using ScyllaDB, as you have disabled"
-    echo " SELinux."
-fi
+    print('ScyllaDB setup finished.')
+    if selinux_reboot_required:
+        print('Please restart your machine before using ScyllaDB, as you have disabled')
+        print(' SELinux.')
+
+
