@@ -1739,7 +1739,86 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
     .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/compound_ck
+// Following tests run on files in tests/sstables/3.x/uncompressed/range_tombstones_simple
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck INT, val INT, PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 101, 1001);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 102, 1002);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 103, 1003);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 104, 1004);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 105, 1005);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 106, 1006);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 107, 1007);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 108, 1008);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 109, 1009);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 110, 1010);
+// DELETE FROM test_ks.test_table WHERE pk = 1 AND ck > 101 AND ck < 104;
+// DELETE FROM test_ks.test_table WHERE pk = 1 AND ck >= 104 AND ck < 105;
+// DELETE FROM test_ks.test_table WHERE pk = 1 AND ck > 108;
+
+static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_PATH = "tests/sstables/3.x/uncompressed/range_tombstones_simple";
+static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
+    sstable_assertions sst(UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA,
+                           UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA, pk);
+    };
+
+    auto to_ck = [] (int ck) {
+        return clustering_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA,
+                                                 int32_type->decompose(ck));
+    };
+
+    auto int_cdef =
+    UNCOMPRESSED_RANGE_TOMBSTONES_SIMPLE_SCHEMA->get_column_definition(to_bytes("val"));
+    BOOST_REQUIRE(int_cdef);
+
+
+    assert_that(sst.read_rows_flat())
+    .produces_partition_start(to_key(1))
+    .produces_row(to_ck(101), {{int_cdef, int32_type->decompose(1001)}})
+    .produces_range_tombstone(range_tombstone(to_ck(101),
+                                              bound_kind::excl_start,
+                                              to_ck(104),
+                                              bound_kind::excl_end,
+                                              tombstone(api::timestamp_type{1529519641211958},
+                                                        gc_clock::time_point(gc_clock::duration(1529519641)))))
+    .produces_range_tombstone(range_tombstone(to_ck(104),
+                                              bound_kind::incl_start,
+                                              to_ck(105),
+                                              bound_kind::excl_end,
+                                              tombstone(api::timestamp_type{1529519641215380},
+                                                        gc_clock::time_point(gc_clock::duration(1529519641)))))
+    .produces_row(to_ck(105), {{int_cdef, int32_type->decompose(1005)}})
+    .produces_row(to_ck(106), {{int_cdef, int32_type->decompose(1006)}})
+    .produces_row(to_ck(107), {{int_cdef, int32_type->decompose(1007)}})
+    .produces_row(to_ck(108), {{int_cdef, int32_type->decompose(1008)}})
+    .produces_range_tombstone(range_tombstone(to_ck(108),
+                                              bound_kind::excl_start,
+                                              clustering_key_prefix::make_empty(),
+                                              bound_kind::incl_end,
+                                              tombstone(api::timestamp_type{1529519643267068},
+                                                        gc_clock::time_point(gc_clock::duration(1529519643)))))
+    .produces_partition_end()
+    .produces_end_of_stream();
+}
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
