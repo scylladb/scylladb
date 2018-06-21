@@ -3635,8 +3635,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     mut.set_cell(ckey, "rc", data_value{2}, write_timestamp);
 
-    mt->apply(std::move(mut));
-    write_and_compare_sstables(s, mt, table_name);
+    mt->apply(mut);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_large_clustering_key) {
