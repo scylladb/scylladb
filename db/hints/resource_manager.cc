@@ -41,6 +41,16 @@ future<dev_t> get_device_id(boost::filesystem::path path) {
     });
 }
 
+future<bool> is_mountpoint(boost::filesystem::path path) {
+    // Special case for '/', which is always a mount point
+    if (path == path.parent_path()) {
+        return make_ready_future<bool>(true);
+    }
+    return when_all(get_device_id(path.native()), get_device_id(path.parent_path().native())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
+        return std::get<0>(ids).get0() != std::get<1>(ids).get0();
+    });
+}
+
 future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
     size_t hint_memory_budget = std::max(_min_send_hint_budget, buf_size);

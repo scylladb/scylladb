@@ -41,6 +41,7 @@ namespace db {
 namespace hints {
 
 future<dev_t> get_device_id(boost::filesystem::path path);
+future<bool> is_mountpoint(boost::filesystem::path path);
 
 using timer_clock_type = seastar::lowres_clock;
 
