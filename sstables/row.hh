@@ -42,6 +42,7 @@
 
 #include "sstables.hh"
 #include "tombstone.hh"
+#include "m_format_read_helpers.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -174,6 +175,15 @@ public:
 
     virtual proceed consume_counter_column(std::optional<column_id> column_id, bytes_view value,
                                            api::timestamp_type timestamp) = 0;
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            bound_kind kind,
+                                            tombstone tomb) = 0;
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            sstables::bound_kind_m,
+                                            tombstone end_tombstone,
+                                            tombstone start_tombstone) = 0;
 
     virtual proceed consume_row_end() = 0;
 
