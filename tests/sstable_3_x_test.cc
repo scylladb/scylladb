@@ -3607,9 +3607,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_different_types) {
     mut.set_cell(ckey, "varcharval", data_value{"привет"}, write_timestamp);
     mut.set_cell(ckey, "varintval", varint_type->deserialize(varint_type->from_string("123")), write_timestamp);
     mut.set_cell(ckey, "durationval", duration_type->deserialize(duration_type->from_string("1h4m48s20ms")), write_timestamp);
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_empty_clustering_values) {
