@@ -2629,35 +2629,6 @@ enum class row_extended_flags : uint8_t {
     has_shadowable_deletion = 0x02,
 };
 
-// This enum corresponds to Origin's ClusteringPrefix.Kind.
-// It is a superset of values of the bound_kind enum
-// declared in clustering_bounds_comparator.hh
-enum class bound_kind_m : uint8_t {
-    excl_end = 0,
-    incl_start = 1,
-    excl_end_incl_start = 2,
-    static_clustering = 3,
-    clustering = 4,
-    incl_end_excl_start = 5,
-    incl_end = 6,
-    excl_start = 7,
-};
-
-static bound_kind to_bound_kind(bound_kind_m kind) {
-    assert (kind == bound_kind_m::incl_start ||
-            kind == bound_kind_m::incl_end ||
-            kind == bound_kind_m::excl_start ||
-            kind == bound_kind_m::excl_end);
-
-    using underlying_type = std::underlying_type_t<bound_kind_m>;
-    return bound_kind{static_cast<underlying_type>(kind)};
-}
-
-static bound_kind_m to_bound_kind_m(bound_kind kind) {
-    using underlying_type = std::underlying_type_t<bound_kind>;
-    return bound_kind_m{static_cast<underlying_type>(kind)};
-}
-
 // A range tombstone marker (RT marker) represents a bound of a range tombstone
 // in a SSTables 3.x ('m') data file.
 // RT markers can be of two types called "bounds" and "boundaries" in Origin nomenclature.
