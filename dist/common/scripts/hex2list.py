@@ -29,22 +29,6 @@
 # 1,5-6,11-13,17-19
 #
 
-hex_str = input().replace("0x", "").replace(",", "")
-hex_int = int(hex_str, 16)
-bin_str = "{0:b}".format(hex_int)
-bin_len = len(bin_str)
-cpu_list = []
-i = 0
-while i < bin_len:
-    if 1 << i & hex_int:
-        j = i
-        while j + 1 < bin_len and 1 << j + 1 & hex_int:
-            j += 1
-        if j == i:
-            cpu_list.append(str(i))
-        else:
-            cpu_list.append("{0}-{1}".format(i, j))
-            i = j
-    i += 1
+from scylla_util import hex2list
 
-print(",".join(cpu_list))
+print(hex2list(input()))
