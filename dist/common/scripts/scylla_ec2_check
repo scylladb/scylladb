@@ -1,57 +1,69 @@
-#!/bin/bash
+#!/usr/bin/python3
+#
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-get_en_interface_type() {
-    TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
-    SUBTYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 2`
-    case $TYPE in
-        "c3"|"c4"|"d2"|"i2"|"r3") echo -n "ixgbevf";;
-        "i3"|"p2"|"r4"|"x1") echo -n "ena";;
-        "m4")
-            if [ "$SUBTYPE" = "16xlarge" ]; then
-                echo -n "ena"
-            else
-                echo -n "ixgbevf"
-            fi;;
-    esac
-}
+import os
+import sys
+import argparse
+from scylla_util import *
 
-is_vpc_enabled() {
-    MAC=`cat /sys/class/net/eth0/address`
-    VPC_AVAIL=`curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/|grep vpc-id`
-    [ -n "$VPC_AVAIL" ]
-}
+def get_en_interface_type():
+    type, subtype = curl('http://169.254.169.254/latest/meta-data/instance-type').split('.')
+    if type in ['c3', 'c4', 'd4', 'd2', 'i2', 'r3']:
+        return 'ixgbevf'
+    if type in ['i3', 'p2', 'r4', 'x1']:
+        return 'ena'
+    if type == 'm4':
+        if subtype == '16xlarge':
+            return 'ena'
+        else:
+            return 'ixgbevf'
 
-if ! is_ec2; then
-    exit 0
-fi
+def is_vpc_enabled():
+    with open('/sys/class/net/eth0/address') as f:
+        mac = f.read().strip()
+    mac_stat = curl('http://169.254.169.254/latest/meta-data/network/interfaces/macs/{}/'.format(mac))
+    return True if re.search(r'^vpc-id$', mac_stat, flags=re.MULTILINE) else False
 
-TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
-EN=`get_en_interface_type`
-DRIVER=`ethtool -i eth0|awk '/^driver:/ {print $2}'`
-if [ "$EN" = "" ]; then
-    tput setaf 1
-    tput bold
-    echo "$TYPE doesn't support enahanced networking!"
-    tput sgr0
-    echo "To enable enhanced networking, please use the instance type which supports it."
-    echo "More documentation available at: "
-    echo "http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking"
-    exit 1
-elif ! is_vpc_enabled; then
-    tput setaf 1
-    tput bold
-    echo "VPC is not enabled!"
-    tput sgr0
-    echo "To enable enhanced networking, please enable VPC."
-    exit 1
-elif [ "$DRIVER" != "$EN" ]; then
-    tput setaf 1
-    tput bold
-    echo "Enhanced networking is disabled!"
-    tput sgr0
-    echo "More documentation available at: "
-    echo "http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html"
-    exit 1
-fi
+
+if __name__ == '__main__':
+    if not is_ec2():
+        sys.exit(0)
+
+    type = curl('http://169.254.169.254/latest/meta-data/instance-type')
+    en = get_en_interface_type()
+    match = re.search(r'^driver: (\S+)$', out('ethtool -i eth0'), flags=re.MULTILINE)
+    driver = match.group(1)
+
+    if not en:
+        print('{bold_red}{type} doesn\'t support enahanced networking!{no_color}'.format(bold_red=concolor.BOLD_RED, type=type, no_color=concolor.NO_COLOR))
+        print('''To enable enhanced networking, please use the instance type which supports it.
+More documentation available at:
+http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking''')
+        sys.exit(1)
+    elif not is_vpc_enabled():
+        print('{bold_red}VPC is not enabled!{no_color}'.format(bold_red=concolor.BOLD_RED, no_color=concolor.NO_COLOR))
+        print('To enable enhanced networking, please enable VPC.')
+        sys.exit(1)
+    elif driver != en:
+        print('{bold_red}Enhanced networking is disabled!{no_color}'.format(bold_red=concolor.BOLD_RED, no_color=concolor.NO_COLOR))
+        print('''More documentation available at:
+http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html''')
+        sys.exit(1)
