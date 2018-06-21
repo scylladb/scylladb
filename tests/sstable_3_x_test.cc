@@ -3445,8 +3445,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_multiple_rows) {
         ts += 10;
     }
 
-    mt->apply(std::move(mut));
-    write_and_compare_sstables(s, mt, table_name);
+    mt->apply(mut);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 // Information on missing columns is serialized differently when the number of columns is > 64.
