@@ -1,34 +1,42 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-print_usage() {
-    echo "scylla_developer_mode_setup --developer-mode [0|1]"
-    echo "  --developer-mode   enable/disable developer mode"
-    exit 1
-}
+import os
+import sys
+import argparse
+from scylla_util import *
 
-DEV_MODE=
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--developer-mode")
-            verify_args $@
-            DEV_MODE=$2
-            shift 2
-            ;;
-        *)
-            print_usage
-            ;;
-    esac
-done
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Modify Scylla running mode.')
+    parser.add_argument('--developer-mode', type=int, required=True,
+                        help='enable/disable developer mode')
+    args = parser.parse_args()
 
-if [ "$DEV_MODE" = "" ]; then
-    print_usage
-fi
-if [ "$DEV_MODE" != "0" ] && [ "$DEV_MODE" != "1" ]; then
-    print_usage
-fi
-
-echo "DEV_MODE=--developer-mode=$DEV_MODE" > /etc/scylla.d/dev-mode.conf
+    if args.developer_mode == 0:
+        with open('/etc/scylla.d/dev-mode.conf', 'w') as f:
+            f.close()
+    else:
+        cfg = sysconfig_parser('/etc/scylla.d/dev-mode.conf')
+        cfg.set('DEV_MODE', '--developer-mode=1')
+        cfg.commit()
