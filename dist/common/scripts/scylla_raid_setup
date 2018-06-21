@@ -1,142 +1,132 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-print_usage() {
-    echo "scylla_raid_setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab --root /var/lib/scylla --volume-role [all|data|commitlog]"
-    echo "  --disks	specify disks for RAID"
-    echo "  --raiddev	MD device name for RAID"
-    echo "  --update-fstab update /etc/fstab for RAID"
-    echo "  --root specify the root of the tree"
-    echo "  --volume-role specify how will this device be used (data, commitlog, or all)"
-    exit 1
-}
+import os
+import argparse
+import pwd
+import grp
+from scylla_util import *
 
-RAID=/dev/md0
-FSTAB=0
-ROOT=/var/lib/scylla
-ROLE="all"
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure RAID volume for Scylla.')
+    parser.add_argument('--disks', required=True,
+                        help='specify disks for RAID')
+    parser.add_argument('--raiddev', default='/dev/md0',
+                        help='MD device name for RAID')
+    parser.add_argument('--update-fstab', action='store_true', default=False,
+                        help='update /etc/fstab for RAID')
+    parser.add_argument('--root', default='/var/lib/scylla',
+                        help='specify the root of the tree')
+    parser.add_argument('--volume-role', default='all',
+                        help='specify how will this device be used (data, commitlog, or all)')
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--disks")
-            verify_args $@
-            DISKS=`echo "$2"|tr -s ',' ' '`
-            NR_DISK=`echo "$DISKS"|wc -w`
-            shift 2
-            ;;
-        "--raiddev")
-            verify_args $@
-            RAID="$2"
-            shift 2
-            ;;
-        "--update-fstab")
-            FSTAB=1
-            shift 1
-            ;;
-        "--root")
-            verify_args $@
-            ROOT="$2"
-            shift 2
-            ;;
-        "--volume-role")
-            verify_args $@
-            ROLE="$2"
-            shift 2
-            ;;
-        *)
-            print_usage
-            ;;
-    esac
-done
+    args = parser.parse_args()
 
-ROOT=${ROOT%/}
-case "$ROLE" in
-    "all")
-        MOUNT_AT=$ROOT
-        ;;
-    "data")
-        MOUNT_AT="$ROOT/data"
-        ;;
-    "commitlog")
-        MOUNT_AT="$ROOT/commitlog"
-        ;;
-    *)
-        echo "Invalid role specified ($ROLE)"
-        print_usage
-        ;;
-esac
+    root = args.root.rstrip('/')
+    if args.volume_role == 'all':
+        mount_at=root
+    elif args.volume_role == 'data':
+        mount_at='{}/data'.format(root)
+    elif args.volume_role == 'commitlog':
+        mount_at='{}/commitlog'.format(root)
+    else:
+        print('Invalid role specified ({})'.format(args.volume_role))
+        parser.print_help()
+        sys.exit(1)
 
-if [ "$DISKS" = "" ]; then
-    print_usage
-fi
+    disks = args.disks.split(',')
+    for disk in disks:
+        if not os.path.exists(disk):
+            print('{} is not found'.format(disk))
+            sys.exit(1)
 
-for dsk in $DISKS; do
-    if [ ! -b $dsk ]; then
-        echo "$dsk is not found"
-        exit 1
-    fi
-done
+    if os.path.exists(args.raiddev):
+        print('{} is already using'.format(args.raiddev))
+        sys.exit(1)
 
-echo Creating RAID0 for scylla using $NR_DISK disk\(s\): $DISKS
-if [ -e $RAID ]; then
-    echo "$RAID is already using"
-    exit 1
-fi
-if mountpoint -q $MOUNT_AT; then
-    echo "$MOUNT_AT is already mounted"
-    exit 1
-fi
+    if os.path.ismount(mount_at):
+        print('{} is already mounted'.format(mount_at))
+        sys.exit(1)
 
-if is_debian_variant; then
-    env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs
-elif is_gentoo_variant; then
-    emerge -uq sys-fs/mdadm sys-fs/xfsprogs
-fi
-if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
-    udevadm settle
-    mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
-    udevadm settle
-    mkfs.xfs $RAID -f
-else
-    for dsk in $DISKS; do
-        if [ "$(cat /sys/block/${dsk##/dev/}/queue/discard_granularity)" != "0" ]; then
-            blkdiscard $dsk &
-        else
-            echo "$dsk does not supported TRIM, skipping blkdiscard..."
-        fi
-    done
-    wait
-    udevadm settle
-    mdadm --create --verbose --force --run $RAID --level=0 -c1024 --raid-devices=$NR_DISK $DISKS
-    udevadm settle
-    mkfs.xfs $RAID -f -K
-fi
-if is_debian_variant; then
-    mdadm --detail --scan > /etc/mdadm/mdadm.conf
-else
-    mdadm --detail --scan > /etc/mdadm.conf
-fi
+    if is_debian_variant():
+        run('env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs')
+    elif is_gentoo_variant():
+        run('emerge -uq sys-fs/mdadm sys-fs/xfsprogs')
 
-mkdir -p "$MOUNT_AT"
-mount -t xfs -o noatime $RAID "$MOUNT_AT"
+    print('Creating RAID0 for scylla using {nr_disk} disk(s): {disks}'.format(nr_disk=len(disks), disks=args.disks))
+    if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
+        run('udevadm settle')
+        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=args.raiddev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
+        run('udevadm settle')
+        run('mkfs.xfs {} -f'.format(args.raiddev))
+    else:
+        procs=[]
+        for disk in disks:
+            d = disk.replace('/dev/', '')
+            discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)
+            if os.path.exists(discard_path):
+                with open(discard_path) as f:
+                    discard = f.read().strip()
+                if discard != '0':
+                    proc = subprocess.Popen(['blkdiscard', disk])
+                    procs.append(proc)
+        for proc in procs:
+            proc.wait()
+        run('udevadm settle')
+        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=args.raiddev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
+        run('udevadm settle')
+        run('mkfs.xfs {} -f -K'.format(args.raiddev))
 
-# create this unconditionally so we are more robust about ordering
-# if the script is run multiple times. But must do after mount in case
-# we are mounting the root
-mkdir -p "$ROOT/data"
-mkdir -p "$ROOT/commitlog"
-mkdir -p "$ROOT/coredump"
-chown scylla:scylla "$ROOT"
-chown scylla:scylla "$ROOT"/*
+    if is_debian_variant():
+        confpath = '/etc/mdadm/mdadm.conf'
+    else:
+        confpath = '/etc/mdadm.conf'
 
-if [ $FSTAB -ne 0 ]; then
-    UUID=`blkid $RAID | awk '{print $2}'`
-    echo "$UUID $MOUNT_AT xfs noatime 0 0" >> /etc/fstab
-fi
+    res = out('mdadm --detail --scan')
+    with open(confpath, 'w') as f:
+        f.write(res)
 
-if is_debian_variant; then
-    update-initramfs -u
-fi
+    makedirs(mount_at)
+    run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=args.raiddev, mount_at=mount_at))
+
+    makedirs('{}/data'.format(root))
+    makedirs('{}/commitlog'.format(root))
+    makedirs('{}/coredump'.format(root))
+
+    uid = pwd.getpwnam('scylla').pw_uid
+    gid = grp.getgrnam('scylla').gr_gid
+    os.chown(root, uid, gid)
+    os.chown('{}/data'.format(root), uid, gid)
+    os.chown('{}/commitlog'.format(root), uid, gid)
+    os.chown('{}/coredump'.format(root), uid, gid)
+
+    if args.update_fstab:
+        res = out('blkid {}'.format(args.raiddev))
+        match = re.search(r'^/dev/\S+: (UUID="\S+")', res.strip())
+        uuid = match.group(1)
+        with open('/etc/fstab', 'a') as f:
+            f.write('{uuid} {mount_at} xfs noatime 0 0\n'.format(uuid=uuid, mount_at=mount_at))
+
+    if is_debian_variant():
+        run('update-initramfs -u')
