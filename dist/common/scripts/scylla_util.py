@@ -15,8 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import urllib2
-import urllib
+import urllib.request, urllib.error, urllib.parse
+import urllib.request, urllib.parse, urllib.error
 import logging
 import time
 import re
@@ -28,9 +28,9 @@ def curl(url):
     retries = 0
     while True:
         try:
-            req = urllib2.Request(url)
-            return urllib2.urlopen(req).read()
-        except urllib2.HTTPError:
+            req = urllib.request.Request(url)
+            return urllib.request.urlopen(req).read().decode('utf-8')
+        except urllib.error.HTTPError:
             logging.warn("Failed to grab %s..." % url)
             time.sleep(5)
             retries += 1
@@ -60,7 +60,7 @@ class aws_instance:
         self._disks = {}
         devname = re.compile("^\D+")
         nvme_re = re.compile(r"nvme\d+n\d+$")
-        nvmes_present = filter(nvme_re.match, os.listdir("/dev"))
+        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         if nvmes_present:
             self._disks["ephemeral"] = nvmes_present;
 
@@ -68,7 +68,7 @@ class aws_instance:
             t = devname.match(dev).group()
             if t == "ephemeral"  and nvmes_present:
                 continue;
-            if not self._disks.has_key(t):
+            if t not in self._disks:
                 self._disks[t] = []
             if not self.__device_exists(self.__xenify(dev)):
                 continue
@@ -93,7 +93,7 @@ class aws_instance:
     def disks(self):
         """Returns all disks in the system, as visible from the AWS registry"""
         disks = set()
-        for v in self._disks.values():
+        for v in list(self._disks.values()):
             disks = disks.union([ self.__disk_name(x) for x in v ])
         return disks
 
@@ -141,16 +141,16 @@ def _reopt(s):
     return s + r"?"
 
 def is_developer_mode():
-    f = file("/etc/scylla.d/dev-mode.conf", "ro")
+    f = open("/etc/scylla.d/dev-mode.conf", "r")
     pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
-    return len([ x for x in f.xreadlines() if pattern.match(x) ]) >= 1
+    return len([ x for x in f if pattern.match(x) ]) >= 1
 
 class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
     Information that can be probed include in which hyperthreads Scylla is configured
     to run, how many total threads exist in the system, etc"""
     def __parse_cpuset(self):
-        f = file("/etc/scylla.d/cpuset.conf", "ro")
+        f = open("/etc/scylla.d/cpuset.conf", "r")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
         grp = [ pattern.match(x) for x in f.readlines() if pattern.match(x) ]
         if not grp:
@@ -163,7 +163,7 @@ class scylla_cpuinfo:
             groups = d["cpuset"].split(",")
             for g in groups:
                 ends = [ int(x) for x in g.split("-") ]
-                actual_set = actual_set.union(set(xrange(ends[0], ends[-1] +1)))
+                actual_set = actual_set.union(set(range(ends[0], ends[-1] +1)))
             d["cpuset"] = actual_set
         if d["smp"]:
             d["smp"] = int(d["smp"])
@@ -171,9 +171,9 @@ class scylla_cpuinfo:
 
     def __system_cpus(self):
         cur_proc = -1
-        f = file("/proc/cpuinfo", "ro")
+        f = open("/proc/cpuinfo", "r")
         results = {}
-        for line in f.xreadlines():
+        for line in f:
             if line == '\n':
                 continue
             key, value = [ x.strip() for x in line.split(":") ]
@@ -197,7 +197,7 @@ class scylla_cpuinfo:
 
     def system_nr_cores(self):
         """Returns the number of cores available in the system"""
-        return len(set([ x['core id'] for x in self._cpu_data["system"].values() ]))
+        return len(set([ x['core id'] for x in list(self._cpu_data["system"].values()) ]))
 
     def cpuset(self):
         """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
