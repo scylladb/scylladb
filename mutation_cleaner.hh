@@ -27,6 +27,14 @@
 #include "utils/logalloc.hh"
 
 // Container for garbage partition_version objects, used for freeing them incrementally.
+//
+// Mutation cleaner extends the lifetime of mutation_partition without doing
+// the same for its schema. This means that the destruction of mutation_partition
+// as well as any LSA migrators it may use cannot depend on the schema. Moreover,
+// all used LSA migrators need remain alive and registered as long as
+// mutation_cleaner is alive. In particular, this means that the instances of
+// mutation_cleaner should not be thread local objects (or members of thread
+// local objects).
 class mutation_cleaner final {
     logalloc::region& _region;
     cache_tracker* _tracker;
