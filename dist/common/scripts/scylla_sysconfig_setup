@@ -1,106 +1,107 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-print_usage() {
-    echo "scylla_sysconfig_setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
-    echo "  --nic  specify NIC"
-    echo "  --mode  network mode (posix, dpdk)"
-    echo "  --nr-hugepages  number of hugepages"
-    echo "  --user  user (dpdk requires root)"
-    echo "  --group  group (dpdk requires root)"
-    echo "  --homedir  scylla home directory"
-    echo "  --confdir  scylla config directory"
-    echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
-    echo "  --ami  AMI instance mode"
-    exit 1
-}
+import os
+import sys
+import argparse
+import subprocess
+import re
+from scylla_util import *
 
-if [ $# -eq 0 ]; then
-    print_usage
-fi
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--nic")
-            verify_args $@
-            NIC="$2"
-            shift 2
-            ;;
-        "--mode")
-            verify_args $@
-            NETWORK_MODE="$2"
-            shift 2
-            ;;
-        "--nr-hugepages")
-            verify_args $@
-            NR_HUGEPAGES="$2"
-            shift 2
-            ;;
-        "--user")
-            verify_args $@
-            USER="$2"
-            shift 2
-            ;;
-        "--group")
-            verify_args $@
-            GROUP="$2"
-            shift 2
-            ;;
-        "--homedir")
-            verify_args $@
-            SCYLLA_HOME="$2"
-            shift 2
-            ;;
-        "--confdir")
-            verify_args $@
-            SCYLLA_CONF="$2"
-            shift 2
-            ;;
-        "--setup-nic")
-            SET_NIC=yes
-            shift 1
-            ;;
-        "--ami")
-            AMI=yes
-            shift 1
-            ;;
-        *)
-            print_usage
-            ;;
-    esac
-done
+def bool2str(val):
+    return 'yes' if val else 'no'
 
-echo Setting parameters on $SYSCONFIG/scylla-server
+def str2bool(val):
+    return True if val == 'yes' else False
 
-if [ $SET_NIC = "yes" ]; then
-   RPS_CPUS=$(/usr/lib/scylla/posix_net_conf.sh --cpu-mask $NIC)
-   if [ "$RPS_CPUS" != "" ]; then
-       CPUSET=$(echo $RPS_CPUS | /usr/lib/scylla/hex2list.py)
-       /usr/lib/scylla/scylla_cpuset_setup --cpuset $CPUSET
-   fi
-fi
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    if is_redhat_variant():
+        cfg = sysconfig_parser('/etc/sysconfig/scylla-server')
+    else:
+        cfg = sysconfig_parser('/etc/default/scylla-server')
+    set_nic = str2bool(cfg.get('SET_NIC'))
+    ami = str2bool(cfg.get('AMI'))
 
-if [ "$NETWORK_MODE" == "dpdk" ]; then
-    ETHDRV=`/usr/lib/scylla/dpdk-devbind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
-    ETHPCIID=`/usr/lib/scylla/dpdk-devbind.py --status | grep if=$NIC | awk '{print $1}'`
-else
-    # this will empty previous values
-    ETHDRV=""
-    ETHPCIID=""
-fi
-sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
-    -e s#^IFNAME=.*#IFNAME=$NIC# \
-    -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
-    -e s#^ETHPCIID=.*#ETHPCIID=$ETHPCIID# \
-    -e s#^NR_HUGEPAGES=.*#NR_HUGEPAGES=$NR_HUGEPAGES# \
-    -e s#^USER=.*#USER=$USER# \
-    -e s#^GROUP=.*#GROUP=$GROUP# \
-    -e s#^SCYLLA_HOME=.*#SCYLLA_HOME=$SCYLLA_HOME# \
-    -e s#^SCYLLA_CONF=.*#SCYLLA_CONF=$SCYLLA_CONF# \
-    -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
-    -e "s#^SCYLLA_ARGS=.*#SCYLLA_ARGS=\"$SCYLLA_ARGS\"#" \
-    -e s#^AMI=.*#AMI=$AMI# \
-    $SYSCONFIG/scylla-server > /tmp/scylla-server
-mv /tmp/scylla-server $SYSCONFIG/scylla-server
+    parser = argparse.ArgumentParser(description='Setting parameters on Scylla sysconfig file.')
+    parser.add_argument('--nic',
+                        help='specify NIC')
+    parser.add_argument('--mode',
+                        help='network mode (posix, dpdk)')
+    parser.add_argument('--nr-hugepages', type=int,
+                        help='number of hugepages')
+    parser.add_argument('--user',
+                        help='user (dpdk requires root)')
+    parser.add_argument('--group',
+                        help='group (dpdk requires root)')
+    parser.add_argument('--homedir',
+                        help='scylla home directory')
+    parser.add_argument('--confdir',
+                        help='scylla config directory')
+    parser.add_argument('--setup-nic', action='store_true', default=set_nic,
+                        help='setup NIC\'s interrupts, RPS, XPS')
+    parser.add_argument('--ami', action='store_true', default=ami,
+                        help='AMI instance mode')
+    args = parser.parse_args()
+
+    ifname = args.nic if args.nic else cfg.get('IFNAME')
+    network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
+
+    if args.setup_nic:
+        rps_cpus = out('/usr/lib/scylla/posix_net_conf.sh --cpu-mask {}'.format(ifname))
+        if len(rps_cpus) > 0:
+            cpuset = hex2list(rps_cpus)
+            run('/usr/lib/scylla/scylla_cpuset_setup --cpuset {}'.format(cpuset))
+
+    ethdrv = ''
+    ethpciid = ''
+    if network_mode == 'dpdk':
+        dpdk_status = out('/usr/lib/scylla/dpdk-devbind.py --status')
+        match = re.search('if={} drv=(\S+)'.format(ifname), dpdk_status, flags=re.MULTILINE)
+        ethdrv = match.group(1)
+        match = re.search('^(\\S+:\\S+:\\S+\.\\S+) [^\n]+ if={} '.format(ifname), dpdk_status, flags=re.MULTILINE)
+        ethpciid = match.group(1)
+
+    if args.mode:
+        cfg.set('NETWORK_MODE', args.mode)
+    if args.nic:
+        cfg.set('IFNAME', args.nic)
+    if cfg.get('ETHDRV') != ethdrv:
+        cfg.set('ETHDRV', ethdrv)
+    if cfg.get('ETHPCIID') != ethpciid:
+        cfg.set('ETHPCIID', ethpciid)
+    if args.nr_hugepages:
+        cfg.set('NR_HUGEPAGES', args.nr_hugepages)
+    if args.user:
+        cfg.set('USER', args.user)
+    if args.group:
+        cfg.set('GROUP', args.group)
+    if args.homedir:
+        cfg.set('SCYLLA_HOME', args.homedir)
+    if args.confdir:
+        cfg.set('SCYLLA_CONF', args.confdir)
+    if str2bool(cfg.get('SET_NIC')) != args.setup_nic:
+        cfg.set('SET_NIC', bool2str(args.setup_nic))
+    if str2bool(cfg.get('AMI')) != args.ami:
+        cfg.set('AMI', bool2str(args.ami))
+    cfg.commit()
