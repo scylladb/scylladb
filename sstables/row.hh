@@ -624,6 +624,7 @@ private:
     temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
+    bool _null_component_occured;
     uint64_t _subcolumns_to_read = 0;
     api::timestamp_type _complex_column_marked_for_delete;
     tombstone _complex_column_tombstone;
@@ -688,6 +689,9 @@ private:
     }
     bool is_block_empty() {
         return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset))) != 0;
+    }
+    bool is_block_null() {
+        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset + 1))) != 0;
     }
     bool should_read_block_header() {
         return _ck_blocks_header_offset == 0u;
@@ -800,6 +804,7 @@ public:
         case state::CLUSTERING_ROW:
         clustering_row_label:
             _is_first_unfiltered = false;
+            _null_component_occured = false;
             setup_ck(_column_translation.clustering_column_value_fix_legths());
         case state::CK_BLOCK:
         ck_block_label:
@@ -818,6 +823,14 @@ public:
             _ck_blocks_header = _u64;
         case state::CK_BLOCK2:
         ck_block2_label: {
+            if (is_block_null()) {
+                _null_component_occured = true;
+                move_to_next_ck_block();
+                goto ck_block_label;
+            }
+            if (_null_component_occured) {
+                throw malformed_sstable_exception("non-null component after null component");
+            }
             if (is_block_empty()) {
                 _row_key.push_back({});
                 move_to_next_ck_block();
