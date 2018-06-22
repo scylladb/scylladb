@@ -3722,8 +3722,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mut.partition().apply_insert(*s, ckey, write_timestamp);
     auto ut_val = make_user_value(ut, user_type_impl::native_type({int32_t(1703), true, sstring("Санкт-Петербург")}));
     mut.set_cell(ckey, "rc", ut_val, write_timestamp);
-    mt->apply(std::move(mut));
-    write_and_compare_sstables(s, mt, table_name);
+    mt->apply(mut);
+
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
