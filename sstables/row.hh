@@ -1029,7 +1029,7 @@ public:
             _column_local_deletion_time = parse_expiry(_header, _u64);
         case state::COLUMN_TTL:
         column_ttl_label:
-            if (_column_flags.use_row_timestamp()) {
+            if (_column_flags.use_row_ttl()) {
                 _column_ttl = _liveness.ttl();
                 _state = state::COLUMN_VALUE;
                 goto column_cell_path_label;
