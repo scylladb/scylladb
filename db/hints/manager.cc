@@ -88,6 +88,8 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         }
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
+        return compute_hints_dir_device_id();
+    }).then([this] {
         _strorage_service_anchor->register_subscriber(this);
     });
 }
@@ -108,6 +110,15 @@ future<> manager::stop() {
             _ep_managers.clear();
             manager_logger.info("Stopped");
         }).discard_result();
+    });
+}
+
+future<> manager::compute_hints_dir_device_id() {
+    return get_device_id(_hints_dir.native()).then([this](dev_t device_id) {
+        _hints_dir_device_id = device_id;
+    }).handle_exception([this](auto ep) {
+        manager_logger.warn("Failed to stat directory {} for device id: {}", _hints_dir.native(), ep);
+        return make_exception_future<>(ep);
     });
 }
 

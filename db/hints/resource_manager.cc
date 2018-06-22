@@ -33,7 +33,23 @@ namespace hints {
 
 static logging::logger resource_manager_logger("hints_resource_manager");
 
-size_t db::hints::resource_manager::max_shard_disk_space_size;
+future<dev_t> get_device_id(boost::filesystem::path path) {
+    return open_directory(path.native()).then([](file f) {
+        return f.stat().then([f = std::move(f)](struct stat st) {
+            return st.st_dev;
+        });
+    });
+}
+
+future<bool> is_mountpoint(boost::filesystem::path path) {
+    // Special case for '/', which is always a mount point
+    if (path == path.parent_path()) {
+        return make_ready_future<bool>(true);
+    }
+    return when_all(get_device_id(path.native()), get_device_id(path.parent_path().native())).then([](std::tuple<future<dev_t>, future<dev_t>> ids) {
+        return std::get<0>(ids).get0() != std::get<1>(ids).get0();
+    });
+}
 
 future<semaphore_units<semaphore_default_exception_factory>> resource_manager::get_send_units_for(size_t buf_size) {
     // Let's approximate the memory size the mutation is going to consume by the size of its serialized form
@@ -46,8 +62,9 @@ future<semaphore_units<semaphore_default_exception_factory>> resource_manager::g
 
 const std::chrono::seconds space_watchdog::_watchdog_period = std::chrono::seconds(1);
 
-space_watchdog::space_watchdog(shard_managers_set& managers)
+space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map)
     : _shard_managers(managers)
+    , _per_device_limits_map(per_device_limits_map)
     , _timer([this] { on_timer(); })
 {}
 
@@ -74,12 +91,6 @@ future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& 
         return io_check(file_size, (dir / de.name.c_str()).c_str()).then([this] (uint64_t fsize) {
             _total_size += fsize;
         });
-    });
-}
-
-size_t space_watchdog::end_point_managers_count() const {
-    return boost::accumulate(_shard_managers, 0, [] (size_t sum, manager& shard_manager) {
-        return sum + shard_manager.ep_managers_size();
     });
 }
 
@@ -125,25 +136,30 @@ void space_watchdog::on_timer() {
                     }
                 });
             }).then([this] {
-                // Adjust the quota to take into account the space we guarantee to every end point manager
-                size_t adjusted_quota = 0;
-                size_t delta = end_point_managers_count() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
-                if (resource_manager::max_shard_disk_space_size > delta) {
-                    adjusted_quota = resource_manager::max_shard_disk_space_size - delta;
-                }
+                return do_for_each(_per_device_limits_map, [this](per_device_limits_map::value_type& per_device_limits_entry) {
+                    space_watchdog::per_device_limits& per_device_limits = per_device_limits_entry.second;
 
-                bool can_hint = _total_size < adjusted_quota;
-                resource_manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
+                    size_t adjusted_quota = 0;
+                    size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
+                        return sum + shard_manager.ep_managers_size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
+                    });
+                    if (per_device_limits.max_shard_disk_space_size > delta) {
+                        adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
+                    }
 
-                if (!can_hint) {
-                    for (manager& shard_manager : _shard_managers) {
-                        shard_manager.forbid_hints_for_eps_with_pending_hints();
-                    }
-                } else {
-                    for (manager& shard_manager : _shard_managers) {
-                        shard_manager.allow_hints();
-                    }
-                }
+                    bool can_hint = _total_size < adjusted_quota;
+                    resource_manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
+
+                    if (!can_hint) {
+                        for (manager& shard_manager : per_device_limits.managers) {
+                            shard_manager.forbid_hints_for_eps_with_pending_hints();
+                        }
+                    } else {
+                        for (manager& shard_manager : per_device_limits.managers) {
+                            shard_manager.allow_hints();
+                        }
+    }
+                });
             });
         }).handle_exception([this] (auto eptr) {
             resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
@@ -161,6 +177,8 @@ future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, s
     return parallel_for_each(_shard_managers, [proxy_ptr, gossiper_ptr, ss_ptr](manager& m) {
         return m.start(proxy_ptr, gossiper_ptr, ss_ptr);
     }).then([this]() {
+        return prepare_per_device_limits();
+    }).then([this]() {
         return _space_watchdog.start();
     });
 }
@@ -175,6 +193,28 @@ future<> resource_manager::stop() noexcept {
 
 void resource_manager::register_manager(manager& m) {
     _shard_managers.insert(m);
+}
+
+future<> resource_manager::prepare_per_device_limits() {
+    return do_for_each(_shard_managers, [this] (manager& shard_manager) mutable {
+        dev_t device_id = shard_manager.hints_dir_device_id();
+        auto it = _per_device_limits_map.find(device_id);
+        if (it == _per_device_limits_map.end()) {
+            return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
+                // By default, give each device 10% of the available disk space. Give each shard an equal share of the available space.
+                size_t max_size = boost::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * smp::count);
+                // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
+                // Then, reserve 90% of all space instead of 10% above.
+                if (is_mountpoint) {
+                    max_size *= 9;
+                }
+                _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{{std::ref(shard_manager)}, max_size});
+            });
+        } else {
+            it->second.managers.emplace_back(std::ref(shard_manager));
+            return make_ready_future<>();
+        }
+    });
 }
 
 }

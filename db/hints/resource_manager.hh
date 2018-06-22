@@ -30,7 +30,7 @@
 #include <unordered_set>
 #include <boost/filesystem.hpp>
 #include <gms/gossiper.hh>
-
+#include "utils/small_vector.hh"
 
 namespace service {
 class storage_proxy;
@@ -39,6 +39,9 @@ class storage_service;
 
 namespace db {
 namespace hints {
+
+future<dev_t> get_device_id(boost::filesystem::path path);
+future<bool> is_mountpoint(boost::filesystem::path path);
 
 using timer_clock_type = seastar::lowres_clock;
 
@@ -61,20 +64,28 @@ private:
     };
 
 public:
+
+    struct per_device_limits {
+        utils::small_vector<std::reference_wrapper<manager>, 2> managers;
+        size_t max_shard_disk_space_size;
+    };
+
     using shard_managers_set = std::unordered_set<std::reference_wrapper<manager>, manager_hash, manager_comp>;
+    using per_device_limits_map = std::unordered_map<dev_t, per_device_limits>;
 
 private:
     size_t _total_size = 0;
     shard_managers_set& _shard_managers;
+    per_device_limits_map& _per_device_limits_map;
+
     seastar::gate _gate;
     seastar::timer<timer_clock_type> _timer;
     int _files_count = 0;
 
 public:
-    space_watchdog(shard_managers_set& managers);
+    space_watchdog(shard_managers_set& managers, per_device_limits_map& per_device_limits_map);
     void start();
     future<> stop() noexcept;
-    size_t end_point_managers_count() const;
 
 private:
     /// \brief Check that hints don't occupy too much disk space.
@@ -109,6 +120,7 @@ class resource_manager {
 
     uint64_t _size_of_hints_in_progress = 0;
     space_watchdog::shard_managers_set _shard_managers;
+    space_watchdog::per_device_limits_map _per_device_limits_map;
     space_watchdog _space_watchdog;
 
 public:
@@ -116,14 +128,13 @@ public:
     static constexpr size_t hint_segment_size_in_mb = 32;
     static constexpr size_t max_hints_per_ep_size_mb = 128; // 4 files 32MB each
     static constexpr size_t max_hints_send_queue_length = 128;
-    static size_t max_shard_disk_space_size;
 
 public:
     resource_manager(size_t max_send_in_flight_memory)
         : _max_send_in_flight_memory(std::max(max_send_in_flight_memory, max_hints_send_queue_length))
         , _min_send_hint_budget(_max_send_in_flight_memory / max_hints_send_queue_length)
         , _send_limiter(_max_send_in_flight_memory)
-        , _space_watchdog(_shard_managers)
+        , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 
     future<semaphore_units<semaphore_default_exception_factory>> get_send_units_for(size_t buf_size);
@@ -147,6 +158,7 @@ public:
     future<> start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr);
     future<> stop() noexcept;
     void register_manager(manager& m);
+    future<> prepare_per_device_limits();
 };
 
 }
