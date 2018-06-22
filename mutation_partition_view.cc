@@ -233,6 +233,28 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
     }
 }
 
+std::optional<clustering_key> mutation_partition_view::first_row_key() const
+{
+    auto in = _in;
+    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto rows = mpv.rows();
+    if (rows.empty()) {
+        return { };
+    }
+    return rows.front().key();
+}
+
+std::optional<clustering_key> mutation_partition_view::last_row_key() const
+{
+    auto in = _in;
+    auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
+    auto rows = mpv.rows();
+    if (rows.empty()) {
+        return { };
+    }
+    return rows.back().key();
+}
+
 mutation_partition_view mutation_partition_view::from_view(ser::mutation_partition_view v)
 {
     return { v.v };

@@ -43,4 +43,7 @@ public:
     static mutation_partition_view from_view(ser::mutation_partition_view v);
     void accept(const schema& schema, mutation_partition_visitor& visitor) const;
     void accept(const column_mapping&, mutation_partition_visitor& visitor) const;
+
+    std::optional<clustering_key> first_row_key() const;
+    std::optional<clustering_key> last_row_key() const;
 };
