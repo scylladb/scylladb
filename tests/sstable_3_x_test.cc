@@ -3268,9 +3268,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
     mutation mut{s, key};
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 2 });
     mut.partition().apply_delete(*s, ckey, tombstone{write_timestamp, write_time_point});
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_collection_wide_update) {
