@@ -2118,7 +2118,7 @@ class data_read_resolver : public abstract_read_resolver {
 
     struct primary_key {
         dht::decorated_key partition;
-        stdx::optional<clustering_key> clustering;
+        std::optional<clustering_key> clustering;
 
         class less_compare_clustering {
             bool _is_reversed;
@@ -2214,33 +2214,7 @@ private:
     }
 
     static primary_key get_last_row(const schema& s, const partition& p, bool is_reversed) {
-        class last_clustering_key final : public mutation_partition_visitor {
-            stdx::optional<clustering_key> _last_ck;
-            bool _is_reversed;
-        public:
-            explicit last_clustering_key(bool is_reversed) : _is_reversed(is_reversed) { }
-
-            virtual void accept_partition_tombstone(tombstone) override { }
-            virtual void accept_static_cell(column_id, atomic_cell_view) override { }
-            virtual void accept_static_cell(column_id, collection_mutation_view) override { }
-            virtual void accept_row_tombstone(const range_tombstone&) override { }
-            virtual void accept_row(position_in_partition_view pos, const row_tombstone&, const row_marker&, is_dummy dummy, is_continuous) override {
-                assert(!dummy);
-                if (!_is_reversed || !_last_ck) {
-                    _last_ck = pos.key();
-                }
-            }
-            virtual void accept_row_cell(column_id id, atomic_cell_view) override { }
-            virtual void accept_row_cell(column_id id, collection_mutation_view) override { }
-
-            stdx::optional<clustering_key>&& release() {
-                return std::move(_last_ck);
-            }
-        };
-
-        last_clustering_key lck(is_reversed);
-        p.mut().partition().accept(s, lck);
-        return {p.mut().decorated_key(s), lck.release()};
+        return {p.mut().decorated_key(s), is_reversed ? p.mut().partition().first_row_key() : p.mut().partition().last_row_key()  };
     }
 
     // Returns the highest row sent by the specified replica, according to the schema and the direction of
@@ -2267,7 +2241,7 @@ private:
         auto&& ranges = cmd.slice.row_ranges(s, m.key());
         mp.compact_for_query(s, cmd.timestamp, ranges, is_reversed, limit);
 
-        stdx::optional<clustering_key> ck;
+        std::optional<clustering_key> ck;
         if (!mp.clustered_rows().empty()) {
             if (is_reversed) {
                 ck = mp.clustered_rows().begin()->key();
