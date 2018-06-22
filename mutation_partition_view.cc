@@ -29,6 +29,8 @@
 #include "mutation_partition.hh"
 #include "counters.hh"
 #include "frozen_mutation.hh"
+#include "partition_builder.hh"
+#include "converting_mutation_partition_applier.hh"
 
 #include "utils/UUID.hh"
 #include "serializer.hh"
@@ -187,20 +189,16 @@ row_marker read_row_marker(boost::variant<ser::live_marker_view, ser::expiring_m
 
 }
 
-void
-mutation_partition_view::accept(const schema& s, mutation_partition_visitor& visitor) const {
-    accept(s.get_column_mapping(), visitor);
-}
-
-void
-mutation_partition_view::accept(const column_mapping& cm, mutation_partition_visitor& visitor) const {
+template<typename Visitor>
+GCC6_CONCEPT(requires MutationViewVisitor<Visitor>)
+void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visitor) const {
     auto in = _in;
     auto mpv = ser::deserialize(in, boost::type<ser::mutation_partition_view>());
 
     visitor.accept_partition_tombstone(mpv.tomb());
 
     struct static_row_cell_visitor {
-        mutation_partition_visitor& _visitor;
+        Visitor& _visitor;
 
         void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
            _visitor.accept_static_cell(id, ac);
@@ -217,10 +215,10 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
 
     for (auto&& cr : mpv.rows()) {
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()));
+        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
 
         struct cell_visitor {
-            mutation_partition_visitor& _visitor;
+            Visitor& _visitor;
 
             void accept_atomic_cell(column_id id, const atomic_cell& ac) const {
                _visitor.accept_row_cell(id, ac);
@@ -231,6 +229,16 @@ mutation_partition_view::accept(const column_mapping& cm, mutation_partition_vis
         };
         read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
     }
+}
+
+void mutation_partition_view::accept(const schema& s, partition_builder& visitor) const
+{
+    do_accept(s.get_column_mapping(), visitor);
+}
+
+void mutation_partition_view::accept(const column_mapping& cm, converting_mutation_partition_applier& visitor) const
+{
+    do_accept(cm, visitor);
 }
 
 std::optional<clustering_key> mutation_partition_view::first_row_key() const

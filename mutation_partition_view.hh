@@ -29,6 +29,26 @@ namespace ser {
 class mutation_partition_view;
 }
 
+class partition_builder;
+class converting_mutation_partition_applier;
+
+GCC6_CONCEPT(
+template<typename T>
+concept bool MutationViewVisitor = requires (T visitor, tombstone t, atomic_cell_view acv,
+                                             collection_mutation_view cmv, range_tombstone rt,
+                                             position_in_partition_view pipv, row_tombstone row_tomb,
+                                             row_marker rm) {
+    visitor.accept_partition_tombstone(t);
+    visitor.accept_static_cell(column_id(), acv);
+    visitor.accept_static_cell(column_id(), cmv);
+    visitor.accept_row_tombstone(rt);
+    visitor.accept_row(pipv, row_tomb, rm,
+            is_dummy::no, is_continuous::yes);
+    visitor.accept_row_cell(column_id(), acv);
+    visitor.accept_row_cell(column_id(), cmv);
+};
+)
+
 // View on serialized mutation partition. See mutation_partition_serializer.
 class mutation_partition_view {
     utils::input_stream _in;
@@ -36,13 +56,17 @@ private:
     mutation_partition_view(utils::input_stream v)
         : _in(v)
     { }
+
+    template<typename Visitor>
+    GCC6_CONCEPT(requires MutationViewVisitor<Visitor>)
+    void do_accept(const column_mapping&, Visitor& visitor) const;
 public:
     static mutation_partition_view from_stream(utils::input_stream v) {
         return { v };
     }
     static mutation_partition_view from_view(ser::mutation_partition_view v);
-    void accept(const schema& schema, mutation_partition_visitor& visitor) const;
-    void accept(const column_mapping&, mutation_partition_visitor& visitor) const;
+    void accept(const schema& schema, partition_builder& visitor) const;
+    void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
 
     std::optional<clustering_key> first_row_key() const;
     std::optional<clustering_key> last_row_key() const;
