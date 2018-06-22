@@ -1533,12 +1533,7 @@ static void compare_files(sstring filename1, sstring filename2) {
     BOOST_CHECK_EQUAL_COLLECTIONS(b1, e1, b2, e2);
 }
 
-static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
-    storage_service_for_tests ssft;
-    tmpdir tmp;
-    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
-    write_memtable_to_sstable_for_test(*mt, sst).get();
-
+static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed = false) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Statistics,
@@ -1551,6 +1546,30 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt,
                 sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         compare_files(orig_filename, result_filename);
     }
+}
+
+// Can be useful if we want, e.g., to avoid range tombstones de-overlapping
+// that otherwise takes place for RTs put into one and the same memtable
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
+                                       sstring table_name, bool compressed = false) {
+    static db::nop_large_partition_handler nop_lp_handler;
+    storage_service_for_tests ssft;
+    tmpdir tmp;
+    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    sstable_writer_config cfg;
+    cfg.large_partition_handler = &nop_lp_handler;
+    sst->write_components(make_combined_reader(s,
+        mt1->make_flat_reader(s),
+        mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_stats()).get();
+    compare_sstables(std::move(tmp), table_name, compressed);
+}
+
+static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
+    storage_service_for_tests ssft;
+    tmpdir tmp;
+    auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
+    write_memtable_to_sstable_for_test(*mt, sst).get();
+    compare_sstables(std::move(tmp), table_name, compressed);
 }
 
 static constexpr api::timestamp_type write_timestamp = 1525385507816568;
@@ -2220,3 +2239,481 @@ SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
     mt->apply(std::move(mut));
     write_and_compare_sstables(s, mt, table_name);
 }
+
+SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
+    sstring table_name = "simple_range_tombstone";
+    // CREATE TABLE simple_range_tombstone (pk int, ck1 text, ck2 text, rc text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("rc", utf8_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    // DELETE FROM simple_range_tombstone WHERE pk = 0 and ck1 = 'aaa';
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528142098};
+    tombstone tomb{write_timestamp, tp};
+    range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+    mut.partition().apply_delete(*s, std::move(rt));
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+// Test the case when for RTs their adjacent bounds are written as boundary RT markers.
+SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
+    sstring table_name = "adjacent_range_tombstones";
+    // CREATE TABLE adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821291};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821308};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+// Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
+// so cannot be merged into a single boundary RT marker.
+SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
+    sstring table_name = "non_adjacent_range_tombstones";
+    // CREATE TABLE non_adjacent_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 > 'aaa' AND ck1 < 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144611};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb, bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, bytes("bbb")), bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM non_adjacent_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528144623};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("bbb")), tomb, bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
+    sstring table_name = "mixed_rows_and_range_tombstones";
+    // CREATE TABLE mixed_rows_and_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157078};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'aaa', 'bbb') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    ts += 10;
+
+    // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'bbb' AND ck2 <= 'ccc';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157101};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes("bbb")),
+                           clustering_key_prefix::from_deeply_exploded(*s, {"bbb", "ccc"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'bbb', 'ccc') USING TIMESTAMP 1525385507816598;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"bbb", "ccc"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    ts += 10;
+
+    // DELETE FROM mixed_rows_and_range_tombstones USING TIMESTAMP 1525385507816608 WHERE pk = 'key' AND ck1 = 'ddd' AND ck2 >= 'eee';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528157186};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"ddd", "eee"}),
+                           clustering_key_prefix::from_single_value(*s, to_bytes("ddd")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO mixed_rows_and_range_tombstones (pk, ck1, ck2) VALUES ('key', 'bbb', 'ccc') USING TIMESTAMP 1525385507816618;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
+    sstring table_name = "many_range_tombstones";
+    // CREATE TABLE many_range_tombstones (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key1")});
+    mutation mut{s, key};
+
+    gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1528226962};
+    tombstone tomb{write_timestamp, tp};
+    sstring ck_base(650, 'a');
+    for (auto idx: boost::irange(1000, 1100)) {
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2))), tomb,
+                           bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, to_bytes(format("{}{}", ck_base, idx * 2 + 1))),
+                           bound_kind::excl_end};
+        mut.partition().apply_delete(*s, std::move(rt));
+        seastar::thread::yield();
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
+    sstring table_name = "adjacent_range_tombstones_with_rows";
+    // CREATE TABLE adjacent_range_tombstones_with_rows (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007036};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO adjacent_range_tombstones_with_rows (pk, ck1, ck2, ck3) VALUES ('key', 'aaa', 'aaa', 'aaa') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "aaa", "aaa"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    ts += 10;
+
+    // DELETE FROM adjacent_range_tombstones_with_rows USING TIMESTAMP 1525385507816588 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529007103};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO adjacent_range_tombstones_with_rows (pk, ck1, ck2, ck3) VALUES ('key', 'aaa', 'ccc', 'ccc') USING TIMESTAMP 1525385507816598;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "ccc", "ccc"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+    mt->apply(std::move(mut));
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
+    sstring table_name = "range_tombstone_same_start_with_row";
+    // CREATE TABLE range_tombstone_same_start_with_row (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM range_tombstone_same_start_with_row USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 >= 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO range_tombstone_same_start_with_row (pk, ck1, ck2) VALUES (0, 'aaa', 'bbb') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_end_with_row) {
+    sstring table_name = "range_tombstone_same_end_with_row";
+    // CREATE TABLE range_tombstone_same_end_with_row (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM range_tombstone_same_end_with_row  USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 <= 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO range_tombstone_same_end_with_row (pk, ck1, ck2) VALUES (0, 'aaa', 'bbb') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"});
+        mut.partition().apply_insert(*s, ckey, ts);
+    }
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_overlapped_start_range_tombstones) {
+    sstring table_name = "overlapped_start_range_tombstones";
+    // CREATE TABLE overlapped_start_range_tombstones (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut1{s, key};
+    mutation mut2{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM overlapped_start_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 0 and ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099073};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut1.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // INSERT INTO overlapped_start_range_tombstones (pk, ck1, ck2) VALUES (0, 'aaa', 'bbb') USING TIMESTAMP 1525385507816578;
+    {
+        clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"});
+        mut2.partition().apply_insert(*s, ckey, ts);
+    }
+    ts += 10;
+
+    // DELETE FROM overlapped_start_range_tombstones USING TIMESTAMP 1525385507816588 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 > 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529099152};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb,
+                           bound_kind::excl_start,
+                           clustering_key::from_single_value(*s, bytes("aaa")),
+                           bound_kind::incl_end};
+        mut2.partition().apply_delete(*s, std::move(rt));
+    }
+
+    lw_shared_ptr<memtable> mt1 = make_lw_shared<memtable>(s);
+    lw_shared_ptr<memtable> mt2 = make_lw_shared<memtable>(s);
+
+    mt1->apply(mut1);
+    mt2->apply(mut2);
+
+    write_and_compare_sstables(s, mt1, mt2, table_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_write_two_non_adjacent_range_tombstones) {
+    sstring table_name = "two_non_adjacent_range_tombstones";
+    // CREATE TABLE two_non_adjacent_range_tombstones (pk int, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto key = partition_key::from_deeply_exploded(*s, {0});
+    mutation mut{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM two_non_adjacent_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 < 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529535128};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           bound_kind::incl_start,
+                           clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           bound_kind::excl_end, tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM range_tombstone_same_end_with_row  USING TIMESTAMP 1525385507816568 WHERE pk = 0 AND ck1 = 'aaa' AND ck2 <= 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1529535139};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           bound_kind::excl_start,
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           bound_kind::incl_end, tomb};
+        mut.partition().apply_delete(*s, std::move(rt));
+    }
+
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+    mt->apply(mut);
+
+    write_and_compare_sstables(s, mt, table_name);
+}
+
+// The resulting files are supposed to be identical to the files
+// from test_write_adjacent_range_tombstones
+SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
+    sstring table_name = "overlapped_range_tombstones";
+    // CREATE TABLE overlapped_range_tombstones (pk text, ck1 text, ck2 text, ck3 text, PRIMARY KEY (pk, ck1, ck2, ck3)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck3", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+
+    auto key = make_dkey(s, {to_bytes("key")});
+    mutation mut1{s, key};
+    mutation mut2{s, key};
+    api::timestamp_type ts = write_timestamp;
+
+    // DELETE FROM overlapped_range_tombstones USING TIMESTAMP 1525385507816568 WHERE pk = 'key' AND ck1 = 'aaa';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821291};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")),
+                           clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
+        mut1.partition().apply_delete(*s, std::move(rt));
+    }
+    ts += 10;
+
+    // DELETE FROM overlapped_range_tombstones USING TIMESTAMP 1525385507816578 WHERE pk = 'key' AND ck1 = 'aaa' AND ck2 = 'bbb';
+    {
+        gc_clock::time_point tp = gc_clock::time_point{} + gc_clock::duration{1527821308};
+        tombstone tomb{ts, tp};
+        range_tombstone rt{clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}),
+                           clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
+        mut2.partition().apply_delete(*s, std::move(rt));
+    }
+
+    lw_shared_ptr<memtable> mt1 = make_lw_shared<memtable>(s);
+    lw_shared_ptr<memtable> mt2 = make_lw_shared<memtable>(s);
+    mt1->apply(mut1);
+    mt2->apply(mut2);
+
+    write_and_compare_sstables(s, mt1, mt2, table_name);
+}
+

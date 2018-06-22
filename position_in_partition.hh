@@ -58,15 +58,10 @@ int position_weight(bound_kind k) {
     switch(k) {
     case bound_kind::excl_end:
     case bound_kind::incl_start:
-    case bound_kind::excl_end_incl_start:
         return -1;
     case bound_kind::incl_end:
     case bound_kind::excl_start:
-    case bound_kind::incl_end_excl_start:
         return 1;
-    case bound_kind::clustering:
-    case bound_kind::static_clustering:
-        return 0;
     }
     abort();
 }

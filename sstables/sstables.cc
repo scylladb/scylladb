@@ -2629,6 +2629,77 @@ enum class row_extended_flags : uint8_t {
     has_shadowable_deletion = 0x02,
 };
 
+// This enum corresponds to Origin's ClusteringPrefix.Kind.
+// It is a superset of values of the bound_kind enum
+// declared in clustering_bounds_comparator.hh
+enum class bound_kind_m : uint8_t {
+    excl_end = 0,
+    incl_start = 1,
+    excl_end_incl_start = 2,
+    static_clustering = 3,
+    clustering = 4,
+    incl_end_excl_start = 5,
+    incl_end = 6,
+    excl_start = 7,
+};
+
+static bound_kind to_bound_kind(bound_kind_m kind) {
+    assert (kind == bound_kind_m::incl_start ||
+            kind == bound_kind_m::incl_end ||
+            kind == bound_kind_m::excl_start ||
+            kind == bound_kind_m::excl_end);
+
+    using underlying_type = std::underlying_type_t<bound_kind_m>;
+    return bound_kind{static_cast<underlying_type>(kind)};
+}
+
+static bound_kind_m to_bound_kind_m(bound_kind kind) {
+    using underlying_type = std::underlying_type_t<bound_kind>;
+    return bound_kind_m{static_cast<underlying_type>(kind)};
+}
+
+// A range tombstone marker (RT marker) represents a bound of a range tombstone
+// in a SSTables 3.x ('m') data file.
+// RT markers can be of two types called "bounds" and "boundaries" in Origin nomenclature.
+//
+// A bound simply represents either a start or an end bound of a full range tombstone.
+//
+// A boundary can be thought of as two merged adjacent bounds and is used to represent adjacent
+// range tombstones. An RT marker of a boundary type has two tombstones corresponding to two
+// range tombstones this boundary belongs to.
+struct rt_marker {
+    clustering_key_prefix clustering;
+    bound_kind_m kind;
+    tombstone tomb;
+    std::optional<tombstone> boundary_tomb; // only engaged for rt_marker of a boundary type
+
+    position_in_partition_view position() const {
+        return {
+            position_in_partition_view::range_tombstone_tag_t(),
+            bound_view{clustering, to_bound_kind(kind)}
+        };
+    }
+
+    // We need this one to uniformly write rows and RT markers inside write_clustered().
+    const clustering_key_prefix& key() const { return clustering; }
+};
+
+static bound_kind_m get_kind(const clustering_row&) {
+    return bound_kind_m::clustering;
+}
+
+static bound_kind_m get_kind(const rt_marker& marker) {
+    return marker.kind;
+}
+
+GCC6_CONCEPT(
+    template<typename T>
+    concept bool Clustered = requires(T t) {
+        { t.key() } -> const clustering_key_prefix&;
+        { get_kind(t) } -> bound_kind_m;
+    };
+)
+
 // Used for writing SSTables in 'mc' format.
 class sstable_writer_m : public sstable_writer::writer_impl {
 private:
@@ -2651,11 +2722,20 @@ private:
     std::optional<key> _partition_key;
     stdx::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
+    range_tombstone_stream _range_tombstones;
+
+    std::optional<rt_marker> _end_open_marker;
+
+    struct clustering_info {
+        clustering_key_prefix clustering;
+        bound_kind_m kind;
+    };
     struct pi_block {
-        clustering_key_prefix first;
-        clustering_key_prefix last;
+        clustering_info first;
+        clustering_info last;
         uint64_t offset;
         uint64_t width;
+        std::optional<tombstone> open_marker;
     };
     // _pi_write_m is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
@@ -2666,8 +2746,8 @@ private:
         tombstone tomb;
         uint64_t block_start_offset;
         uint64_t block_next_start_offset;
-        std::optional<clustering_key_prefix> first_clustering;
-        std::optional<clustering_key_prefix> last_clustering;
+        std::optional<clustering_info> first_clustering;
+        std::optional<clustering_info> last_clustering;
         size_t desired_block_size;
     } _pi_write_m;
     column_stats _c_stats;
@@ -2680,13 +2760,15 @@ private:
         }
     }
 
+    void drain_tombstones(std::optional<position_in_partition_view> pos = {});
+
     void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
         return components_writer::maybe_add_summary_entry(
             _sst._components->summary, token, key, get_data_offset(),
             _index_writer->offset(), _index_sampling_state);
     }
 
-    void maybe_set_pi_first_clustering(const clustering_key_prefix& clustering);
+    void maybe_set_pi_first_clustering(const clustering_info& info);
     void maybe_add_pi_block();
     void add_pi_block();
 
@@ -2732,8 +2814,28 @@ private:
     void write_cells(file_writer& writer, column_kind kind, const row& row_body, const row_time_properties& properties, bool has_complex_deletion = false);
     void write_row_body(file_writer& writer, const clustering_row& row, bool has_complex_deletion);
     void write_static_row(const row& static_row);
-    void write_clustered_row(const clustering_row& clustered_row, uint64_t prev_row_size);
+
+    // Clustered is a term used to denote an entity that has a clustering key prefix
+    // and constitutes an entry of a partition.
+    // Both clustered_rows and rt_markers are instances of Clustered
+    void write_clustered(const clustering_row& clustered_row, uint64_t prev_row_size);
+    void write_clustered(const rt_marker& marker, uint64_t prev_row_size);
+
+    template <typename T>
+    GCC6_CONCEPT(
+        requires Clustered<T>
+    )
+    void write_clustered(const T& clustered) {
+        clustering_info info {clustered.key(), get_kind(clustered)};
+        maybe_set_pi_first_clustering(info);
+        uint64_t pos = _data_writer->offset();
+        write_clustered(clustered, pos - _prev_row_start);
+        _pi_write_m.last_clustering = info;
+        _prev_row_start = pos;
+        maybe_add_pi_block();
+    }
     void write_promoted_index(file_writer& writer);
+    void consume(rt_marker&& marker);
 public:
 
     sstable_writer_m(sstable& sst, const schema& s, uint64_t estimated_partitions,
@@ -2745,6 +2847,7 @@ public:
         , _cfg(cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
+        , _range_tombstones(_schema)
     {
         _sst.generate_toc(_schema.get_compressor_params().get_compressor(), _schema.bloom_filter_fp_chance());
         _sst.write_toc(_pc);
@@ -2767,9 +2870,7 @@ public:
     void consume(tombstone t) override;
     stop_iteration consume(static_row&& sr) override;
     stop_iteration consume(clustering_row&& cr) override;
-    stop_iteration consume(range_tombstone&& rt) override {
-        throw std::runtime_error("consume(range_tombstone) is not yet implemented for SSTables v3");
-    }
+    stop_iteration consume(range_tombstone&& rt) override;
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream() override;
 };
@@ -2788,13 +2889,26 @@ sstable_writer_m::~sstable_writer_m() {
     close_writer(_data_writer);
 }
 
-void sstable_writer_m::maybe_set_pi_first_clustering(const clustering_key_prefix& clustering) {
+void sstable_writer_m::maybe_set_pi_first_clustering(const sstable_writer_m::clustering_info& info) {
     uint64_t pos = _data_writer->offset();
     if (!_pi_write_m.first_clustering) {
-        _pi_write_m.first_clustering = clustering;
+        _pi_write_m.first_clustering = info;
         _pi_write_m.block_start_offset = pos;
         _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
     }
+}
+
+static deletion_time to_deletion_time(tombstone t) {
+    deletion_time dt;
+    if (t) {
+        dt.local_deletion_time = t.deletion_time.time_since_epoch().count();
+        dt.marked_for_delete_at = t.timestamp;
+    } else {
+        // Default values for live, non-deleted rows.
+        dt.local_deletion_time = std::numeric_limits<int32_t>::max();
+        dt.marked_for_delete_at = std::numeric_limits<int64_t>::min();
+    }
+    return dt;
 }
 
 void sstable_writer_m::add_pi_block() {
@@ -2802,7 +2916,8 @@ void sstable_writer_m::add_pi_block() {
         *_pi_write_m.first_clustering,
         *_pi_write_m.last_clustering,
         _pi_write_m.block_start_offset - _c_stats.start_offset,
-        _data_writer->offset() - _pi_write_m.block_start_offset});
+        _data_writer->offset() - _pi_write_m.block_start_offset,
+        (_end_open_marker ? std::make_optional(_end_open_marker->tomb) : std::optional<tombstone>{})});
 }
 
 void sstable_writer_m::maybe_add_pi_block() {
@@ -2850,6 +2965,76 @@ void sstable_writer_m::close_data_writer() {
     }
 }
 
+void sstable_writer_m::drain_tombstones(std::optional<position_in_partition_view> pos) {
+    auto get_next_rt = [this, &pos] {
+        return pos ? _range_tombstones.get_next(*pos) : _range_tombstones.get_next();
+    };
+
+    auto get_rt_start = [] (const range_tombstone& rt) {
+        return rt_marker{rt.start, to_bound_kind_m(rt.start_kind), rt.tomb};
+    };
+
+    auto get_rt_end = [] (const range_tombstone& rt) {
+        return rt_marker{rt.end, to_bound_kind_m(rt.end_kind), rt.tomb};
+    };
+
+    auto flush_end_open_marker = [this] {
+        consume(*std::exchange(_end_open_marker, {}));
+    };
+
+    auto write_rt_boundary = [this, &get_rt_end] (const range_tombstone& rt) {
+        auto boundary_kind = rt.start_kind == bound_kind::incl_start
+                ? bound_kind_m::excl_end_incl_start
+                : bound_kind_m::incl_end_excl_start;
+        tombstone end_tomb{std::move(_end_open_marker->tomb)};
+        _end_open_marker = get_rt_end(rt);
+        consume(rt_marker{rt.start, boundary_kind, end_tomb, rt.tomb});
+    };
+
+    ensure_tombstone_is_written();
+    position_in_partition::less_compare less{_schema};
+    position_in_partition::equal_compare eq{_schema};
+    while (auto mfo = get_next_rt()) {
+        range_tombstone rt {std::move(mfo)->as_range_tombstone()};
+        bool need_write_start = true;
+        if (_end_open_marker) {
+            if (eq(_end_open_marker->position(), rt.position())) {
+                write_rt_boundary(rt);
+                need_write_start = false;
+            } else if (less(rt.position(), _end_open_marker->position())) {
+                if (_end_open_marker->tomb != rt.tomb) {
+                    // Previous end marker has been superseded by a range tombstone that was added later
+                    // so we end the currently open one and start the new one at once
+                    write_rt_boundary(rt);
+                    need_write_start = false;
+                } else {
+                    // The range tombstone is a continuation of the currently open one
+                    // so don't need to write the start marker, just update the end
+                    _end_open_marker = get_rt_end(rt);
+                    need_write_start = false;
+                }
+            } else {
+                // The new range tombstone lies entirely after the currently open one.
+                // Simply close it.
+                flush_end_open_marker();
+            }
+        }
+
+        if (need_write_start) {
+            _end_open_marker = get_rt_end(rt);
+            consume(get_rt_start(rt));
+        }
+
+        if (pos && rt.trim_front(_schema, *pos)) {
+            _range_tombstones.apply(std::move(rt));
+        }
+    }
+
+    if (_end_open_marker && (!pos || less(_end_open_marker->position(), *pos))) {
+        flush_end_open_marker();
+    }
+}
+
 void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _c_stats.start_offset = _data_writer->offset();
     _prev_row_start = _data_writer->offset();
@@ -2879,19 +3064,6 @@ void sstable_writer_m::consume_new_partition(const dht::decorated_key& dk) {
     _partition_header_length = _data_writer->offset() - _c_stats.start_offset;
 
     _tombstone_written = false;
-}
-
-deletion_time to_deletion_time(tombstone t) {
-    deletion_time dt;
-    if (t) {
-        dt.local_deletion_time = t.deletion_time.time_since_epoch().count();
-        dt.marked_for_delete_at = t.timestamp;
-    } else {
-        // Default values for live, non-deleted rows.
-        dt.local_deletion_time = std::numeric_limits<int32_t>::max();
-        dt.marked_for_delete_at = std::numeric_limits<int64_t>::min();
-    }
-    return dt;
 }
 
 void sstable_writer_m::consume(tombstone t) {
@@ -3142,7 +3314,7 @@ static bool row_has_complex_deletion(const schema& s, const row& r) {
     return result;
 }
 
-void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, uint64_t prev_row_size) {
+void sstable_writer_m::write_clustered(const clustering_row& clustered_row, uint64_t prev_row_size) {
     row_flags flags = row_flags::none;
     row_extended_flags ext_flags = row_extended_flags::none;
     if (clustered_row.marker().is_live()) {
@@ -3193,25 +3365,18 @@ void sstable_writer_m::write_clustered_row(const clustering_row& clustered_row, 
 }
 
 stop_iteration sstable_writer_m::consume(clustering_row&& cr) {
-    ensure_tombstone_is_written();
-    maybe_set_pi_first_clustering(cr.key());
-    uint64_t pos = _data_writer->offset();
-    write_clustered_row(cr, pos - _prev_row_start);
-
-    _pi_write_m.last_clustering = cr.key();
-
-    _prev_row_start = pos;
-    maybe_add_pi_block();
+    drain_tombstones(position_in_partition_view::after_key(cr.key()));
+    write_clustered(cr);
     return stop_iteration::no;
 }
 
 // Write clustering prefix along with its bound kind and, if not full, its size
-static void write_clustering_prefix(file_writer& writer, bound_kind kind,
+static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
         const schema& s, const clustering_key_prefix& clustering) {
-    assert(kind != bound_kind::static_clustering);
+    assert(kind != bound_kind_m::static_clustering);
     write(sstable_version_types::mc, writer, kind);
     auto is_ephemerally_full = ephemerally_full_prefix{s.is_compact_table()};
-    if (kind != bound_kind::clustering) {
+    if (kind != bound_kind_m::clustering) {
         // Don't use ephemerally full for RT bounds as they're always non-full
         is_ephemerally_full = ephemerally_full_prefix::no;
         write(sstable_version_types::mc, writer, static_cast<uint16_t>(clustering.size(s)));
@@ -3232,13 +3397,14 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
     uint64_t start = writer.offset();
     for (const pi_block& block: _pi_write_m.promoted_index) {
         offsets.push_back(writer.offset() - start);
-        write_clustering_prefix(writer, bound_kind::clustering, _schema, block.first);
-        write_clustering_prefix(writer, bound_kind::clustering, _schema, block.last);
+        write_clustering_prefix(writer, block.first.kind, _schema, block.first.clustering);
+        write_clustering_prefix(writer, block.last.kind, _schema, block.last.clustering);
         write_vint(writer, block.offset);
         write_signed_vint(writer, block.width - width_base);
-        // TODO: serialize end open marker here later, for now always write "false"
-        // to indicate there is no end open marker
-        write(_sst.get_version(), writer, (std::byte)0);
+        write(_sst.get_version(), writer, static_cast<std::byte>(block.open_marker ? 1 : 0));
+        if (block.open_marker) {
+            write(sstable_version_types::mc, writer, to_deletion_time(*block.open_marker));
+        }
     }
 
     for (uint32_t offset: offsets) {
@@ -3246,8 +3412,39 @@ void sstable_writer_m::write_promoted_index(file_writer& writer) {
     }
 }
 
+void sstable_writer_m::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
+    write(sstable_version_types::mc, *_data_writer, row_flags::is_marker);
+    write_clustering_prefix(*_data_writer, marker.kind, _schema, marker.clustering);
+    auto write_marker_body = [this, &marker] (file_writer& writer) {
+        write_delta_deletion_time(writer, to_deletion_time(marker.tomb));
+        if (marker.boundary_tomb) {
+            write_delta_deletion_time(writer, to_deletion_time(*marker.boundary_tomb));
+        }
+    };
+
+    uint64_t marker_body_size = calculate_write_size(write_marker_body) + unsigned_vint::serialized_size(prev_row_size);
+
+    write_vint(*_data_writer, marker_body_size);
+    write_vint(*_data_writer, prev_row_size);
+
+    write_marker_body(*_data_writer);
+};
+
+void sstable_writer_m::consume(rt_marker&& marker) {
+    write_clustered(marker);
+}
+
+stop_iteration sstable_writer_m::consume(range_tombstone&& rt) {
+    drain_tombstones(rt.position());
+    _range_tombstones.apply(std::move(rt));
+    return stop_iteration::no;
+}
+
 stop_iteration sstable_writer_m::consume_end_of_partition() {
-    ensure_tombstone_is_written();
+    drain_tombstones();
+
+    write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
+
     if (!_pi_write_m.promoted_index.empty() && _pi_write_m.first_clustering) {
         add_pi_block();
     }
@@ -3259,8 +3456,6 @@ stop_iteration sstable_writer_m::consume_end_of_partition() {
     uint64_t pi_size = calculate_write_size(write_pi);
     write_vint(*_index_writer, pi_size);
     write_pi(*_index_writer);
-
-    write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;

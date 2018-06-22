@@ -265,7 +265,6 @@ void range_tombstone_stream::apply(const range_tombstone_list& list, const query
 }
 
 void range_tombstone_stream::reset() {
-    _inside_range_tombstone = false;
     _list.clear();
 }
 

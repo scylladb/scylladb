@@ -575,7 +575,6 @@ class range_tombstone_stream {
     const schema& _schema;
     position_in_partition::less_compare _cmp;
     range_tombstone_list _list;
-    bool _inside_range_tombstone = false;
 private:
     mutation_fragment_opt do_get_next();
 public:
