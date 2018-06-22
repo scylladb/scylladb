@@ -51,7 +51,7 @@ verify_args() {
 #
 get_mode_cpu_set() {
     local mode=$1
-    local mode_cpu_mask=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode "$mode" --get-cpu-mask` 2>&-
+    local mode_cpu_mask=`/usr/lib/scylla/perftune.py --tune net --nic "$nic" --mode "$mode" --get-cpu-mask 2>&-`
 
     # If the given mode is not supported - return invalid CPU set
     if [[ "$?" -ne "0" ]]; then
