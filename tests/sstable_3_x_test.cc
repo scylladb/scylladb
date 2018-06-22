@@ -3703,8 +3703,9 @@ SEASTAR_THREAD_TEST_CASE(test_write_compact_table) {
     clustering_key ckey = clustering_key::from_deeply_exploded(*s, { 1 });
     mut.set_cell(ckey, "rc", data_value{1}, write_timestamp);
 
-    mt->apply(std::move(mut));
-    write_and_compare_sstables(s, mt, table_name);
+    mt->apply(mut);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_user_defined_type_table) {
