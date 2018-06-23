@@ -3379,16 +3379,21 @@ static void test_write_many_partitions(sstring table_name, tombstone partition_t
 
     lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
 
+    std::vector<mutation> muts;
     for (auto i : boost::irange(0, 65536)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
-        mutation mut{s, key};
+        muts.emplace_back(s, key);
         if (partition_tomb) {
-            mut.partition().apply(partition_tomb);
+            muts.back().partition().apply(partition_tomb);
         }
-        mt->apply(std::move(mut));
+        mt->apply(muts.back());
     }
 
-    write_and_compare_sstables(s, mt, table_name, cp != compression_parameters{});
+    bool compressed = cp != compression_parameters{};
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name, compressed);
+
+    boost::sort(muts, mutation_decorated_key_less_comparator());
+    validate_read(s, tmp.path, muts);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_live_partitions) {
