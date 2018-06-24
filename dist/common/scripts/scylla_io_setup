@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 # Copyright (C) 2017 ScyllaDB
 #
@@ -62,12 +62,12 @@ if __name__ == "__main__":
                 disk_properties["read_bandwidth"] = 507338935 * nr_disks
                 disk_properties["write_iops"] = 57100 * nr_disks
                 disk_properties["write_bandwidth"] = 483141731 * nr_disks
-            properties_file = file("/etc/scylla.d/io_properties.yaml", "w")
+            properties_file = open("/etc/scylla.d/io_properties.yaml", "w")
             yaml.dump({ "disks": [ disk_properties ] }, properties_file,  default_flow_style=False)
-            ioconf = file("/etc/scylla.d/io.conf", "w")
+            ioconf = open("/etc/scylla.d/io.conf", "w")
             ioconf.write("SEASTAR_IO=\"--io-properties-file={}\"\n".format(properties_file.name))
         else:
-            if os.environ.has_key("SCYLLA_CONF"):
+            if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
             else:
                 conf_dir = "/etc/scylla"

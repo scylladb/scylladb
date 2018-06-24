@@ -1,38 +1,67 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2016 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-if [ ! -f /sys/devices/system/cpu/cpufreq/policy0/scaling_governor ]; then
-    echo "This computer doesn't supported CPU scaling configuration."
-    exit 0
-fi
-if is_debian_variant; then
-    apt-get install -y cpufrequtils
-    service cpufrequtils stop
-    echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
-    if is_systemd; then
-        systemctl enable cpufrequtils.service
-    fi
-    service cpufrequtils start
-elif is_gentoo_variant; then
-    emerge -uq sys-power/cpupower
-    sed -e 's/--governor ondemand/--governor performance/g' -i /etc/conf.d/cpupower
-    if is_systemd; then
-        systemctl enable cpupower-frequency-set.service
-        systemctl start cpupower-frequency-set.service
-    else
-        rc-update add cpupower default
-        rc-service cpupower start
-    fi
-else
-    yum install -y cpupowerutils || true
-    echo 'CPUPOWER_START_OPTS="frequency-set -g performance"' > /etc/sysconfig/cpupower
-    echo 'CPUPOWER_STOP_OPTS="frequency-set -g ondemand"' >> /etc/sysconfig/cpupower
-    if [ "`systemctl is-active cpupower.service`" = "active" ]; then
-        systemctl stop cpupower.service
-    fi
-    systemctl enable cpupower.service
-    systemctl start cpupower.service
-fi
+import os
+import sys
+import shlex
+from scylla_util import *
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    if not os.path.exists('/sys/devices/system/cpu/cpufreq/policy0/scaling_governor'):
+        print('This computer doesn\'t supported CPU scaling configuration.')
+        sys.exit(0)
+    if is_debian_variant():
+        run('apt-get install -y cpufrequtils')
+        cfg = sysconfig_parser('/etc/default/cpufrequtils')
+        cfg.set('GOVERNOR', 'performance')
+        cfg.commit()
+        if is_systemd():
+            cpufreq = systemd_unit('cpufrequtils.service')
+            cpufreq.enable()
+            cpufreq.restart()
+        else:
+            run('service cpufrequtils restart')
+    if is_gentoo_variant():
+        run('emerge -uq sys-power/cpupower')
+        with open('/etc/conf.d/cpupower') as f:
+            cur = f.read()
+        new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
+        with open('/etc/conf.d/cpupower') as f:
+            f.write(new)
+        if is_systemd():
+            cpufreq = systemd_unit('cpupower-frequency-set.service')
+            cpufreq.enable()
+            cpufreq.restart()
+        else:
+            run('rc-update add cpupower default')
+            run('rc-service cpupower start')
+    if is_redhat_variant():
+        run('yum install -y cpupowerutils')
+        cfg = sysconfig_parser('/etc/sysconfig/cpupower')
+        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+        cfg.commit()
+        cpupwr = systemd_unit('cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()

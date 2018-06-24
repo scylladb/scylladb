@@ -1,14 +1,41 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-if is_debian_variant || is_gentoo_variant; then
-    echo "scylla_selinux_setup only supports Red Hat variants"
-else
-    if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
-        setenforce 0
-        sed --follow-symlinks -i -e "s/^SELINUX=enforcing/SELINUX=disabled/" /etc/sysconfig/selinux
-    fi
-fi
+import os
+import sys
+import subprocess
+from scylla_util import *
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+
+    if is_debian_variant() or is_gentoo_variant():
+        print("scylla_selinux_setup only supports Red Hat variants")
+        sys.exit(0)
+
+    res = out('sestatus')
+    if res.split(None)[2] != 'disabled':
+        run('setenforce 0')
+        cfg = sysconfig_parser('/etc/sysconfig/selinux')
+        cfg.set('SELINUX', 'disabled')
+        cfg.commit()

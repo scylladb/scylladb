@@ -1,60 +1,74 @@
-#!/bin/bash -e
+#!/usr/bin/python3
 #
-#  Copyright (C) 2015 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
 
-. /usr/lib/scylla/scylla_lib.sh
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-print_usage() {
-    echo "scylla_coredump_setup --dump-to-raiddir"
-    echo "  --dump-to-raiddir  store coredump to /var/lib/scylla"
-    echo "  --compress  enable compress on systemd-coredump"
-    exit 1
-}
+import os
+import sys
+import argparse
+import subprocess
+import shutil
+from scylla_util import *
 
-SYMLINK=0
-COMPRESS=no
-while [ $# -gt 0 ]; do
-    case "$1" in
-        "--dump-to-raiddir")
-            SYMLINK=1
-            shift 1
-            ;;
-        "--compress")
-            COMPRESS=yes
-            shift 1
-            ;;
-        *)
-            print_usage
-            ;;
-    esac
-done
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Optimize coredump settings for Scylla.')
+    parser.add_argument('--dump-to-raiddir', action='store_true', default=False,
+                        help='store coredump to /var/lib/scylla')
+    parser.add_argument('--compress', action='store_true', default=False,
+                        help='enable compress on systemd-coredump')
+    args = parser.parse_args()
 
-if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "14.04" ]; then
-    apt-get remove -y apport-noui
-    sysctl -p /etc/sysctl.d/99-scylla-coredump.conf
-elif [ "$ID" = "debian" ] && [ "$VERSION_ID" = "8" ] || [ "$ID" = "gentoo" ]; then
-    sysctl -p /etc/sysctl.d/99-scylla-coredump.conf
-else
-    if is_debian_variant; then
-        apt-get install -y systemd-coredump
-    fi
-    cat << EOS > /etc/systemd/coredump.conf
+# Ubuntu 14.04 not used systemd, so use scylla_save_coredump
+    if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
+        run('apt-get remove -y apport-noui')
+        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+# Debian 8 uses systemd but it's too old to use systemd-coredump, so
+# use scylla_save_coredump too
+    elif dist_name() == 'debian' and re.match(r'^8\.', dist_ver()):
+        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+# Gentoo may uses OpenRC
+    elif is_gentoo_variant():
+        run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')
+# Other distributions can use systemd-coredump, so setup it
+    else:
+        if is_debian_variant():
+            run('apt-get install -y systemd-coredump')
+        conf_data = '''
 [Coredump]
 Storage=external
-Compress=$COMPRESS
+Compress={compress}
 ProcessSizeMax=1024G
 ExternalSizeMax=1024G
-EOS
-    if [ $SYMLINK = 1 ]; then
-        rm -rf /var/lib/systemd/coredump
-        mkdir -p /var/lib/scylla/coredump
-        ln -sf /var/lib/scylla/coredump /var/lib/systemd/coredump
-    fi
-    systemctl daemon-reload
-    if is_debian_variant; then
-        sysctl -p /usr/lib/sysctl.d/50-coredump.conf
-    else
-        echo "kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e" > /etc/sysctl.d/99-coredump.conf
-        sysctl -p /etc/sysctl.d/99-coredump.conf
-    fi
-fi
+'''[1:-1].format(compress = 'yes' if args.compress else 'no')
+        with open('/etc/systemd/coredump.conf', 'w') as f:
+            conf = f.write(conf_data)
+        if args.dump_to_raiddir:
+            shutil.rmtree('/var/lib/systemd/coredump')
+            makedirs('/var/lib/scylla/coredump')
+            os.symlink('/var/lib/scylla/coredump', '/var/lib/systemd/coredump')
+        run('systemctl daemon-reload')
+        if is_debian_variant():
+            run('sysctl -p /usr/lib/sysctl.d/50-coredump.conf')
+        else:
+            with open('/etc/sysctl.d/99-scylla-coredump.conf', 'w') as f:
+                f.write('kernel.core_pattern=|/usr/lib/systemd/systemd-coredump %p %u %g %s %t %e"')
+            run('sysctl -p /etc/sysctl.d/99-scylla-coredump.conf')

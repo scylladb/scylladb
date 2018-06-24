@@ -15,22 +15,27 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import urllib2
-import urllib
+import urllib.request, urllib.error, urllib.parse
+import urllib.request, urllib.parse, urllib.error
 import logging
 import time
 import re
 import os
 import string
+import subprocess
+import platform
+import configparser
+import io
+import shlex
 
 def curl(url):
     max_retries = 5
     retries = 0
     while True:
         try:
-            req = urllib2.Request(url)
-            return urllib2.urlopen(req).read()
-        except urllib2.HTTPError:
+            req = urllib.request.Request(url)
+            return urllib.request.urlopen(req).read().decode('utf-8')
+        except urllib.error.HTTPError:
             logging.warn("Failed to grab %s..." % url)
             time.sleep(5)
             retries += 1
@@ -60,7 +65,7 @@ class aws_instance:
         self._disks = {}
         devname = re.compile("^\D+")
         nvme_re = re.compile(r"nvme\d+n\d+$")
-        nvmes_present = filter(nvme_re.match, os.listdir("/dev"))
+        nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         if nvmes_present:
             self._disks["ephemeral"] = nvmes_present;
 
@@ -68,7 +73,7 @@ class aws_instance:
             t = devname.match(dev).group()
             if t == "ephemeral"  and nvmes_present:
                 continue;
-            if not self._disks.has_key(t):
+            if t not in self._disks:
                 self._disks[t] = []
             if not self.__device_exists(self.__xenify(dev)):
                 continue
@@ -93,7 +98,7 @@ class aws_instance:
     def disks(self):
         """Returns all disks in the system, as visible from the AWS registry"""
         disks = set()
-        for v in self._disks.values():
+        for v in list(self._disks.values()):
             disks = disks.union([ self.__disk_name(x) for x in v ])
         return disks
 
@@ -141,16 +146,16 @@ def _reopt(s):
     return s + r"?"
 
 def is_developer_mode():
-    f = file("/etc/scylla.d/dev-mode.conf", "ro")
+    f = open("/etc/scylla.d/dev-mode.conf", "r")
     pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
-    return len([ x for x in f.xreadlines() if pattern.match(x) ]) >= 1
+    return len([ x for x in f if pattern.match(x) ]) >= 1
 
 class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
     Information that can be probed include in which hyperthreads Scylla is configured
     to run, how many total threads exist in the system, etc"""
     def __parse_cpuset(self):
-        f = file("/etc/scylla.d/cpuset.conf", "ro")
+        f = open("/etc/scylla.d/cpuset.conf", "r")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
         grp = [ pattern.match(x) for x in f.readlines() if pattern.match(x) ]
         if not grp:
@@ -163,7 +168,7 @@ class scylla_cpuinfo:
             groups = d["cpuset"].split(",")
             for g in groups:
                 ends = [ int(x) for x in g.split("-") ]
-                actual_set = actual_set.union(set(xrange(ends[0], ends[-1] +1)))
+                actual_set = actual_set.union(set(range(ends[0], ends[-1] +1)))
             d["cpuset"] = actual_set
         if d["smp"]:
             d["smp"] = int(d["smp"])
@@ -171,9 +176,9 @@ class scylla_cpuinfo:
 
     def __system_cpus(self):
         cur_proc = -1
-        f = file("/proc/cpuinfo", "ro")
+        f = open("/proc/cpuinfo", "r")
         results = {}
-        for line in f.xreadlines():
+        for line in f:
             if line == '\n':
                 continue
             key, value = [ x.strip() for x in line.split(":") ]
@@ -197,7 +202,7 @@ class scylla_cpuinfo:
 
     def system_nr_cores(self):
         """Returns the number of cores available in the system"""
-        return len(set([ x['core id'] for x in self._cpu_data["system"].values() ]))
+        return len(set([ x['core id'] for x in list(self._cpu_data["system"].values()) ]))
 
     def cpuset(self):
         """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
@@ -215,3 +220,168 @@ class scylla_cpuinfo:
             return len(self._cpu_data["cpuset"])
         else:
             return len(self._cpu_data["system"])
+
+def run(cmd, shell=False, silent=False, exception=True):
+    stdout=None
+    stderr=None
+    if silent:
+        stdout=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL
+    if shell:
+        if exception:
+            return subprocess.check_call(cmd, shell=True, stdout=stdout, stderr=stderr)
+        else:
+            p = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
+            return p.wait()
+    else:
+        if exception:
+            return subprocess.check_call(shlex.split(cmd), stdout=stdout, stderr=stderr)
+        else:
+            p = subprocess.Popen(shlex.split(cmd), stdout=stdout, stderr=stderr)
+            return p.wait()
+
+def out(cmd, shell=False, exception=True):
+    if shell:
+        if exception:
+            return subprocess.check_output(cmd, shell=True).strip().decode('utf-8')
+        else:
+            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+            return p.communicate()[0].strip().decode('utf-8')
+    else:
+        if exception:
+            return subprocess.check_output(shlex.split(cmd)).strip().decode('utf-8')
+        else:
+            p = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE)
+            return p.communicate()[0].strip().decode('utf-8')
+
+def is_debian_variant():
+    return os.path.exists('/etc/debian_version')
+
+def is_redhat_variant():
+    return os.path.exists('/etc/redhat-release')
+
+def is_gentoo_variant():
+    return os.path.exists('/etc/gentoo-release')
+
+def is_ec2():
+    if os.path.exists('/sys/hypervisor/uuid'):
+        with open('/sys/hypervisor/uuid') as f:
+            s = f.read()
+        return True if re.match(r'^ec2.*', s, flags=re.IGNORECASE) else False
+    elif os.path.exists('/sys/class/dmi/id/board_vendor'):
+        with open('/sys/class/dmi/id/board_vendor') as f:
+            s = f.read()
+        return True if re.match(r'^Amazon EC2$', s) else False
+    return False
+
+def is_systemd():
+    try:
+        with open('/proc/1/comm') as f:
+            s = f.read()
+        return True if re.match(r'^systemd$', s, flags=re.MULTILINE) else False
+    except:
+        return False
+
+def hex2list(hex_str):
+    hex_str2 = hex_str.replace("0x", "").replace(",", "")
+    hex_int = int(hex_str2, 16)
+    bin_str = "{0:b}".format(hex_int)
+    bin_len = len(bin_str)
+    cpu_list = []
+    i = 0
+    while i < bin_len:
+        if 1 << i & hex_int:
+            j = i
+            while j + 1 < bin_len and 1 << j + 1 & hex_int:
+                j += 1
+            if j == i:
+                cpu_list.append(str(i))
+            else:
+                cpu_list.append("{0}-{1}".format(i, j))
+                i = j
+        i += 1
+    return ",".join(cpu_list)
+
+def makedirs(name):
+    if not os.path.isdir(name):
+        os.makedirs(name)
+
+def dist_name():
+    return platform.dist()[0]
+
+def dist_ver():
+    return platform.dist()[1]
+
+class SystemdException(Exception):
+    pass
+
+class systemd_unit:
+    def __init__(self, unit):
+        self._unit = unit
+
+    def start(self):
+        return run('systemctl start {}'.format(self._unit))
+
+    def stop(self):
+        return run('systemctl stop {}'.format(self._unit))
+        return subprocess.check_call(['systemctl', 'stop', self._unit])
+
+    def restart(self):
+        return run('systemctl restart {}'.format(self._unit))
+
+    def enable(self):
+        return run('systemctl enable {}'.format(self._unit))
+
+    def disable(self):
+        return run('systemctl disable {}'.format(self._unit))
+
+    def is_active(self):
+        res = out('systemctl is-active {}'.format(self._unit), exception=False)
+        return True if re.match(r'^active', res, flags=re.MULTILINE) else False
+
+    def mask(self):
+        return run('systemctl mask {}'.format(self._unit))
+
+    def unmask(self):
+        return run('systemctl unmask {}'.format(self._unit))
+
+class sysconfig_parser:
+    def __load(self):
+        f = io.StringIO('[global]\n{}'.format(self._data))
+        self._cfg = configparser.ConfigParser()
+        self._cfg.optionxform = str
+        self._cfg.readfp(f)
+
+    def __escape(self, val):
+        return re.sub(r'"', r'\"', val)
+
+    def __add(self, key, val):
+        self._data += '{}="{}"\n'.format(key, self.__escape(val))
+        self.__load()
+
+    def __init__(self, filename):
+        self._filename = filename
+        if not os.path.exists(filename):
+            open(filename, 'a').close()
+        with open(filename) as f:
+            self._data = f.read()
+        self.__load()
+
+    def get(self, key):
+        return self._cfg.get('global', key)
+
+    def set(self, key, val):
+        if not self._cfg.has_option('global', key):
+            return self.__add(key, val)
+        self._data = re.sub('^{}=[^\n]*$'.format(key), '{}="{}"'.format(key, self.__escape(val)), self._data, flags=re.MULTILINE)
+        self.__load()
+
+    def commit(self):
+        with open(self._filename, 'w') as f:
+            f.write(self._data)
+
+class concolor:
+    GREEN = '\033[0;32m'
+    RED = '\033[0;31m'
+    BOLD_RED = '\033[1;31m'
+    NO_COLOR = '\033[0m'
