@@ -37,6 +37,8 @@ static thread_local bool cancelled = false;
 
 using namespace std::chrono_literals;
 
+namespace row_cache_stress_test {
+
 struct table {
     simple_schema s;
     std::vector<dht::decorated_key> p_keys;
@@ -222,6 +224,10 @@ public:
     }
 };
 
+}
+
+using namespace row_cache_stress_test;
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
@@ -246,7 +252,7 @@ int main(int argc, char** argv) {
             auto rows = app.configuration()["rows"].as<unsigned>();
             auto seconds = app.configuration()["seconds"].as<unsigned>();
 
-            table t(partitions, rows);
+            row_cache_stress_test::table t(partitions, rows);
 
             engine().at_exit([] {
                 cancelled = true;

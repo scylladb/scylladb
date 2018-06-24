@@ -23,7 +23,6 @@
 #pragma once
 
 class compaction_manager;
-class column_family;
 
 class compaction_weight_registration {
     compaction_manager* _cm;

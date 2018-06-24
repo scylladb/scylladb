@@ -39,7 +39,8 @@
 #include "compaction_backlog_manager.hh"
 #include "backlog_controller.hh"
 
-class column_family;
+class table;
+using column_family = table;
 class compacting_sstable_registration;
 
 // Compaction manager is a feature used to manage compaction jobs from multiple

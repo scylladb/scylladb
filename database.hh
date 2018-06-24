@@ -291,7 +291,10 @@ public:
     friend struct ser::serializer<cache_temperature>;
 };
 
-class column_family : public enable_lw_shared_from_this<column_family> {
+class table;
+using column_family = table;
+
+class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
         sstring datadir;
@@ -644,14 +647,14 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 private:
-    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats);
+    table(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&, cell_locker_stats& cl_stats);
 public:
-    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats)
-        : column_family(schema, std::move(cfg), &cl, cm, cl_stats) {}
-    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats)
-        : column_family(schema, std::move(cfg), nullptr, cm, cl_stats) {}
-    column_family(column_family&&) = delete; // 'this' is being captured during construction
-    ~column_family();
+    table(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : table(schema, std::move(cfg), &cl, cm, cl_stats) {}
+    table(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm, cell_locker_stats& cl_stats)
+        : table(schema, std::move(cfg), nullptr, cm, cl_stats) {}
+    table(column_family&&) = delete; // 'this' is being captured during construction
+    ~table();
     const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
     db::commitlog* commitlog() { return _commitlog; }
