@@ -171,6 +171,34 @@ class sstring_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'string'
 
+class managed_bytes_printer(gdb.printing.PrettyPrinter):
+    'print a managed_bytes'
+    def __init__(self, val):
+        self.val = val
+
+    def bytes(self):
+        def signed_chr(c):
+            return int(c).to_bytes(1, byteorder='little', signed=True)
+        if self.val['_u']['small']['size'] >= 0:
+            array = self.val['_u']['small']['data']
+            len = int(self.val['_u']['small']['size'])
+            return b''.join([signed_chr(array[x]) for x in range(len)])
+        else:
+            ref = self.val['_u']['ptr']
+            chunks = list()
+            while ref['ptr']:
+                array = ref['ptr']['data']
+                len = int(ref['ptr']['frag_size'])
+                ref = ref['ptr']['next']
+                chunks.append(b''.join([signed_chr(array[x]) for x in range(len)]))
+            return b''.join(chunks)
+
+    def to_string(self):
+        return str(self.bytes())
+
+    def display_hint(self):
+        return 'managed_bytes'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -186,6 +214,7 @@ class uuid_printer(gdb.printing.PrettyPrinter):
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
