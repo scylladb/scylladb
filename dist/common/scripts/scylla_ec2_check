@@ -26,9 +26,9 @@ from scylla_util import *
 
 def get_en_interface_type():
     type, subtype = curl('http://169.254.169.254/latest/meta-data/instance-type').split('.')
-    if type in ['c3', 'c4', 'd4', 'd2', 'i2', 'r3']:
+    if type in ['c3', 'c4', 'd2', 'i2', 'r3']:
         return 'ixgbevf'
-    if type in ['i3', 'p2', 'r4', 'x1']:
+    if type in ['c5', 'c5d', 'f1', 'g3', 'h1', 'i3', 'm5', 'm5d', 'p2', 'p3', 'r4', 'x1']:
         return 'ena'
     if type == 'm4':
         if subtype == '16xlarge':
