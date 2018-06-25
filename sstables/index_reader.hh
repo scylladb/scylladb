@@ -171,8 +171,11 @@ public:
             } else {
                 _num_pi_blocks = 0;
             }
-            _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(promoted_index_stream),
-                _promoted_index_size, std::move(_deletion_time), _num_pi_blocks, _s}, _entry_offset);
+            std::optional<promoted_index> index;
+            if (promoted_index_stream) {
+                index.emplace(_s, *_deletion_time, std::move(*promoted_index_stream), _promoted_index_size, _num_pi_blocks);
+            }
+            _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(index)}, _entry_offset);
             _entry_offset += len;
             _deletion_time = std::nullopt;
             _num_pi_blocks = 0;
