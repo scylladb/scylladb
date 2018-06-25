@@ -1172,7 +1172,81 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/simple
+// Following tests run on files in tests/sstables/3.x/uncompressed/deleted_cells
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck INT, val INT, PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 101, 1001);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 102, 1002);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 103, 1003);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 104, 1004);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 105, 1005);
+// DELETE val FROM test_ks.test_table WHERE pk = 1 AND ck = 102;
+// DELETE val FROM test_ks.test_table WHERE pk = 1 AND ck = 104;
+
+static thread_local const sstring UNCOMPRESSED_DELETED_CELLS_PATH = "tests/sstables/3.x/uncompressed/deleted_cells";
+static thread_local const schema_ptr UNCOMPRESSED_DELETED_CELLS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_deleted_cells_read) {
+    sstable_assertions sst(UNCOMPRESSED_DELETED_CELLS_SCHEMA, UNCOMPRESSED_DELETED_CELLS_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_DELETED_CELLS_SCHEMA, pk);
+    };
+
+    auto int_cdef =
+    UNCOMPRESSED_DELETED_CELLS_SCHEMA->get_column_definition(to_bytes("val"));
+    BOOST_REQUIRE(int_cdef);
+
+    auto generate = [&] (uint64_t timestamp, uint64_t deletion_time) {
+        std::vector<flat_reader_assertions::assert_function> assertions;
+
+        assertions.push_back([timestamp, deletion_time] (const column_definition& def,
+                                 const atomic_cell_or_collection* cell) {
+            auto c = cell->as_atomic_cell(def);
+            BOOST_REQUIRE(!c.is_live());
+            BOOST_REQUIRE_EQUAL(timestamp, c.timestamp());
+            BOOST_REQUIRE_EQUAL(deletion_time, c.deletion_time().time_since_epoch().count());
+        });
+
+        return assertions;
+    };
+
+    std::vector<column_id> ids{int_cdef->id};
+
+    assert_that(sst.read_rows_flat())
+    .produces_partition_start(to_key(1))
+    .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA,
+                  int32_type->decompose(101)),
+                  {{int_cdef, int32_type->decompose(1001)}})
+    .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA,
+                  int32_type->decompose(102)),
+                  ids, generate(1529586065552460, 1529586065))
+    .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA,
+                  int32_type->decompose(103)),
+                  {{int_cdef, int32_type->decompose(1003)}})
+    .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA,
+                  int32_type->decompose(104)),
+                  ids, generate(1529586067568210, 1529586067))
+    .produces_row(clustering_key::from_single_value(*UNCOMPRESSED_DELETED_CELLS_SCHEMA,
+                  int32_type->decompose(105)),
+                  {{int_cdef, int32_type->decompose(1005)}})
+    .produces_partition_end()
+    .produces_end_of_stream();
+}
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/compound_ck
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
