@@ -48,9 +48,14 @@
 
 static logging::logger qlogger("paging");
 
-class service::pager::query_pagers::impl : public query_pager {
-public:
-    impl(schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+namespace service::pager {
+
+static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
+    return s.clustering_key_size() > 0
+            && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
+}
+
+    query_pager::query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
                     db::timeout_clock::duration timeout,
@@ -67,13 +72,7 @@ public:
                     , _ranges(std::move(ranges))
     {}
 
-private:
-    static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
-        return s.clustering_key_size() > 0
-               && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
-    }
-
-    future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) override {
+    future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now) {
         auto state = _options.get_paging_state();
 
         if (!_last_pkey && state) {
@@ -222,16 +221,20 @@ private:
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision}).then(
-                [this, &builder, page_size, now](service::storage_proxy::coordinator_query_result qr) {
-                    _last_replicas = std::move(qr.last_replicas);
-                    _query_read_repair_decision = qr.read_repair_decision;
-                    handle_result(builder, std::move(qr.query_result), page_size, now);
-                });
+                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
     }
 
-    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size,
-            gc_clock::time_point now) override {
+    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {
+        return do_fetch_page(page_size, now).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+            _last_replicas = std::move(qr.last_replicas);
+            _query_read_repair_decision = qr.read_repair_decision;
+            handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
+                          std::move(qr.query_result), page_size, now);
+        });
+    }
+
+    future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_size,
+            gc_clock::time_point now) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
@@ -242,49 +245,66 @@ private:
                 });
     }
 
-    void handle_result(
-            cql3::selection::result_set_builder& builder,
-            foreign_ptr<lw_shared_ptr<query::result>> results,
-            uint32_t page_size, gc_clock::time_point now) {
-
-        class myvisitor : public cql3::selection::result_set_builder::visitor {
-        public:
-            uint32_t total_rows = 0;
-            std::experimental::optional<partition_key> last_pkey;
-            std::experimental::optional<clustering_key> last_ckey;
-
-            myvisitor(cql3::selection::result_set_builder& builder,
-                    const schema& s,
-                    const cql3::selection::selection& selection)
-                    : visitor(builder, s, selection) {
-            }
-
-            void accept_new_partition(uint32_t) {
-                throw std::logic_error("Should not reach!");
-            }
-            void accept_new_partition(const partition_key& key, uint32_t row_count) {
-                qlogger.trace("Accepting partition: {} ({})", key, row_count);
-                total_rows += std::max(row_count, 1u);
-                last_pkey = key;
-                last_ckey = { };
-                visitor::accept_new_partition(key, row_count);
-            }
-            void accept_new_row(const clustering_key& key,
-                    const query::result_row_view& static_row,
-                    const query::result_row_view& row) {
-                last_ckey = key;
-                visitor::accept_new_row(key, static_row, row);
-            }
-            void accept_new_row(const query::result_row_view& static_row,
-                    const query::result_row_view& row) {
-                visitor::accept_new_row(static_row, row);
-            }
-            void accept_partition_end(const query::result_row_view& static_row) {
-                visitor::accept_partition_end(static_row);
-            }
+future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats) {
+    return do_fetch_page(page_size, now).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
+        struct noop_visitor {
+            void accept_new_partition(uint32_t) { }
+            void accept_new_partition(const partition_key& key, uint32_t row_count) { }
+            void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) { }
+            void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) { }
+            void accept_partition_end(const query::result_row_view& static_row) { }
         };
 
-        myvisitor v(builder, *_schema, *_selection);
+        _last_replicas = std::move(qr.last_replicas);
+        _query_read_repair_decision = qr.read_repair_decision;
+        handle_result(noop_visitor(), qr.query_result, page_size, now);
+        return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats);
+    });
+}
+
+template<typename Base>
+class query_pager::query_result_visitor : public Base {
+    using visitor = Base;
+public:
+    uint32_t total_rows = 0;
+    std::experimental::optional<partition_key> last_pkey;
+    std::experimental::optional<clustering_key> last_ckey;
+
+    query_result_visitor(Base&& v) : Base(std::move(v)) { }
+
+    void accept_new_partition(uint32_t) {
+        throw std::logic_error("Should not reach!");
+    }
+    void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        qlogger.trace("Accepting partition: {} ({})", key, row_count);
+        total_rows += std::max(row_count, 1u);
+        last_pkey = key;
+        last_ckey = { };
+        visitor::accept_new_partition(key, row_count);
+    }
+    void accept_new_row(const clustering_key& key,
+            const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        last_ckey = key;
+        visitor::accept_new_row(key, static_row, row);
+    }
+    void accept_new_row(const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        visitor::accept_new_row(static_row, row);
+    }
+    void accept_partition_end(const query::result_row_view& static_row) {
+        visitor::accept_partition_end(static_row);
+    }
+};
+
+    template<typename Visitor>
+    GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)
+    void query_pager::handle_result(
+            Visitor&& visitor,
+            const foreign_ptr<lw_shared_ptr<query::result>>& results,
+            uint32_t page_size, gc_clock::time_point now) {
+
+        query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
         query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {
@@ -311,38 +331,12 @@ private:
         }
     }
 
-    bool is_exhausted() const override {
-        return _exhausted;
-    }
-
-    int max_remaining() const override {
-        return _max;
-    }
-
-    ::shared_ptr<const service::pager::paging_state> state() const override {
+    shared_ptr<const service::pager::paging_state> query_pager::state() const {
         return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
                 _last_ckey, _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
     }
 
-private:
-    // remember if we use clustering. if not, each partition == one row
-    const bool _has_clustering_keys;
-    bool _exhausted = false;
-    uint32_t _max;
-
-    std::experimental::optional<partition_key> _last_pkey;
-    std::experimental::optional<clustering_key> _last_ckey;
-
-    schema_ptr _schema;
-    ::shared_ptr<cql3::selection::selection> _selection;
-    service::query_state& _state;
-    const cql3::query_options& _options;
-    db::timeout_clock::duration _timeout;
-    lw_shared_ptr<query::read_command> _cmd;
-    dht::partition_range_vector _ranges;
-    paging_state::replicas_per_token_range _last_replicas;
-    std::experimental::optional<db::read_repair_decision> _query_read_repair_decision;
-};
+}
 
 bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         const query::read_command& cmd,
@@ -374,12 +368,12 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
 }
 
 ::shared_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
-        schema_ptr s, ::shared_ptr<cql3::selection::selection> selection,
+        schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
         db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges) {
-    return ::make_shared<impl>(std::move(s), std::move(selection), state,
+    return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
             options, timeout, std::move(cmd), std::move(ranges));
 }
 

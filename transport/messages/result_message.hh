@@ -182,12 +182,12 @@ std::ostream& operator<<(std::ostream& os, const result_message::schema_change& 
 
 class result_message::rows : public result_message {
 private:
-    std::unique_ptr<cql3::result_set> _rs;
+    cql3::result _result;
 public:
-    rows(std::unique_ptr<cql3::result_set> rs) : _rs(std::move(rs)) {}
+    rows(cql3::result rs) : _result(std::move(rs)) {}
 
-    const cql3::result_set& rs() const {
-        return *_rs;
+    const cql3::result& rs() const {
+        return _result;
     }
 
     virtual void accept(result_message::visitor& v) const override {

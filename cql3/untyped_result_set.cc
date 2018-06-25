@@ -77,8 +77,9 @@ cql3::untyped_result_set::untyped_result_set(::shared_ptr<result_message> msg)
         void visit(const result_message::rows& rmrs) override {
             auto& rs = rmrs.rs();
             auto& cn = rs.get_metadata().get_names();
-            for (auto& r : rs.rows()) {
-                rows.emplace_back(cn, r);
+            auto set = rs.result_set();
+            for (auto& r : set.rows()) {
+                rows.emplace_back(cn, std::move(r));
             }
         }
     };

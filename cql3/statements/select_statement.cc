@@ -423,7 +423,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                     ).then([this, &builder] {
                                 auto rs = builder.build();
                                 update_stats_rows_read(rs->size());
-                                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+                                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
                             });
                 });
@@ -435,6 +435,19 @@ select_statement::do_execute(service::storage_proxy& proxy,
                         " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
+    if (_selection->is_trivial()) {
+        return p->fetch_page_generator(page_size, now, _stats).then([this, p, limit] (result_generator generator) {
+            auto meta = make_shared<metadata>(*_selection->get_result_metadata());
+            if (!p->is_exhausted()) {
+                meta->set_has_more_pages(p->state());
+            }
+
+            return shared_ptr<cql_transport::messages::result_message>(
+                make_shared<cql_transport::messages::result_message::rows>(result(std::move(generator), std::move(meta)))
+            );
+        });
+    }
+
     return p->fetch_page(page_size, now).then(
             [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
@@ -443,7 +456,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                 }
 
                 update_stats_rows_read(rs->size());
-                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+                auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
             });
 }
@@ -541,6 +554,14 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                                   const query_options& options,
                                   gc_clock::time_point now)
 {
+    bool fast_path = !needs_post_query_ordering() && _selection->is_trivial();
+    if (fast_path) {
+        return make_shared<cql_transport::messages::result_message::rows>(result(
+            result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
+            ::make_shared<metadata>(*_selection->get_result_metadata())
+        ));
+    }
+
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
     query::result_view::consume(*results, cmd->slice,
@@ -556,7 +577,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         rs->trim(cmd->row_limit);
     }
     update_stats_rows_read(rs->size());
-    return ::make_shared<cql_transport::messages::result_message::rows>(std::move(rs));
+    return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
 }
 
 ::shared_ptr<restrictions::statement_restrictions> select_statement::get_restrictions() const {
@@ -799,7 +820,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
         query::result_view::consume(*qr.query_result,
                                     slice,
                                     cql3::selection::result_set_builder::visitor(builder, *view, *selection));
-        auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
+        auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(result(builder.build()))));
         dht::partition_range_vector partition_ranges;
         partition_ranges.reserve(rs.size());
         // We are reading the list of primary keys as rows of a single
@@ -854,7 +875,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
         query::result_view::consume(*qr.query_result,
                                     slice,
                                     cql3::selection::result_set_builder::visitor(builder, *view, *selection));
-        auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
+        auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(result(builder.build())));
         std::vector<primary_key> primary_keys;
         primary_keys.reserve(rs.size());
         for (size_t i = 0; i < rs.size(); i++) {

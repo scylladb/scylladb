@@ -61,14 +61,12 @@ public:
     static bool may_need_paging(uint32_t page_size, const query::read_command&,
             const dht::partition_range_vector&);
     static ::shared_ptr<query_pager> pager(schema_ptr,
-            ::shared_ptr<cql3::selection::selection>,
+            shared_ptr<const cql3::selection::selection>,
             service::query_state&,
             const cql3::query_options&,
             db::timeout_clock::duration timeout,
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector);
-private:
-    class impl;
 };
 
 }

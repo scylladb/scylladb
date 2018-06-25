@@ -65,8 +65,9 @@ private:
     size_type _size;
 public:
     class fragment_iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
-        chunk* _current;
+        chunk* _current = nullptr;
     public:
+        fragment_iterator() = default;
         fragment_iterator(chunk* current) : _current(current) {}
         fragment_iterator(const fragment_iterator&) = default;
         fragment_iterator& operator=(const fragment_iterator&) = default;
@@ -286,6 +287,24 @@ public:
     void append(const bytes_ostream& o) {
         for (auto&& bv : o.fragments()) {
             write(bv);
+        }
+    }
+
+    // Removes n bytes from the end of the bytes_ostream.
+    // Beware of O(n) algorithm.
+    void remove_suffix(size_t n) {
+        _size -= n;
+        auto left = _size;
+        auto current = _begin.get();
+        while (current) {
+            if (current->offset >= left) {
+                current->offset = left;
+                _current = current;
+                current->next.reset();
+                return;
+            }
+            left -= current->offset;
+            current = current->next.get();
         }
     }
 

@@ -469,7 +469,8 @@ SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
-            for (auto&& row : rows->rs().rows()) {
+            auto rs = rows->rs().result_set();
+            for (auto&& row : rs.rows()) {
                 BOOST_REQUIRE(row[0]);
                 keys.push_back(*row[0]);
             }
@@ -528,7 +529,8 @@ SEASTAR_TEST_CASE(test_partitions_have_consistent_ordering_in_range_query) {
             auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
-            for (auto&& row : rows->rs().rows()) {
+            auto rs = rows->rs().result_set();
+            for (auto&& row : rs.rows()) {
                 BOOST_REQUIRE(row[0]);
                 keys.push_back(*row[0]);
             }
@@ -610,7 +612,8 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
             std::vector<int64_t> tokens;
-            for (auto&& row : rows->rs().rows()) {
+            auto rs = rows->rs().result_set();
+            for (auto&& row : rs.rows()) {
                 BOOST_REQUIRE(row[0]);
                 BOOST_REQUIRE(row[1]);
                 keys.push_back(*row[0]);
@@ -1060,8 +1063,9 @@ SEASTAR_TEST_CASE(test_functions) {
                 virtual void visit(const result_message::prepared::thrift&) override { throw "bad"; }
                 virtual void visit(const result_message::schema_change&) override { throw "bad"; }
                 virtual void visit(const result_message::rows& rows) override {
-                    BOOST_REQUIRE_EQUAL(rows.rs().rows().size(), 3);
-                    for (auto&& rw : rows.rs().rows()) {
+                    auto rs = rows.rs().result_set();
+                    BOOST_REQUIRE_EQUAL(rs.rows().size(), 3);
+                    for (auto&& rw : rs.rows()) {
                         BOOST_REQUIRE_EQUAL(rw.size(), 1);
                         res.push_back(rw[0]);
                     }

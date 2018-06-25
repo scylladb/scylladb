@@ -47,6 +47,12 @@
 #include "service/pager/paging_state.hh"
 #include "schema.hh"
 
+#include "query-result-reader.hh"
+
+#include "result_generator.hh"
+
+#include <seastar/util/gcc6-concepts.hh>
+
 namespace cql3 {
 
 class metadata {
@@ -131,10 +137,22 @@ public:
     const std::vector<uint16_t>& partition_key_bind_indices() const;
 };
 
+GCC6_CONCEPT(
+
+template<typename Visitor>
+concept bool ResultVisitor = requires(Visitor& visitor) {
+    visitor.start_row();
+    visitor.accept_value(std::optional<query::result_bytes_view>());
+    visitor.end_row();
+};
+
+)
+
 class result_set {
-public:
     ::shared_ptr<metadata> _metadata;
     std::deque<std::vector<bytes_opt>> _rows;
+
+    friend class result;
 public:
     result_set(std::vector<::shared_ptr<column_specification>> metadata_);
 
@@ -163,6 +181,80 @@ public:
 
     // Returns a range of rows. A row is a range of bytes_opt.
     const std::deque<std::vector<bytes_opt>>& rows() const;
+
+    template<typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void visit(Visitor&& visitor) const {
+        auto column_count = get_metadata().column_count();
+        for (auto& row : _rows) {
+            visitor.start_row();
+            for (auto i = 0u; i < column_count; i++) {
+                auto& cell = row[i];
+                visitor.accept_value(cell ? std::optional<query::result_bytes_view>(*cell) : std::optional<query::result_bytes_view>());
+            }
+            visitor.end_row();
+        }
+    }
+
+    class builder;
+};
+
+class result_set::builder {
+    result_set _result;
+    std::vector<bytes_opt> _current_row;
+public:
+    explicit builder(shared_ptr<metadata> mtd)
+        : _result(std::move(mtd)) { }
+
+    void start_row() { }
+    void accept_value(std::optional<query::result_bytes_view> value) {
+        if (!value) {
+            _current_row.emplace_back();
+            return;
+        }
+        _current_row.emplace_back(value->linearize());
+    }
+    void end_row() {
+        _result.add_row(std::exchange(_current_row, { }));
+    }
+    result_set get_result_set() && { return std::move(_result); }
+};
+
+class result {
+    std::unique_ptr<cql3::result_set> _result_set;
+    result_generator _result_generator;
+    shared_ptr<cql3::metadata> _metadata;
+public:
+    explicit result(std::unique_ptr<cql3::result_set> rs)
+        : _result_set(std::move(rs))
+        , _metadata(_result_set->_metadata)
+    { }
+
+    explicit result(result_generator generator, shared_ptr<metadata> m)
+        : _result_generator(std::move(generator))
+        , _metadata(std::move(m))
+    { }
+
+    const cql3::metadata& get_metadata() const { return *_metadata; }
+    cql3::result_set result_set() const {
+        if (_result_set) {
+            return *_result_set;
+        } else {
+            auto builder = result_set::builder(_metadata);
+            _result_generator.visit(builder);
+            return std::move(builder).get_result_set();
+        }
+    }
+    
+    template<typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void visit(Visitor&& visitor) const {
+        if (_result_set) {
+            _result_set->visit(std::forward<Visitor>(visitor));
+        } else {
+            _result_generator.visit(std::forward<Visitor>(visitor));
+        }
+    }
 };
 
 }

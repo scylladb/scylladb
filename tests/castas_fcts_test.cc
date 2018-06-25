@@ -225,12 +225,12 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
             // Conversions that include floating point cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, float req) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 auto val = value_cast<float>( float_type->deserialize(row[index].value()) );
                 BOOST_CHECK_CLOSE(val, req, 1e-4);
             };
             auto cmp_null = [&](::size_t index) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 BOOST_CHECK(!row[index]);
             };
             cmp(0, 1.f);
@@ -256,12 +256,12 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
             // Conversions that include floating points cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, double req) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 auto val = value_cast<double>( double_type->deserialize(row[index].value()) );
                 BOOST_CHECK_CLOSE(val, req, 1e-4);
             };
             auto cmp_null = [&](::size_t index) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 BOOST_CHECK(!row[index]);
             };
             cmp(0, 1.d);
@@ -287,12 +287,12 @@ SEASTAR_TEST_CASE(test_numeric_casts_in_selection_clause) {
             // Conversions that include floating points cannot be compared with assert_that(), because result
             //   of such conversions may be slightly different from theoretical values.
             auto cmp = [&](::size_t index, double req) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 auto val = value_cast<big_decimal>( decimal_type->deserialize(row[index].value()) );
                 BOOST_CHECK_CLOSE(boost::lexical_cast<double>(val.to_string()), req, 1e-4);
             };
             auto cmp_null = [&](::size_t index) {
-                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+                auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
                 BOOST_CHECK(!row[index]);
             };
             cmp(0, 1.d);
@@ -364,7 +364,7 @@ SEASTAR_TEST_CASE(test_integers_to_decimal_casts_in_selection_clause) {
                                  "CAST(h AS decimal) FROM test").get0();
 
         auto cmp = [&](::size_t index, auto x) {
-            auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().rows().front();
+            auto row = dynamic_cast<cql_transport::messages::result_message::rows&>(*msg).rs().result_set().rows().front();
             auto val = value_cast<big_decimal>( decimal_type->deserialize(row[index].value()) );
             BOOST_CHECK_EQUAL(val.unscaled_value(), x*10);
             BOOST_CHECK_EQUAL(val.scale(), 1);

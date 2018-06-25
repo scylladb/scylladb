@@ -39,29 +39,28 @@
 
 namespace query {
 
+using result_bytes_view = ser::buffer_view<bytes_ostream::fragment_iterator>;
+
 class result_atomic_cell_view {
-    api::timestamp_type _timestamp;
-    expiry_opt _expiry;
-    ttl_opt _ttl;
-    bytes_view _value;
+    ser::qr_cell_view _view;
 public:
-    result_atomic_cell_view(api::timestamp_type timestamp, expiry_opt expiry, ttl_opt ttl, bytes_view value)
-        : _timestamp(timestamp), _expiry(expiry), _ttl(ttl), _value(value) { }
+    result_atomic_cell_view(ser::qr_cell_view view)
+        : _view(view) { }
 
     api::timestamp_type timestamp() const {
-        return _timestamp;
+        return _view.timestamp().value_or(api::missing_timestamp);
     }
 
     expiry_opt expiry() const {
-        return _expiry;
+        return _view.expiry();
     }
 
     ttl_opt ttl() const {
-        return _ttl;
+        return _view.ttl();
     }
 
-    bytes_view value() const {
-        return _value;
+    result_bytes_view value() const {
+        return _view.value().view();
     }
 };
 
@@ -76,32 +75,25 @@ public:
         using cells_vec = std::vector<std::experimental::optional<ser::qr_cell_view>>;
         cells_vec _cells;
         cells_vec::iterator _i;
-        bytes _tmp_value;
     public:
         iterator_type(ser::qr_row_view v)
             : _cells(v.cells())
             , _i(_cells.begin())
         { }
-        std::experimental::optional<result_atomic_cell_view> next_atomic_cell() {
+        std::optional<result_atomic_cell_view> next_atomic_cell() {
             auto cell_opt = *_i++;
             if (!cell_opt) {
                 return {};
             }
-            ser::qr_cell_view v = *cell_opt;
-            api::timestamp_type timestamp = v.timestamp().value_or(api::missing_timestamp);
-            expiry_opt expiry = v.expiry();
-            ttl_opt ttl = v.ttl();
-            _tmp_value = v.value();
-            return {result_atomic_cell_view(timestamp, expiry, ttl, _tmp_value)};
+            return {result_atomic_cell_view(*cell_opt)};
         }
-        std::experimental::optional<bytes_view> next_collection_cell() {
+        std::optional<result_bytes_view> next_collection_cell() {
             auto cell_opt = *_i++;
             if (!cell_opt) {
                 return {};
             }
             ser::qr_cell_view v = *cell_opt;
-            _tmp_value = v.value();
-            return {bytes_view(_tmp_value)};
+            return {v.value().view()};
         };
         void skip(const column_definition& def) {
             ++_i;
@@ -144,6 +136,20 @@ struct result_visitor {
     void accept_partition_end(const result_row_view& static_row) {}
 };
 
+GCC6_CONCEPT(
+template<typename Visitor>
+concept bool ResultVisitor = requires(Visitor visitor, const partition_key& pkey,
+                                      uint32_t row_count, const clustering_key& ckey,
+                                      const result_row_view& static_row, const result_row_view& row)
+{
+    visitor.accept_new_partition(pkey, row_count);
+    visitor.accept_new_partition(row_count);
+    visitor.accept_new_row(ckey, static_row, row);
+    visitor.accept_new_row(static_row, row);
+    visitor.accept_partition_end(static_row);
+};
+)
+
 class result_view {
     ser::query_result_view _v;
     friend class result_merger;
@@ -164,8 +170,9 @@ public:
         });
     }
 
-    template <typename ResultVisitor>
-    void consume(const partition_slice& slice, ResultVisitor&& visitor) {
+    template <typename Visitor>
+    GCC6_CONCEPT(requires ResultVisitor<Visitor>)
+    void consume(const partition_slice& slice, Visitor&& visitor) {
         for (auto&& p : _v.partitions()) {
             auto rows = p.rows();
             auto row_count = rows.size();
