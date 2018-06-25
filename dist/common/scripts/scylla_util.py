@@ -27,6 +27,7 @@ import platform
 import configparser
 import io
 import shlex
+import shutil
 
 def curl(url):
     max_retries = 5
@@ -305,6 +306,12 @@ def hex2list(hex_str):
 def makedirs(name):
     if not os.path.isdir(name):
         os.makedirs(name)
+
+def rmtree(path):
+    if not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
 
 def dist_name():
     return platform.dist()[0]
