@@ -2699,7 +2699,7 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     remove(*cf);
     cf->clear_views();
     auto& ks = find_keyspace(ks_name);
-    return cf->await_pending_writes().then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
+    return when_all_succeed(cf->await_pending_writes(), cf->await_pending_reads()).then([this, &ks, cf, tsf = std::move(tsf), snapshot] {
         return truncate(ks, *cf, std::move(tsf), snapshot).finally([this, cf] {
             return cf->stop();
         });
@@ -3139,7 +3139,7 @@ database::query(schema_ptr s, const query::read_command& cmd, query::result_opti
             seastar::ref(get_result_memory_limiter()),
             max_result_size,
             timeout,
-            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<lw_shared_ptr<query::result>, cache_temperature>(f.get_exception());
@@ -3167,7 +3167,7 @@ database::query_mutations(schema_ptr s, const query::read_command& cmd, const dh
             std::move(accounter),
             std::move(trace_state),
             timeout,
-            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate()] (auto f) {
+            std::move(cache_ctx)).then_wrapped([this, s = _stats, hit_rate = cf.get_global_cache_hit_rate(), op = cf.read_in_progress()] (auto f) {
         if (f.failed()) {
             ++s->total_reads_failed;
             return make_exception_future<reconcilable_result, cache_temperature>(f.get_exception());
