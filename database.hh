@@ -475,6 +475,8 @@ private:
     // after some modification, needs to ensure that news writes will see it before
     // it can proceed, such as the view building code.
     utils::phased_barrier _pending_writes_phaser;
+    // Corresponding phaser for in-progress reads.
+    utils::phased_barrier _pending_reads_phaser;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable, const std::vector<unsigned>& shards_for_the_sstable) noexcept;
     // Adds new sstable to the set of sstables
@@ -815,6 +817,14 @@ public:
 
     future<> await_pending_writes() {
         return _pending_writes_phaser.advance_and_await();
+    }
+
+    utils::phased_barrier::operation read_in_progress() {
+        return _pending_reads_phaser.start();
+    }
+
+    future<> await_pending_reads() {
+        return _pending_reads_phaser.advance_and_await();
     }
 
     void add_or_update_view(view_ptr v);
