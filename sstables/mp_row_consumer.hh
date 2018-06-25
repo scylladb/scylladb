@@ -950,7 +950,8 @@ public:
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
-                                   gc_clock::time_point local_deletion_time) override {
+                                   gc_clock::time_point local_deletion_time,
+                                   bool is_deleted) override {
         if (!column_id) {
             return proceed::yes;
         }
@@ -960,15 +961,17 @@ public:
         }
         if (column_def.is_multi_cell()) {
             auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
-            auto ac = make_atomic_cell(*ctype->value_comparator(),
-                                       timestamp,
-                                       value,
-                                       ttl,
-                                       local_deletion_time,
-                                       atomic_cell::collection_member::yes);
+            auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
+                                 : make_atomic_cell(*ctype->value_comparator(),
+                                                    timestamp,
+                                                    value,
+                                                    ttl,
+                                                    local_deletion_time,
+                                                    atomic_cell::collection_member::yes);
             _cm.cells.emplace_back(to_bytes(cell_path), std::move(ac));
         } else {
-            auto ac = make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
+            auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
+                                 : make_atomic_cell(*column_def.type, timestamp, value, ttl, local_deletion_time,
                                        atomic_cell::collection_member::no);
             _cells.push_back({*column_id, atomic_cell_or_collection(std::move(ac))});
         }
