@@ -93,6 +93,12 @@ def get_unused_disks():
         s = out('swapon --show=NAME --noheadings')
         if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
             continue
+        # dev is used in MDRAID
+        if os.path.exists('/proc/mdstat'):
+            with open('/proc/mdstat') as f:
+                s = f.read().strip()
+            if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+                continue
         unused.append(dev)
     return unused
 
