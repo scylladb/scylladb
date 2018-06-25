@@ -81,7 +81,7 @@ private:
     temporary_buffer<char> _key;
     uint32_t _promoted_index_size;
     uint64_t _position;
-    stdx::optional<deletion_time> _deletion_time;
+    std::optional<deletion_time> _deletion_time;
     uint32_t _num_pi_blocks = 0;
 
     trust_promoted_index _trust_pi;
@@ -156,7 +156,7 @@ public:
                 _promoted_index_size -= 16;
             }
             auto data_size = data.size();
-            stdx::optional<input_stream<char>> promoted_index_stream;
+            std::optional<input_stream<char>> promoted_index_stream;
             if ((_trust_pi == trust_promoted_index::yes) && (_promoted_index_size > 0)) {
                 if (_promoted_index_size <= data_size) {
                     auto buf = data.share();
@@ -174,7 +174,7 @@ public:
             _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(promoted_index_stream),
                 _promoted_index_size, std::move(_deletion_time), _num_pi_blocks, _s}, _entry_offset);
             _entry_offset += len;
-            _deletion_time = stdx::nullopt;
+            _deletion_time = std::nullopt;
             _num_pi_blocks = 0;
             _state = state::START;
             if (_promoted_index_size <= data_size) {
@@ -517,7 +517,7 @@ public:
     // Returns tombstone for the current lower partition if it was recorded in the sstable.
     // It may be unavailable for old sstables for which this information was not generated.
     // Can be called only when lower_partition_data_ready().
-    stdx::optional<sstables::deletion_time> lower_partition_tombstone() {
+    std::optional<sstables::deletion_time> lower_partition_tombstone() {
         return current_partition_entry(_lower_bound).get_deletion_time();
     }
 

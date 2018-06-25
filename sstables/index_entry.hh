@@ -55,7 +55,7 @@ private:
     const schema& _s;
     consuming_mode _mode = consuming_mode::consume_next;
     size_t _current_pi_idx = 0; // for consume_until mode
-    stdx::optional<position_in_partition_view> _pos; // for consume_until mode
+    std::optional<position_in_partition_view> _pos; // for consume_until mode
 
     enum class state {
         START_NAME_LENGTH,
@@ -176,12 +176,12 @@ public:
 class index_entry {
 private:
     temporary_buffer<char> _key;
-    mutable stdx::optional<dht::token> _token;
+    mutable std::optional<dht::token> _token;
     uint64_t _position;
-    stdx::optional<promoted_index_blocks_reader> _reader;
+    std::optional<promoted_index_blocks_reader> _reader;
     bool _reader_closed = false;
     uint32_t _promoted_index_size;
-    stdx::optional<deletion_time> _del_time;
+    std::optional<deletion_time> _del_time;
 
 public:
 
@@ -202,12 +202,12 @@ public:
 
     uint64_t position() const { return _position; };
 
-    stdx::optional<deletion_time> get_deletion_time() const { return _del_time; }
+    std::optional<deletion_time> get_deletion_time() const { return _del_time; }
     uint32_t get_promoted_index_size() const { return _promoted_index_size; }
 
     index_entry(temporary_buffer<char>&& key, uint64_t position,
-             stdx::optional<input_stream<char>>&& promoted_index_stream, uint32_t promoted_index_size,
-             stdx::optional<deletion_time>&& del_time, uint32_t num_pi_blocks, const schema& s)
+             std::optional<input_stream<char>>&& promoted_index_stream, uint32_t promoted_index_size,
+             std::optional<deletion_time>&& del_time, uint32_t num_pi_blocks, const schema& s)
         : _key(std::move(key))
         , _position(position)
         , _promoted_index_size(promoted_index_size)
