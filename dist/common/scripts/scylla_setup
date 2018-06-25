@@ -295,7 +295,7 @@ if __name__ == '__main__':
                     continue
                 if not stat.S_ISBLK(os.stat(dsk).st_mode):
                     print('{} is not block device'.format(dsk))
-                selected += dsk
+                selected.append(dsk)
                 devices.remove(dsk)
             disks = ','.join(selected)
     if raid_setup:
