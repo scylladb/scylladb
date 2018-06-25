@@ -58,6 +58,33 @@ class intrusive_list:
     def __bool__(self):
         return self.__nonzero__()
 
+class intrusive_set:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        self.node_type = container_type.template_argument(0)
+        member_hook = get_template_arg_with_prefix(container_type, "boost::intrusive::member_hook")
+        if not member_hook:
+            raise Exception('Expected member_hook<> option not found in container\'s template parameters')
+        self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        self.root = ref['holder']['root']['parent_']
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['left_']):
+                yield n
+
+            node_ptr = node.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+
+            for n in self.__visit(node['right_']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
 class std_array:
     def __init__(self, ref):
         self.ref = ref
