@@ -2643,14 +2643,20 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     // notify the remote token
     auto done = make_shared<bool>(false);
     auto local = get_broadcast_address();
+    auto sent = make_lw_shared<int>(0);
     slogger.debug("Notifying {} of replication completion", remote);
     return do_until(
-        [done, remote] {
-            return *done || !gms::get_local_failure_detector().is_alive(remote);
+        [done, sent, remote] {
+            // The node can send REPLICATION_FINISHED to itself, in which case
+            // is_alive will be true. If the messaging_service is stopped,
+            // REPLICATION_FINISHED can be sent infinitely here. To fix, limit
+            // the number of retries.
+            return *done || !gms::get_local_failure_detector().is_alive(remote) || *sent >= 3;
         },
-        [done, remote, local] {
+        [done, sent, remote, local] {
             auto& ms = netw::get_local_messaging_service();
             netw::msg_addr id{remote, 0};
+            (*sent)++;
             return ms.send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
                 try {
                     f.get();
