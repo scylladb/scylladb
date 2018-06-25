@@ -72,17 +72,21 @@ def list_block_devices():
 def get_unused_disks():
     unused = []
     for dev in list_block_devices():
+        # dev is mounted
         with open('/proc/mounts') as f:
             s = f.read().strip()
-        count_raw = len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE))
-        count_pvs = 0
+        if len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE)) > 0:
+            continue
+        # dev is used in LVM
         if shutil.which('pvs'):
             s = out('pvs -o pv_name --nohead')
-            count_pvs = len(re.findall(dev, s, flags=re.MULTILINE))
+            if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+                continue
+        # dev is used for swap
         s = out('swapon --show=NAME --noheadings')
-        count_swap = len(re.findall(dev, s, flags=re.MULTILINE))
-        if count_raw + count_pvs + count_swap == 0:
-            unused.append(dev)
+        if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+            continue
+        unused.append(dev)
     return unused
 
 def run_setup_script(name, script):
