@@ -213,7 +213,6 @@ if __name__ == '__main__':
     if enable_service:
         if is_systemd():
             systemd_unit('scylla-server.service').enable()
-            systemd_unit('scylla-fstrim.timer').unmask()
         elif is_gentoo_variant():
             run('rc-update add scylla-server default')
 
