@@ -22,7 +22,6 @@
 import os
 import sys
 import argparse
-import logging
 import glob
 import shutil
 import io
@@ -111,7 +110,7 @@ def run_setup_script(name, script):
 
 if __name__ == '__main__':
     if os.getuid() > 0:
-        logging.error('Requires root permission.')
+        print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     parser.add_argument('--disks',
