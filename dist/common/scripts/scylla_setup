@@ -67,7 +67,7 @@ def list_block_devices():
         devices = []
         for p in ['/dev/sd*', '/dev/hd*', '/dev/xvd*', '/dev/nvme*', '/dev/mapper/*']:
             devices.extend([d for d in glob.glob(p) if d != '/dev/mapper/control'])
-        return devices
+    return devices
 
 def get_unused_disks():
     unused = []
