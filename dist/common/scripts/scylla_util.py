@@ -317,6 +317,10 @@ class SystemdException(Exception):
 
 class systemd_unit:
     def __init__(self, unit):
+        try:
+            run('systemctl cat {}'.format(unit), silent=True)
+        except subprocess.CalledProcessError:
+            raise SystemdException('unit {} not found'.format(unit))
         self._unit = unit
 
     def start(self):
