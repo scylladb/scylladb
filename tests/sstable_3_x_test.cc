@@ -1308,7 +1308,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_load) {
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_index) {
     sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     auto vec = sst.read_index().get0();
-    BOOST_REQUIRE_EQUAL(1, vec.size());
+    BOOST_REQUIRE_EQUAL(5, vec.size());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
