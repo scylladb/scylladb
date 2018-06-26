@@ -247,6 +247,20 @@ class row_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'row'
 
+class managed_vector_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        size = int(self.val['_size'])
+        items = list()
+        for i in range(size):
+            items.append(str(self.val['_data'][i]))
+        return '{size=%d, items=[%s]}' % (size, ', '.join(items))
+
+    def display_hint(self):
+        return 'managed_vector'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -266,6 +280,7 @@ def build_pretty_printer():
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
     pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
     pp.add_printer('row', r'^row$', row_printer)
+    pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
