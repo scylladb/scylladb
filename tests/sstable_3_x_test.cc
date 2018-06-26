@@ -38,6 +38,7 @@
 #include "tests/test_services.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/index_reader_assertions.hh"
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
@@ -2789,5 +2790,32 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
     mt2->apply(mut2);
 
     write_and_compare_sstables(s, mt1, mt2, table_name);
+}
+
+static sstring get_read_index_test_path(sstring table_name) {
+    return format("tests/sstables/3.x/uncompressed/read_{}", table_name);
+}
+
+static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
+    return std::make_unique<index_reader>(sst, default_priority_class());
+}
+
+/*
+ * The SSTables read is generated using the following queries:
+ *
+ *  CREATE TABLE empty_index (pk text, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+ *  INSERT INTO empty_index (pk) VALUES ('привет');
+*/
+
+SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
+    sstring table_name = "empty_index";
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).is_empty(*s);
 }
 
