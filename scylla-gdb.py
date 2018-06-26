@@ -231,6 +231,22 @@ class mutation_partition_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'mutation_partition'
 
+class row_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        if self.val['_type'] == gdb.parse_and_eval('row::storage_type::vector'):
+            cells = str(self.val['_storage']['vector'])
+        elif self.val['_type'] == gdb.parse_and_eval('row::storage_type::set'):
+            cells = '[%s]' % (', '.join(str(cell) for cell in intrusive_set(self.val['_storage']['set'])))
+        else:
+            raise Exception('Unsupported storage type: ' + self.val['_type'])
+        return '{type=%s, cells=%s}' % (self.val['_type'], cells)
+
+    def display_hint(self):
+        return 'row'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -249,6 +265,7 @@ def build_pretty_printer():
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
     pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
+    pp.add_printer('row', r'^row$', row_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
