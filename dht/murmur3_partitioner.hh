@@ -52,6 +52,7 @@ public:
 
     virtual unsigned shard_of(const token& t) const override;
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans) const override;
+    virtual unsigned sharding_ignore_msb() const override;
 private:
     using uint128_t = unsigned __int128;
     static int64_t normalize(int64_t in);
