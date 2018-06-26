@@ -36,7 +36,7 @@
 #include "partition_slice_builder.hh"
 #include "tmpdir.hh"
 #include "memtable-sstable.hh"
-#include "tests/sstable_assertions.hh"
+#include "tests/index_reader_assertions.hh"
 #include "tests/test_services.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "simple_schema.hh"

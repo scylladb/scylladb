@@ -49,7 +49,7 @@
 #include "cell_locking.hh"
 #include "simple_schema.hh"
 #include "memtable-sstable.hh"
-#include "tests/sstable_assertions.hh"
+#include "tests/index_reader_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "tests/make_random_string.hh"
 
