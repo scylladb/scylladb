@@ -52,6 +52,7 @@
 #include "mutation_source_test.hh"
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
+#include "service/storage_proxy.hh"
 
 #include "simple_schema.hh"
 
@@ -91,15 +92,16 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
 template <typename Func>
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, Func func) {
+    auto tracker = make_lw_shared<cache_tracker>();
     auto dir = make_lw_shared<tmpdir>();
     cfg.datadir = { dir->path };
     auto cm = make_lw_shared<compaction_manager>();
     auto cl_stats = make_lw_shared<cell_locker_stats>();
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm, *cl_stats, *tracker);
     cf->mark_ready_for_writes();
     return func(*cf).then([cf, cm] {
         return cf->stop();
-    }).finally([cf, cm, dir, cl_stats] {});
+    }).finally([cf, cm, dir, cl_stats, tracker] () mutable { cf = { }; });
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
