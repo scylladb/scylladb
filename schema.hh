@@ -295,9 +295,10 @@ static constexpr int DEFAULT_GC_GRACE_SECONDS = 864000;
 class column_mapping_entry {
     bytes _name;
     data_type _type;
+    bool _is_atomic;
 public:
     column_mapping_entry(bytes name, data_type type)
-        : _name(std::move(name)), _type(std::move(type)) { }
+        : _name(std::move(name)), _type(std::move(type)), _is_atomic(_type->is_atomic()) { }
     column_mapping_entry(bytes name, sstring type_name);
     column_mapping_entry(const column_mapping_entry&);
     column_mapping_entry& operator=(const column_mapping_entry&);
@@ -306,6 +307,7 @@ public:
     const bytes& name() const { return _name; }
     const data_type& type() const { return _type; }
     const sstring& type_name() const { return _type->name(); }
+    bool is_atomic() const { return _is_atomic; }
 };
 
 // Encapsulates information needed for converting mutations between different schema versions.
