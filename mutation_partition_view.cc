@@ -131,13 +131,13 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 : _visitor(v), _id(id), _col(col) { }
 
             void operator()(atomic_cell_variant& acv) const {
-                if (!_col.type()->is_atomic()) {
+                if (!_col.is_atomic()) {
                     throw std::runtime_error("A collection expected, got an atomic cell");
                 }
                 _visitor.accept_atomic_cell(_id, read_atomic_cell(*_col.type(), acv));
             }
             void operator()(ser::collection_cell_view& ccv) const {
-                if (_col.type()->is_atomic()) {
+                if (_col.is_atomic()) {
                     throw std::runtime_error("An atomic cell expected, got a collection");
                 }
                 // FIXME: Pass view to cell to avoid copy
