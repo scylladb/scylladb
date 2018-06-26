@@ -214,6 +214,23 @@ class partition_entry_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'partition_entry'
 
+class mutation_partition_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        rows = list(str(r) for r in intrusive_set_external_comparator(self.val['_rows']))
+        range_tombstones = list(str(r) for r in intrusive_set(self.val['_row_tombstones']['_tombstones']))
+        return '{_tombstone=%s, _static_row=%s (cont=%s), _row_tombstones=[%s], _rows=[%s]}' % (
+            self.val['_tombstone'],
+            self.val['_static_row'],
+            ('no', 'yes')[self.val['_static_row_continuous']],
+            '\n' + ',\n'.join(range_tombstones) + '\n' if range_tombstones else '',
+            '\n' + ',\n'.join(rows) + '\n' if rows else '')
+
+    def display_hint(self):
+        return 'mutation_partition'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -231,6 +248,7 @@ def build_pretty_printer():
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
     pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
+    pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
