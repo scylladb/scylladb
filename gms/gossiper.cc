@@ -984,7 +984,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             logger.warn("Assassinating {} via gossip", endpoint);
             if (es) {
                 auto& ss = service::get_local_storage_service();
-                auto tokens = ss.get_token_metadata().get_tokens(endpoint);
+                tokens = ss.get_token_metadata().get_tokens(endpoint);
                 if (tokens.empty()) {
                     logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
                     throw std::runtime_error(sprint("Unable to calculate tokens for %s", endpoint));
