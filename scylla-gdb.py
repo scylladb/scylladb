@@ -199,6 +199,21 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'managed_bytes'
 
+class partition_entry_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        versions = list()
+        v = self.val['_version']['_version']
+        while v:
+            versions.append('@%s: %s' % (v, v.dereference()))
+            v = v['_next']
+        return '{_snapshot=%s, _version=%s, versions=[\n%s\n]}' % (self.val['_snapshot'], self.val['_version'], ',\n'.join(versions))
+
+    def display_hint(self):
+        return 'partition_entry'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -215,6 +230,7 @@ def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
     pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
+    pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
