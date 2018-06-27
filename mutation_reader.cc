@@ -188,7 +188,7 @@ private:
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
-    void maybe_add_readers(const dht::token* const t);
+    void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
     future<> prepare_next();
     // Collect all forwardable readers into _next, and remove them from
@@ -244,7 +244,7 @@ public:
     list_reader_selector(list_reader_selector&&) = default;
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const) override {
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>&) override {
         _selector_position = dht::ring_position_view::max();
         return std::exchange(_readers, {});
     }
@@ -254,9 +254,9 @@ public:
     }
 };
 
-void mutation_reader_merger::maybe_add_readers(const dht::token* const t) {
-    if (_selector->has_new_readers(t)) {
-        add_readers(_selector->create_new_readers(t));
+void mutation_reader_merger::maybe_add_readers(const std::optional<dht::ring_position_view>& pos) {
+    if (_selector->has_new_readers(pos)) {
+        add_readers(_selector->create_new_readers(pos));
     }
 }
 
@@ -326,9 +326,9 @@ future<> mutation_reader_merger::prepare_next() {
         // waiting for a fast-forward so there is nothing to do.
         if (_fragment_heap.empty() && _halted_readers.empty()) {
             if (_reader_heap.empty()) {
-                maybe_add_readers(nullptr);
+                maybe_add_readers(std::nullopt);
             } else {
-                maybe_add_readers(&_reader_heap.front().fragment.as_partition_start().key().token());
+                maybe_add_readers(_reader_heap.front().fragment.as_partition_start().key());
             }
         }
     });
@@ -357,7 +357,7 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     , _schema(std::move(schema))
     , _fwd_sm(fwd_sm)
     , _fwd_mr(fwd_mr) {
-    maybe_add_readers(nullptr);
+    maybe_add_readers(std::nullopt);
 }
 
 future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()() {

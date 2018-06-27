@@ -56,13 +56,13 @@ public:
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) = 0;
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) = 0;
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) = 0;
 
     // Can be false-positive but never false-negative!
-    bool has_new_readers(const dht::token* const t) const noexcept {
+    bool has_new_readers(const std::optional<dht::ring_position_view>& pos) const noexcept {
         dht::ring_position_comparator cmp(*_s);
-        return !_selector_position.is_max() && (!t || cmp(dht::ring_position_view(*t), _selector_position) >= 0);
+        return !_selector_position.is_max() && (!pos || cmp(*pos, _selector_position) >= 0);
     }
 };
 

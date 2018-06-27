@@ -571,26 +571,26 @@ public:
         // So we can pop the next reader off the back
         boost::reverse(_readers_mutations);
     }
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         if (_readers_mutations.empty()) {
             return {};
         }
 
         std::vector<flat_mutation_reader> readers;
 
-        if (!t) {
+        if (!pos) {
             readers.emplace_back(pop_reader());
             return readers;
         }
 
-        auto pos = dht::ring_position_view::ending_at(*t);
-        while (!_readers_mutations.empty() && dht::ring_position_tri_compare(*_s, _selector_position, pos) <= 0) {
+        while (!_readers_mutations.empty() && dht::ring_position_tri_compare(*_s, _selector_position, *pos) <= 0) {
             readers.emplace_back(pop_reader());
         }
         return readers;
     }
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-        return create_new_readers(&pr.start()->value().token());
+        _pr = pr;
+        return create_new_readers(dht::ring_position_view::for_range_start(_pr));
     }
 };
 
