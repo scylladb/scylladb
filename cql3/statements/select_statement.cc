@@ -409,7 +409,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout = options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, timeout, command, std::move(key_ranges));
+            state, options, timeout, command, std::move(key_ranges), _restrictions->need_filtering() ? _restrictions : nullptr);
 
     if (aggregate) {
         return do_with(
@@ -435,7 +435,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                         " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
-    if (_selection->is_trivial()) {
+    if (_selection->is_trivial() && !_restrictions->need_filtering()) {
         return p->fetch_page_generator(page_size, now, _stats).then([this, p, limit] (result_generator generator) {
             auto meta = make_shared<metadata>(*_selection->get_result_metadata());
             if (!p->is_exhausted()) {
@@ -554,7 +554,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                                   const query_options& options,
                                   gc_clock::time_point now)
 {
-    bool fast_path = !needs_post_query_ordering() && _selection->is_trivial();
+    bool fast_path = !needs_post_query_ordering() && _selection->is_trivial() && !_restrictions->need_filtering();
     if (fast_path) {
         return make_shared<cql_transport::messages::result_message::rows>(result(
             result_generator(_schema, std::move(results), std::move(cmd), _selection, _stats),
@@ -564,9 +564,15 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
 
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    query::result_view::consume(*results, cmd->slice,
-            cql3::selection::result_set_builder::visitor(builder, *_schema,
-                    *_selection));
+    if (_restrictions->need_filtering()) {
+        query::result_view::consume(*results, cmd->slice,
+                cql3::selection::result_set_builder::visitor(builder, *_schema,
+                        *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions)));
+    } else {
+        query::result_view::consume(*results, cmd->slice,
+                cql3::selection::result_set_builder::visitor(builder, *_schema,
+                        *_selection));
+    }
     auto rs = builder.build();
 
     if (needs_post_query_ordering()) {
@@ -957,7 +963,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, _select_clause);
 
-    auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view);
+    auto restrictions = prepare_restrictions(db, schema, bound_names, selection, for_view, _parameters->allow_filtering());
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(schema, selection, restrictions);
@@ -1011,13 +1017,14 @@ select_statement::prepare_restrictions(database& db,
                                        schema_ptr schema,
                                        ::shared_ptr<variable_specifications> bound_names,
                                        ::shared_ptr<selection::selection> selection,
-                                       bool for_view)
+                                       bool for_view,
+                                       bool allow_filtering)
 {
     try {
         // FIXME: this method should take a separate allow_filtering parameter
         // and pass it on. Currently we pass "for_view" as allow_filtering.
         return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
-            selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, for_view);
+            selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(sprint("Aliases aren't allowed in the where clause ('%s')", e.relation->to_string()));
