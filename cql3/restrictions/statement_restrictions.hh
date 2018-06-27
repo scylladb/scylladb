@@ -120,8 +120,8 @@ public:
         bool for_view = false,
         bool allow_filtering = false);
 private:
-    void add_restriction(::shared_ptr<restriction> restriction);
-    void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction);
+    void add_restriction(::shared_ptr<restriction> restriction, bool for_view, bool allow_filtering);
+    void add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering);
 public:
     bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 
@@ -175,7 +175,7 @@ public:
      */
     bool has_unrestricted_clustering_columns() const;
 private:
-    void process_partition_key_restrictions(bool has_queriable_index, bool for_view);
+    void process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering);
 
     /**
      * Returns the partition key components that are not restricted.
@@ -190,7 +190,7 @@ private:
      * @param select_a_collection <code>true</code> if the query should return a collection column
      * @throws InvalidRequestException if the request is invalid
      */
-    void process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view);
+    void process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view, bool allow_filtering);
 
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.
@@ -358,7 +358,7 @@ public:
      * Checks if the query need to use filtering.
      * @return <code>true</code> if the query need to use filtering, <code>false</code> otherwise.
      */
-    bool need_filtering();
+    bool need_filtering() const;
 
     void validate_secondary_index_selections(bool selects_only_static_columns);
 

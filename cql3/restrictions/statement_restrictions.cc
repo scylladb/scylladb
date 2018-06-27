@@ -205,7 +205,7 @@ statement_restrictions::statement_restrictions(database& db,
                     throw exceptions::invalid_request_exception(sprint("restriction '%s' is only supported in materialized view creation", relation->to_string()));
                 }
             } else {
-                add_restriction(relation->to_restriction(db, schema, bound_names));
+                add_restriction(relation->to_restriction(db, schema, bound_names), for_view, allow_filtering);
             }
         }
     }
@@ -217,11 +217,11 @@ statement_restrictions::statement_restrictions(database& db,
             || _nonprimary_key_restrictions->has_supporting_index(sim);
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(has_queriable_index, for_view);
+    process_partition_key_restrictions(has_queriable_index, for_view, allow_filtering);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
-    if (_uses_secondary_indexing) {
+    if (_uses_secondary_indexing || _partition_key_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_partition_key_restrictions);
     }
 
@@ -237,13 +237,14 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(has_queriable_index, select_a_collection, for_view);
+    process_clustering_columns_restrictions(has_queriable_index, select_a_collection, for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && has_queriable_clustering_column_index)
-    _uses_secondary_indexing = true;
+    if (_is_key_range && has_queriable_clustering_column_index) {
+        _uses_secondary_indexing = true;
+    }
 
-    if (_uses_secondary_indexing) {
+    if (_uses_secondary_indexing || _clustering_columns_restrictions->needs_filtering(*_schema)) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
     } else if (_clustering_columns_restrictions->is_contains()) {
         fail(unimplemented::cause::INDEXES);
@@ -272,31 +273,48 @@ statement_restrictions::statement_restrictions(database& db,
         uses_secondary_indexing = true;
 #endif
     }
-    // Even if uses_secondary_indexing is false at this point, we'll still have to use one if
-    // there is restrictions not covered by the PK.
+
     if (!_nonprimary_key_restrictions->empty()) {
-        _uses_secondary_indexing = true;
+        if (has_queriable_index) {
+            _uses_secondary_indexing = true;
+        } else if (!allow_filtering) {
+            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
+                "thus may have unpredictable performance. If you want to execute "
+                "this query despite the performance unpredictability, use ALLOW FILTERING");
+        }
         _index_restrictions.push_back(_nonprimary_key_restrictions);
     }
 
-    if (_uses_secondary_indexing && !for_view) {
+    if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
         validate_secondary_index_selections(selects_only_static_columns);
     }
 }
 
-void statement_restrictions::add_restriction(::shared_ptr<restriction> restriction) {
+void statement_restrictions::add_restriction(::shared_ptr<restriction> restriction, bool for_view, bool allow_filtering) {
     if (restriction->is_multi_column()) {
         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
     } else if (restriction->is_on_token()) {
         _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
     } else {
-        add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction));
+        add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction), for_view, allow_filtering);
     }
 }
 
-void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction) {
+void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction, bool for_view, bool allow_filtering) {
     auto& def = restriction->get_column_def();
     if (def.is_partition_key()) {
+        // A SELECT query may not request a slice (range) of partition keys
+        // without using token(). This is because there is no way to do this
+        // query efficiently: mumur3 turns a contiguous range of partition
+        // keys into tokens all over the token space.
+        // However, in a SELECT statement used to define a materialized view,
+        // such a slice is fine - it is used to check whether individual
+        // partitions, match, and does not present a performance problem.
+        assert(!restriction->is_on_token());
+        if (restriction->is_slice() && !for_view && !allow_filtering) {
+            throw exceptions::invalid_request_exception(
+                    "Only EQ and IN relation are supported on the partition key (unless you use the token() function or allow filtering)");
+        }
         _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
     } else if (def.is_clustering_key()) {
         _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
@@ -315,7 +333,7 @@ const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_res
     return _index_restrictions;
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view) {
+void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queriable index, is the query ok
@@ -324,39 +342,32 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
     // components must have a EQ. Only the last partition key component can be in IN relation.
     if (_partition_key_restrictions->is_on_token()) {
         _is_key_range = true;
-    } else if (has_partition_key_unrestricted_components()) {
-        if (!_partition_key_restrictions->empty() && !for_view) {
-            if (!has_queriable_index) {
-                throw exceptions::invalid_request_exception(sprint("Partition key parts: %s must be restricted as other parts are",
-                    join(", ", get_partition_key_unrestricted_components())));
-            }
-        }
-
+    } else if (_partition_key_restrictions->has_unrestricted_components(*_schema)) {
         _is_key_range = true;
         _uses_secondary_indexing = has_queriable_index;
     }
-    if (_partition_key_restrictions->is_slice() && !_partition_key_restrictions->is_on_token() && !for_view) {
-        // A SELECT query may not request a slice (range) of partition keys
-        // without using token(). This is because there is no way to do this
-        // query efficiently: mumur3 turns a contiguous range of partition
-        // keys into tokens all over the token space.
-        // However, in a SELECT statement used to define a materialized view,
-        // such a slice is fine - it is used to check whether individual
-        // partitions, match, and does not present a performance problem.
-        throw exceptions::invalid_request_exception(
-                "Only EQ and IN relation are supported on the partition key (unless you use the token() function)");
+
+    if (_partition_key_restrictions->needs_filtering(*_schema)) {
+        if (!allow_filtering && !for_view && !has_queriable_index) {
+            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
+                "thus may have unpredictable performance. If you want to execute "
+                "this query despite the performance unpredictability, use ALLOW FILTERING");
+        }
+        _is_key_range = true;
+        _uses_secondary_indexing = has_queriable_index;
     }
+
 }
 
 bool statement_restrictions::has_partition_key_unrestricted_components() const {
-    return _partition_key_restrictions->size() < _schema->partition_key_size();
+    return _partition_key_restrictions->has_unrestricted_components(*_schema);
 }
 
 bool statement_restrictions::has_unrestricted_clustering_columns() const {
-    return _clustering_columns_restrictions->size() < _schema->clustering_key_size();
+    return _clustering_columns_restrictions->has_unrestricted_components(*_schema);
 }
 
-void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view) {
+void statement_restrictions::process_clustering_columns_restrictions(bool has_queriable_index, bool select_a_collection, bool for_view, bool allow_filtering) {
     if (!has_clustering_columns_restriction()) {
         return;
     }
@@ -365,36 +376,34 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
         throw exceptions::invalid_request_exception(
             "Cannot restrict clustering columns by IN relations when a collection is selected by the query");
     }
-    if (_clustering_columns_restrictions->is_contains() && !has_queriable_index) {
+    if (_clustering_columns_restrictions->is_contains() && !has_queriable_index && !allow_filtering) {
         throw exceptions::invalid_request_exception(
-            "Cannot restrict clustering columns by a CONTAINS relation without a secondary index");
+            "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
     }
 
-    auto clustering_columns_iter = _schema->clustering_key_columns().begin();
-
-    for (auto&& restricted_column : _clustering_columns_restrictions->get_column_defs()) {
-        const column_definition* clustering_column = &(*clustering_columns_iter);
-        ++clustering_columns_iter;
-
-        if (clustering_column != restricted_column && !for_view) {
-            if (!has_queriable_index) {
-                throw exceptions::invalid_request_exception(sprint(
-                    "PRIMARY KEY column \"%s\" cannot be restricted as preceding column \"%s\" is not restricted",
-                    restricted_column->name_as_text(), clustering_column->name_as_text()));
+    if (has_clustering_columns_restriction() && _clustering_columns_restrictions->needs_filtering(*_schema)) {
+        if (has_queriable_index) {
+            _uses_secondary_indexing = true;
+        } else if (!allow_filtering && !for_view) {
+            auto clustering_columns_iter = _schema->clustering_key_columns().begin();
+            for (auto&& restricted_column : _clustering_columns_restrictions->get_column_defs()) {
+                const column_definition* clustering_column = &(*clustering_columns_iter);
+                ++clustering_columns_iter;
+                if (clustering_column != restricted_column) {
+                        throw exceptions::invalid_request_exception(sprint(
+                            "PRIMARY KEY column \"%s\" cannot be restricted as preceding column \"%s\" is not restricted",
+                            restricted_column->name_as_text(), clustering_column->name_as_text()));
+                }
             }
-
-            _uses_secondary_indexing = true; // handle gaps and non-keyrange cases.
-            break;
         }
-    }
-
-    if (_clustering_columns_restrictions->is_contains()) {
-        _uses_secondary_indexing = true;
     }
 }
 
 dht::partition_range_vector statement_restrictions::get_partition_key_ranges(const query_options& options) const {
     if (_partition_key_restrictions->empty()) {
+        return {dht::partition_range::make_open_ended_both_sides()};
+    }
+    if (_partition_key_restrictions->needs_filtering(*_schema)) {
         return {dht::partition_range::make_open_ended_both_sides()};
     }
     return _partition_key_restrictions->bounds_ranges(options);
@@ -404,18 +413,30 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_columns_restrictions->empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
+    // TODO(sarna): For filtering to work, clustering range is not bounded at all. For filtering to work faster,
+    // the biggest clustering prefix restriction should be used here.
+    if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
+        return {query::clustering_range::make_open_ended_both_sides()};
+    }
     return _clustering_columns_restrictions->bounds_ranges(options);
 }
 
-bool statement_restrictions::need_filtering() {
+bool statement_restrictions::need_filtering() const {
     uint32_t number_of_restricted_columns = 0;
     for (auto&& restrictions : _index_restrictions) {
         number_of_restricted_columns += restrictions->size();
     }
 
+    if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {
+        // TODO(sarna): Implement ALLOW FILTERING support for multi-column restrictions - return false for now
+        // in order to ensure backwards compatibility
+        return false;
+    }
+
     return number_of_restricted_columns > 1
-           || (number_of_restricted_columns == 0 && has_clustering_columns_restriction())
-           || (number_of_restricted_columns != 0 && _nonprimary_key_restrictions->has_multiple_contains());
+            || (number_of_restricted_columns == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
+            || (number_of_restricted_columns != 0 && _nonprimary_key_restrictions->has_multiple_contains())
+            || (number_of_restricted_columns != 0 && !_uses_secondary_indexing);
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
