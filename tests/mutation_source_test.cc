@@ -659,6 +659,46 @@ void test_mutation_reader_fragments_have_monotonic_positions(populate_fn populat
     });
 }
 
+static void test_date_tiered_clustering_slicing(populate_fn populate) {
+    BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
+
+    simple_schema ss;
+
+    auto s = schema_builder(ss.schema())
+        .set_compaction_strategy(sstables::compaction_strategy_type::date_tiered)
+        .build();
+
+    auto pkey = ss.make_pkey();
+
+    mutation m1(s, pkey);
+    ss.add_static_row(m1, "s");
+    m1.partition().apply(ss.new_tombstone());
+    ss.add_row(m1, ss.make_ckey(0), "v1");
+
+    mutation_source ms = populate(s, {m1});
+
+    // query row outside the range of existing rows to exercise sstable clustering key filter
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(ss.make_ckey_range(1, 2))
+            .build();
+        auto prange = dht::partition_range::make_singular(pkey);
+        assert_that(ms.make_reader(s, prange, slice))
+            .produces(m1, slice.row_ranges(*s, pkey.key()))
+            .produces_end_of_stream();
+    }
+
+    {
+        auto slice = partition_slice_builder(*s)
+            .with_range(query::clustering_range::make_singular(ss.make_ckey(0)))
+            .build();
+        auto prange = dht::partition_range::make_singular(pkey);
+        assert_that(ms.make_reader(s, prange, slice))
+            .produces(m1)
+            .produces_end_of_stream();
+    }
+}
+
 static void test_clustering_slices(populate_fn populate) {
     BOOST_TEST_MESSAGE(__PRETTY_FUNCTION__);
     auto s = schema_builder("ks", "cf")
@@ -1012,6 +1052,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
 }
 
 void run_mutation_reader_tests(populate_fn populate) {
+    test_date_tiered_clustering_slicing(populate);
     test_fast_forwarding_across_partitions_to_empty_range(populate);
     test_clustering_slices(populate);
     test_mutation_reader_fragments_have_monotonic_positions(populate);
