@@ -27,6 +27,44 @@
 
 namespace sstables {
 
+class promoted_index_block {
+public:
+    promoted_index_block(temporary_buffer<char>&& start, temporary_buffer<char>&& end,
+            uint64_t offset, uint64_t width)
+        : _start(std::move(start)), _end(std::move(end))
+        , _offset(offset), _width(width)
+    {}
+    promoted_index_block(const promoted_index_block& rhs)
+        : _start(rhs._start.get(), rhs._start.size()), _end(rhs._end.get(), rhs._end.size())
+        , _offset(rhs._offset), _width(rhs._width)
+    {}
+    promoted_index_block(promoted_index_block&&) noexcept = default;
+
+    promoted_index_block& operator=(const promoted_index_block& rhs) {
+        if (this != &rhs) {
+            _start = temporary_buffer<char>(rhs._start.get(), rhs._start.size());
+            _end = temporary_buffer<char>(rhs._end.get(), rhs._end.size());
+            _offset = rhs._offset;
+            _width = rhs._width;
+        }
+        return *this;
+    }
+    promoted_index_block& operator=(promoted_index_block&&) noexcept = default;
+
+    composite_view start(const schema& s) const { return composite_view(to_bytes_view(_start), s.is_compound());}
+    composite_view end(const schema& s) const { return composite_view(to_bytes_view(_end), s.is_compound());}
+    uint64_t offset() const { return _offset; }
+    uint64_t width() const { return _width; }
+
+private:
+    temporary_buffer<char> _start;
+    temporary_buffer<char> _end;
+    uint64_t _offset;
+    uint64_t _width;
+};
+
+using promoted_index_blocks = seastar::circular_buffer<promoted_index_block>;
+
 inline void erase_all_but_last(promoted_index_blocks& pi_blocks) {
     while (pi_blocks.size() > 1) {
         pi_blocks.pop_front();
