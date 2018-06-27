@@ -23,6 +23,7 @@ import os
 import argparse
 import pwd
 import grp
+import sys
 from scylla_util import *
 
 if __name__ == '__main__':
