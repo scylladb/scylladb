@@ -475,36 +475,23 @@ public:
     virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(pos));
 
-        const auto position = (pos ? *pos : _selector_position);
-        // we only pass _selector_position's token to _selector::select() when T is nullptr
-        // because it means gap between sstables, and the lower bound of the first interval
-        // after the gap is guaranteed to be inclusive.
-        auto selection = _selector.select(position);
+        auto readers = std::vector<flat_mutation_reader>();
 
-        if (selection.sstables.empty()) {
-            // For the lower bound of the token range the _selector
-            // might not return any sstables, in this case try again
-            // with next_token unless it's maximum token.
-            auto start = _pr->start() ? dht::ring_position_view::ending_at(_pr->start()->value().token()) : dht::ring_position_view::min();
-            if (!selection.next_position.is_max() && dht::ring_position_tri_compare(*_s, position, start) == 0) {
-                dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
-                _selector_position = std::move(selection.next_position);
-                return create_new_readers(std::nullopt);
-            }
+        do {
+            auto selection = _selector.select(_selector_position);
+            _selector_position = selection.next_position;
 
-            _selector_position = dht::ring_position::max();
-            return {};
-        }
+            dblog.trace("incremental_reader_selector {}: {} sstables to consider, advancing selector to {}", this, selection.sstables.size(),
+                    _selector_position);
 
-        _selector_position = std::move(selection.next_position);
+            readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
+                    | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
+                    | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+        } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
-        dblog.trace("incremental_reader_selector {}: {} new sstables to consider, advancing selector to {}", this, selection.sstables.size(), _selector_position);
+        dblog.trace("incremental_reader_selector {}: created {} new readers", this, readers.size());
 
-        return boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
-                | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
-                | boost::adaptors::transformed([this] (auto& sst) {
-                    return this->create_reader(sst);
-                }));
+        return readers;
     }
 
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
