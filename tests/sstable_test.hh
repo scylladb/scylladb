@@ -81,16 +81,16 @@ public:
     future<index_list> read_indexes() {
         auto l = make_lw_shared<index_list>();
         return do_with(std::make_unique<index_reader>(_sst, default_priority_class()), [this, l] (std::unique_ptr<index_reader>& ir) {
-            return ir->read_lower_partition_data().then([&, l] {
-                l->push_back(std::move(ir->current_lower_partition_entry()));
+            return ir->read_partition_data().then([&, l] {
+                l->push_back(std::move(ir->current_partition_entry()));
             }).then([&, l] {
                 return repeat([&, l] {
-                    return ir->advance_lower_to_next_partition().then([&, l] {
+                    return ir->advance_to_next_partition().then([&, l] {
                         if (ir->eof()) {
                             return stop_iteration::yes;
                         }
 
-                        l->push_back(std::move(ir->current_lower_partition_entry()));
+                        l->push_back(std::move(ir->current_partition_entry()));
                         return stop_iteration::no;
                     });
                 });

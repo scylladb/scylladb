@@ -227,25 +227,25 @@ private:
             return make_ready_future<>();
         }
         return (_index_in_current_partition
-                ? _index_reader->advance_lower_to_next_partition()
-                : get_index_reader().advance_lower_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
+                ? _index_reader->advance_to_next_partition()
+                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
             _index_in_current_partition = true;
             auto [start, end] = _index_reader->data_file_positions();
             if (end && start > *end) {
                 _read_enabled = false;
                 return make_ready_future<>();
             }
-            return _context->skip_to(_index_reader->lower_element_kind(), start);
+            return _context->skip_to(_index_reader->element_kind(), start);
         });
     }
     future<> read_from_index() {
         sstlog.trace("reader {}: read from index", this);
-        auto tomb = _index_reader->lower_partition_tombstone();
+        auto tomb = _index_reader->partition_tombstone();
         if (!tomb) {
             sstlog.trace("reader {}: no tombstone", this);
             return read_from_datafile();
         }
-        auto pk = _index_reader->lower_partition_key().to_partition_key(*_schema);
+        auto pk = _index_reader->partition_key().to_partition_key(*_schema);
         auto key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
@@ -299,11 +299,11 @@ private:
                 sstlog.trace("reader {}: eof", this);
                 return make_ready_future<>();
             }
-            if (_index_reader->lower_partition_data_ready()) {
+            if (_index_reader->partition_data_ready()) {
                 return read_from_index();
             }
             if (_will_likely_slice) {
-                return _index_reader->read_lower_partition_data().then([this] {
+                return _index_reader->read_partition_data().then([this] {
                     return read_from_index();
                 });
             }
@@ -337,14 +337,14 @@ private:
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
-                return get_index_reader().advance_lower_to(*_current_partition_key);
+                return get_index_reader().advance_to(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos] {
-            return get_index_reader().advance_lower_to(*pos).then([this] {
+            return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                return _context->skip_to(idx.lower_element_kind(), index_position.start);
+                return _context->skip_to(idx.element_kind(), index_position.start);
             });
         });
     }

@@ -248,7 +248,8 @@ future<> close_index_list(shared_index_lists::list_ptr& list) {
 // Maintains logical cursors to sstable elements (partitions, cells).
 // Holds two cursors pointing to the range within sstable (upper cursor may be not set).
 // Initially the lower cursor is positioned on the first partition in the sstable.
-// Cursors can be advanced forward using advance_to().
+// Lower cursor can be accessed and advanced from outside.
+// Upper cursor can only be advanced along with the lower cursor and not accessed from outside.
 //
 // If eof() then the lower bound cursor is positioned past all partitions in the sstable.
 class index_reader {
@@ -496,8 +497,8 @@ private:
         // We advance cursor within the current lower bound partition
         // So need to make sure first that it is read
         if (!partition_data_ready(_lower_bound)) {
-            return read_lower_partition_data().then([this, pos] {
-                assert(lower_partition_data_ready());
+            return read_partition_data().then([this, pos] {
+                assert(partition_data_ready());
                 return advance_upper_past(pos);
             });
         }
@@ -551,9 +552,9 @@ public:
         sstlog.trace("index {}: index_reader for {}", this, _sstable->get_filename());
     }
 
-    // Ensures that lower_partition_data_ready() returns true.
-    // Can be called only when !eof(_lower_bound)
-    future<> read_lower_partition_data() {
+    // Ensures that partition_data_ready() returns true.
+    // Can be called only when !eof()
+    future<> read_partition_data() {
         assert(!eof());
         if (partition_data_ready(_lower_bound)) {
             return make_ready_future<>();
@@ -570,30 +571,31 @@ public:
             advance_upper_to_end(range));
     }
 
-    index_entry& current_lower_partition_entry() {
+    // Get current index entry
+    index_entry& current_partition_entry() {
         return current_partition_entry(_lower_bound);
     }
 
-    // Returns tombstone for the current lower partition if it was recorded in the sstable.
+    // Returns tombstone for the current partition if it was recorded in the sstable.
     // It may be unavailable for old sstables for which this information was not generated.
-    // Can be called only when lower_partition_data_ready().
-    std::optional<sstables::deletion_time> lower_partition_tombstone() {
+    // Can be called only when partition_data_ready().
+    std::optional<sstables::deletion_time> partition_tombstone() {
         return current_partition_entry(_lower_bound).get_deletion_time();
     }
 
-    // Returns the key for current lower partition.
-    // Can be called only when lower_partition_data_ready().
+    // Returns the key for current partition.
+    // Can be called only when partition_data_ready().
     // The result is valid as long as index_reader is valid.
-    key_view lower_partition_key() {
+    key_view partition_key() {
         index_entry& e = current_partition_entry(_lower_bound);
         return e.get_key();
     }
 
-    bool lower_partition_data_ready() const {
+    bool partition_data_ready() const {
         return partition_data_ready(_lower_bound);
     }
 
-    // Forwards the lower bound cursor to given position in current partition.
+    // Forwards the cursor to the given position in the current partition.
     //
     // Note that the index within partition, unlike the partition index, doesn't cover all keys.
     // So this may forward the cursor to some position pos' which precedes pos, even though
@@ -601,19 +603,19 @@ public:
     //
     // Must be called for non-decreasing positions.
     // Must be called only after advanced to some partition and !eof().
-    future<> advance_lower_to(position_in_partition_view pos) {
-        sstlog.trace("index {}: advance_lower_to({}), current data_file_pos={}",
+    future<> advance_to(position_in_partition_view pos) {
+        sstlog.trace("index {}: advance_to({}), current data_file_pos={}",
                  this, pos, _lower_bound.data_file_position);
 
-        if (!lower_partition_data_ready()) {
-            return read_lower_partition_data().then([this, pos] {
+        if (!partition_data_ready()) {
+            return read_partition_data().then([this, pos] {
                 sstlog.trace("index {}: page done", this);
                 assert(partition_data_ready(_lower_bound));
-                return advance_lower_to(pos);
+                return advance_to(pos);
             });
         }
 
-        index_entry& e = current_lower_partition_entry();
+        index_entry& e = current_partition_entry();
         if (e.get_total_pi_blocks_count() == 0) {
             sstlog.trace("index {}: no promoted index", this);
             return make_ready_future<>();
@@ -676,7 +678,7 @@ public:
             if (eof()) {
                 return make_ready_future<bool>(false);
             }
-            return read_lower_partition_data().then([this, key, pos] {
+            return read_partition_data().then([this, key, pos] {
                 index_comparator cmp(*_sstable->_schema);
                 bool found = cmp(key, current_partition_entry(_lower_bound)) == 0;
                 if (!found || !pos) {
@@ -690,15 +692,15 @@ public:
         });
     }
 
-    // Moves the lower bound cursor to the beginning of next partition.
+    // Moves the cursor to the beginning of next partition.
     // Can be called only when !eof().
-    future<> advance_lower_to_next_partition() {
+    future<> advance_to_next_partition() {
         return advance_to_next_partition(_lower_bound);
     }
 
-    // Positions the lower bound cursor on the first partition which is not smaller than pos (like std::lower_bound).
+    // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
     // Must be called for non-decreasing positions.
-    future<> advance_lower_to(dht::ring_position_view pos) {
+    future<> advance_to(dht::ring_position_view pos) {
         return advance_to(_lower_bound, pos);
     }
 
@@ -708,7 +710,7 @@ public:
     };
 
     // Returns positions in the data file of the cursor.
-    // End position may not be set
+    // End position may be unset
     data_file_positions_range data_file_positions() const {
         data_file_positions_range result;
         result.start = _lower_bound.data_file_position;
@@ -718,8 +720,8 @@ public:
         return result;
     }
 
-    // Returns the kind of sstable element the lower bound cursor is pointing at.
-    indexable_element lower_element_kind() const {
+    // Returns the kind of sstable element the cursor is pointing at.
+    indexable_element element_kind() const {
         return _lower_bound.element;
     }
 
