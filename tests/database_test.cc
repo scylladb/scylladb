@@ -29,6 +29,9 @@
 #include "database.hh"
 #include "partition_slice_builder.hh"
 #include "frozen_mutation.hh"
+#include "mutation_source_test.hh"
+#include "schema_registry.hh"
+#include "service/migration_manager.hh"
 
 #include "disk-error-handler.hh"
 
@@ -77,5 +80,35 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
                 assert_that(query::result_set::from_raw_result(s, cmd.slice, *result)).has_size(3);
             }
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_database_with_data_in_sstables_is_a_mutation_source) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        run_mutation_source_tests([&] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+            try {
+                e.local_db().find_column_family(s->ks_name(), s->cf_name());
+                service::get_local_migration_manager().announce_column_family_drop(s->ks_name(), s->cf_name(), true).get();
+            } catch (const no_such_column_family&) {
+                // expected
+            }
+            service::get_local_migration_manager().announce_new_column_family(s, true).get();
+            column_family& cf = e.local_db().find_column_family(s);
+            for (auto&& m : partitions) {
+                e.local_db().apply(cf.schema(), freeze(m)).get();
+            }
+            cf.flush().get();
+            cf.get_row_cache().invalidate([] {}).get();
+            return mutation_source([&] (schema_ptr s,
+                    const dht::partition_range& range,
+                    const query::partition_slice& slice,
+                    const io_priority_class& pc,
+                    tracing::trace_state_ptr trace_state,
+                    streamed_mutation::forwarding fwd,
+                    mutation_reader::forwarding fwd_mr) {
+                return cf.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr);
+            });
+        });
+        return make_ready_future<>();
     });
 }
