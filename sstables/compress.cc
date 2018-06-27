@@ -33,6 +33,7 @@
 #include "unimplemented.hh"
 #include "stdx.hh"
 #include "segmented_compress_params.hh"
+#include "utils/class_registrator.hh"
 
 namespace sstables {
 
@@ -299,7 +300,8 @@ size_t local_compression::compress_max_size(size_t input_len) const {
 
 void compression::set_compressor(compressor_ptr c) {
     if (c) {
-        auto& cn = c->name();
+        unqualified_name uqn(compressor::namespace_prefix, c->name());
+        const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
         for (auto& p : c->options()) {
             if (p.first != compression_parameters::SSTABLE_COMPRESSION) {
