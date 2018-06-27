@@ -184,12 +184,10 @@ private:
     // end, a call to next_partition() or a call to
     // fast_forward_to(dht::partition_range).
     reader_and_last_fragment_kind _single_reader;
-    dht::decorated_key_opt _key;
     const schema_ptr _schema;
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
-    const dht::token* current_position() const;
     void maybe_add_readers(const dht::token* const t);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
     future<> prepare_next();
@@ -272,14 +270,6 @@ void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_r
     }
 }
 
-const dht::token* mutation_reader_merger::current_position() const {
-    if (!_key) {
-        return nullptr;
-    }
-
-    return &_key->token();
-}
-
 struct mutation_reader_merger::reader_heap_compare {
     const schema& s;
 
@@ -338,12 +328,10 @@ future<> mutation_reader_merger::prepare_next() {
         // waiting for a fast-forward so there is nothing to do.
         if (_fragment_heap.empty() && _halted_readers.empty()) {
             if (_reader_heap.empty()) {
-                _key = {};
+                maybe_add_readers(nullptr);
             } else {
-                _key = _reader_heap.front().fragment.as_partition_start().key();
+                maybe_add_readers(&_reader_heap.front().fragment.as_partition_start().key().token());
             }
-
-            maybe_add_readers(current_position());
         }
     });
 }
