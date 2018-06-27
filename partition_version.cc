@@ -483,7 +483,10 @@ coroutine partition_entry::apply_to_incomplete(const schema& s,
         pe.upgrade(pe_schema.shared_from_this(), s.shared_from_this(), pe_cleaner, no_cache_tracker);
     }
 
-    bool can_move = !pe._snapshot;
+    // When preemptible, later memtable reads could start using the snapshot before
+    // snapshot's writes are made visible in cache, which would cause them to miss those writes.
+    // So we cannot allow erasing when preemptible.
+    bool can_move = !preemptible && !pe._snapshot;
 
     auto src_snp = pe.read(reg, pe_cleaner, s.shared_from_this(), no_cache_tracker);
     partition_snapshot_ptr prev_snp;
