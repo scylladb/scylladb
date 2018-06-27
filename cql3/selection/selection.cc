@@ -330,6 +330,82 @@ std::unique_ptr<result_set> result_set_builder::build() {
     return std::move(_result_set);
 }
 
+bool result_set_builder::restrictions_filter::operator()(const selection& selection,
+                                                         const std::vector<bytes>& partition_key,
+                                                         const std::vector<bytes>& clustering_key,
+                                                         const query::result_row_view& static_row,
+                                                         const query::result_row_view& row) const {
+    static logging::logger rlogger("restrictions_filter");
+
+    auto static_row_iterator = static_row.iterator();
+    auto row_iterator = row.iterator();
+    auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
+    auto partition_key_restrictions_map = _restrictions->get_single_column_partition_key_restrictions();
+    auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
+    for (auto&& cdef : selection.get_columns()) {
+        switch (cdef->kind) {
+        case column_kind::static_column:
+            // fallthrough
+        case column_kind::regular_column:
+            if (cdef->type->is_multi_cell()) {
+                rlogger.debug("Multi-cell filtering is not implemented yet", cdef->name_as_text());
+            } else {
+                auto cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
+                auto cell = cell_iterator.next_atomic_cell();
+
+                auto restr_it = non_pk_restrictions_map.find(cdef);
+                if (restr_it == non_pk_restrictions_map.end()) {
+                    continue;
+                }
+                restrictions::single_column_restriction& restriction = *restr_it->second;
+
+                bool regular_restriction_matches;
+                if (cell) {
+                    regular_restriction_matches = cell->value().with_linearized([&restriction](bytes_view data) {
+                        return restriction.is_satisfied_by(data, cql3::query_options({ }));
+                    });
+                } else {
+                    regular_restriction_matches = restriction.is_satisfied_by(bytes(), cql3::query_options({ }));
+                }
+                if (!regular_restriction_matches) {
+                    return false;
+                }
+
+            }
+            break;
+        case column_kind::partition_key: {
+            auto restr_it = partition_key_restrictions_map.find(cdef);
+            if (restr_it == partition_key_restrictions_map.end()) {
+                continue;
+            }
+            restrictions::single_column_restriction& restriction = *restr_it->second;
+            const bytes& value_to_check = partition_key[cdef->id];
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            if (!pk_restriction_matches) {
+                return false;
+            }
+            }
+            break;
+        case column_kind::clustering_key: {
+            auto restr_it = clustering_key_restrictions_map.find(cdef);
+            if (restr_it == clustering_key_restrictions_map.end()) {
+                continue;
+            }
+            restrictions::single_column_restriction& restriction = *restr_it->second;
+            const bytes& value_to_check = clustering_key[cdef->id];
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            if (!pk_restriction_matches) {
+                return false;
+            }
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
 api::timestamp_type result_set_builder::timestamp_of(size_t idx) {
     return _timestamps[idx];
 }

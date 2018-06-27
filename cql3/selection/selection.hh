@@ -48,6 +48,7 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selector_factories.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "unimplemented.hh"
 
 namespace cql3 {
@@ -247,6 +248,20 @@ private:
     const gc_clock::time_point _now;
     cql_serialization_format _cql_serialization_format;
 public:
+    class nop_filter {
+    public:
+        inline bool operator()(const selection&, const std::vector<bytes>&, const std::vector<bytes>&, const query::result_row_view&, const query::result_row_view&) const {
+            return true;
+        }
+    };
+    class restrictions_filter {
+        ::shared_ptr<restrictions::statement_restrictions> _restrictions;
+    public:
+        restrictions_filter() = default;
+        explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions) : _restrictions(restrictions) {}
+        bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
+    };
+
     result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf);
     void add_empty();
     void add(bytes_opt value);
@@ -258,6 +273,7 @@ public:
     int32_t ttl_of(size_t idx);
 
     // Implements ResultVisitor concept from query.hh
+    template<typename Filter = nop_filter>
     class visitor {
     protected:
         result_set_builder& _builder;
@@ -266,12 +282,15 @@ public:
         uint32_t _row_count;
         std::vector<bytes> _partition_key;
         std::vector<bytes> _clustering_key;
+        Filter _filter;
     public:
-        visitor(cql3::selection::result_set_builder& builder, const schema& s, const selection&)
+        visitor(cql3::selection::result_set_builder& builder, const schema& s,
+                const selection& selection, Filter filter = Filter())
             : _builder(builder)
             , _schema(s)
             , _selection(selection)
             , _row_count(0)
+            , _filter(filter)
         {}
         visitor(visitor&&) = default;
 
@@ -310,6 +329,9 @@ public:
         void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
             auto static_row_iterator = static_row.iterator();
             auto row_iterator = row.iterator();
+            if (!_filter(_selection, _partition_key, _clustering_key, static_row, row)) {
+                return;
+            }
             _builder.new_row();
             for (auto&& def : _selection.get_columns()) {
                 switch (def->kind) {
@@ -351,6 +373,7 @@ public:
             }
         }
     };
+
 private:
     bytes_opt get_value(data_type t, query::result_atomic_cell_view c);
 };
