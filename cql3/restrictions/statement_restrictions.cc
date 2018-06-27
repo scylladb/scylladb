@@ -23,6 +23,7 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 #include "statement_restrictions.hh"
 #include "single_column_primary_key_restrictions.hh"
@@ -482,6 +483,14 @@ bool single_column_restriction::EQ::is_satisfied_by(const schema& schema,
     return false;
 }
 
+bool single_column_restriction::EQ::is_satisfied_by(bytes_view data, const query_options& options) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    auto operand = value(options);
+    return operand && _column_def.type->compare(*operand, data) == 0;
+}
+
 bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
         const partition_key& key,
         const clustering_key_prefix& ckey,
@@ -501,6 +510,16 @@ bool single_column_restriction::IN::is_satisfied_by(const schema& schema,
         return operand && _column_def.type->compare(*operand, cell_value_bv) == 0;
     });
   });
+}
+
+bool single_column_restriction::IN::is_satisfied_by(bytes_view data, const query_options& options) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    auto operands = values(options);
+    return boost::algorithm::any_of(operands, [this, &data] (const bytes_opt& operand) {
+        return operand && _column_def.type->compare(*operand, data) == 0;
+    });
 }
 
 static query::range<bytes_view> to_range(const term_slice& slice, const query_options& options) {
@@ -536,6 +555,13 @@ bool single_column_restriction::slice::is_satisfied_by(const schema& schema,
     return cell_value->with_linearized([&] (bytes_view cell_value_bv) {
         return to_range(_slice, options).contains(cell_value_bv, _column_def.type->as_tri_comparator());
     });
+}
+
+bool single_column_restriction::slice::is_satisfied_by(bytes_view data, const query_options& options) const {
+    if (_column_def.type->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    return to_range(_slice, options).contains(data, _column_def.type->as_tri_comparator());
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
@@ -678,6 +704,11 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
     }
 
     return true;
+}
+
+bool single_column_restriction::contains::is_satisfied_by(bytes_view data, const query_options& options) const {
+    //TODO(sarna): Deserialize & return. It would be nice to deduplicate, is_satisfied_by above is rather long
+    fail(unimplemented::cause::INDEXES);
 }
 
 bool token_restriction::EQ::is_satisfied_by(const schema& schema,
