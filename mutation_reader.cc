@@ -255,11 +255,9 @@ public:
 };
 
 void mutation_reader_merger::maybe_add_readers(const dht::token* const t) {
-    if (!_selector->has_new_readers(t)) {
-        return;
+    if (_selector->has_new_readers(t)) {
+        add_readers(_selector->create_new_readers(t));
     }
-
-    add_readers(_selector->create_new_readers(t));
 }
 
 void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_readers) {
