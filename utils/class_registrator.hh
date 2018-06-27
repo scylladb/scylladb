@@ -164,7 +164,7 @@ class unqualified_name {
 public:
     // can be optimized with string_views etc.
     unqualified_name(const sstring& pkg_pfx, const sstring& name)
-        : _qname(name.compare(0, pkg_pfx.size(), pkg_pfx) == 0 ? name.substr(pkg_pfx.size() + 1) : name)
+        : _qname(name.compare(0, pkg_pfx.size(), pkg_pfx) == 0 ? name.substr(pkg_pfx.size()) : name)
     {}
     operator const sstring&() const {
         return _qname;
