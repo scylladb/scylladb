@@ -2993,7 +2993,7 @@ static sstring get_write_test_path(sstring table_name, bool compressed = false) 
     return format("tests/sstables/3.x/{}compressed/write_{}", compressed ? "" : "un", table_name);
 }
 
-static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed = false) {
+static void compare_sstables(sstring result_path, sstring table_name, bool compressed = false) {
     for (auto file_type : {component_type::Data,
                            component_type::Index,
                            component_type::Statistics,
@@ -3003,14 +3003,14 @@ static void compare_sstables(tmpdir&& tmp, sstring table_name, bool compressed =
                 sstable::filename(get_write_test_path(table_name, compressed),
                                   "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         auto result_filename =
-                sstable::filename(tmp.path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
+                sstable::filename(result_path, "ks", table_name, sstables::sstable_version_types::mc, 1, big, file_type);
         compare_files(orig_filename, result_filename);
     }
 }
 
 // Can be useful if we want, e.g., to avoid range tombstones de-overlapping
 // that otherwise takes place for RTs put into one and the same memtable
-static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
+static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1, lw_shared_ptr<memtable> mt2,
                                        sstring table_name, bool compressed = false) {
     static db::nop_large_partition_handler nop_lp_handler;
     storage_service_for_tests ssft;
@@ -3021,19 +3021,21 @@ static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt1
     sst->write_components(make_combined_reader(s,
         mt1->make_flat_reader(s),
         mt2->make_flat_reader(s)), 1, s, cfg, mt1->get_stats()).get();
-    compare_sstables(std::move(tmp), table_name, compressed);
+    compare_sstables(tmp.path, table_name, compressed);
+    return tmp;
 }
 
-static void write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
+static tmpdir write_and_compare_sstables(schema_ptr s, lw_shared_ptr<memtable> mt, sstring table_name, bool compressed = false) {
     storage_service_for_tests ssft;
     tmpdir tmp;
     auto sst = sstables::test::make_test_sstable(4096, s, tmp.path, 1, sstables::sstable_version_types::mc, sstable::format_types::big);
     write_memtable_to_sstable_for_test(*mt, sst).get();
-    compare_sstables(std::move(tmp), table_name, compressed);
+    compare_sstables(tmp.path, table_name, compressed);
+    return tmp;
 }
 
-static void validate_read(schema_ptr s, sstring table_name, std::vector<mutation> mutations, bool compressed = false) {
-    sstable_assertions sst(s, get_write_test_path(table_name, compressed));
+static void validate_read(schema_ptr s, sstring path, std::vector<mutation> mutations) {
+    sstable_assertions sst(s, path);
     sst.load();
 
     auto assertions = assert_that(sst.read_rows_flat());
