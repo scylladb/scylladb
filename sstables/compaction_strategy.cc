@@ -47,7 +47,7 @@
 #include "compaction_strategy_impl.hh"
 #include "schema.hh"
 #include "sstable_set.hh"
-#include "compatible_ring_position.hh"
+#include "compatible_ring_position_view.hh"
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/adaptors.hpp>
 #include <boost/icl/interval_map.hpp>
@@ -191,7 +191,7 @@ std::unique_ptr<incremental_selector_impl> bag_sstable_set::make_incremental_sel
 // e.g. leveled compaction strategy
 class partitioned_sstable_set : public sstable_set_impl {
     using value_set = std::unordered_set<shared_sstable>;
-    using interval_map_type = boost::icl::interval_map<compatible_ring_position, value_set>;
+    using interval_map_type = boost::icl::interval_map<compatible_ring_position_view, value_set>;
     using interval_type = interval_map_type::interval_type;
     using map_iterator = interval_map_type::const_iterator;
 private:
@@ -201,14 +201,22 @@ private:
 private:
     static interval_type make_interval(const schema& s, const dht::partition_range& range) {
         return interval_type::closed(
-                compatible_ring_position(s, range.start()->value()),
-                compatible_ring_position(s, range.end()->value()));
+                compatible_ring_position_view(s, range.start()->value()),
+                compatible_ring_position_view(s, range.end()->value()));
     }
     interval_type make_interval(const dht::partition_range& range) const {
         return make_interval(*_schema, range);
     }
+    static interval_type make_interval(const schema& s, const sstable& sst) {
+        return interval_type::closed(
+                compatible_ring_position_view(s, dht::ring_position_view::starting_at(sst.get_first_decorated_key().token())),
+                compatible_ring_position_view(s, dht::ring_position_view::ending_at(sst.get_last_decorated_key().token())));
+    }
+    interval_type make_interval(const sstable& sst) const {
+        return make_interval(*_schema, sst);
+    }
     interval_type singular(const dht::ring_position& rp) const {
-        auto crp = compatible_ring_position(*_schema, rp);
+        auto crp = compatible_ring_position_view(*_schema, rp);
         return interval_type::closed(crp, crp);
     }
     std::pair<map_iterator, map_iterator> query(const dht::partition_range& range) const {
@@ -248,30 +256,14 @@ public:
         if (sst->get_sstable_level() == 0) {
             _unleveled_sstables.push_back(std::move(sst));
         } else {
-            auto first = sst->get_first_decorated_key().token();
-            auto last = sst->get_last_decorated_key().token();
-            using bound = dht::partition_range::bound;
-            _leveled_sstables.add({
-                    make_interval(
-                            dht::partition_range(
-                                    bound(dht::ring_position::starting_at(first)),
-                                    bound(dht::ring_position::ending_at(last)))),
-                    value_set({sst})});
+            _leveled_sstables.add({make_interval(*sst), value_set({sst})});
         }
     }
     virtual void erase(shared_sstable sst) override {
         if (sst->get_sstable_level() == 0) {
             _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
         } else {
-            auto first = sst->get_first_decorated_key().token();
-            auto last = sst->get_last_decorated_key().token();
-            using bound = dht::partition_range::bound;
-            _leveled_sstables.subtract({
-                    make_interval(
-                            dht::partition_range(
-                                    bound(dht::ring_position::starting_at(first)),
-                                    bound(dht::ring_position::ending_at(last)))),
-                    value_set({sst})});
+            _leveled_sstables.subtract({make_interval(*sst), value_set({sst})});
         }
     }
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;

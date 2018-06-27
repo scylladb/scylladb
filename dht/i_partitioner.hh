@@ -617,6 +617,7 @@ public:
         , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
+    const dht::token& token() const { return *_token; }
     const partition_key* key() const { return _key; }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
