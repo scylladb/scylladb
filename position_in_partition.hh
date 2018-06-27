@@ -121,7 +121,7 @@ public:
     position_in_partition_view(const clustering_key_prefix& ck)
         : _type(partition_region::clustered), _ck(&ck) { }
     position_in_partition_view(range_tag_t, bound_view bv)
-        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind)), _ck(&bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind())), _ck(&bv.prefix()) { }
 
     static position_in_partition_view for_range_start(const query::clustering_range& r) {
         return {position_in_partition_view::range_tag_t(), bound_view::from_range_start(r)};
@@ -214,7 +214,7 @@ public:
     position_in_partition(before_clustering_row_tag_t, clustering_key_prefix ck)
         : _type(partition_region::clustered), _bound_weight(-1), _ck(std::move(ck)) { }
     position_in_partition(range_tag_t, bound_view bv)
-        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind)), _ck(bv.prefix) { }
+        : _type(partition_region::clustered), _bound_weight(position_weight(bv.kind())), _ck(bv.prefix()) { }
     position_in_partition(after_static_row_tag_t) :
         position_in_partition(range_tag_t(), bound_view::bottom()) { }
     explicit position_in_partition(position_in_partition_view view)

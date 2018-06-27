@@ -166,7 +166,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 auto it = ranges.begin();
                 while (it != ranges.end()) {
                     auto range = bound_view::from_range(*it);
-                    if (cmp(end_bound(range), lo) || eq(end_bound(range).prefix, lo)) {
+                    if (cmp(end_bound(range), lo) || eq(end_bound(range).prefix(), lo)) {
                         qlogger.trace("Remove ck range {}", *it);
                         it = ranges.erase(it);
                         continue;

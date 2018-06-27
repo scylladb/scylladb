@@ -52,7 +52,7 @@ public:
             , tomb(std::move(tomb))
     { }
     range_tombstone(bound_view start, bound_view end, tombstone tomb)
-            : range_tombstone(start.prefix, start.kind, end.prefix, end.kind, std::move(tomb))
+            : range_tombstone(start.prefix(), start.kind(), end.prefix(), end.kind(), std::move(tomb))
     { }
     range_tombstone(clustering_key_prefix&& start, clustering_key_prefix&& end, tombstone tomb)
             : range_tombstone(std::move(start), bound_kind::incl_start, std::move(end), bound_kind::incl_end, std::move(tomb))
@@ -151,6 +151,9 @@ public:
         }
         if (less(position(), pos)) {
             set_start(s, pos);
+            bound_view new_start = pos.as_start_bound_view();
+            start = new_start.prefix();
+            start_kind = new_start.kind();
         }
         return true;
     }
@@ -158,8 +161,8 @@ public:
     // Assumes !pos.is_clustering_row(), because range_tombstone bounds can't represent such positions
     void set_start(const schema& s, position_in_partition_view pos) {
         bound_view new_start = pos.as_start_bound_view();
-        start = new_start.prefix;
-        start_kind = new_start.kind;
+        start = new_start.prefix();
+        start_kind = new_start.kind();
     }
 
     size_t external_memory_usage(const schema&) const {

@@ -125,7 +125,7 @@ public:
         return _tombstones.end();
     }
     void apply(const schema& s, const bound_view& start_bound, const bound_view& end_bound, tombstone tomb) {
-        apply(s, start_bound.prefix, start_bound.kind, end_bound.prefix, end_bound.kind, std::move(tomb));
+        apply(s, start_bound.prefix(), start_bound.kind(), end_bound.prefix(), end_bound.kind(), std::move(tomb));
     }
     void apply(const schema& s, const range_tombstone& rt) {
         apply(s, rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb);

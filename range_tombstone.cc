@@ -68,10 +68,10 @@ void range_tombstone_accumulator::drop_unneeded_tombstones(const clustering_key_
     auto cmp = [&] (const range_tombstone& rt, const clustering_key_prefix& ck, int w) {
         if (_reversed) {
             auto bv = rt.start_bound();
-            return _cmp(ck, w, bv.prefix, weight(bv.kind));
+            return _cmp(ck, w, bv.prefix(), weight(bv.kind()));
         }
         auto bv = rt.end_bound();
-        return _cmp(bv.prefix, weight(bv.kind), ck, w);
+        return _cmp(bv.prefix(), weight(bv.kind()), ck, w);
     };
     while (!_range_tombstones.empty() && cmp(*_range_tombstones.begin(), ck, w)) {
         _range_tombstones.pop_front();

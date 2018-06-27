@@ -252,7 +252,7 @@ range_tombstone_list range_tombstone_list::difference(const schema& s, const ran
             ++other_rt;
             continue;
         }
-        auto new_end = bound_view(other_rt->start_bound().prefix, invert_kind(other_rt->start_bound().kind));
+        auto new_end = bound_view(other_rt->start_bound().prefix(), invert_kind(other_rt->start_bound().kind()));
         if (cmp_rt(cur_start, new_end)) {
             diff.apply(s, cur_start, new_end, this_rt->tomb);
             cur_start = other_rt->start_bound();
@@ -267,7 +267,7 @@ range_tombstone_list range_tombstone_list::difference(const schema& s, const ran
             if (this_rt->tomb > other_rt->tomb) {
                 diff.apply(s, cur_start, end, this_rt->tomb);
             }
-            cur_start = bound_view(end.prefix, invert_kind(end.kind));
+            cur_start = bound_view(end.prefix(), invert_kind(end.kind()));
             ++other_rt;
             if (cmp_rt(cur_end, cur_start)) {
                 advance_this_rt();

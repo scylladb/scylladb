@@ -113,4 +113,4 @@ int32_t weight(bound_kind k) {
     abort();
 }
 
-const thread_local clustering_key_prefix bound_view::empty_prefix = clustering_key::make_empty();
+const thread_local clustering_key_prefix bound_view::_empty_prefix = clustering_key::make_empty();

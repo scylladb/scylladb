@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <functional>
 #include "keys.hh"
 #include "schema.hh"
 #include "range.hh"
@@ -43,22 +44,20 @@ bound_kind invert_kind(bound_kind k);
 int32_t weight(bound_kind k);
 
 class bound_view {
+    const static thread_local clustering_key _empty_prefix;
+    std::reference_wrapper<const clustering_key_prefix> _prefix;
+    bound_kind _kind;
 public:
-    const static thread_local clustering_key empty_prefix;
-    const clustering_key_prefix& prefix;
-    bound_kind kind;
     bound_view(const clustering_key_prefix& prefix, bound_kind kind)
-        : prefix(prefix)
-        , kind(kind)
+        : _prefix(prefix)
+        , _kind(kind)
     { }
     bound_view(const bound_view& other) noexcept = default;
-    bound_view& operator=(const bound_view& other) noexcept {
-        if (this != &other) {
-            this->~bound_view();
-            new (this) bound_view(other);
-        }
-        return *this;
-    }
+    bound_view& operator=(const bound_view& other) noexcept = default;
+
+    bound_kind kind() const { return _kind; }
+    const clustering_key_prefix& prefix() const { return _prefix; }
+
     struct tri_compare {
         // To make it assignable and to avoid taking a schema_ptr, we
         // wrap the schema reference.
@@ -82,13 +81,13 @@ public:
             return d1 < d2 ? w1 - (w1 <= 0) : -(w2 - (w2 <= 0));
         }
         int operator()(const bound_view b, const clustering_key_prefix& p) const {
-            return operator()(b.prefix, weight(b.kind), p, 0);
+            return operator()(b._prefix, weight(b._kind), p, 0);
         }
         int operator()(const clustering_key_prefix& p, const bound_view b) const {
-            return operator()(p, 0, b.prefix, weight(b.kind));
+            return operator()(p, 0, b._prefix, weight(b._kind));
         }
         int operator()(const bound_view b1, const bound_view b2) const {
-            return operator()(b1.prefix, weight(b1.kind), b2.prefix, weight(b2.kind));
+            return operator()(b1._prefix, weight(b1._kind), b2._prefix, weight(b2._kind));
         }
     };
     struct compare {
@@ -101,26 +100,26 @@ public:
             return _cmp(p1, w1, p2, w2) < 0;
         }
         bool operator()(const bound_view b, const clustering_key_prefix& p) const {
-            return operator()(b.prefix, weight(b.kind), p, 0);
+            return operator()(b._prefix, weight(b._kind), p, 0);
         }
         bool operator()(const clustering_key_prefix& p, const bound_view b) const {
-            return operator()(p, 0, b.prefix, weight(b.kind));
+            return operator()(p, 0, b._prefix, weight(b._kind));
         }
         bool operator()(const bound_view b1, const bound_view b2) const {
-            return operator()(b1.prefix, weight(b1.kind), b2.prefix, weight(b2.kind));
+            return operator()(b1._prefix, weight(b1._kind), b2._prefix, weight(b2._kind));
         }
     };
     bool equal(const schema& s, const bound_view other) const {
-        return kind == other.kind && prefix.equal(s, other.prefix);
+        return _kind == other._kind && _prefix.get().equal(s, other._prefix.get());
     }
     bool adjacent(const schema& s, const bound_view other) const {
-        return invert_kind(other.kind) == kind && prefix.equal(s, other.prefix);
+        return invert_kind(other._kind) == _kind && _prefix.get().equal(s, other._prefix.get());
     }
     static bound_view bottom() {
-        return {empty_prefix, bound_kind::incl_start};
+        return {_empty_prefix, bound_kind::incl_start};
     }
     static bound_view top() {
-        return {empty_prefix, bound_kind::incl_end};
+        return {_empty_prefix, bound_kind::incl_end};
     }
     template<template<typename> typename R>
     GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
@@ -144,13 +143,13 @@ public:
     template<template<typename> typename R>
     GCC6_CONCEPT( requires Range<R, clustering_key_prefix_view> )
     static stdx::optional<typename R<clustering_key_prefix_view>::bound> to_range_bound(const bound_view& bv) {
-        if (&bv.prefix == &empty_prefix) {
+        if (&bv._prefix.get() == &_empty_prefix) {
             return {};
         }
-        bool inclusive = bv.kind != bound_kind::excl_end && bv.kind != bound_kind::excl_start;
-        return {typename R<clustering_key_prefix_view>::bound(bv.prefix.view(), inclusive)};
+        bool inclusive = bv._kind != bound_kind::excl_end && bv._kind != bound_kind::excl_start;
+        return {typename R<clustering_key_prefix_view>::bound(bv._prefix.get().view(), inclusive)};
     }
     friend std::ostream& operator<<(std::ostream& out, const bound_view& b) {
-        return out << "{bound: prefix=" << b.prefix << ", kind=" << b.kind << "}";
+        return out << "{bound: prefix=" << b._prefix.get() << ", kind=" << b._kind << "}";
     }
 };
