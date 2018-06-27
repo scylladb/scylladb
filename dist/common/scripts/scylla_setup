@@ -293,10 +293,14 @@ if __name__ == '__main__':
             else:
                 print('Please select unmounted disks from the following list: {}'.format(devices))
             selected = []
+            dsklist = []
             while len(devices):
                 print('type \'cancel\' to cancel RAID/XFS setup.')
                 print('type \'done\' to finish selection. Selected: {}'.format(selected))
-                dsk = input('> ')
+                if len(dsklist) > 0:
+                    dsk = dsklist.pop(0)
+                else:
+                    dsk = input('> ')
                 if dsk == 'cancel':
                     raid_setup = 0
                     break
@@ -305,6 +309,9 @@ if __name__ == '__main__':
                         continue
                     break
                 if dsk == '':
+                    continue
+                if dsk.find(',') > 0:
+                    dsklist = dsk.split(',')
                     continue
                 if not os.path.exists(dsk):
                     print('{} not found'.format(dsk))
