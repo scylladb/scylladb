@@ -3008,3 +3008,259 @@ SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
         assert_that(res).is_rows().is_empty();
     });
 }
+
+SEASTAR_TEST_CASE(test_allow_filtering_check) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (p int, c int, v int, PRIMARY KEY(p, c));").get();
+        e.require_table_exists("ks", "t").get();
+
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j <3; ++j) {
+                e.execute_cql(sprint("INSERT INTO t(p, c, v) VALUES (%s, %s, %s)", i, j, j)).get();
+            }
+        }
+
+        std::vector<sstring> queries = {
+                "SELECT * FROM t WHERE p = 1",
+                "SELECT * FROM t WHERE p = 1 and c > 2",
+                "SELECT * FROM t WHERE p = 1 and c = 2"
+        };
+
+        for (const sstring& q : queries) {
+            e.execute_cql(q).get();
+            e.execute_cql(q + " ALLOW FILTERING").get();
+        }
+
+        queries = {
+            "SELECT * FROM t WHERE c = 2",
+            "SELECT * FROM t WHERE c <= 4"
+        };
+
+        for (const sstring& q : queries) {
+            BOOST_CHECK_THROW(e.execute_cql(q).get(), exceptions::invalid_request_exception);
+            e.execute_cql(q + " ALLOW FILTERING").get();
+        }
+
+        e.execute_cql("CREATE TABLE t2 (p int PRIMARY KEY, a int, b int);").get();
+        e.require_table_exists("ks", "t2").get();
+        e.execute_cql("CREATE INDEX ON t2(a)").get();
+        for (int i = 0; i < 5; ++i) {
+            e.execute_cql(sprint("INSERT INTO t2 (p, a, b) VALUES (%s, %s, %s)", i, i * 10, i * 100)).get();
+        }
+
+        queries = {
+            "SELECT * FROM t2 WHERE p = 1",
+            "SELECT * FROM t2 WHERE a = 20"
+        };
+
+        for (const sstring& q : queries) {
+            e.execute_cql(q).get();
+            e.execute_cql(q + " ALLOW FILTERING").get();
+        }
+
+        queries = {
+            "SELECT * FROM t2 WHERE a = 20 AND b = 200"
+        };
+
+        for (const sstring& q : queries) {
+            BOOST_CHECK_THROW(e.execute_cql(q).get(), exceptions::invalid_request_exception);
+            e.execute_cql(q + " ALLOW FILTERING").get();
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_allow_filtering_pk_ck) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY ((a, b), c, d));").get();
+        e.require_table_exists("ks", "t").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (11, 12, 13, 14, 15)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (11, 15, 16, 17, 18)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (21, 22, 23, 24, 25)").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d,e) VALUES (31, 32, 33, 34, 35)").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 15 AND c = 16").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 12 AND c > 13 AND d = 14").get(), exceptions::invalid_request_exception);
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 15 AND c = 16").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 15 AND c > 13 AND d >= 17 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 12 AND c > 13 AND d > 17").get(), exceptions::invalid_request_exception);
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a = 11 AND b = 15 AND c > 13 AND d >= 17 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a <= 11 AND c > 15 AND d >= 16 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a <= 11 AND b >= 15 AND c > 15 AND d >= 16 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(11),
+            int32_type->decompose(15),
+            int32_type->decompose(16),
+            int32_type->decompose(17),
+            int32_type->decompose(18),
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE a <= 100 AND b >= 15 AND c > 0 AND d <= 100 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(11),
+                int32_type->decompose(15),
+                int32_type->decompose(16),
+                int32_type->decompose(17),
+                int32_type->decompose(18),
+            },
+            {
+                int32_type->decompose(31),
+                int32_type->decompose(32),
+                int32_type->decompose(33),
+                int32_type->decompose(34),
+                int32_type->decompose(35),
+            },
+            {
+                int32_type->decompose(21),
+                int32_type->decompose(22),
+                int32_type->decompose(23),
+                int32_type->decompose(24),
+                int32_type->decompose(25),
+            }
+        });
+
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE a <= 11 AND c > 15 AND d >= 16").get(), exceptions::invalid_request_exception);
+    });
+}
+
+SEASTAR_TEST_CASE(test_allow_filtering_clustering_column) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (k int, c int, v int, PRIMARY KEY (k, c));").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 2, 1)").get();
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (1, 3, 2)").get();
+        e.execute_cql("INSERT INTO t (k, c, v) VALUES (2, 2, 3)").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t WHERE k = 1").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(3),
+                int32_type->decompose(2)
+           }
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE k = 1 AND c > 2").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(1),
+            int32_type->decompose(3),
+            int32_type->decompose(2)
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE k = 1 AND c = 2").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(1),
+            int32_type->decompose(2),
+            int32_type->decompose(1)
+        }});
+
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c = 2").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c > 2 AND c <= 4").get(), exceptions::invalid_request_exception);
+
+        msg = e.execute_cql("SELECT * FROM t WHERE c = 2 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1)
+            },
+            {
+                int32_type->decompose(2),
+                int32_type->decompose(2),
+                int32_type->decompose(3)
+           }
+        });
+
+        msg = e.execute_cql("SELECT * FROM t WHERE c > 2 AND c <= 4 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(1),
+            int32_type->decompose(3),
+            int32_type->decompose(2)
+        }});
+    });
+}
+
+SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, s int static, PRIMARY KEY(a, b));").get();
+        e.require_table_exists("ks", "t").get();
+        e.execute_cql("CREATE INDEX ON t(c)").get();
+
+        e.execute_cql("INSERT INTO t (a, b, c, s) VALUES (1, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO t (a, b, c) VALUES (1, 2, 1)").get();
+        e.execute_cql("INSERT INTO t (a, s) VALUES (3, 3)").get();
+        e.execute_cql("INSERT INTO t (a, b, c, s) VALUES (2, 1, 1, 2)").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 2 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(2),
+            int32_type->decompose(1),
+            int32_type->decompose(2),
+            int32_type->decompose(1)
+        }});
+
+        msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 1 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(1)
+           }
+        });
+    });
+}
