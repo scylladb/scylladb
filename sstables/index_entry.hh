@@ -22,8 +22,6 @@
 #pragma once
 #include "consumer.hh"
 #include "types.hh"
-#include <boost/variant.hpp>
-#include <seastar/util/variant_utils.hh>
 
 namespace sstables {
 
