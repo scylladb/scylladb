@@ -112,6 +112,7 @@ boost_tests = [
     'sstable_3_x_test',
     'meta_test',
     'reusable_buffer_test',
+    'multishard_writer_test',
 ]
 
 other_tests = [
