@@ -384,7 +384,7 @@ struct sst_factory {
     schema_ptr s;
     sstring path;
     unsigned gen;
-    int level;
+    uint32_t level;
 
     sst_factory(schema_ptr s, const sstring& path, unsigned gen, int level)
         : s(s)
@@ -396,8 +396,8 @@ struct sst_factory {
     sstables::shared_sstable operator()() {
         auto sst = sstables::make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         sst->set_unshared();
-
-        //TODO set sstable level, to make the test more interesting
+        //sst->set_sstable_level(level);
+        sst->get_metadata_collector().sstable_level(level);
 
         return sst;
     }
@@ -406,96 +406,73 @@ struct sst_factory {
 SEASTAR_TEST_CASE(combined_mutation_reader_test) {
     return seastar::async([] {
         storage_service_for_tests ssft;
-        //logging::logger_registry().set_logger_level("database", logging::log_level::trace);
 
         simple_schema s;
 
-        const auto pkeys = s.make_pkeys(4);
+        auto pkeys = s.make_pkeys(6);
         const auto ckeys = s.make_ckeys(4);
 
-        std::vector<mutation> base_mutations = boost::copy_range<std::vector<mutation>>(
-                pkeys | boost::adaptors::transformed([&s](const auto& k) { return mutation(s.schema(), k); }));
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
-        // Data layout:
-        //   d[xx]
-        // b[xx][xx]c
-        // a[x    x]
+        auto make_sstable_mutations = [&] (sstring value_prefix, unsigned ckey_index, bool static_row, std::vector<unsigned> pkey_indexes) {
+            std::vector<mutation> muts;
 
-        int i{0};
+            for (auto pkey_index : pkey_indexes) {
+                muts.emplace_back(s.schema(), pkeys[pkey_index]);
+                auto& mut = muts.back();
+                s.add_row(mut, ckeys[ckey_index], sprint("%s_%i_val", value_prefix, ckey_index));
 
-        // sstable d
-        std::vector<mutation> table_d_mutations;
+                if (static_row) {
+                    s.add_static_row(mut, sprint("%s_static_val", value_prefix));
+                }
+            }
 
-        i = 1;
-        table_d_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_d_mutations.back(), ckeys[i], sprint("val_d_%i", i));
+            return muts;
+        };
 
-        i = 2;
-        table_d_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_d_mutations.back(), ckeys[i], sprint("val_d_%i", i));
-        const auto t_static_row = s.add_static_row(table_d_mutations.back(), sprint("%i_static_val", i));
+        std::vector<mutation> sstable_level_0_0_mutations = make_sstable_mutations("level_0_0", 0, true,  {0, 1,       4   });
+        std::vector<mutation> sstable_level_1_0_mutations = make_sstable_mutations("level_1_0", 1, false, {0, 1            });
+        std::vector<mutation> sstable_level_1_1_mutations = make_sstable_mutations("level_1_1", 1, false, {      2, 3      });
+        std::vector<mutation> sstable_level_2_0_mutations = make_sstable_mutations("level_2_0", 2, false, {   1,       4   });
+        std::vector<mutation> sstable_level_2_1_mutations = make_sstable_mutations("level_2_1", 2, false, {               5});
 
-        // sstable b
-        std::vector<mutation> table_b_mutations;
-
-        i = 0;
-        table_b_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_b_mutations.back(), ckeys[i], sprint("val_b_%i", i));
-
-        i = 1;
-        table_b_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_b_mutations.back(), ckeys[i], sprint("val_b_%i", i));
-
-        // sstable c
-        std::vector<mutation> table_c_mutations;
-
-        i = 2;
-        table_c_mutations.emplace_back(base_mutations[i]);
-        const auto t_row = s.add_row(table_c_mutations.back(), ckeys[i], sprint("val_c_%i", i));
-
-        i = 3;
-        table_c_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_c_mutations.back(), ckeys[i], sprint("val_c_%i", i));
-
-        // sstable a
-        std::vector<mutation> table_a_mutations;
-
-        i = 0;
-        table_a_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_a_mutations.back(), ckeys[i], sprint("val_a_%i", i));
-
-        i = 3;
-        table_a_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_a_mutations.back(), ckeys[i], sprint("val_a_%i", i));
+        const mutation expexted_mutation_0 = sstable_level_0_0_mutations[0] + sstable_level_1_0_mutations[0];
+        const mutation expexted_mutation_1 = sstable_level_0_0_mutations[1] + sstable_level_1_0_mutations[1] + sstable_level_2_0_mutations[0];
+        const mutation expexted_mutation_2 = sstable_level_1_1_mutations[0];
+        const mutation expexted_mutation_3 = sstable_level_1_1_mutations[1];
+        const mutation expexted_mutation_4 = sstable_level_0_0_mutations[2] + sstable_level_2_0_mutations[1];
+        const mutation expexted_mutation_5 = sstable_level_2_1_mutations[0];
 
         auto tmp = make_lw_shared<tmpdir>();
 
         unsigned gen{0};
-
-        std::vector<sstables::shared_sstable> tables = {
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 0), table_a_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 1), table_b_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 1), table_c_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 2), table_d_mutations)
+        std::vector<sstables::shared_sstable> sstable_list = {
+                make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 0), std::move(sstable_level_0_0_mutations)),
+                make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_0_mutations)),
+                make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_1_mutations)),
+                make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_0_mutations)),
+                make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_1_mutations)),
         };
 
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
-        auto sstables = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
+        auto sstable_set = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
 
         std::vector<flat_mutation_reader> sstable_mutation_readers;
 
-        for (auto table : tables) {
-            sstables->insert(table);
+        for (auto sst : sstable_list) {
+            sstable_set->insert(sst);
 
             sstable_mutation_readers.emplace_back(
-                table->read_range_rows_flat(
+                sst->as_mutation_source().make_reader(
                     s.schema(),
                     query::full_partition_range,
                     s.schema()->full_slice(),
                     seastar::default_priority_class(),
-                    no_resource_tracking(),
+                    nullptr,
                     streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes));
+                    mutation_reader::forwarding::no));
         }
 
         auto list_reader = make_combined_reader(s.schema(),
@@ -503,32 +480,32 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
 
         auto incremental_reader = make_local_shard_sstable_reader(
                 s.schema(),
-                sstables,
+                sstable_set,
                 query::full_partition_range,
                 s.schema()->full_slice(),
                 seastar::default_priority_class(),
                 no_resource_tracking(),
                 nullptr,
                 streamed_mutation::forwarding::no,
-                mutation_reader::forwarding::yes);
-
-        // merge c[0] with d[1]
-        i = 2;
-        auto c_d_merged = mutation(s.schema(), pkeys[i]);
-        s.add_row(c_d_merged, ckeys[i], sprint("val_c_%i", i), t_row);
-        s.add_static_row(c_d_merged, sprint("%i_static_val", i), t_static_row);
+                mutation_reader::forwarding::no);
 
         assert_that(std::move(list_reader))
-            .produces(table_a_mutations.front())
-            .produces(table_b_mutations[1])
-            .produces(c_d_merged)
-            .produces(table_a_mutations.back());
+            .produces(expexted_mutation_0)
+            .produces(expexted_mutation_1)
+            .produces(expexted_mutation_2)
+            .produces(expexted_mutation_3)
+            .produces(expexted_mutation_4)
+            .produces(expexted_mutation_5)
+            .produces_end_of_stream();
 
         assert_that(std::move(incremental_reader))
-            .produces(table_a_mutations.front())
-            .produces(table_b_mutations[1])
-            .produces(c_d_merged)
-            .produces(table_a_mutations.back());
+            .produces(expexted_mutation_0)
+            .produces(expexted_mutation_1)
+            .produces(expexted_mutation_2)
+            .produces(expexted_mutation_3)
+            .produces(expexted_mutation_4)
+            .produces(expexted_mutation_5)
+            .produces_end_of_stream();
     });
 }
 
