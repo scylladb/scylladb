@@ -30,6 +30,7 @@
 #include "mutation.hh"
 #include "schema_builder.hh"
 #include "streamed_mutation.hh"
+#include "sstable_utils.hh"
 
 // Helper for working with the following table:
 //
@@ -147,12 +148,14 @@ public:
 
     // Creates a sequence of keys in ring order
     std::vector<dht::decorated_key> make_pkeys(int n) {
-        std::vector<dht::decorated_key> keys;
-        for (int i = 0; i < n; ++i) {
-            keys.push_back(make_pkey(i));
-        }
-        std::sort(keys.begin(), keys.end(), dht::decorated_key::less_comparator(_s));
-        return keys;
+        auto local_keys = make_local_keys(n, _s);
+        return boost::copy_range<std::vector<dht::decorated_key>>(local_keys | boost::adaptors::transformed([this] (sstring& key) {
+            return make_pkey(std::move(key));
+        }));
+    }
+
+    dht::decorated_key make_pkey() {
+        return make_pkey(make_local_key(_s));
     }
 
     static std::vector<dht::ring_position> to_ring_positions(const std::vector<dht::decorated_key>& keys) {
