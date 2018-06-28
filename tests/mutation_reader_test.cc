@@ -601,6 +601,10 @@ SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
         simple_schema s;
         auto pkeys = s.make_pkeys(3);
 
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
+
         auto mut1 = make_mutation_with_key(s, pkeys[0]);
         auto mut2a = make_mutation_with_key(s, pkeys[1]);
         auto mut2b = make_mutation_with_key(s, pkeys[1]);
@@ -630,7 +634,11 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
         storage_service_for_tests ssft;
 
         simple_schema s;
-        auto pkeys = s.make_pkeys(3);
+        auto pkeys = s.make_pkeys(4);
+
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
         auto mut1 = make_mutation_with_key(s, pkeys[0]);
         auto mut2a = make_mutation_with_key(s, pkeys[1]);
@@ -638,14 +646,27 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
         auto mut3a = make_mutation_with_key(s, pkeys[2]);
         auto mut3b = make_mutation_with_key(s, pkeys[2]);
         auto mut3c = make_mutation_with_key(s, pkeys[2]);
+        auto mut4a = make_mutation_with_key(s, pkeys[3]);
+        auto mut4b = make_mutation_with_key(s, pkeys[3]);
 
         tombstone tomb(100, {});
         mut2b.partition().apply(tomb);
 
+        s.add_row(mut2a, s.make_ckey(1), "a");
+        s.add_row(mut2b, s.make_ckey(2), "b");
+
+        s.add_row(mut3a, s.make_ckey(1), "a");
+        s.add_row(mut3b, s.make_ckey(2), "b");
+        s.add_row(mut3c, s.make_ckey(3), "c");
+
+        s.add_row(mut4a, s.make_ckey(1), "a");
+        s.add_row(mut4b, s.make_ckey(2), "b");
+
         std::vector<std::vector<mutation>> readers_mutations{
             {mut1, mut2a, mut3a},
             {mut2b, mut3b},
-            {mut3c}
+            {mut3c, mut4a},
+            {mut4b},
         };
 
         auto reader = make_combined_reader(s.schema(),
@@ -657,6 +678,7 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
             .produces_partition(mut1)
             .produces_partition(mut2a + mut2b)
             .produces_partition(mut3a + mut3b + mut3c)
+            .produces_partition(mut4a + mut4b)
             .produces_end_of_stream();
     });
 }
@@ -667,6 +689,10 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
         simple_schema s;
         auto pkeys = s.make_pkeys(5);
+
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
         auto mut1a = make_mutation_with_key(s, pkeys[0]);
         auto mut1b = make_mutation_with_key(s, pkeys[0]);
