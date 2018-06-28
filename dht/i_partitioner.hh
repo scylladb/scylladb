@@ -540,6 +540,7 @@ class ring_position_view {
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 public:
+    using token_bound = ring_position::token_bound;
     struct after_key_tag {};
     using after_key = bool_class<after_key_tag>;
 
@@ -575,6 +576,14 @@ public:
         return ring_position_view(after_key_tag(), view);
     }
 
+    static ring_position_view starting_at(const dht::token& t) {
+        return ring_position_view(t, token_bound::start);
+    }
+
+    static ring_position_view ending_at(const dht::token& t) {
+        return ring_position_view(t, token_bound::end);
+    }
+
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
         : _token(&pos.token())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
@@ -602,10 +611,10 @@ public:
         , _weight(weight)
     { }
 
-    explicit ring_position_view(const dht::token& token, int8_t weight = -1)
+    explicit ring_position_view(const dht::token& token, token_bound bound = token_bound::start)
         : _token(&token)
         , _key(nullptr)
-        , _weight(weight)
+        , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
     const partition_key* key() const { return _key; }
