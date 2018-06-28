@@ -525,6 +525,7 @@ public:
 // Such range includes all keys k such that v1 <= k < v2, with order defined by ring_position_comparator.
 //
 class ring_position_view {
+    friend int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
     friend class ring_position_comparator;
 
     // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
@@ -611,6 +612,8 @@ public:
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
+
+int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
 
 // Trichotomic comparator for ring order
 struct ring_position_comparator {
