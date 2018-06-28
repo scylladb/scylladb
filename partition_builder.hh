@@ -25,7 +25,7 @@
 #include "mutation_partition_view.hh"
 
 // Partition visitor which builds mutation_partition corresponding to the data its fed with.
-class partition_builder : public mutation_partition_visitor {
+class partition_builder final : public mutation_partition_visitor {
 private:
     const schema& _schema;
     mutation_partition& _partition;
@@ -43,9 +43,13 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
-        row& r = _partition.static_row();
         auto& cdef = _schema.static_column_at(id);
-        r.append_cell(id, atomic_cell_or_collection(*cdef.type, cell));
+        accept_static_cell(id, atomic_cell(*cdef.type, cell));
+    }
+
+    void accept_static_cell(column_id id, atomic_cell&& cell) {
+        row& r = _partition.static_row();
+        r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
@@ -66,9 +70,13 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        row& r = _current_row->cells();
         auto& cdef = _schema.regular_column_at(id);
-        r.append_cell(id, atomic_cell_or_collection(*cdef.type, cell));
+        accept_row_cell(id, atomic_cell(*cdef.type, cell));
+    }
+
+    void accept_row_cell(column_id id, atomic_cell&& cell) {
+        row& r = _current_row->cells();
+        r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {

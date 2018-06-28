@@ -92,6 +92,10 @@ public:
         _p.apply(t);
     }
 
+    void accept_static_cell(column_id id, atomic_cell cell) {
+        return accept_static_cell(id, atomic_cell_view(cell));
+    }
+
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
         const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
@@ -117,6 +121,10 @@ public:
         r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;
+    }
+
+    void accept_row_cell(column_id id, atomic_cell cell) {
+        return accept_row_cell(id, atomic_cell_view(cell));
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {

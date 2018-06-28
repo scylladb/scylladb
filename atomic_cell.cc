@@ -47,7 +47,24 @@ atomic_cell atomic_cell::make_live(const abstract_type& type, api::timestamp_typ
     );
 }
 
+atomic_cell atomic_cell::make_live(const abstract_type& type, api::timestamp_type timestamp, ser::buffer_view<bytes_ostream::fragment_iterator> value, atomic_cell::collection_member cm) {
+    auto& imr_data = type.imr_state();
+    return atomic_cell(
+        imr_data.type_info(),
+        imr_object_type::make(data::cell::make_live(imr_data.type_info(), timestamp, value, bool(cm)), &imr_data.lsa_migrator())
+    );
+}
+
 atomic_cell atomic_cell::make_live(const abstract_type& type, api::timestamp_type timestamp, bytes_view value,
+                             gc_clock::time_point expiry, gc_clock::duration ttl, atomic_cell::collection_member cm) {
+    auto& imr_data = type.imr_state();
+    return atomic_cell(
+        imr_data.type_info(),
+        imr_object_type::make(data::cell::make_live(imr_data.type_info(), timestamp, value, expiry, ttl, bool(cm)), &imr_data.lsa_migrator())
+    );
+}
+
+atomic_cell atomic_cell::make_live(const abstract_type& type, api::timestamp_type timestamp, ser::buffer_view<bytes_ostream::fragment_iterator> value,
                              gc_clock::time_point expiry, gc_clock::duration ttl, atomic_cell::collection_member cm) {
     auto& imr_data = type.imr_state();
     return atomic_cell(

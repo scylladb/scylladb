@@ -52,24 +52,18 @@ bool is_compatible(column_kind k1, column_kind k2) {
 }
 
 column_mapping_entry::column_mapping_entry(bytes name, sstring type_name)
-    : _name(std::move(name))
-    , _type(db::marshal::type_parser::parse(type_name))
+    : column_mapping_entry(std::move(name), db::marshal::type_parser::parse(type_name))
 {
 }
 
 column_mapping_entry::column_mapping_entry(const column_mapping_entry& o)
-    : _name(o._name)
-    , _type(db::marshal::type_parser::parse(o._type->name()))
+    : column_mapping_entry(o._name, o._type->name())
 {
 }
 
 column_mapping_entry& column_mapping_entry::operator=(const column_mapping_entry& o) {
-    if (this != &o) {
-        auto tmp = o;
-        this->~column_mapping_entry();
-        new (this) column_mapping_entry(std::move(tmp));
-    }
-    return *this;
+    auto copy = o;
+    return operator=(std::move(copy));
 }
 
 template<typename Sequence>
