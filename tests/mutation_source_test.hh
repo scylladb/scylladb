@@ -22,6 +22,7 @@
 #pragma once
 
 #include "mutation_reader.hh"
+#include "tests/sstable_utils.hh"
 
 using populate_fn = std::function<mutation_source(schema_ptr s, const std::vector<mutation>&)>;
 
@@ -49,7 +50,7 @@ public:
     struct generate_counters_tag { };
     using generate_counters = bool_class<generate_counters_tag>;
 
-    explicit random_mutation_generator(generate_counters);
+    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes);
     ~random_mutation_generator();
     mutation operator()();
     // Generates n mutations sharing the same schema nad sorted by their decorated keys.

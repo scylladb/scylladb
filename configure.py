@@ -303,6 +303,7 @@ scylla_tests = [
     'tests/imr_test',
     'tests/partition_data_test',
     'tests/reusable_buffer_test',
+    'tests/multishard_writer_test',
 ]
 
 perf_tests = [
@@ -629,6 +630,7 @@ scylla_core = (['database.cc',
                  'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                  'querier.cc',
                  'data/cell.cc',
+                 'multishard_writer.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
