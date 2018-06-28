@@ -78,7 +78,7 @@ static atomic_cell make_atomic_cell(data_type dt, T value) {
 
 template<typename T>
 static atomic_cell make_collection_member(data_type dt, T value) {
-    return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)));
+    return atomic_cell::make_live(*dt, 0, dt->decompose(std::move(value)), atomic_cell::collection_member::yes);
 };
 
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
