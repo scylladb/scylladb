@@ -53,7 +53,7 @@
 #include "cell_locking.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "service/storage_proxy.hh"
-
+#include "random-utils.hh"
 #include "simple_schema.hh"
 
 using namespace std::chrono_literals;
@@ -1602,4 +1602,117 @@ SEASTAR_TEST_CASE(test_continuity_merging) {
             assert_that(incomplete + incomplete).has_same_continuity(incomplete);
         }
     });
+}
+
+class measuring_allocator final : public allocation_strategy {
+    size_t _allocated_bytes;
+public:
+    virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
+        _allocated_bytes += size;
+        return standard_allocator().alloc(mf, size, alignment);
+    }
+    virtual void free(void* ptr, size_t size) override {
+        standard_allocator().free(ptr, size);
+    }
+    virtual void free(void* ptr) override {
+        standard_allocator().free(ptr);
+    }
+    virtual size_t object_memory_size_in_allocator(const void* obj) const noexcept override {
+        return standard_allocator().object_memory_size_in_allocator(obj);
+    }
+    size_t allocated_bytes() const { return _allocated_bytes; }
+};
+
+SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
+    measuring_allocator alloc;
+    auto s = simple_schema();
+
+    auto generate = [&s] {
+        size_t data_size = 0;
+
+        auto m = mutation(s.schema(), s.make_pkey("pk"));
+
+        auto row_count = tests::random::get_int(1, 16);
+        for (auto i = 0; i < row_count; i++) {
+            auto ck_value = to_hex(tests::random::get_bytes(tests::random::get_int(1023) + 1));
+            data_size += ck_value.size();
+            auto ck = s.make_ckey(ck_value);
+
+            auto value = to_hex(tests::random::get_bytes(tests::random::get_int(128 * 1024)));
+            data_size += value.size();
+            s.add_row(m, ck, value);
+        }
+
+        return std::pair(std::move(m), data_size);
+    };
+
+    for (auto i = 0; i < 16; i++) {
+        auto [ m, size ] = generate();
+
+        with_allocator(alloc, [&] {
+            auto before = alloc.allocated_bytes();
+            auto m2 = m;
+            auto after = alloc.allocated_bytes();
+
+            BOOST_CHECK_EQUAL(m.partition().external_memory_usage(*s.schema()),
+                              m2.partition().external_memory_usage(*s.schema()));
+
+            BOOST_CHECK_GE(m.partition().external_memory_usage(*s.schema()), size);
+            BOOST_CHECK_EQUAL(m.partition().external_memory_usage(*s.schema()), after - before);
+        });
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
+    measuring_allocator alloc;
+
+
+    auto test_live_atomic_cell = [&] (data_type dt, bytes_view bv) {
+        with_allocator(alloc, [&] {
+            auto before = alloc.allocated_bytes();
+            auto ac = atomic_cell_or_collection(atomic_cell::make_live(*dt, 1, bv));
+            auto after = alloc.allocated_bytes();
+            BOOST_CHECK_GE(ac.external_memory_usage(*dt), bv.size());
+            BOOST_CHECK_EQUAL(ac.external_memory_usage(*dt), after - before);
+        });
+    };
+
+    test_live_atomic_cell(int32_type, { });
+    test_live_atomic_cell(int32_type, int32_type->decompose(int32_t(1)));
+
+    test_live_atomic_cell(bytes_type, { });
+    test_live_atomic_cell(bytes_type, bytes(1, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(16, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(32, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(1024, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(64 * 1024 - 1, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(64 * 1024, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(64 * 1024 + 1, 'a'));
+    test_live_atomic_cell(bytes_type, bytes(1024 * 1024, 'a'));
+
+    auto test_collection = [&] (bytes_view bv) {
+        auto collection_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+
+        auto m = make_collection_mutation({ }, int32_type->decompose(0), make_collection_member(bytes_type, data_value(bytes(bv))));
+        auto cell = atomic_cell_or_collection(collection_type->serialize_mutation_form(m));
+
+        with_allocator(alloc, [&] {
+            auto before = alloc.allocated_bytes();
+            auto cell2 = cell.copy(*collection_type);
+            auto after = alloc.allocated_bytes();
+            BOOST_CHECK_GE(cell2.external_memory_usage(*collection_type), bv.size());
+            BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), cell.external_memory_usage(*collection_type));
+            BOOST_CHECK_EQUAL(cell2.external_memory_usage(*collection_type), after - before);
+        });
+    };
+
+    test_collection({ });
+    test_collection(bytes(1, 'a'));
+    test_collection(bytes(16, 'a'));
+    test_collection(bytes(32, 'a'));
+    test_collection(bytes(1024, 'a'));
+    test_collection(bytes(64 * 1024 - 1, 'a'));
+    test_collection(bytes(64 * 1024, 'a'));
+    test_collection(bytes(64 * 1024 + 1, 'a'));
+    test_collection(bytes(1024 * 1024, 'a'));
 }
