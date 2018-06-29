@@ -481,6 +481,63 @@ private:
         });
     }
 
+    // Forwards the upper bound cursor to a position which is greater than given position in current partition.
+    //
+    // Note that the index within partition, unlike the partition index, doesn't cover all keys.
+    // So this may not forward to the smallest position which is greater than pos.
+    //
+    // May advance to the next partition if it's not possible to find a suitable position inside
+    // current partition.
+    //
+    // Must be called only when !eof().
+    future<> advance_upper_past(position_in_partition_view pos) {
+        sstlog.trace("index {}: advance_upper_past({})", this, pos);
+
+        // We advance cursor within the current lower bound partition
+        // So need to make sure first that it is read
+        if (!partition_data_ready(_lower_bound)) {
+            return read_lower_partition_data().then([this, pos] {
+                assert(lower_partition_data_ready());
+                return advance_upper_past(pos);
+            });
+        }
+
+        if (!_upper_bound) {
+            _upper_bound = _lower_bound;
+        }
+
+        index_entry& e = current_partition_entry(*_upper_bound);
+        if (e.get_total_pi_blocks_count() == 0) {
+            sstlog.trace("index {}: no promoted index", this);
+            return advance_to_next_partition(*_upper_bound);
+        }
+
+        if (e.get_read_pi_blocks_count() == 0) {
+            return e.get_next_pi_blocks().then([this, pos] {
+                return advance_upper_past(pos);
+            });
+        }
+
+        const schema& s = *_sstable->_schema;
+        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s), s]
+                (position_in_partition_view pos, const promoted_index_block& info) -> bool {
+            return pos_cmp(pos, info.start(s));
+        };
+        promoted_index_blocks* pi_blocks = e.get_pi_blocks();
+        assert(pi_blocks);
+        auto i = std::upper_bound(pi_blocks->begin() + _upper_bound->current_pi_idx, pi_blocks->end(), pos, cmp_with_start);
+        _upper_bound->current_pi_idx = std::distance(pi_blocks->begin(), i);
+        if (i == pi_blocks->end()) {
+            return advance_to_next_partition(*_upper_bound);
+        }
+
+        _upper_bound->data_file_position = e.position() + i->offset();
+        _upper_bound->element = indexable_element::cell;
+        sstlog.trace("index {} upper bound: skipped to cell, _current_pi_idx={}, _data_file_position={}",
+                 this, _upper_bound->current_pi_idx, _upper_bound->data_file_position);
+        return make_ready_future<>();
+    }
+
     // Returns position right after all partitions in the sstable
     uint64_t data_file_end() const {
         return _sstable->data_size();
@@ -609,63 +666,6 @@ public:
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
             return make_ready_future<>();
         });
-    }
-
-    // Forwards the upper blound cursor to a position which is greater than given position in current partition.
-    //
-    // Note that the index within partition, unlike the partition index, doesn't cover all keys.
-    // So this may not forward to the smallest position which is greater than pos.
-    //
-    // May advance to the next partition if it's not possible to find a suitable position inside
-    // current partition.
-    //
-    // Must be called only when !eof().
-    future<> advance_upper_past(position_in_partition_view pos) {
-        sstlog.trace("index {}: advance_upper_past({})", this, pos);
-
-        // We advance cursor within the current lower bound partition
-        // So need to make sure first that it is read
-        if (!partition_data_ready(_lower_bound)) {
-            return read_lower_partition_data().then([this, pos] {
-                assert(lower_partition_data_ready());
-                return advance_upper_past(pos);
-            });
-        }
-
-        if (!_upper_bound) {
-            _upper_bound = _lower_bound;
-        }
-
-        index_entry& e = current_partition_entry(*_upper_bound);
-        if (e.get_total_pi_blocks_count() == 0) {
-            sstlog.trace("index {}: no promoted index", this);
-            return advance_to_next_partition(*_upper_bound);
-        }
-
-        if (e.get_read_pi_blocks_count() == 0) {
-            return e.get_next_pi_blocks().then([this, pos] {
-                return advance_upper_past(pos);
-            });
-        }
-
-        const schema& s = *_sstable->_schema;
-        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s), s]
-                (position_in_partition_view pos, const promoted_index_block& info) -> bool {
-            return pos_cmp(pos, info.start(s));
-        };
-        promoted_index_blocks* pi_blocks = e.get_pi_blocks();
-        assert(pi_blocks);
-        auto i = std::upper_bound(pi_blocks->begin() + _upper_bound->current_pi_idx, pi_blocks->end(), pos, cmp_with_start);
-        _upper_bound->current_pi_idx = std::distance(pi_blocks->begin(), i);
-        if (i == pi_blocks->end()) {
-            return advance_to_next_partition(*_upper_bound);
-        }
-
-        _upper_bound->data_file_position = e.position() + i->offset();
-        _upper_bound->element = indexable_element::cell;
-        sstlog.trace("index {} upper bound: skipped to cell, _current_pi_idx={}, _data_file_position={}",
-                 this, _upper_bound->current_pi_idx, _upper_bound->data_file_position);
-        return make_ready_future<>();
     }
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
