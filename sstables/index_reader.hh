@@ -669,14 +669,23 @@ public:
     }
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
-    future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) {
-        return advance_to(_lower_bound, key).then([this, key] {
+    // If upper_bound is provided, the upper bound within position is looked up
+    future<bool> advance_lower_and_check_if_present(
+            dht::ring_position_view key, std::optional<position_in_partition_view> pos = {}) {
+        return advance_to(_lower_bound, key).then([this, key, pos] {
             if (eof()) {
                 return make_ready_future<bool>(false);
             }
-            return read_lower_partition_data().then([this, key] {
+            return read_lower_partition_data().then([this, key, pos] {
                 index_comparator cmp(*_sstable->_schema);
-                return cmp(key, current_partition_entry(_lower_bound)) == 0;
+                bool found = cmp(key, current_partition_entry(_lower_bound)) == 0;
+                if (!found || !pos) {
+                    return make_ready_future<bool>(found);
+                }
+
+                return advance_upper_past(*pos).then([] {
+                    return make_ready_future<bool>(true);
+                });
             });
         });
     }
