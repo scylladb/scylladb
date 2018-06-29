@@ -1387,6 +1387,11 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
 
 // Best run with SMP >= 2
 SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
             const auto remote_shard = (engine().cpu_id() + 1) % smp::count;
@@ -1507,6 +1512,11 @@ dht::token dummy_partitioner::token_for_next_shard(const dht::token& t, shard_id
 
 // Best run with SMP >= 2
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto populate = [] (schema_ptr s, const std::vector<mutation>& mutations) {
             // We need to group mutations that have the same token so they land on the same shard.
@@ -1570,6 +1580,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
 
 // Best run with SMP >= 3
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
+    if (smp::count < 3) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         std::vector<bool> shards_touched(smp::count, false);
         simple_schema s;
@@ -1909,6 +1924,11 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
 //
 // Best run with smp >= 2
 SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending_read_ahead) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with smp::count < 2" << std::endl;
+        return;
+    }
+
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
         remote_controls.reserve(smp::count);
