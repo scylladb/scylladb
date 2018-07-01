@@ -211,7 +211,7 @@ protected:
 
 protected:
     virtual bool waited_for(gms::inet_address from) = 0;
-    virtual void signal(gms::inet_address from) {
+    void signal(gms::inet_address from) {
         if (waited_for(from)) {
             signal();
         }
