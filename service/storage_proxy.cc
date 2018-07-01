@@ -221,7 +221,7 @@ public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             std::unique_ptr<mutation_holder> mh, std::unordered_set<gms::inet_address> targets, tracing::trace_state_ptr trace_state,
             storage_proxy::write_stats& stats, size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
-            : _id(p->_next_response_id++), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
+            : _id(p->get_next_response_id()), _proxy(std::move(p)), _trace_state(trace_state), _cl(cl), _type(type), _mutation_holder(std::move(mh)), _targets(std::move(targets)),
               _dead_endpoints(std::move(dead_endpoints)), _stats(stats) {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
@@ -635,9 +635,12 @@ void storage_proxy_stats::split_stats::register_metrics_for(gms::inet_address ep
     }
 }
 
+using namespace std::literals::chrono_literals;
+
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cfg)
     : _db(db)
+    , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
     , _background_write_throttle_threahsold(cfg.available_memory / 10) {
