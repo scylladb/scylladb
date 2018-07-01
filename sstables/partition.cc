@@ -64,15 +64,12 @@ template
 data_consume_context<data_consume_rows_context_m>
 data_consume_rows<data_consume_rows_context_m>(const schema& s, shared_sstable, data_consume_rows_context_m::consumer&);
 
-
 static
-future<> advance_to_upper_bound(index_reader& ix, const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
-    auto& ranges = slice.row_ranges(s, *key.key());
-    if (ranges.empty()) {
-        return ix.advance_upper_past(position_in_partition_view::for_static_row());
-    } else {
-        return ix.advance_upper_past(position_in_partition_view::for_range_end(ranges[ranges.size() - 1]));
-    }
+position_in_partition_view get_slice_upper_bound(const schema& s, const query::partition_slice& slice, dht::ring_position_view key) {
+    const auto& ranges = slice.row_ranges(s, *key.key());
+    return ranges.empty()
+        ? position_in_partition_view::for_static_row()
+        : position_in_partition_view::for_range_end(ranges.back());
 }
 
 GCC6_CONCEPT(
@@ -170,7 +167,8 @@ public:
         , _consumer(this, _schema, slice, pc, std::move(resource_tracker), fwd, _sst)
         , _single_partition_read(true)
         , _initialize([this, key = std::move(key), &pc, &slice, fwd_mr] () mutable {
-            auto f = get_index_reader().advance_lower_and_check_if_present(key);
+            position_in_partition_view pos = get_slice_upper_bound(*_schema, slice, key);
+            auto f = get_index_reader().advance_lower_and_check_if_present(key, pos);
             return f.then([this, &slice, &pc, key] (bool present) mutable {
                 if (!present) {
                     _sst->get_filter_tracker().add_false_positive();
@@ -179,17 +177,15 @@ public:
 
                 _sst->get_filter_tracker().add_true_positive();
 
-                auto f = advance_to_upper_bound(*_index_reader, *_schema, slice, key);
-                return f.then([this, &slice, &pc] () mutable {
-                    auto [start, end] = _index_reader->data_file_positions();
-                    assert(end);
-                    _read_enabled = (start != *end);
-                    _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
-                            { start, *end });
-                    _monitor.on_read_started(_context->reader_position());
-                    _will_likely_slice = will_likely_slice(slice);
-                    _index_in_current_partition = true;
-                });
+                auto [start, end] = _index_reader->data_file_positions();
+                assert(end);
+                _read_enabled = (start != *end);
+                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer,
+                        { start, *end });
+                _monitor.on_read_started(_context->reader_position());
+                _will_likely_slice = will_likely_slice(slice);
+                _index_in_current_partition = true;
+                return make_ready_future<>();
             });
         })
         , _fwd(fwd)
@@ -231,25 +227,25 @@ private:
             return make_ready_future<>();
         }
         return (_index_in_current_partition
-                ? _index_reader->advance_lower_to_next_partition()
-                : get_index_reader().advance_lower_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
+                ? _index_reader->advance_to_next_partition()
+                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
             _index_in_current_partition = true;
             auto [start, end] = _index_reader->data_file_positions();
             if (end && start > *end) {
                 _read_enabled = false;
                 return make_ready_future<>();
             }
-            return _context->skip_to(_index_reader->lower_element_kind(), start);
+            return _context->skip_to(_index_reader->element_kind(), start);
         });
     }
     future<> read_from_index() {
         sstlog.trace("reader {}: read from index", this);
-        auto tomb = _index_reader->lower_partition_tombstone();
+        auto tomb = _index_reader->partition_tombstone();
         if (!tomb) {
             sstlog.trace("reader {}: no tombstone", this);
             return read_from_datafile();
         }
-        auto pk = _index_reader->lower_partition_key().to_partition_key(*_schema);
+        auto pk = _index_reader->partition_key().to_partition_key(*_schema);
         auto key = dht::global_partitioner().decorate_key(*_schema, std::move(pk));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
@@ -303,11 +299,11 @@ private:
                 sstlog.trace("reader {}: eof", this);
                 return make_ready_future<>();
             }
-            if (_index_reader->lower_partition_data_ready()) {
+            if (_index_reader->partition_data_ready()) {
                 return read_from_index();
             }
             if (_will_likely_slice) {
-                return _index_reader->read_lower_partition_data().then([this] {
+                return _index_reader->read_partition_data().then([this] {
                     return read_from_index();
                 });
             }
@@ -341,14 +337,14 @@ private:
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
-                return get_index_reader().advance_lower_to(*_current_partition_key);
+                return get_index_reader().advance_to(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos] {
-            return get_index_reader().advance_lower_to(*pos).then([this] {
+            return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                return _context->skip_to(idx.lower_element_kind(), index_position.start);
+                return _context->skip_to(idx.element_kind(), index_position.start);
             });
         });
     }
