@@ -113,6 +113,10 @@ public:
     // This function is the analogue of Origin's
     // StorageService.getPrimaryRangesForEndpoint().
     dht::token_range_vector get_primary_ranges(inet_address ep);
+    // get_primary_ranges_within_dc() is similar to get_primary_ranges()
+    // except it assigns a primary node for each range within each dc,
+    // instead of one node globally.
+    dht::token_range_vector get_primary_ranges_within_dc(inet_address ep);
 
     std::unordered_multimap<inet_address, dht::token_range> get_address_ranges(token_metadata& tm) const;
 

@@ -164,6 +164,30 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep) {
     return ret;
 }
 
+dht::token_range_vector
+abstract_replication_strategy::get_primary_ranges_within_dc(inet_address ep) {
+    dht::token_range_vector ret;
+    sstring local_dc = _snitch->get_datacenter(ep);
+    std::unordered_set<inet_address> local_dc_nodes = _token_metadata.get_topology().get_datacenter_endpoints().at(local_dc);
+    auto prev_tok = _token_metadata.sorted_tokens().back();
+    for (auto tok : _token_metadata.sorted_tokens()) {
+        auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
+        // Unlike get_primary_ranges() which checks if ep is the first
+        // owner of this range, here we check if ep is the first just
+        // among nodes which belong to the local dc of ep.
+        for (auto& e : eps) {
+            if (local_dc_nodes.count(e)) {
+                if (e == ep) {
+                    insert_token_range_to_sorted_container_while_unwrapping(prev_tok, tok, ret);
+                }
+                break;
+            }
+        }
+        prev_tok = tok;
+    }
+    return ret;
+}
+
 std::unordered_multimap<inet_address, dht::token_range>
 abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
     std::unordered_multimap<inet_address, dht::token_range> ret;

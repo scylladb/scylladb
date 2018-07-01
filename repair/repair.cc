@@ -1004,6 +1004,22 @@ static dht::token_range_vector get_primary_ranges(
             utils::fb_utilities::get_broadcast_address());
 }
 
+// get_primary_ranges_within_dc() is similar to get_primary_ranges(),
+// but instead of each range being assigned just one primary owner
+// across the entire cluster, here each range is assigned a primary
+// owner in each of the clusters.
+static dht::token_range_vector get_primary_ranges_within_dc(
+        database& db, sstring keyspace) {
+    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
+    return rs.get_primary_ranges_within_dc(
+            utils::fb_utilities::get_broadcast_address());
+}
+
+static sstring get_local_dc() {
+    return locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
+            utils::fb_utilities::get_broadcast_address());
+}
+
 
 struct repair_options {
     // If primary_range is true, we should perform repair only on this node's
@@ -1256,21 +1272,14 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         rlogger.info("primary-range repair");
         // when "primary_range" option is on, neither data_centers nor hosts
         // may be set, except data_centers may contain only local DC (-local)
-#if 0
         if (options.data_centers.size() == 1 &&
-                options.data_centers[0] == DatabaseDescriptor.getLocalDataCenter()) {
+            options.data_centers[0] == get_local_dc()) {
             ranges = get_primary_ranges_within_dc(db.local(), keyspace);
-        } else
-#endif
-#if 0
-        if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
+        } else if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
             throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
         } else {
-#endif
             ranges = get_primary_ranges(db.local(), keyspace);
-#if 0
         }
-#endif
     } else {
         ranges = get_local_ranges(db.local(), keyspace);
     }
