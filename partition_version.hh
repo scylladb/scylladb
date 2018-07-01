@@ -28,6 +28,7 @@
 #include "utils/coroutine.hh"
 
 #include <boost/intrusive/parent_from_member.hpp>
+#include <boost/intrusive/slist.hpp>
 
 // This is MVCC implementation for mutation_partitions.
 //
@@ -188,8 +189,9 @@ class partition_version_ref {
     friend class partition_version;
 public:
     partition_version_ref() = default;
-    explicit partition_version_ref(partition_version& pv) noexcept
+    explicit partition_version_ref(partition_version& pv, bool unique_owner = false) noexcept
         : _version(&pv)
+        , _unique_owner(unique_owner)
     {
         assert(!_version->_backref);
         _version->_backref = this;
@@ -300,8 +302,9 @@ private:
     logalloc::region& _region;
     mutation_cleaner& _cleaner;
     cache_tracker* _tracker;
-
+    boost::intrusive::slist_member_hook<> _cleaner_hook;
     friend class partition_entry;
+    friend class mutation_cleaner_impl;
 public:
     explicit partition_snapshot(schema_ptr s,
                                 logalloc::region& region,
@@ -329,10 +332,17 @@ public:
         return container_of(v._backref);
     }
 
-    // If possible merges the version pointed to by this snapshot with
+    // If possible, merges the version pointed to by this snapshot with
     // adjacent partition versions. Leaves the snapshot in an unspecified state.
     // Can be retried if previous merge attempt has failed.
-    void merge_partition_versions();
+    stop_iteration merge_partition_versions();
+
+    // Prepares the snapshot for cleaning by moving to the right-most unreferenced version.
+    // Returns stop_iteration::yes if there is nothing to merge with and the snapshot
+    // should be collected right away, and stop_iteration::no otherwise.
+    // When returns stop_iteration::no, the snapshots is guaranteed to not be attached
+    // to the latest version.
+    stop_iteration slide_to_oldest() noexcept;
 
     ~partition_snapshot();
 
@@ -357,6 +367,7 @@ public:
     const schema_ptr& schema() const { return _schema; }
     logalloc::region& region() const { return _region; }
     cache_tracker* tracker() const { return _tracker; }
+    mutation_cleaner& cleaner() { return _cleaner; }
 
     tombstone partition_tombstone() const;
     ::static_row static_row(bool digest_requested) const;
@@ -366,6 +377,36 @@ public:
     std::vector<range_tombstone> range_tombstones(position_in_partition_view start, position_in_partition_view end);
     // Returns all range tombstones
     std::vector<range_tombstone> range_tombstones();
+};
+
+class partition_snapshot_ptr {
+    lw_shared_ptr<partition_snapshot> _snp;
+public:
+    using value_type = partition_snapshot;
+    partition_snapshot_ptr() = default;
+    partition_snapshot_ptr(partition_snapshot_ptr&&) = default;
+    partition_snapshot_ptr(const partition_snapshot_ptr&) = default;
+    partition_snapshot_ptr(lw_shared_ptr<partition_snapshot> snp) : _snp(std::move(snp)) {}
+    ~partition_snapshot_ptr();
+    partition_snapshot_ptr& operator=(partition_snapshot_ptr&& other) noexcept {
+        if (this != &other) {
+            this->~partition_snapshot_ptr();
+            new (this) partition_snapshot_ptr(std::move(other));
+        }
+        return *this;
+    }
+    partition_snapshot_ptr& operator=(const partition_snapshot_ptr& other) noexcept {
+        if (this != &other) {
+            this->~partition_snapshot_ptr();
+            new (this) partition_snapshot_ptr(other);
+        }
+        return *this;
+    }
+    partition_snapshot& operator*() { return *_snp; }
+    const partition_snapshot& operator*() const { return *_snp; }
+    partition_snapshot* operator->() { return &*_snp; }
+    const partition_snapshot* operator->() const { return &*_snp; }
+    explicit operator bool() const { return bool(_snp); }
 };
 
 class real_dirty_memory_accounter;
@@ -523,7 +564,7 @@ public:
     void upgrade(schema_ptr from, schema_ptr to, mutation_cleaner&, cache_tracker*);
 
     // Snapshots with different values of phase will point to different partition_version objects.
-    lw_shared_ptr<partition_snapshot> read(logalloc::region& region,
+    partition_snapshot_ptr read(logalloc::region& region,
         mutation_cleaner&,
         schema_ptr entry_schema,
         cache_tracker*,

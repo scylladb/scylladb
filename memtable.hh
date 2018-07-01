@@ -66,7 +66,7 @@ public:
     partition_entry& partition() { return _pe; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    lw_shared_ptr<partition_snapshot> snapshot(memtable& mtbl);
+    partition_snapshot_ptr snapshot(memtable& mtbl);
 
     size_t external_memory_usage_without_rows() const {
         return _key.key().external_memory_usage();
@@ -125,8 +125,7 @@ public:
         bi::compare<memtable_entry::compare>>;
 private:
     dirty_memory_manager& _dirty_mgr;
-    mutation_cleaner _memtable_cleaner;
-    mutation_cleaner* _cleaner; // will switch to cache's cleaner after memtable is moved to cache.
+    mutation_cleaner _cleaner;
     memtable_list *_memtable_list;
     schema_ptr _schema;
     logalloc::allocating_section _read_section;
@@ -254,7 +253,8 @@ private:
     void clear() noexcept;
     uint64_t dirty_size() const;
 public:
-    explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr);
+    explicit memtable(schema_ptr schema, dirty_memory_manager&, memtable_list *memtable_list = nullptr,
+        seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group());
     // Used for testing that want to control the flush process.
     explicit memtable(schema_ptr schema);
     ~memtable();
@@ -294,7 +294,7 @@ public:
     }
 
     mutation_cleaner& cleaner() {
-        return *_cleaner;
+        return _cleaner;
     }
 public:
     memtable_list* get_memtable_list() {

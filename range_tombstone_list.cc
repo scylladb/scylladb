@@ -437,14 +437,18 @@ bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& ot
     });
 }
 
-void range_tombstone_list::apply_monotonically(const schema& s, range_tombstone_list&& list) {
+stop_iteration range_tombstone_list::apply_monotonically(const schema& s, range_tombstone_list&& list, is_preemptible preemptible) {
     auto del = current_deleter<range_tombstone>();
     auto it = list.begin();
     while (it != list.end()) {
         // FIXME: Optimize by stealing the entry
         apply_monotonically(s, *it);
         it = list._tombstones.erase_and_dispose(it, del);
+        if (preemptible && need_preempt()) {
+            return stop_iteration::no;
+        }
     }
+    return stop_iteration::yes;
 }
 
 void range_tombstone_list::apply_monotonically(const schema& s, const range_tombstone_list& list) {

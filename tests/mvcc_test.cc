@@ -29,6 +29,7 @@
 
 #include "partition_version.hh"
 #include "partition_snapshot_row_cursor.hh"
+#include "partition_snapshot_reader.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
@@ -169,7 +170,7 @@ public:
     partition_snapshot::phase_type phase() const { return _phase; }
     real_dirty_memory_accounter& accounter() { return _acc; }
 
-    mutation_partition squashed(lw_shared_ptr<partition_snapshot>& snp) {
+    mutation_partition squashed(partition_snapshot_ptr& snp) {
         logalloc::allocating_section as;
         return as(_tracker.region(), [&] {
             return snp->squashed();
@@ -220,7 +221,7 @@ public:
         });
     }
 
-    lw_shared_ptr<partition_snapshot> read() {
+    partition_snapshot_ptr read() {
         logalloc::allocating_section as;
         return as(region(), [&] {
             return _e.read(region(), _container.cleaner(), schema(), &_container.tracker(), _container.phase());
@@ -466,7 +467,7 @@ SEASTAR_TEST_CASE(test_apply_to_incomplete_respects_continuity) {
                 m1.partition().make_fully_continuous();
                 e += m1;
 
-                lw_shared_ptr<partition_snapshot> snap;
+                partition_snapshot_ptr snap;
                 if (with_active_reader) {
                     snap = e.read();
                 }
@@ -869,11 +870,10 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
 
-                snap1->merge_partition_versions();
                 snap1 = {};
-
-                snap2->merge_partition_versions();
                 snap2 = {};
+
+                cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
                 assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());
@@ -890,11 +890,10 @@ SEASTAR_TEST_CASE(test_versions_are_merged_when_snapshots_go_away) {
 
                 auto snap2 = e.read(r, cleaner, s, nullptr);
 
-                snap2->merge_partition_versions();
                 snap2 = {};
-
-                snap1->merge_partition_versions();
                 snap1 = {};
+
+                cleaner.drain().get();
 
                 BOOST_REQUIRE_EQUAL(1, boost::size(e.versions()));
                 assert_that(s, e.squashed(*s)).is_equal_to((m1 + m2).partition());

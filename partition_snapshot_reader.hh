@@ -33,34 +33,6 @@ struct partition_snapshot_reader_dummy_accounter {
 };
 extern partition_snapshot_reader_dummy_accounter no_accounter;
 
-inline void maybe_merge_versions(lw_shared_ptr<partition_snapshot>& snp,
-                                 logalloc::region& lsa_region,
-                                 logalloc::allocating_section& read_section) {
-    if (!snp.owned()) {
-        return;
-    }
-    // If no one else is using this particular snapshot try to merge partition
-    // versions.
-    with_allocator(lsa_region.allocator(), [&snp, &lsa_region, &read_section] {
-        return with_linearized_managed_bytes([&snp, &lsa_region, &read_section] {
-            try {
-                // Allocating sections require the region to be reclaimable
-                // which means that they cannot be nested.
-                // It is, however, possible, that if the snapshot is taken
-                // inside an allocating section and then an exception is thrown
-                // this function will be called to clean up even though we
-                // still will be in the context of the allocating section.
-                if (lsa_region.reclaiming_enabled()) {
-                    read_section(lsa_region, [&snp] {
-                        snp->merge_partition_versions();
-                    });
-                }
-            } catch (...) { }
-            snp = {};
-        });
-    });
-}
-
 template <typename MemoryAccounter = partition_snapshot_reader_dummy_accounter>
 class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public MemoryAccounter {
     struct rows_position {
@@ -87,7 +59,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
         position_in_partition::equal_compare _eq;
         heap_compare _heap_cmp;
 
-        lw_shared_ptr<partition_snapshot> _snapshot;
+        partition_snapshot_ptr _snapshot;
 
         logalloc::region& _region;
         logalloc::allocating_section& _read_section;
@@ -99,7 +71,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
     private:
         template<typename Function>
         decltype(auto) in_alloc_section(Function&& fn) {
-            return _read_section.with_reclaiming_disabled(_region, [&] { 
+            return _read_section.with_reclaiming_disabled(_region, [&] {
                 return with_linearized_managed_bytes([&] {
                     return fn();
                 });
@@ -155,7 +127,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             return !_clustering_rows.empty();
         }
     public:
-        explicit lsa_partition_reader(const schema& s, lw_shared_ptr<partition_snapshot> snp,
+        explicit lsa_partition_reader(const schema& s, partition_snapshot_ptr snp,
                                       logalloc::region& region, logalloc::allocating_section& read_section,
                                       bool digest_requested)
             : _schema(s)
@@ -167,10 +139,6 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
             , _read_section(read_section)
             , _digest_requested(digest_requested)
         { }
-
-        ~lsa_partition_reader() {
-            maybe_merge_versions(_snapshot, _region, _read_section);
-        }
 
         template<typename Function>
         decltype(auto) with_reserve(Function&& fn) {
@@ -187,7 +155,7 @@ class partition_snapshot_flat_reader : public flat_mutation_reader::impl, public
                 return _snapshot->static_row(_digest_requested);
             });
         }
-        
+
         // Returns next clustered row in the range.
         // If the ck_range is the same as the one used previously last_row needs
         // to be engaged and equal the position of the row returned last time.
@@ -298,7 +266,7 @@ private:
     }
 public:
     template <typename... Args>
-    partition_snapshot_flat_reader(schema_ptr s, dht::decorated_key dk, lw_shared_ptr<partition_snapshot> snp,
+    partition_snapshot_flat_reader(schema_ptr s, dht::decorated_key dk, partition_snapshot_ptr snp,
                               query::clustering_key_filter_ranges crr, bool digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               boost::any pointer_to_container, Args&&... args)
@@ -344,7 +312,7 @@ inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
-                                    lw_shared_ptr<partition_snapshot> snp,
+                                    partition_snapshot_ptr snp,
                                     bool digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,
@@ -365,7 +333,7 @@ inline flat_mutation_reader
 make_partition_snapshot_flat_reader(schema_ptr s,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
-                                    lw_shared_ptr<partition_snapshot> snp,
+                                    partition_snapshot_ptr snp,
                                     bool digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,

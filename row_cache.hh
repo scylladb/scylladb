@@ -269,6 +269,7 @@ public:
     mutation_cleaner& memtable_cleaner() { return _memtable_cleaner; }
     uint64_t partitions() const { return _stats.partitions; }
     const stats& get_stats() const { return _stats; }
+    void set_compaction_scheduling_group(seastar::scheduling_group);
 };
 
 inline

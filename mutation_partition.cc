@@ -280,11 +280,14 @@ mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
     mf.visit(applier);
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, cache_tracker* tracker, is_preemptible preemptible) {
     _tombstone.apply(p._tombstone);
-    _row_tombstones.apply_monotonically(s, std::move(p._row_tombstones));
     _static_row.apply_monotonically(s, column_kind::static_column, std::move(p._static_row));
     _static_row_continuous |= p._static_row_continuous;
+
+    if (_row_tombstones.apply_monotonically(s, std::move(p._row_tombstones), preemptible) == stop_iteration::no) {
+        return stop_iteration::no;
+    }
 
     rows_entry::compare less(s);
     auto del = current_deleter<rows_entry>();
@@ -317,22 +320,34 @@ void mutation_partition::apply_monotonically(const schema& s, mutation_partition
                 // Newer evictable versions store complete rows
                 i->_row = std::move(src_e._row);
             } else {
+                memory::on_alloc_point();
                 i->_row.apply_monotonically(s, std::move(src_e._row));
             }
             i->set_continuous(continuous);
             i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
+        if (preemptible && need_preempt() && p_i != p._rows.end()) {
+            // We cannot leave p with the clustering range up to p_i->position()
+            // marked as continuous because some of its sub-ranges may have originally been discontinuous.
+            // This would result in the sum of this and p to have broader continuity after preemption,
+            // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
+            // if that's what we're merging here.
+            // It's always safe to mark the range as discontinuous.
+            p_i->set_continuous(false);
+            return stop_iteration::no;
+        }
     }
+    return stop_iteration::yes;
 }
 
-void mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema) {
+stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation_partition&& p, const schema& p_schema, is_preemptible preemptible) {
     if (s.version() == p_schema.version()) {
-        apply_monotonically(s, std::move(p), no_cache_tracker);
+        return apply_monotonically(s, std::move(p), no_cache_tracker, preemptible);
     } else {
         mutation_partition p2(s, p);
         p2.upgrade(p_schema, s);
-        apply_monotonically(s, std::move(p2), no_cache_tracker);
+        return apply_monotonically(s, std::move(p2), no_cache_tracker, is_preemptible::no); // FIXME: make preemptible
     }
 }
 
@@ -2305,17 +2320,20 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     return f.finally([r_a_r = std::move(r_a_r)] { });
 }
 
-mutation_cleaner::~mutation_cleaner() {
+mutation_cleaner_impl::~mutation_cleaner_impl() {
+    _worker_state->done = true;
+    _worker_state->cv.signal();
+    _worker_state->snapshots.clear_and_dispose(typename lw_shared_ptr<partition_snapshot>::disposer());
     with_allocator(_region.allocator(), [this] {
         clear();
     });
 }
 
-void mutation_cleaner::clear() noexcept {
+void mutation_cleaner_impl::clear() noexcept {
     while (clear_gently() == stop_iteration::no) ;
 }
 
-stop_iteration mutation_cleaner::clear_gently() noexcept {
+stop_iteration mutation_cleaner_impl::clear_gently() noexcept {
     while (clear_some() == memory::reclaiming_result::reclaimed_something) {
         if (need_preempt()) {
             return stop_iteration::no;
@@ -2324,7 +2342,7 @@ stop_iteration mutation_cleaner::clear_gently() noexcept {
     return stop_iteration::yes;
 }
 
-memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
+memory::reclaiming_result mutation_cleaner_impl::clear_some() noexcept {
     if (_versions.empty()) {
         return memory::reclaiming_result::reclaimed_nothing;
     }
@@ -2337,14 +2355,81 @@ memory::reclaiming_result mutation_cleaner::clear_some() noexcept {
     return memory::reclaiming_result::reclaimed_something;
 }
 
-void mutation_cleaner::merge(mutation_cleaner& r) noexcept {
+void mutation_cleaner_impl::merge(mutation_cleaner_impl& r) noexcept {
     _versions.splice(r._versions);
+    _worker_state->snapshots.splice(_worker_state->snapshots.end(), r._worker_state->snapshots);
+    if (!_worker_state->snapshots.empty()) {
+        _worker_state->cv.signal();
+    }
 }
 
-future<> mutation_cleaner::drain() {
+void mutation_cleaner_impl::start_worker() {
+    auto f = repeat([w = _worker_state, this] () mutable noexcept {
+      if (w->done) {
+          return make_ready_future<stop_iteration>(stop_iteration::yes);
+      }
+      return with_scheduling_group(_scheduling_group, [w, this] {
+        return w->cv.wait([w] {
+            return w->done || !w->snapshots.empty();
+        }).then([this, w] () noexcept {
+            if (w->done) {
+                return stop_iteration::yes;
+            }
+            merge_some();
+            return stop_iteration::no;
+        });
+      });
+    });
+    if (f.failed()) {
+        f.get();
+    }
+}
+
+stop_iteration mutation_cleaner_impl::merge_some(partition_snapshot& snp) noexcept {
+    auto&& region = snp.region();
+    return with_allocator(region.allocator(), [&] {
+        return with_linearized_managed_bytes([&] {
+            // Allocating sections require the region to be reclaimable
+            // which means that they cannot be nested.
+            // It is, however, possible, that if the snapshot is taken
+            // inside an allocating section and then an exception is thrown
+            // this function will be called to clean up even though we
+            // still will be in the context of the allocating section.
+            if (!region.reclaiming_enabled()) {
+                return stop_iteration::no;
+            }
+            try {
+                return _worker_state->alloc_section(region, [&] {
+                    return snp.merge_partition_versions();
+                });
+            } catch (...) {
+                // Merging failed, give up as there is no guarantee of forward progress.
+                return stop_iteration::yes;
+            }
+        });
+    });
+}
+
+stop_iteration mutation_cleaner_impl::merge_some() noexcept {
+    if (_worker_state->snapshots.empty()) {
+        return stop_iteration::yes;
+    }
+    partition_snapshot& snp = _worker_state->snapshots.front();
+    if (merge_some(snp) == stop_iteration::yes) {
+        _worker_state->snapshots.pop_front();
+        lw_shared_ptr<partition_snapshot>::dispose(&snp);
+    }
+    return stop_iteration::no;
+}
+
+future<> mutation_cleaner_impl::drain() {
     return repeat([this] {
-        return with_allocator(_region.allocator(), [this] {
-            return clear_gently();
+        return merge_some();
+    }).then([this] {
+        return repeat([this] {
+            return with_allocator(_region.allocator(), [this] {
+                return clear_gently();
+            });
         });
     });
 }

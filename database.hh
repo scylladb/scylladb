@@ -164,29 +164,33 @@ private:
     std::function<schema_ptr()> _current_schema;
     dirty_memory_manager* _dirty_memory_manager;
     std::experimental::optional<shared_promise<>> _flush_coalescing;
+    seastar::scheduling_group _compaction_scheduling_group;
 public:
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
             seal_delayed_fn_type seal_delayed_fn,
             std::function<schema_ptr()> cs,
-            dirty_memory_manager* dirty_memory_manager)
+            dirty_memory_manager* dirty_memory_manager,
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
         , _seal_delayed_fn(seal_delayed_fn)
         , _current_schema(cs)
-        , _dirty_memory_manager(dirty_memory_manager) {
+        , _dirty_memory_manager(dirty_memory_manager)
+        , _compaction_scheduling_group(compaction_scheduling_group) {
         add_memtable();
     }
 
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
             std::function<schema_ptr()> cs,
-            dirty_memory_manager* dirty_memory_manager)
-        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager) {
+            dirty_memory_manager* dirty_memory_manager,
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
+        : memtable_list(std::move(seal_immediate_fn), {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
     }
 
-    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager)
-        : memtable_list({}, {}, std::move(cs), dirty_memory_manager) {
+    memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager, seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
+        : memtable_list({}, {}, std::move(cs), dirty_memory_manager, compaction_scheduling_group) {
     }
 
     bool may_flush() const {
@@ -312,6 +316,7 @@ public:
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group compaction_scheduling_group;
+        seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
@@ -1039,6 +1044,7 @@ public:
         seastar::scheduling_group memtable_scheduling_group;
         seastar::scheduling_group memtable_to_cache_scheduling_group;
         seastar::scheduling_group compaction_scheduling_group;
+        seastar::scheduling_group memory_compaction_scheduling_group;
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
@@ -1119,6 +1125,7 @@ struct database_config {
     seastar::scheduling_group memtable_scheduling_group;
     seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
     seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group memory_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
     size_t available_memory;

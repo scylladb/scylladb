@@ -27,11 +27,11 @@
 #include "schema_upgrader.hh"
 #include "partition_builder.hh"
 
-memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list)
+memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm, memtable_list* memtable_list,
+    seastar::scheduling_group compaction_scheduling_group)
         : logalloc::region(dmm.region_group())
         , _dirty_mgr(dmm)
-        , _memtable_cleaner(*this, no_cache_tracker)
-        , _cleaner(&_memtable_cleaner)
+        , _cleaner(*this, no_cache_tracker, compaction_scheduling_group)
         , _memtable_list(memtable_list)
         , _schema(std::move(schema))
         , partitions(memtable_entry::compare(_schema)) {
@@ -56,10 +56,9 @@ void memtable::clear() noexcept {
     auto dirty_before = dirty_size();
     with_allocator(allocator(), [this] {
         partitions.clear_and_dispose([this] (memtable_entry* e) {
-            e->partition().evict(_memtable_cleaner);
+            e->partition().evict(_cleaner);
             current_deleter<memtable_entry>()(e);
         });
-        _memtable_cleaner.clear();
     });
     remove_flushed_memory(dirty_before - dirty_size());
 }
@@ -322,7 +321,7 @@ public:
                     _delegate = delegate_reader(*_delegate_range, _slice, _pc, streamed_mutation::forwarding::no, _fwd_mr);
                 } else {
                     auto key_and_snp = read_section()(region(), [&] {
-                        return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, lw_shared_ptr<partition_snapshot>>> {
+                        return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
                             memtable_entry *e = fetch_entry();
                             if (!e) {
                                 return { };
@@ -484,7 +483,7 @@ private:
     void get_next_partition() {
         uint64_t component_size = 0;
         auto key_and_snp = read_section()(region(), [&] {
-            return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, lw_shared_ptr<partition_snapshot>>> {
+            return with_linearized_managed_bytes([&] () -> std::optional<std::pair<dht::decorated_key, partition_snapshot_ptr>> {
                 memtable_entry* e = fetch_entry();
                 if (e) {
                     auto dk = e->key();
@@ -550,7 +549,7 @@ public:
     }
 };
 
-lw_shared_ptr<partition_snapshot> memtable_entry::snapshot(memtable& mtbl) {
+partition_snapshot_ptr memtable_entry::snapshot(memtable& mtbl) {
     return _pe.read(mtbl.region(), mtbl.cleaner(), _schema, no_cache_tracker);
 }
 
@@ -564,7 +563,7 @@ memtable::make_flat_reader(schema_ptr s,
                       mutation_reader::forwarding fwd_mr) {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
-        auto snp = _read_section(*this, [&] () -> lw_shared_ptr<partition_snapshot> {
+        auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
             managed_bytes::linearization_context_guard lcg;
             auto i = partitions.find(pos, memtable_entry::compare(_schema));
             if (i != partitions.end()) {

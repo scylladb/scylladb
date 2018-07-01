@@ -92,6 +92,11 @@ cache_tracker::~cache_tracker() {
     clear();
 }
 
+void cache_tracker::set_compaction_scheduling_group(seastar::scheduling_group sg) {
+    _memtable_cleaner.set_scheduling_group(sg);
+    _garbage.set_scheduling_group(sg);
+}
+
 void
 cache_tracker::setup_metrics() {
     namespace sm = seastar::metrics;
@@ -933,8 +938,7 @@ future<> row_cache::do_update(external_updater eu, memtable& m, Updater updater)
     real_dirty_memory_accounter real_dirty_acc(m, _tracker);
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
-    _tracker.memtable_cleaner().merge(m._memtable_cleaner);
-    m._cleaner = &_tracker.memtable_cleaner();
+    _tracker.memtable_cleaner().merge(m._cleaner);
     STAP_PROBE(scylla, row_cache_update_start);
     auto cleanup = defer([&m, this] {
         invalidate_sync(m);

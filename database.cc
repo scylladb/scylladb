@@ -182,7 +182,7 @@ thread_local dirty_memory_manager default_dirty_memory_manager;
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _config.memory_compaction_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -191,7 +191,7 @@ table::make_memtable_list() {
         return seal_active_memtable(std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _config.memory_compaction_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -200,7 +200,7 @@ table::make_streaming_memtable_list() {
         return seal_active_streaming_memtable_immediate(std::move(permit));
     };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
 }
 
 lw_shared_ptr<memtable_list>
@@ -209,7 +209,7 @@ table::make_streaming_memtable_big_list(streaming_memtable_big& smb) {
         return seal_active_streaming_memtable_big(smb, std::move(permit));
     };
     auto get_schema =  [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.streaming_dirty_memory_manager, _config.streaming_scheduling_group);
 }
 
 table::table(schema_ptr schema, config config, db::commitlog* cl, compaction_manager& compaction_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker)
@@ -2158,6 +2158,8 @@ database::database(const db::config& cfg, database_config dbcfg)
     _compaction_manager->start();
     setup_metrics();
 
+    _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
+
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
 }
 
@@ -2845,6 +2847,7 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
     cfg.compaction_scheduling_group = _config.compaction_scheduling_group;
+    cfg.memory_compaction_scheduling_group = _config.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _config.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _config.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
@@ -3396,7 +3399,7 @@ future<> memtable_list::request_flush() {
 }
 
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
-    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this);
+    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager, this, _compaction_scheduling_group);
 }
 
 future<flush_permit> flush_permit::reacquire_sstable_write_permit() && {
@@ -3625,6 +3628,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.enable_incremental_backups = _enable_incremental_backups;
 
     cfg.compaction_scheduling_group = _dbcfg.compaction_scheduling_group;
+    cfg.memory_compaction_scheduling_group = _dbcfg.memory_compaction_scheduling_group;
     cfg.memtable_scheduling_group = _dbcfg.memtable_scheduling_group;
     cfg.memtable_to_cache_scheduling_group = _dbcfg.memtable_to_cache_scheduling_group;
     cfg.streaming_scheduling_group = _dbcfg.streaming_scheduling_group;

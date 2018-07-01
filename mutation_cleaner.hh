@@ -26,6 +26,76 @@
 
 #include "utils/logalloc.hh"
 
+class mutation_cleaner_impl final {
+    using snapshot_list = boost::intrusive::slist<partition_snapshot,
+        boost::intrusive::member_hook<partition_snapshot, boost::intrusive::slist_member_hook<>, &partition_snapshot::_cleaner_hook>>;
+    struct worker {
+        condition_variable cv;
+        snapshot_list snapshots;
+        logalloc::allocating_section alloc_section;
+        bool done = false; // true means the worker was abandoned and cannot access the mutation_cleaner_impl instance.
+    };
+private:
+    logalloc::region& _region;
+    cache_tracker* _tracker;
+    partition_version_list _versions;
+    lw_shared_ptr<worker> _worker_state;
+    seastar::scheduling_group _scheduling_group;
+private:
+    stop_iteration merge_some(partition_snapshot& snp) noexcept;
+    stop_iteration merge_some() noexcept;
+    void start_worker();
+public:
+    mutation_cleaner_impl(logalloc::region& r, cache_tracker* t, seastar::scheduling_group sg = seastar::current_scheduling_group())
+        : _region(r)
+        , _tracker(t)
+        , _worker_state(make_lw_shared<worker>())
+        , _scheduling_group(sg)
+    {
+        start_worker();
+    }
+    ~mutation_cleaner_impl();
+    stop_iteration clear_gently() noexcept;
+    memory::reclaiming_result clear_some() noexcept;
+    void clear() noexcept;
+    void destroy_later(partition_version& v) noexcept;
+    void destroy_gently(partition_version& v) noexcept;
+    void merge(mutation_cleaner_impl& other) noexcept;
+    bool empty() const noexcept { return _versions.empty(); }
+    future<> drain();
+    void merge_and_destroy(partition_snapshot&) noexcept;
+    void set_scheduling_group(seastar::scheduling_group sg) {
+        _scheduling_group = sg;
+        _worker_state->cv.broadcast();
+    }
+};
+
+inline
+void mutation_cleaner_impl::destroy_later(partition_version& v) noexcept {
+    _versions.push_back(v);
+}
+
+inline
+void mutation_cleaner_impl::destroy_gently(partition_version& v) noexcept {
+    if (v.clear_gently(_tracker) == stop_iteration::no) {
+        destroy_later(v);
+    } else {
+        current_allocator().destroy(&v);
+    }
+}
+
+inline
+void mutation_cleaner_impl::merge_and_destroy(partition_snapshot& ps) noexcept {
+    if (ps.slide_to_oldest() == stop_iteration::yes || merge_some(ps) == stop_iteration::yes) {
+        lw_shared_ptr<partition_snapshot>::dispose(&ps);
+    } else {
+        // The snapshot must not be reachable by partitino_entry::read() after this,
+        // which is ensured by slide_to_oldest() == stop_iteration::no.
+        _worker_state->snapshots.push_front(ps);
+        _worker_state->cv.signal();
+    }
+}
+
 // Container for garbage partition_version objects, used for freeing them incrementally.
 //
 // Mutation cleaner extends the lifetime of mutation_partition without doing
@@ -36,57 +106,71 @@
 // mutation_cleaner should not be thread local objects (or members of thread
 // local objects).
 class mutation_cleaner final {
-    logalloc::region& _region;
-    cache_tracker* _tracker;
-    partition_version_list _versions;
+    lw_shared_ptr<mutation_cleaner_impl> _impl;
 public:
-    mutation_cleaner(logalloc::region& r, cache_tracker* t) : _region(r), _tracker(t) {}
-    ~mutation_cleaner();
+    mutation_cleaner(logalloc::region& r, cache_tracker* t, seastar::scheduling_group sg = seastar::current_scheduling_group())
+        : _impl(make_lw_shared<mutation_cleaner_impl>(r, t, sg)) {
+    }
+
+    void set_scheduling_group(seastar::scheduling_group sg) {
+        _impl->set_scheduling_group(sg);
+    }
 
     // Frees some of the data. Returns stop_iteration::yes iff all was freed.
     // Must be invoked under owning allocator.
-    stop_iteration clear_gently() noexcept;
+    stop_iteration clear_gently() noexcept {
+        return _impl->clear_gently();
+    }
 
     // Must be invoked under owning allocator.
-    memory::reclaiming_result clear_some() noexcept;
+    memory::reclaiming_result clear_some() noexcept {
+        return _impl->clear_some();
+    }
 
     // Must be invoked under owning allocator.
-    void clear() noexcept;
+    void clear() noexcept {
+        _impl->clear();
+    }
 
     // Enqueues v for destruction.
     // The object must not be part of any list, and must not be accessed externally any more.
     // In particular, it must not be attached, even indirectly, to any snapshot or partition_entry,
     // and must not be evicted from.
     // Must be invoked under owning allocator.
-    void destroy_later(partition_version& v) noexcept;
+    void destroy_later(partition_version& v) noexcept {
+        return _impl->destroy_later(v);
+    }
 
     // Destroys v now or later.
     // Same requirements as destroy_later().
     // Must be invoked under owning allocator.
-    void destroy_gently(partition_version& v) noexcept;
+    void destroy_gently(partition_version& v) noexcept {
+        return _impl->destroy_gently(v);
+    }
 
     // Transfers objects from other to this.
     // This and other must belong to the same logalloc::region, and the same cache_tracker.
-    // After the call bool(other) is false.
-    void merge(mutation_cleaner& other) noexcept;
+    // After the call other will refer to this cleaner.
+    void merge(mutation_cleaner& other) noexcept {
+        _impl->merge(*other._impl);
+        other._impl = _impl;
+    }
 
     // Returns true iff contains no unfreed objects
-    bool empty() const noexcept { return _versions.empty(); }
+    bool empty() const noexcept {
+        return _impl->empty();
+    }
 
     // Forces cleaning and returns a future which resolves when there is nothing to clean.
-    future<> drain();
-};
-
-inline
-void mutation_cleaner::destroy_later(partition_version& v) noexcept {
-    _versions.push_back(v);
-}
-
-inline
-void mutation_cleaner::destroy_gently(partition_version& v) noexcept {
-    if (v.clear_gently(_tracker) == stop_iteration::no) {
-        destroy_later(v);
-    } else {
-        current_allocator().destroy(&v);
+    future<> drain() {
+        return _impl->drain();
     }
-}
+
+    // Will merge given snapshot using partition_snapshot::merge_partition_versions() and then destroys it
+    // using destroy_from_this(), possibly deferring in between.
+    // This instance becomes the sole owner of the partition_snapshot object, the caller should not destroy it
+    // nor access it after calling this.
+    void merge_and_destroy(partition_snapshot& ps) {
+        return _impl->merge_and_destroy(ps);
+    }
+};
