@@ -285,10 +285,13 @@ public:
     }
     // return true on last ack
     bool response(gms::inet_address from) {
-        signal(from);
         auto it = _targets.find(from);
-        assert(it != _targets.end());
-        _targets.erase(it);
+        if (it != _targets.end()) {
+            signal(from);
+            _targets.erase(it);
+        } else {
+            slogger.warn("Receive outdated write ack from {}", from);
+        }
         return _targets.size() == 0;
     }
     future<> wait() {
