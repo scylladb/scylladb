@@ -185,7 +185,7 @@ void compaction_manager::register_weight(int weight) {
 
 void compaction_manager::deregister_weight(int weight) {
     _weight_tracker.erase(weight);
-    reevalute_postponed_compactions();
+    reevaluate_postponed_compactions();
 }
 
 std::vector<sstables::shared_sstable> compaction_manager::get_candidates(const column_family& cf) {
@@ -403,7 +403,7 @@ void compaction_manager::postponed_compactions_reevaluation() {
     });
 }
 
-void compaction_manager::reevalute_postponed_compactions() {
+void compaction_manager::reevaluate_postponed_compactions() {
     _postponed_reevaluation.signal();
 }
 
@@ -431,7 +431,7 @@ future<> compaction_manager::stop() {
             return this->task_stop(task);
         });
     }).then([this] () mutable {
-        reevalute_postponed_compactions();
+        reevaluate_postponed_compactions();
         return std::move(_waiting_reevalution);
     }).then([this] {
         _weight_tracker.clear();
@@ -527,7 +527,7 @@ void compaction_manager::submit(column_family* cf) {
                 _stats.pending_tasks++;
                 _stats.completed_tasks++;
                 task->compaction_retry.reset();
-                reevalute_postponed_compactions();
+                reevaluate_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
           });
@@ -590,7 +590,7 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
                 });
             }
             _stats.completed_tasks++;
-            reevalute_postponed_compactions();
+            reevaluate_postponed_compactions();
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         });
     }).finally([this, task] {
@@ -656,7 +656,7 @@ void compaction_manager::stop_compaction(sstring type) {
 
 void compaction_manager::on_compaction_complete(compaction_weight_registration& weight_registration) {
     weight_registration.deregister();
-    reevalute_postponed_compactions();
+    reevaluate_postponed_compactions();
 }
 
 double compaction_backlog_tracker::backlog() const {
