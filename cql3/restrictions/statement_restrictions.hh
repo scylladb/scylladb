@@ -399,6 +399,16 @@ public:
     const single_column_restrictions::restrictions_map& get_non_pk_restriction() const {
         return _nonprimary_key_restrictions->restrictions();
     }
+
+    /**
+     * @return partition key restrictions split into single column restrictions (e.g. for filtering support).
+     */
+    const single_column_restrictions::restrictions_map& get_single_column_partition_key_restrictions() const;
+
+    /**
+     * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
+     */
+    const single_column_restrictions::restrictions_map& get_single_column_clustering_key_restrictions() const;
 };
 
 }

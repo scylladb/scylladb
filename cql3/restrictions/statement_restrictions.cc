@@ -37,6 +37,8 @@
 namespace cql3 {
 namespace restrictions {
 
+static logging::logger rlogger("restrictions");
+
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
 
@@ -429,6 +431,33 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
         throw exceptions::invalid_request_exception(
             "Queries using 2ndary indexes don't support selecting only static columns");
     }
+}
+
+const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_partition_key_restrictions() const {
+    static single_column_restrictions::restrictions_map empty;
+    auto single_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<partition_key>>(_partition_key_restrictions);
+    if (!single_restrictions) {
+        if (dynamic_pointer_cast<initial_key_restrictions<partition_key>>(_partition_key_restrictions)) {
+            return empty;
+        }
+        throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
+    }
+    return single_restrictions->restrictions();
+}
+
+/**
+ * @return clustering key restrictions split into single column restrictions (e.g. for filtering support).
+ */
+const single_column_restrictions::restrictions_map& statement_restrictions::get_single_column_clustering_key_restrictions() const {
+    static single_column_restrictions::restrictions_map empty;
+    auto single_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(_clustering_columns_restrictions);
+    if (!single_restrictions) {
+        if (dynamic_pointer_cast<initial_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
+            return empty;
+        }
+        throw std::runtime_error("statement restrictions for multi-column partition key restrictions are not implemented yet");
+    }
+    return single_restrictions->restrictions();
 }
 
 static std::optional<atomic_cell_value_view> do_get_value(const schema& schema,
