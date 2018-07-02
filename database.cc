@@ -1660,7 +1660,7 @@ future<> distributed_loader::open_sstable(distributed<database>& db, sstables::e
         return with_semaphore(local.sstable_load_concurrency_sem(), 1, [&db, &local, comps = std::move(comps), func = std::move(func), pc] {
             auto& cf = local.find_column_family(comps.ks, comps.cf);
 
-            auto f = sstables::sstable::load_shared_components(cf.schema(), cf._config.datadir, comps.generation, comps.version, comps.format, pc);
+            auto f = sstables::sstable::load_shared_components(cf.schema(), comps.sstdir, comps.generation, comps.version, comps.format, pc);
             return f.then([&db, comps = std::move(comps), func = std::move(func)] (sstables::sstable_open_info info) {
                 // shared components loaded, now opening sstable in all shards that own it with shared components
                 return do_with(std::move(info), [&db, comps = std::move(comps), func = std::move(func)] (auto& info) {
