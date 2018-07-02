@@ -24,6 +24,7 @@ import argparse
 import pwd
 import grp
 import sys
+import stat
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -60,6 +61,9 @@ if __name__ == '__main__':
     for disk in disks:
         if not os.path.exists(disk):
             print('{} is not found'.format(disk))
+            sys.exit(1)
+        if not stat.S_ISBLK(os.stat(disk).st_mode):
+            print('{} is not block device'.format(disk))
             sys.exit(1)
 
     if os.path.exists(args.raiddev):
