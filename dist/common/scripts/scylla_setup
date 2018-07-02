@@ -22,7 +22,6 @@
 import os
 import sys
 import argparse
-import logging
 import glob
 import shutil
 import io
@@ -54,6 +53,8 @@ def do_verify_package(pkg):
         res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
     elif is_redhat_variant():
         res = run('rpm -q {}'.format(pkg), silent=True, exception=False)
+    elif is_gentoo_variant():
+        res = 1 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 0
     if res != 0:
         print('{} package is not installed.'.format(pkg))
         sys.exit(1)
@@ -67,22 +68,38 @@ def list_block_devices():
         devices = []
         for p in ['/dev/sd*', '/dev/hd*', '/dev/xvd*', '/dev/nvme*', '/dev/mapper/*']:
             devices.extend([d for d in glob.glob(p) if d != '/dev/mapper/control'])
-        return devices
+    return devices
 
 def get_unused_disks():
     unused = []
     for dev in list_block_devices():
+        # dev is not in /sys/class/block/
+        if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/',''))):
+            continue
+        # dev contains partitions
+        if len(glob.glob('/sys/class/block/{dev}/{dev}*'.format(dev=dev.replace('/dev/','')))) > 0:
+            continue
+        # dev is mounted
         with open('/proc/mounts') as f:
             s = f.read().strip()
-        count_raw = len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE))
-        count_pvs = 0
+        if len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE)) > 0:
+            continue
+        # dev is used in LVM
         if shutil.which('pvs'):
             s = out('pvs -o pv_name --nohead')
-            count_pvs = len(re.findall(dev, s, flags=re.MULTILINE))
+            if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+                continue
+        # dev is used for swap
         s = out('swapon --show=NAME --noheadings')
-        count_swap = len(re.findall(dev, s, flags=re.MULTILINE))
-        if count_raw + count_pvs + count_swap == 0:
-            unused.append(dev)
+        if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+            continue
+        # dev is used in MDRAID
+        if os.path.exists('/proc/mdstat'):
+            with open('/proc/mdstat') as f:
+                s = f.read().strip()
+            if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+                continue
+        unused.append(dev)
     return unused
 
 def run_setup_script(name, script):
@@ -99,7 +116,7 @@ def run_setup_script(name, script):
 
 if __name__ == '__main__':
     if os.getuid() > 0:
-        logging.error('Requires root permission.')
+        print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     parser.add_argument('--disks',
@@ -202,7 +219,6 @@ if __name__ == '__main__':
     if enable_service:
         if is_systemd():
             systemd_unit('scylla-server.service').enable()
-            systemd_unit('scylla-fstrim.timer').unmask()
         elif is_gentoo_variant():
             run('rc-update add scylla-server default')
 
@@ -277,10 +293,14 @@ if __name__ == '__main__':
             else:
                 print('Please select unmounted disks from the following list: {}'.format(devices))
             selected = []
+            dsklist = []
             while len(devices):
                 print('type \'cancel\' to cancel RAID/XFS setup.')
                 print('type \'done\' to finish selection. Selected: {}'.format(selected))
-                dsk = input('> ')
+                if len(dsklist) > 0:
+                    dsk = dsklist.pop(0)
+                else:
+                    dsk = input('> ')
                 if dsk == 'cancel':
                     raid_setup = 0
                     break
@@ -290,12 +310,15 @@ if __name__ == '__main__':
                     break
                 if dsk == '':
                     continue
+                if dsk.find(',') > 0:
+                    dsklist = dsk.split(',')
+                    continue
                 if not os.path.exists(dsk):
                     print('{} not found'.format(dsk))
                     continue
                 if not stat.S_ISBLK(os.stat(dsk).st_mode):
                     print('{} is not block device'.format(dsk))
-                selected += dsk
+                selected.append(dsk)
                 devices.remove(dsk)
             disks = ','.join(selected)
     if raid_setup:

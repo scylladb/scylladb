@@ -23,7 +23,6 @@ import os
 import sys
 import argparse
 import subprocess
-import shutil
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -62,7 +61,7 @@ ExternalSizeMax=1024G
         with open('/etc/systemd/coredump.conf', 'w') as f:
             conf = f.write(conf_data)
         if args.dump_to_raiddir:
-            shutil.rmtree('/var/lib/systemd/coredump')
+            rmtree('/var/lib/systemd/coredump')
             makedirs('/var/lib/scylla/coredump')
             os.symlink('/var/lib/scylla/coredump', '/var/lib/systemd/coredump')
         run('systemctl daemon-reload')

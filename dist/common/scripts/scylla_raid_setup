@@ -23,6 +23,7 @@ import os
 import argparse
 import pwd
 import grp
+import sys
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -74,12 +75,20 @@ if __name__ == '__main__':
     elif is_gentoo_variant():
         run('emerge -uq sys-fs/mdadm sys-fs/xfsprogs')
 
-    print('Creating RAID0 for scylla using {nr_disk} disk(s): {disks}'.format(nr_disk=len(disks), disks=args.disks))
+    if len(disks) == 1:
+        raid = False
+        fsdev = disks[0]
+    else:
+        raid = True
+        fsdev = args.raiddev
+
+    print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type='RAID0' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
     if dist_name() == 'Ubuntu' and dist_ver() == '14.04':
-        run('udevadm settle')
-        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=args.raiddev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
-        run('udevadm settle')
-        run('mkfs.xfs {} -f'.format(args.raiddev))
+        if raid:
+            run('udevadm settle')
+            run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
+            run('udevadm settle')
+        run('mkfs.xfs {} -f'.format(fsdev))
     else:
         procs=[]
         for disk in disks:
@@ -93,22 +102,24 @@ if __name__ == '__main__':
                     procs.append(proc)
         for proc in procs:
             proc.wait()
-        run('udevadm settle')
-        run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=args.raiddev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
-        run('udevadm settle')
-        run('mkfs.xfs {} -f -K'.format(args.raiddev))
+        if raid:
+            run('udevadm settle')
+            run('mdadm --create --verbose --force --run {raid} --level=0 -c1024 --raid-devices={nr_disk} {disks}'.format(raid=fsdev, nr_disk=len(disks), disks=args.disks.replace(',', ' ')))
+            run('udevadm settle')
+        run('mkfs.xfs {} -f -K'.format(fsdev))
 
     if is_debian_variant():
         confpath = '/etc/mdadm/mdadm.conf'
     else:
         confpath = '/etc/mdadm.conf'
 
-    res = out('mdadm --detail --scan')
-    with open(confpath, 'w') as f:
-        f.write(res)
+    if raid:
+        res = out('mdadm --detail --scan')
+        with open(confpath, 'w') as f:
+            f.write(res)
 
     makedirs(mount_at)
-    run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=args.raiddev, mount_at=mount_at))
+    run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=fsdev, mount_at=mount_at))
 
     makedirs('{}/data'.format(root))
     makedirs('{}/commitlog'.format(root))
@@ -122,7 +133,7 @@ if __name__ == '__main__':
     os.chown('{}/coredump'.format(root), uid, gid)
 
     if args.update_fstab:
-        res = out('blkid {}'.format(args.raiddev))
+        res = out('blkid {}'.format(fsdev))
         match = re.search(r'^/dev/\S+: (UUID="\S+")', res.strip())
         uuid = match.group(1)
         with open('/etc/fstab', 'a') as f:
