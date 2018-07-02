@@ -158,13 +158,10 @@ int compaction_manager::trim_to_compact(column_family* cf, sstables::compaction_
 }
 
 bool compaction_manager::can_register_weight(column_family* cf, int weight) {
-    auto has_cf_ongoing_compaction = [&] {
-        auto ret = boost::range::count_if(_tasks, [&] (const lw_shared_ptr<task>& task) {
-            return task->compacting_cf == cf;
+    auto has_cf_ongoing_compaction = [&] () -> bool {
+        return boost::range::count_if(_tasks, [&] (const lw_shared_ptr<task>& task) {
+            return task->compacting_cf == cf && task->compaction_running;
         });
-        // compaction task trying to proceed is already registered in task list,
-        // so we must check for an additional one.
-        return ret >= 2;
     };
 
     // Only one weight is allowed if parallel compaction is disabled.
@@ -511,8 +508,10 @@ void compaction_manager::submit(column_family* cf) {
 
             _stats.pending_tasks--;
             _stats.active_tasks++;
+            task->compaction_running = true;
             return cf.run_compaction(std::move(descriptor)).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
                 _stats.active_tasks--;
+                task->compaction_running = false;
 
                 if (!can_proceed(task)) {
                     maybe_stop_on_error(std::move(f));
@@ -528,6 +527,7 @@ void compaction_manager::submit(column_family* cf) {
                 _stats.pending_tasks++;
                 _stats.completed_tasks++;
                 task->compaction_retry.reset();
+                reevalute_postponed_compactions();
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
           });
@@ -569,12 +569,14 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
 
         _stats.pending_tasks--;
         _stats.active_tasks++;
+        task->compaction_running = true;
         compaction_backlog_tracker user_initiated(std::make_unique<user_initiated_backlog_tracker>(_compaction_controller.backlog_of_shares(200), _available_memory));
         return do_with(std::move(user_initiated), [this, &cf, descriptor = std::move(descriptor)] (compaction_backlog_tracker& bt) mutable {
             return with_scheduling_group(_scheduling_group, [this, &cf, descriptor = std::move(descriptor)] () mutable {
                 return cf.cleanup_sstables(std::move(descriptor));
             });
         }).then_wrapped([this, task, compacting = std::move(compacting)] (future<> f) mutable {
+            task->compaction_running = false;
             _stats.active_tasks--;
             if (!can_proceed(task)) {
                 maybe_stop_on_error(std::move(f));
@@ -588,6 +590,7 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
                 });
             }
             _stats.completed_tasks++;
+            reevalute_postponed_compactions();
             return make_ready_future<stop_iteration>(stop_iteration::yes);
         });
     }).finally([this, task] {

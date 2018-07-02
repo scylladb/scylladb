@@ -60,6 +60,7 @@ private:
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
         bool cleanup = false;
+        bool compaction_running = false;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
