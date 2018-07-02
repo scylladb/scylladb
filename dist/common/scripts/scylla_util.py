@@ -27,6 +27,7 @@ import platform
 import configparser
 import io
 import shlex
+import shutil
 
 def curl(url):
     max_retries = 5
@@ -306,6 +307,12 @@ def makedirs(name):
     if not os.path.isdir(name):
         os.makedirs(name)
 
+def rmtree(path):
+    if not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
 def dist_name():
     return platform.dist()[0]
 
@@ -317,6 +324,10 @@ class SystemdException(Exception):
 
 class systemd_unit:
     def __init__(self, unit):
+        try:
+            run('systemctl cat {}'.format(unit), silent=True)
+        except subprocess.CalledProcessError:
+            raise SystemdException('unit {} not found'.format(unit))
         self._unit = unit
 
     def start(self):
