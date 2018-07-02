@@ -67,6 +67,9 @@ if __name__ == '__main__':
         if not stat.S_ISBLK(os.stat(disk).st_mode):
             print('{} is not block device'.format(disk))
             sys.exit(1)
+        if not is_unused_disk(disk):
+            print('{} is busy'.format(disk))
+            sys.exit(1)
 
     if os.path.exists(args.raiddev):
         print('{} is already using'.format(args.raiddev))
