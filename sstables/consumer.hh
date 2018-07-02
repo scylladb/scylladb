@@ -76,6 +76,8 @@ protected:
         READING_UNSIGNED_VINT_LENGTH_BYTES,
         READING_UNSIGNED_VINT_WITH_LEN,
         READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN,
+        READING_SIGNED_VINT,
+        READING_SIGNED_VINT_WITH_LEN,
     } _prestate = prestate::NONE;
 
     // state for non-NONE prestates
@@ -85,6 +87,7 @@ protected:
     uint16_t _u16;
     uint32_t _u32;
     uint64_t _u64;
+    int64_t _i64; // for reading signed vints
     union {
         char bytes[sizeof(uint64_t)];
         uint64_t uint64;
@@ -105,6 +108,42 @@ private:
         _prestate = next_state;
         return read_status::waiting;
     }
+    template <typename VintType, prestate ReadingVint, prestate ReadingVintWithLen, typename T>
+    inline read_status read_vint(temporary_buffer<char>& data, T& dest) {
+        static_assert(std::is_same_v<T, typename VintType::value_type>, "Destination type mismatch");
+        if (data.empty()) {
+            _prestate = ReadingVint;
+            return read_status::waiting;
+        } else {
+            const vint_size_type len = VintType::serialized_size_from_first_byte(*data.begin());
+            if (data.size() >= len) {
+                dest = VintType::deserialize(
+                        bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
+                data.trim_front(len);
+                return read_status::ready;
+            } else {
+                _read_bytes = temporary_buffer<char>(len);
+                std::copy(data.begin(), data.end(), _read_bytes.get_write());
+                _pos = data.size();
+                data.trim(0);
+                _prestate = ReadingVintWithLen;
+                return read_status::waiting;
+            }
+        }
+    }
+    template <typename VintType, typename T>
+    inline void read_vint_with_len(temporary_buffer<char>& data, T& dest) {
+        static_assert(std::is_same_v<T, typename VintType::value_type>, "Destination type mismatch");
+        const auto n = std::min(_read_bytes.size() - _pos, data.size());
+        std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
+        data.trim_front(n);
+        _pos += n;
+        if (_pos == _read_bytes.size()) {
+            dest = VintType::deserialize(
+                    bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
+            _prestate = prestate::NONE;
+        }
+    };
 protected:
     inline read_status read_8(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint8_t)) {
@@ -170,25 +209,16 @@ protected:
         return read_bytes(data, uint32_t{_u16}, where);
     }
     inline read_status read_unsigned_vint(temporary_buffer<char>& data) {
-        if (data.empty()) {
-            _prestate = prestate::READING_UNSIGNED_VINT;
-            return read_status::waiting;
-        } else {
-            const vint_size_type len = unsigned_vint::serialized_size_from_first_byte(*data.begin());
-            if (data.size() >= len) {
-                _u64 = unsigned_vint::deserialize(
-                        bytes_view(reinterpret_cast<bytes::value_type*>(data.get_write()), len)).value;
-                data.trim_front(len);
-                return read_status::ready;
-            } else {
-                _read_bytes = temporary_buffer<char>(len);
-                std::copy(data.begin(), data.end(), _read_bytes.get_write());
-                _pos = data.size();
-                data.trim(0);
-                _prestate = prestate::READING_UNSIGNED_VINT_WITH_LEN;
-                return read_status::waiting;
-            }
-        }
+        return read_vint<
+                unsigned_vint,
+                prestate::READING_UNSIGNED_VINT,
+                prestate::READING_UNSIGNED_VINT_WITH_LEN>(data, _u64);
+    }
+    inline read_status read_signed_vint(temporary_buffer<char>& data) {
+        return read_vint<
+                signed_vint,
+                prestate::READING_SIGNED_VINT,
+                prestate::READING_SIGNED_VINT_WITH_LEN>(data, _i64);
     }
     inline read_status read_unsigned_vint_length_bytes(temporary_buffer<char>& data, temporary_buffer<char>& where) {
         if (data.empty()) {
@@ -230,20 +260,18 @@ private:
             if (read_unsigned_vint(data) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
+        } else if (_prestate == prestate::READING_SIGNED_VINT) {
+            if (read_signed_vint(data) == read_status::ready) {
+                _prestate = prestate::NONE;
+            }
         } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES) {
             if (read_unsigned_vint_length_bytes(data, *_read_bytes_where) == read_status::ready) {
                 _prestate = prestate::NONE;
             }
         } else if (_prestate == prestate::READING_UNSIGNED_VINT_WITH_LEN) {
-            const auto n = std::min(_read_bytes.size() - _pos, data.size());
-            std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
-            data.trim_front(n);
-            _pos += n;
-            if (_pos == _read_bytes.size()) {
-                _u64 = unsigned_vint::deserialize(
-                        bytes_view(reinterpret_cast<bytes::value_type*>(_read_bytes.get_write()), _read_bytes.size())).value;
-                _prestate = prestate::NONE;
-            }
+            read_vint_with_len<unsigned_vint>(data, _u64);
+        } else if (_prestate == prestate::READING_SIGNED_VINT_WITH_LEN) {
+            read_vint_with_len<signed_vint>(data, _i64);
         } else if (_prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN) {
             const auto n = std::min(_read_bytes.size() - _pos, data.size());
             std::copy_n(data.begin(), n, _read_bytes.get_write() + _pos);
