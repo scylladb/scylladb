@@ -114,6 +114,7 @@ public:
         return _dc_racks;
     }
 
+    const endpoint_dc_rack& get_location(const inet_address& ep) const;
 private:
     /** multi-map: DC -> endpoints in that DC */
     std::unordered_map<sstring,
