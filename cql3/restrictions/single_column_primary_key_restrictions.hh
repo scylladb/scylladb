@@ -314,6 +314,10 @@ public:
         fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
     }
 
+    const single_column_restrictions::restrictions_map& restrictions() const {
+        return _restrictions->restrictions();
+    }
+
     virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
         return _restrictions->has_supporting_index(index_manager);
     }
