@@ -3991,7 +3991,7 @@ future<> table::snapshot(sstring name) {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables->all());
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
-
+            return io_check(recursive_touch_directory, jsondir).then([this, name, jsondir, &tables] {
             return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
                 auto dir = sstable->get_dir() + "/snapshots/" + name;
                 return io_check(recursive_touch_directory, dir).then([sstable, dir] {
@@ -4008,14 +4008,9 @@ future<> table::snapshot(sstring name) {
                         return make_ready_future<>();
                     });
                 });
+            });
             }).then([jsondir, &tables] {
-                // This is not just an optimization. If we have no files, jsondir may not have been created,
-                // and sync_directory would throw.
-                if (tables.size()) {
-                    return io_check(sync_directory, std::move(jsondir));
-                } else {
-                    return make_ready_future<>();
-                }
+                return io_check(sync_directory, std::move(jsondir));
             }).finally([this, &tables, jsondir] {
                 auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
