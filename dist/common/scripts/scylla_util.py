@@ -319,6 +319,32 @@ def dist_name():
 def dist_ver():
     return platform.dist()[1]
 
+def is_unused_disk(dev):
+    # dev is not in /sys/class/block/
+    if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/',''))):
+        return False
+    # dev is mounted
+    with open('/proc/mounts') as f:
+        s = f.read().strip()
+    if len(re.findall('^{} '.format(dev), s, flags=re.MULTILINE)) > 0:
+        return False
+    # dev is used in LVM
+    if shutil.which('pvs'):
+        s = out('pvs -o pv_name --nohead')
+        if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+            return False
+    # dev is used for swap
+    s = out('swapon --show=NAME --noheadings')
+    if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+        return False
+    # dev is used in MDRAID
+    if os.path.exists('/proc/mdstat'):
+        with open('/proc/mdstat') as f:
+            s = f.read().strip()
+        if len(re.findall(dev, s, flags=re.MULTILINE)) > 0:
+            return False
+    return True
+
 class SystemdException(Exception):
     pass
 
