@@ -620,6 +620,11 @@ public:
     const dht::token& token() const { return *_token; }
     const partition_key* key() const { return _key; }
 
+    // Only when key() == nullptr
+    token_bound get_token_bound() const { return token_bound(_weight); }
+    // Only when key() != nullptr
+    after_key is_after_key() const { return after_key(_weight == 1); }
+
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
 

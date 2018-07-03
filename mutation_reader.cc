@@ -234,7 +234,7 @@ class list_reader_selector : public reader_selector {
 
 public:
     explicit list_reader_selector(schema_ptr s, std::vector<flat_mutation_reader> readers)
-        : reader_selector(s, dht::ring_position::min())
+        : reader_selector(s, dht::ring_position_view::min())
         , _readers(std::move(readers)) {
     }
 
@@ -245,7 +245,7 @@ public:
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const) override {
-        _selector_position = dht::ring_position::max();
+        _selector_position = dht::ring_position_view::max();
         return std::exchange(_readers, {});
     }
 

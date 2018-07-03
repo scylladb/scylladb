@@ -541,17 +541,17 @@ static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) 
 }
 
 class dummy_incremental_selector : public reader_selector {
+    // To back _selector_position.
+    dht::ring_position _position;
     std::vector<std::vector<mutation>> _readers_mutations;
     streamed_mutation::forwarding _fwd;
     dht::partition_range _pr;
 
-    const dht::token& position() const {
-        return _readers_mutations.back().front().token();
-    }
     flat_mutation_reader pop_reader() {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
-        _selector_position = _readers_mutations.empty() ? dht::ring_position::max() : dht::ring_position::starting_at(position());
+        _position = _readers_mutations.empty() ? dht::ring_position::max() : _readers_mutations.back().front().decorated_key();
+        _selector_position = _position;
         return flat_mutation_reader_from_mutations(std::move(muts), _pr, _fwd);
     }
 public:
@@ -563,13 +563,13 @@ public:
             std::vector<std::vector<mutation>> reader_mutations,
             dht::partition_range pr = query::full_partition_range,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
-        : reader_selector(s, dht::ring_position::min())
+        : reader_selector(s, dht::ring_position_view::min())
+        , _position(dht::ring_position::min())
         , _readers_mutations(std::move(reader_mutations))
         , _fwd(fwd)
         , _pr(std::move(pr)) {
         // So we can pop the next reader off the back
         boost::reverse(_readers_mutations);
-        _selector_position = dht::ring_position::starting_at(position());
     }
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
         if (_readers_mutations.empty()) {
@@ -583,7 +583,8 @@ public:
             return readers;
         }
 
-        while (!_readers_mutations.empty() && *t >= _selector_position.token()) {
+        auto pos = dht::ring_position_view::ending_at(*t);
+        while (!_readers_mutations.empty() && dht::ring_position_tri_compare(*_s, _selector_position, pos) <= 0) {
             readers.emplace_back(pop_reader());
         }
         return readers;

@@ -237,7 +237,7 @@ partition_presence_checker
 table::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
     auto sel = make_lw_shared(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
-        auto& sst = sel->select(key.token()).sstables;
+        auto& sst = sel->select(key).sstables;
         if (sst.empty()) {
             return partition_presence_checker_result::definitely_doesnt_exist;
         }
@@ -453,7 +453,7 @@ public:
             const dht::partition_range& pr,
             tracing::trace_state_ptr trace_state,
             sstable_reader_factory_type fn)
-        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position::min())
+        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position_view::min())
         , _pr(&pr)
         , _sstables(std::move(sstables))
         , _trace_state(std::move(trace_state))
@@ -475,7 +475,7 @@ public:
     virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
         dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(t));
 
-        const auto& position = (t ? *t : _selector_position.token());
+        const auto position = (t ? dht::ring_position_view::ending_at(*t) : _selector_position);
         // we only pass _selector_position's token to _selector::select() when T is nullptr
         // because it means gap between sstables, and the lower bound of the first interval
         // after the gap is guaranteed to be inclusive.
@@ -485,8 +485,8 @@ public:
             // For the lower bound of the token range the _selector
             // might not return any sstables, in this case try again
             // with next_token unless it's maximum token.
-            if (!selection.next_position.is_max()
-                    && position == (_pr->start() ? _pr->start()->value().token() : dht::minimum_token())) {
+            auto start = _pr->start() ? dht::ring_position_view::ending_at(_pr->start()->value().token()) : dht::ring_position_view::min();
+            if (!selection.next_position.is_max() && dht::ring_position_tri_compare(*_s, position, start) == 0) {
                 dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
                 _selector_position = std::move(selection.next_position);
                 return create_new_readers(nullptr);
@@ -510,8 +510,7 @@ public:
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _pr = &pr;
 
-        dht::ring_position_comparator cmp(*_s);
-        if (cmp(dht::ring_position_view::for_range_start(*_pr), _selector_position) >= 0) {
+        if (dht::ring_position_tri_compare(*_s, dht::ring_position_view::for_range_start(*_pr), _selector_position) >= 0) {
             return create_new_readers(&_pr->start()->value().token());
         }
 
@@ -1566,7 +1565,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
         return do_with(dht::decorated_key(dht::global_partitioner().decorate_key(*_schema, pk)),
                 [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
-            auto sst = sel->select(dk.token()).sstables;
+            auto sst = sel->select(dk).sstables;
             auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
 
             return do_for_each(sst, [this, &filenames, &dk, hk = std::move(hk)] (std::vector<sstables::shared_sstable>::const_iterator::reference s) mutable {

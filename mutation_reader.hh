@@ -50,9 +50,9 @@ namespace mutation_reader {
 class reader_selector {
 protected:
     schema_ptr _s;
-    dht::ring_position _selector_position;
+    dht::ring_position_view _selector_position;
 public:
-    reader_selector(schema_ptr s, dht::ring_position rp) noexcept : _s(std::move(s)), _selector_position(std::move(rp)) {}
+    reader_selector(schema_ptr s, dht::ring_position_view rpv) noexcept : _s(std::move(s)), _selector_position(std::move(rpv)) {}
 
     virtual ~reader_selector() = default;
     // Call only if has_new_readers() returned true.

@@ -36,8 +36,8 @@ public:
     compatible_ring_position_view(const schema& s, dht::ring_position_view rpv)
         : _schema(&s), _rpv(rpv) {
     }
-    const dht::token& token() const {
-        return _rpv->token();
+    const dht::ring_position_view& position() const {
+        return *_rpv;
     }
     friend int tri_compare(const compatible_ring_position_view& x, const compatible_ring_position_view& y) {
         return dht::ring_position_tri_compare(*x._schema, *x._rpv, *y._rpv);
