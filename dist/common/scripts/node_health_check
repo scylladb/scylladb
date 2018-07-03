@@ -28,6 +28,7 @@ OUTPUT_PATH4="$OUTPUT_PATH/data_model"
 OUTPUT_PATH5="$OUTPUT_PATH/network_checks"
 IS_FEDORA="0"
 IS_DEBIAN="0"
+IS_GENTOO="0"
 JMX_PORT="7199"
 CQL_PORT="9042"
 PRINT_DM=NO
@@ -75,7 +76,7 @@ while getopts ":hdncap:q:" opt; do
 done
 
 
-##Check server release (Fedora/Oracle/Debian)##
+##Check server release (Fedora/Oracle/Debian/Gentoo)##
 cat /etc/os-release | grep -i fedora &> /dev/null
 if [ $? -ne 0 ]; then
     cat /etc/os-release | grep -i oracle &> /dev/null
@@ -89,7 +90,12 @@ if [ $? -ne 0 ]; then
     IS_DEBIAN="1"
 fi
 
-if [ "$IS_FEDORA" == "1" ] && [ "$IS_DEBIAN" == "1" ]; then
+cat /etc/os-release | grep -i gentoo &> /dev/null
+if [ $? -ne 0 ]; then
+    IS_GENTOO="1"
+fi
+
+if [ "$IS_FEDORA" == "1" ] && [ "$IS_DEBIAN" == "1" ] && [ "$IS_GENTOO" == "1" ]; then
     echo "This s a Non-Supported OS, Please Review the Support Matrix"
     exit 222
 fi
@@ -108,7 +114,7 @@ if [ $? -ne 0 ]; then
 else
     echo "Scylla-server Service: OK"
     echo "--------------------------------------------------"
-fi 
+fi
 
 
 ##Scylla-JMX service status##
@@ -125,7 +131,7 @@ if [ $? -ne 0 ]; then
 else
     echo "Scylla-JMX Service (nodetool): OK"
     echo "--------------------------------------------------"
-fi 
+fi
 
 
 #Install 'net-tools' pkg, to be used for netstat command#
@@ -141,6 +147,9 @@ if [ "$IS_DEBIAN" == "0" ]; then
     sudo apt-get install net-tools -y | grep already
 fi
 
+if [ "$IS_GENTOO" == "0" ]; then
+    sudo emerge -1uq sys-apps/ethtool sys-apps/net-tools
+fi
 
 #Create dir structure to save output_files#
 echo "--------------------------------------------------"
@@ -182,6 +191,12 @@ if [ "$IS_DEBIAN" == "0" ]; then
     cp -p /etc/default/scylla-server $OUTPUT_PATH2
 fi
 
+if [ "$IS_GENTOO" == "0" ]; then
+    sudo emerge -1uq app-portage/portage-utils
+    sudo qlist -ICv scylla > $OUTPUT_PATH2/scylla-pkgs.txt
+    cp -p /etc/default/scylla-server $OUTPUT_PATH2
+fi
+
 
 #Scylla Logs#
 echo "--------------------------------------------------"
@@ -192,7 +207,11 @@ journalctl --help &> /dev/null
 if [ $? -eq 0 ]; then
     journalctl -t scylla > $OUTPUT_PATH/scylla-logs.txt
 else
-    cat /var/log/syslog | grep -i scylla > $OUTPUT_PATH/scylla-logs.txt
+    if [ "$IS_GENTOO" == "0" ]; then
+        cat /var/log/scylla/scylla.log > $OUTPUT_PATH/scylla-logs.txt
+    else
+        cat /var/log/syslog | grep -i scylla > $OUTPUT_PATH/scylla-logs.txt
+    fi
 fi
 
 gzip -f $OUTPUT_PATH/scylla-logs.txt
@@ -224,6 +243,7 @@ if [ "$SCYLLA_SERVICE" == "1" ]; then
     echo "Skipping Data Model Info Collection"
     echo "--------------------------------------------------"
 else
+    # TODO: handle connecting with authentication
     cqlsh `hostname -i` $CQL_PORT -e "HELP" &> /dev/null
     if [ $? -eq 0 ]; then
         echo "Collecting Data Model Info (using port $CQL_PORT)"
@@ -357,7 +377,7 @@ if [ "$IS_FEDORA" == "0" ]; then
     echo "## /etc/sysconfig/scylla-server ##" >> $REPORT
 fi
 
-if [ "$IS_DEBIAN" == "0" ]; then
+if [ "$IS_DEBIAN" == "0" ] || [ "$IS_GENTOO" == "0" ]; then
     echo "## /etc/default/scylla-server ##" >> $REPORT
 fi
 
