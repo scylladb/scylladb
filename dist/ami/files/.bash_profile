@@ -40,18 +40,11 @@ if [ `ec2_is_supported_instance_type` -eq 0 ]; then
 	echo "    $TYPE is not supported instance type!"
 	tput sgr0
 	echo -n "To continue startup ScyllaDB on this instance, run 'sudo scylla_io_setup' "
-	if ! is_systemd; then
-		echo "then 'initctl start scylla-server'."
-	else
-		echo "then 'systemctl start scylla-server'."
-	fi
+	echo "then 'systemctl start scylla-server'."
 	echo "For a list of optimized instance types and more EC2 instructions see http://www.scylladb.com/doc/getting-started-amazon/"
 	echo
 else
-	SETUP=
-	if is_systemd; then
-		SETUP=`systemctl is-active scylla-ami-setup`
-	fi
+	SETUP=`systemctl is-active scylla-ami-setup`
 	if [ "$SETUP" == "activating" ]; then
 		tput setaf 4
 		tput bold
@@ -75,15 +68,7 @@ else
 		echo " 'systemctl status scylla-ami-setup'"
 		echo
 	else
-		if is_systemd; then
-			SCYLLA=`systemctl is-active scylla-server`
-		else
-			if [ "`initctl status scylla-server|grep "running, process"`" != "" ]; then
-				SCYLLA="active"
-			else
-				SCYLLA="failed"
-			fi
-		fi
+		SCYLLA=`systemctl is-active scylla-server`
 		if [ "$SCYLLA" == "activating" ]; then
 			tput setaf 4
 			tput bold
@@ -108,15 +93,8 @@ else
 			echo "    ScyllaDB is not started!"
 			tput sgr0
 			echo "Please wait for startup. To see status of ScyllaDB, run "
-			if ! is_systemd; then
-				echo " 'initctl status scylla-server'"
-				echo "and"
-				echo " 'sudo cat /var/log/upstart/scylla-server.log'"
-				echo
-			else
-				echo " 'systemctl status scylla-server'"
-				echo
-			fi
+			echo " 'systemctl status scylla-server'"
+			echo
 		fi
 	fi
 	echo -n "    "
