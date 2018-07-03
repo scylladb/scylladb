@@ -33,6 +33,17 @@
 struct generate_error_tag { };
 using generate_error = bool_class<generate_error_tag>;
 
+
+constexpr unsigned many_partitions() {
+    return
+#ifndef SEASTAR_DEBUG
+	1000
+#else
+	10
+#endif
+	;
+}
+
 SEASTAR_TEST_CASE(test_multishard_writer) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto test_random_streams = [] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
@@ -81,17 +92,17 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
         test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), 1);
         test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), 1);
 
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), 1000);
-        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), 1000);
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions());
+        test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions());
 
         try {
-            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), 1000, generate_error::yes);
+            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions(), generate_error::yes);
             BOOST_ASSERT(false);
         } catch (...) {
         }
 
         try {
-            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), 1000, generate_error::yes);
+            test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions(), generate_error::yes);
             BOOST_ASSERT(false);
         } catch (...) {
         }
