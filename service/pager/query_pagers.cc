@@ -85,7 +85,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
             _query_read_repair_decision = state->get_query_read_repair_decision();
         } else {
             // Reusing readers is currently only supported for singular queries.
-            if (_ranges.front().is_singular()) {
+            if (!_ranges.empty() && _ranges.front().is_singular()) {
                 _cmd->query_uuid = utils::make_random_uuid();
             }
             _cmd->is_first_page = true;
