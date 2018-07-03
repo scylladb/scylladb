@@ -64,6 +64,10 @@ if __name__ == '__main__':
                         help='AMI instance mode')
     args = parser.parse_args()
 
+    if args.nic and not os.path.exists('/sys/class/net/{}'.format(args.nic):
+            print('NIC {} not found.'.format(args.nic))
+            sys.exit(1)
+
     ifname = args.nic if args.nic else cfg.get('IFNAME')
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 

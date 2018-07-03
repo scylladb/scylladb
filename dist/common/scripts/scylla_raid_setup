@@ -24,6 +24,7 @@ import argparse
 import pwd
 import grp
 import sys
+import stat
 from scylla_util import *
 
 if __name__ == '__main__':
@@ -41,6 +42,8 @@ if __name__ == '__main__':
                         help='specify the root of the tree')
     parser.add_argument('--volume-role', default='all',
                         help='specify how will this device be used (data, commitlog, or all)')
+    parser.add_argument('--force-raid', action='store_true', default=False,
+                        help='force constructing RAID when only one disk is specified')
 
     args = parser.parse_args()
 
@@ -61,6 +64,12 @@ if __name__ == '__main__':
         if not os.path.exists(disk):
             print('{} is not found'.format(disk))
             sys.exit(1)
+        if not stat.S_ISBLK(os.stat(disk).st_mode):
+            print('{} is not block device'.format(disk))
+            sys.exit(1)
+        if not is_unused_disk(disk):
+            print('{} is busy'.format(disk))
+            sys.exit(1)
 
     if os.path.exists(args.raiddev):
         print('{} is already using'.format(args.raiddev))
@@ -75,7 +84,7 @@ if __name__ == '__main__':
     elif is_gentoo_variant():
         run('emerge -uq sys-fs/mdadm sys-fs/xfsprogs')
 
-    if len(disks) == 1:
+    if len(disks) == 1 and not args.force_raid:
         raid = False
         fsdev = disks[0]
     else:
