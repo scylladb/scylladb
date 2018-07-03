@@ -204,7 +204,24 @@ size_t atomic_cell_or_collection::external_memory_usage(const abstract_type& t) 
         return 0;
     }
     auto ctx = data::cell::context(_data.get(), t.imr_state().type_info());
-    return data::cell::structure::serialized_object_size(_data.get(), ctx);
+
+    auto view = data::cell::structure::make_view(_data.get(), ctx);
+    auto flags = view.get<data::cell::tags::flags>();
+
+    size_t external_value_size = 0;
+    if (flags.get<data::cell::tags::external_data>()) {
+        if (flags.get<data::cell::tags::collection>()) {
+            external_value_size = get_collection_mutation_view(_data.get()).data.size_bytes();
+        } else {
+            auto cell_view = data::cell::atomic_cell_view(t.imr_state().type_info(), view);
+            external_value_size = cell_view.value_size();
+        }
+        // Add overhead of chunk headers. The last one is a special case.
+        external_value_size += (external_value_size - 1) / data::cell::maximum_external_chunk_length * data::cell::external_chunk_overhead;
+        external_value_size += data::cell::external_last_chunk_overhead;
+    }
+    return data::cell::structure::serialized_object_size(_data.get(), ctx)
+        + imr_object_type::size_overhead + external_value_size;
 }
 
 std::ostream& operator<<(std::ostream& os, const atomic_cell_or_collection& c) {

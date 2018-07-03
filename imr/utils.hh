@@ -92,7 +92,7 @@ public:
                         imr::member<tags::back_pointer, imr::tagged_type<tags::back_pointer, imr::pod<basic_object*>>>,
                         imr::member<tags::object, Structure>
                       >;
-
+    static constexpr size_t size_overhead = sizeof(basic_object*);
 private:
     explicit object(uint8_t* ptr) noexcept
         : basic_object(ptr)

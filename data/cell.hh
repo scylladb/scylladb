@@ -211,6 +211,7 @@ struct cell {
         imr::member<tags::chunk_next, imr::pod<uint8_t*>>,
         imr::member<tags::chunk_data, imr::buffer<tags::chunk_data>>
     >;
+    static constexpr size_t external_chunk_overhead = sizeof(uint8_t*) * 2;
 
     using external_last_chunk_size = imr::pod<uint16_t>;
     /// The last fragment of an externally stored value
@@ -224,6 +225,7 @@ struct cell {
         imr::member<tags::last_chunk_size, external_last_chunk_size>,
         imr::member<tags::chunk_data, imr::buffer<tags::chunk_data>>
     >;
+    static constexpr size_t external_last_chunk_overhead = sizeof(uint8_t*) + sizeof(uint16_t);
 
     class context;
     class minimal_context;
