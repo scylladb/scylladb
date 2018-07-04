@@ -4066,13 +4066,16 @@ future<bool> table::snapshot_exists(sstring tag) {
 }
 
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
-    std::unordered_map<sstring, snapshot_details> all_snapshots;
-    return do_with(std::move(all_snapshots), lister::path(_config.datadir) / "snapshots", [this] (auto& all_snapshots, const lister::path& snapshots_dir) {
-        return io_check([&] { return engine().file_exists(snapshots_dir.native()); }).then([this, &all_snapshots, &snapshots_dir](bool file_exists) {
-            if (!file_exists) {
-                return make_ready_future<>();
-            }
-            return lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
+    return seastar::async([this] {
+        std::unordered_map<sstring, snapshot_details> all_snapshots;
+        auto datadir = _config.datadir;
+        lister::path snapshots_dir = lister::path(datadir) / "snapshots";
+        auto file_exists = io_check([&snapshots_dir] { return engine().file_exists(snapshots_dir.native()); }).get0();
+        if (!file_exists) {
+            return all_snapshots;
+        }
+
+        lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, datadir, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
             auto snapshot_name = de.name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
             return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
@@ -4088,8 +4091,6 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                     } else {
                         size = 0;
                     }
-                    return make_ready_future<uint64_t>(size);
-                }).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
                     // FIXME: When we support multiple data directories, the file may not necessarily
                     // live in this same location. May have to test others as well.
                     return io_check(file_size, (lister::path(_config.datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
@@ -4106,10 +4107,8 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                     });
                 });
             });
-        });
-        }).then([&all_snapshots] {
-            return std::move(all_snapshots);
-        });
+        }).get();
+        return all_snapshots;
     });
 }
 
