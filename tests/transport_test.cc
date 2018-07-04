@@ -78,21 +78,20 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     static constexpr auto version = 4;
     auto msg = res.make_message(version, cql_transport::cql_compression::none).release();
-    msg.linearize();
-    auto frags = msg.release();
-    BOOST_CHECK_EQUAL(frags.size(), 1);
-    auto& frag = frags.front();
+    auto total_length = msg.len();
+    auto fbufs = fragmented_temporary_buffer(msg.release(), total_length);
 
-    auto req = cql_transport::request_reader(bytes_view(reinterpret_cast<const bytes::value_type*>(frag.get()), frag.size()));
+    bytes_ostream linearization_buffer;
+    auto req = cql_transport::request_reader(fbufs.get_istream(), linearization_buffer);
     BOOST_CHECK_EQUAL(unsigned(uint8_t(req.read_byte())), version | 0x80);
     BOOST_CHECK_EQUAL(unsigned(req.read_byte()), 0); // flags
     BOOST_CHECK_EQUAL(req.read_short(), stream_id);
     BOOST_CHECK_EQUAL(unsigned(req.read_byte()), unsigned(opcode));
-    BOOST_CHECK_EQUAL(req.read_int() + 9, frag.size());
+    BOOST_CHECK_EQUAL(req.read_int() + 9, total_length);
 
     BOOST_CHECK(req.read_value_view(version).is_null());
     BOOST_CHECK(req.read_value_view(version).is_unset_value());
-    BOOST_CHECK_EQUAL(*req.read_value_view(version), value);
+    BOOST_CHECK_EQUAL(linearized(*req.read_value_view(version)), value);
 
     std::vector<sstring_view> names;
     std::vector<cql3::raw_value_view> values;
@@ -104,7 +103,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
         if (!name_and_value.second) {
             return cql3::raw_value_view::make_null();
         }
-        return cql3::raw_value_view::make_value(*name_and_value.second);
+        return cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(*name_and_value.second));
     }));
 
     auto received_string_list = std::vector<sstring>();

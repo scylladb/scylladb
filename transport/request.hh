@@ -25,17 +25,20 @@
 
 #include "server.hh"
 #include "utils/reusable_buffer.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace cql_transport {
 
 class request_reader {
-    bytes_view _in;
+    fragmented_temporary_buffer::istream _in;
+    bytes_ostream* _linearization_buffer;
 private:
-    void check_room(size_t n) {
-        if (_in.size() < n) {
-            throw exceptions::protocol_exception(sprint("truncated frame: expected %lu bytes, length is %lu", n, _in.size()));
-        }
-    }
+    struct exception_thrower {
+        [[noreturn]] [[gnu::cold]]
+        static void throw_out_of_range(size_t attempted_read, size_t actual_left) {
+            throw exceptions::protocol_exception(sprint("truncated frame: expected %lu bytes, length is %lu", attempted_read, actual_left));
+        };
+    };
     static void validate_utf8(sstring_view s) {
         try {
             boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
@@ -61,85 +64,55 @@ private:
         }
     }
 public:
-    explicit request_reader(bytes_view bv) noexcept : _in(bv) { }
+    explicit request_reader(fragmented_temporary_buffer::istream in, bytes_ostream& linearization_buffer) noexcept
+        : _in(std::move(in))
+        , _linearization_buffer(&linearization_buffer)
+    { }
 
     size_t bytes_left() const {
-        return _in.size();
+        return _in.bytes_left();
     }
 
     bytes_view read_raw_bytes_view(size_t n) {
-        auto bv = bytes_view(_in.data(), n);
-        _in.remove_prefix(n);
-        return bv;
+        return _in.read_bytes_view(n, *_linearization_buffer, exception_thrower());
     }
 
     int8_t read_byte() {
-        check_room(1);
-        int8_t n = _in[0];
-        _in.remove_prefix(1);
-        return n;
+        return _in.read<int8_t>(exception_thrower());
     }
 
     int32_t read_int() {
-        check_room(sizeof(int32_t));
-        auto p = reinterpret_cast<const uint8_t*>(_in.begin());
-        uint32_t n = (static_cast<uint32_t>(p[0]) << 24)
-                | (static_cast<uint32_t>(p[1]) << 16)
-                | (static_cast<uint32_t>(p[2]) << 8)
-                | (static_cast<uint32_t>(p[3]));
-        _in.remove_prefix(4);
-        return n;
+        return be_to_cpu(_in.read<int32_t>(exception_thrower()));
     }
 
     int64_t read_long() {
-        check_room(sizeof(int64_t));
-        auto p = reinterpret_cast<const uint8_t*>(_in.begin());
-        uint64_t n = (static_cast<uint64_t>(p[0]) << 56)
-                | (static_cast<uint64_t>(p[1]) << 48)
-                | (static_cast<uint64_t>(p[2]) << 40)
-                | (static_cast<uint64_t>(p[3]) << 32)
-                | (static_cast<uint64_t>(p[4]) << 24)
-                | (static_cast<uint64_t>(p[5]) << 16)
-                | (static_cast<uint64_t>(p[6]) << 8)
-                | (static_cast<uint64_t>(p[7]));
-        _in.remove_prefix(8);
-        return n;
+        return be_to_cpu(_in.read<int64_t>(exception_thrower()));
     }
 
     uint16_t read_short() {
-        check_room(sizeof(uint16_t));
-        auto p = reinterpret_cast<const uint8_t*>(_in.begin());
-        uint16_t n = (static_cast<uint16_t>(p[0]) << 8)
-                | (static_cast<uint16_t>(p[1]));
-        _in.remove_prefix(2);
-        return n;
+        return be_to_cpu(_in.read<uint16_t>(exception_thrower()));
     }
 
     sstring read_string() {
         auto n = read_short();
-        check_room(n);
-        sstring s{reinterpret_cast<const char*>(_in.begin()), static_cast<size_t>(n)};
-        assert(n >= 0);
-        _in.remove_prefix(n);
+        sstring s(sstring::initialized_later(), n);
+        _in.read_to(n, s.begin(), exception_thrower());
         validate_utf8(s);
         return s;
     }
 
     sstring_view read_string_view() {
         auto n = read_short();
-        check_room(n);
-        sstring_view s{reinterpret_cast<const char*>(_in.begin()), static_cast<size_t>(n)};
-        assert(n >= 0);
-        _in.remove_prefix(n);
+        auto bv = _in.read_bytes_view(n, *_linearization_buffer, exception_thrower());
+        auto s = sstring_view(reinterpret_cast<const char*>(bv.data()), bv.size());
         validate_utf8(s);
         return s;
     }
 
     sstring_view read_long_string_view() {
         auto n = read_int();
-        check_room(n);
-        sstring_view s{reinterpret_cast<const char*>(_in.begin()), static_cast<size_t>(n)};
-        _in.remove_prefix(n);
+        auto bv = _in.read_bytes_view(n, *_linearization_buffer, exception_thrower());
+        auto s = sstring_view(reinterpret_cast<const char*>(bv.data()), bv.size());
         validate_utf8(s);
         return s;
     }
@@ -149,19 +122,16 @@ public:
         if (len < 0) {
             return {};
         }
-        check_room(len);
-        bytes b(reinterpret_cast<const int8_t*>(_in.begin()), len);
-        _in.remove_prefix(len);
+        bytes b(bytes::initialized_later(), len);
+        _in.read_to(len, b.begin(), exception_thrower());
         return {std::move(b)};
     }
 
     bytes read_short_bytes() {
         auto n = read_short();
-        check_room(n);
-        bytes s{reinterpret_cast<const int8_t*>(_in.begin()), static_cast<size_t>(n)};
-        assert(n >= 0);
-        _in.remove_prefix(n);
-        return s;
+        bytes b(bytes::initialized_later(), n);
+        _in.read_to(n, b.begin(), exception_thrower());
+        return b;
     }
 
     cql3::raw_value_view read_value_view(uint8_t version) {
@@ -178,10 +148,7 @@ public:
                 throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
             }
         }
-        check_room(len);
-        bytes_view bv(reinterpret_cast<const int8_t*>(_in.begin()), len);
-        _in.remove_prefix(len);
-        return cql3::raw_value_view::make_value(std::move(bv));
+        return cql3::raw_value_view::make_value(_in.read_bytes_view(len, *_linearization_buffer, exception_thrower()));
     }
 
     void read_name_and_value_list(uint8_t version, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values) {

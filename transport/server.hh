@@ -36,6 +36,7 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/net/tls.hh>
 #include <seastar/core/metrics_registration.hh>
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace scollectd {
 
@@ -158,6 +159,7 @@ private:
         connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
+        fragmented_temporary_buffer::reader _buffer_reader;
         seastar::gate _pending_requests_gate;
         future<> _ready_to_respond = make_ready_future<>();
         cql_protocol_version_type _version = 0;
@@ -176,7 +178,7 @@ private:
         using execution_stage_type = inheriting_concrete_execution_stage<
                 future<cql_server::connection::processing_result>,
                 cql_server::connection*,
-                bytes_view,
+                fragmented_temporary_buffer::istream,
                 uint8_t,
                 uint16_t,
                 service::client_state,
@@ -191,12 +193,12 @@ private:
     private:
         const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         friend class process_request_executor;
-        future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
+        future<processing_result> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
-        future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
+        future<fragmented_temporary_buffer> read_and_decompress_frame(size_t length, uint8_t flags);
         future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
         future<response_type> process_startup(uint16_t stream, request_reader in, service::client_state client_state);
         future<response_type> process_auth_response(uint16_t stream, request_reader in, service::client_state client_state);

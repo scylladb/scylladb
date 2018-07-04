@@ -345,7 +345,7 @@ cql_server::connection::read_frame() {
 }
 
 future<cql_server::connection::processing_result>
-    cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
+    cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request) {
     using auth_state = service::client_state::auth_state;
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
@@ -364,7 +364,9 @@ future<cql_server::connection::processing_result>
         }
     }
 
-    return futurize_apply([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
+    auto linearization_buffer = std::make_unique<bytes_ostream>();
+    auto linearization_buffer_ptr = linearization_buffer.get();
+    return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -397,7 +399,7 @@ future<cql_server::connection::processing_result>
 
         tracing::set_username(client_state.get_trace_state(), user);
 
-        auto in = request_reader(buf);
+        auto in = request_reader(std::move(fbuf), *linearization_buffer_ptr);
         switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(in), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(in), std::move(client_state));
@@ -409,7 +411,7 @@ future<cql_server::connection::processing_result>
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(in), std::move(client_state));
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
-    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) -> processing_result {
+    }).then_wrapped([this, cqlop, stream, client_state, linearization_buffer = std::move(linearization_buffer)] (future<response_type> f) -> processing_result {
         auto stop_trace = defer([&] {
             tracing::stop_foreground(client_state.get_trace_state());
         });
@@ -586,7 +588,7 @@ future<> cql_server::connection::process_request() {
         }
 
         return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
@@ -595,15 +597,18 @@ future<> cql_server::connection::process_request() {
             auto leave = defer([this] { _pending_requests_gate.leave(); });
             // Replacing the immediately-invoked lambda below with just its body costs 5-10 usec extra per invocation.
             // Cause not understood.
+            auto istream = buf.get_istream();
             [&] {
-                auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
                 auto cpu = pick_request_cpu();
                 return [&] {
                     if (cpu == engine().cpu_id()) {
-                        return _process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
+                        return _process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
                     } else {
-                        return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                            return _process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
+                        // We should avoid sending non-trivial objects across shards.
+                        static_assert(std::is_trivially_destructible_v<fragmented_temporary_buffer::istream>);
+                        static_assert(std::is_trivially_copyable_v<fragmented_temporary_buffer::istream>);
+                        return smp::submit_to(cpu, [this, istream, op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
+                            return _process_request_stage(this, istream, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
                 }().then_wrapped([this, buf = std::move(buf), mem_permit = std::move(mem_permit), leave = std::move(leave)] (future<processing_result> response_f) {
@@ -648,51 +653,55 @@ void on_compression_buffer_use() {
 
 }
 
-future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame(size_t length, uint8_t flags)
+future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_frame(size_t length, uint8_t flags)
 {
+    using namespace compression_buffers;
     if (flags & cql_frame_flags::compression) {
         if (_compression == cql_compression::lz4) {
             if (length < 4) {
                 throw std::runtime_error("Truncated frame");
             }
-            return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
-                int32_t uncomp_len = request_reader(to_bytes_view(buf)).read_int();
+            return _buffer_reader.read_exactly(_read_buf, length).then([this] (fragmented_temporary_buffer buf) {
+                auto linearization_buffer = bytes_ostream();
+                int32_t uncomp_len = request_reader(buf.get_istream(), linearization_buffer).read_int();
                 if (uncomp_len < 0) {
                     throw std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len));
                 }
-                buf.trim_front(4);
-                temporary_buffer<char> uncomp{size_t(uncomp_len)};
-                const char* input = buf.get();
-                size_t input_len = buf.size();
-                char *output = uncomp.get_write();
-                size_t output_len = uncomp_len;
-                auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
+                buf.remove_prefix(4);
+                auto in = input_buffer.get_linearized_view(fragmented_temporary_buffer::view(buf));
+              auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
+                auto ret = LZ4_decompress_safe(reinterpret_cast<const char*>(in.data()), reinterpret_cast<char*>(out.data()),
+                                               in.size(), out.size());
                 if (ret < 0) {
                     throw std::runtime_error("CQL frame LZ4 uncompression failure");
                 }
-                return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+                return out.size();
+              });
+                on_compression_buffer_use();
+                return uncomp;
             });
         } else if (_compression == cql_compression::snappy) {
-            return _read_buf.read_exactly(length).then([this] (temporary_buffer<char> buf) {
-                const char* input = buf.get();
-                size_t input_len = buf.size();
+            return _buffer_reader.read_exactly(_read_buf, length).then([this] (fragmented_temporary_buffer buf) {
+                auto in = input_buffer.get_linearized_view(fragmented_temporary_buffer::view(buf));
                 size_t uncomp_len;
-                if (snappy_uncompressed_length(input, input_len, &uncomp_len) != SNAPPY_OK) {
+                if (snappy_uncompressed_length(reinterpret_cast<const char*>(in.data()), in.size(), &uncomp_len) != SNAPPY_OK) {
                     throw std::runtime_error("CQL frame Snappy uncompressed size is unknown");
                 }
-                temporary_buffer<char> uncomp{uncomp_len};
-                char *output = uncomp.get_write();
-                size_t output_len = uncomp_len;
-                if (snappy_uncompress(input, input_len, output, &output_len) != SNAPPY_OK) {
+              auto uncomp = output_buffer.make_fragmented_temporary_buffer(uncomp_len, fragmented_temporary_buffer::default_fragment_size, [&] (bytes_mutable_view out) {
+                size_t output_len = out.size();
+                if (snappy_uncompress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &output_len) != SNAPPY_OK) {
                     throw std::runtime_error("CQL frame Snappy uncompression failure");
                 }
-                return make_ready_future<temporary_buffer<char>>(std::move(uncomp));
+                return output_len;
+              });
+                on_compression_buffer_use();
+                return uncomp;
             });
         } else {
             throw exceptions::protocol_exception(sprint("Unknown compression algorithm"));
         }
     }
-    return _read_buf.read_exactly(length);
+    return _buffer_reader.read_exactly(_read_buf, length);
 }
 
 unsigned cql_server::connection::pick_request_cpu()
