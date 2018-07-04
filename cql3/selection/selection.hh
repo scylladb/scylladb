@@ -256,7 +256,7 @@ public:
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
-    
+
     // Implements ResultVisitor concept from query.hh
     class visitor {
     protected:
@@ -267,18 +267,89 @@ public:
         std::vector<bytes> _partition_key;
         std::vector<bytes> _clustering_key;
     public:
-        visitor(cql3::selection::result_set_builder& builder, const schema& s, const selection&);
+        visitor(cql3::selection::result_set_builder& builder, const schema& s, const selection&)
+            : _builder(builder)
+            , _schema(s)
+            , _selection(selection)
+            , _row_count(0)
+        {}
         visitor(visitor&&) = default;
 
-        void add_value(const column_definition& def, query::result_row_view::iterator_type& i);
-        void accept_new_partition(const partition_key& key, uint32_t row_count);
-        void accept_new_partition(uint32_t row_count);
-        void accept_new_row(const clustering_key& key,
-                const query::result_row_view& static_row,
-                const query::result_row_view& row);
-        void accept_new_row(const query::result_row_view& static_row,
-                const query::result_row_view& row);
-        void accept_partition_end(const query::result_row_view& static_row);
+        void add_value(const column_definition& def, query::result_row_view::iterator_type& i) {
+            if (def.type->is_multi_cell()) {
+                auto cell = i.next_collection_cell();
+                if (!cell) {
+                    _builder.add_empty();
+                    return;
+                }
+                _builder.add_collection(def, cell->linearize());
+            } else {
+                auto cell = i.next_atomic_cell();
+                if (!cell) {
+                    _builder.add_empty();
+                    return;
+                }
+                _builder.add(def, *cell);
+            }
+        }
+
+        void accept_new_partition(const partition_key& key, uint32_t row_count) {
+            _partition_key = key.explode(_schema);
+            _row_count = row_count;
+        }
+
+        void accept_new_partition(uint32_t row_count) {
+            _row_count = row_count;
+        }
+
+        void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) {
+            _clustering_key = key.explode(_schema);
+            accept_new_row(static_row, row);
+        }
+
+        void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+            auto static_row_iterator = static_row.iterator();
+            auto row_iterator = row.iterator();
+            _builder.new_row();
+            for (auto&& def : _selection.get_columns()) {
+                switch (def->kind) {
+                case column_kind::partition_key:
+                    _builder.add(_partition_key[def->component_index()]);
+                    break;
+                case column_kind::clustering_key:
+                    if (_clustering_key.size() > def->component_index()) {
+                        _builder.add(_clustering_key[def->component_index()]);
+                    } else {
+                        _builder.add({});
+                    }
+                    break;
+                case column_kind::regular_column:
+                    add_value(*def, row_iterator);
+                    break;
+                case column_kind::static_column:
+                    add_value(*def, static_row_iterator);
+                    break;
+                default:
+                    assert(0);
+                }
+            }
+        }
+
+        void accept_partition_end(const query::result_row_view& static_row) {
+            if (_row_count == 0) {
+                _builder.new_row();
+                auto static_row_iterator = static_row.iterator();
+                for (auto&& def : _selection.get_columns()) {
+                    if (def->is_partition_key()) {
+                        _builder.add(_partition_key[def->component_index()]);
+                    } else if (def->is_static()) {
+                        add_value(*def, static_row_iterator);
+                    } else {
+                        _builder.add_empty();
+                    }
+                }
+            }
+        }
     };
 private:
     bytes_opt get_value(data_type t, query::result_atomic_cell_view c);
