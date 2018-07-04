@@ -306,6 +306,7 @@ scylla_tests = [
     'tests/multishard_writer_test',
     'tests/observable_test',
     'tests/transport_test',
+    'tests/fragmented_temporary_buffer_test',
 ]
 
 perf_tests = [
