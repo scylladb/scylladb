@@ -235,7 +235,7 @@ if __name__ == "__main__":
                 mode = 'debug'
             xmlout = (args.jenkins + "." + mode + "." +
                       os.path.basename(path.split()[0]) + ".boost.xml")
-            boost_args += ['--report_level=no', '--logger=XML,test_suite,' + xmlout]
+            boost_args += ['--report_level=no', '--logger=HRF,test_suite:XML,test_suite,' + xmlout]
         if type == 'boost':
             boost_args += ['--']
         def report_error(out, report_subcause):
