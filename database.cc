@@ -1830,12 +1830,13 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                 return;
             }
 
+            parallel_for_each(cf->_config.all_datadirs, [&db, cf] (const sstring& directory) {
             auto candidates = get_all_shared_sstables(db, directory, cf).get0();
             dblog.debug("{} candidates for resharding for {}.{}", candidates.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
             auto jobs = cf->get_compaction_strategy().get_resharding_jobs(*cf, std::move(candidates));
             dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
 
-            invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
+            return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
                 auto creator = [&cf, directory] (shard_id shard) mutable {
                     // we need generation calculated by instance of cf at requested shard,
                     // or resource usage wouldn't be fairly distributed among shards.
@@ -1901,6 +1902,7 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                         });
                     });
                 });
+            });
             }).get();
         });
     });
@@ -2086,12 +2088,6 @@ future<> distributed_loader::populate_column_family(distributed<database>& db, s
                 }
                 return make_ready_future<>();
             });
-        });
-    }).then([&db, ks, cf] {
-        return db.invoke_on_all([ks = std::move(ks), cfname = std::move(cf)] (database& db) {
-            auto& cf = db.find_column_family(ks, cfname);
-            // Make sure this is called even if CF is empty
-            cf.mark_ready_for_writes();
         });
     });
 
@@ -2410,11 +2406,11 @@ future<> distributed_loader::populate_keyspace(distributed<database>& db, sstrin
         auto& column_families = db.local().get_column_families();
 
         return parallel_for_each(ks.metadata()->cf_meta_data() | boost::adaptors::map_values,
-            [ks_name, &ks, &column_families, &db] (schema_ptr s) {
+            [ks_name, ksdir, &ks, &column_families, &db] (schema_ptr s) {
                 utils::UUID uuid = s->id();
                 lw_shared_ptr<column_family> cf = column_families[uuid];
                 sstring cfname = cf->schema()->cf_name();
-                auto sstdir = ks.column_family_directory(cfname, uuid);
+                auto sstdir = ks.column_family_directory(ksdir, cfname, uuid);
                 dblog.info("Keyspace {}: Reading CF {} id={} version={}", ks_name, cfname, uuid, s->version());
                 return ks.make_directory_for_column_family(cfname, uuid).then([&db, sstdir, uuid, ks_name, cfname] {
                     return distributed_loader::populate_column_family(db, sstdir, ks_name, cfname);
@@ -2531,24 +2527,25 @@ future<> distributed_loader::init_system_keyspace(distributed<database>& db) {
             db::system_keyspace::make(db, durable, cfg.volatile_system_keyspace_for_testing());
         }).get();
 
-        // FIXME support multiple directories
         const auto& cfg = db.local().get_config();
-        auto data_dir = cfg.data_file_directories()[0];
+        for (auto& data_dir : cfg.data_file_directories()) {
+            for (auto ksname : system_keyspaces) {
+                io_check(touch_directory, data_dir + "/" + ksname).get();
+                distributed_loader::populate_keyspace(db, data_dir, ksname).get();
+            }
+        }
 
-        for (auto ksname : system_keyspaces) {
-            io_check(touch_directory, data_dir + "/" + ksname).get();
-            distributed_loader::populate_keyspace(db, data_dir, ksname).get();
-
-            db.invoke_on_all([ksname] (database& db) {
+        db.invoke_on_all([] (database& db) {
+            for (auto ksname : system_keyspaces) {
                 auto& ks = db.find_keyspace(ksname);
                 for (auto& pair : ks.metadata()->cf_meta_data()) {
                     auto cfm = pair.second;
                     auto& cf = db.find_column_family(cfm);
                     cf.mark_ready_for_writes();
                 }
-                return make_ready_future<>();
-            }).get();
-        }
+            }
+            return make_ready_future<>();
+        }).get();
     });
 }
 
@@ -2569,7 +2566,17 @@ future<> distributed_loader::init_non_system_keyspaces(distributed<database>& db
         }).get();
 
         const auto& cfg = db.local().get_config();
-        populate(db, cfg.data_file_directories()[0]).get();
+        parallel_for_each(cfg.data_file_directories(), [&db] (sstring directory) {
+            return populate(db, directory);
+        }).get();
+
+        db.invoke_on_all([] (database& db) {
+            return parallel_for_each(db.get_non_system_column_families(), [] (lw_shared_ptr<table> table) {
+                // Make sure this is called even if the table is empty
+                table->mark_ready_for_writes();
+                return make_ready_future<>();
+            });
+        }).get();
     });
 }
 
@@ -2835,7 +2842,10 @@ void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
 column_family::config
 keyspace::make_column_family_config(const schema& s, const db::config& db_config, db::large_partition_handler* lp_handler) const {
     column_family::config cfg;
-    cfg.datadir = column_family_directory(s.cf_name(), s.id());
+    for (auto& extra : _config.all_datadirs) {
+        cfg.all_datadirs.push_back(column_family_directory(extra, s.cf_name(), s.id()));
+    }
+    cfg.datadir = cfg.all_datadirs[0];
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
@@ -2862,17 +2872,27 @@ keyspace::make_column_family_config(const schema& s, const db::config& db_config
 
 sstring
 keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
+    return column_family_directory(_config.datadir, name, uuid);
+}
+
+sstring
+keyspace::column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const {
     auto uuid_sstring = uuid.to_sstring();
     boost::erase_all(uuid_sstring, "-");
-    return sprint("%s/%s-%s", _config.datadir, name, uuid_sstring);
+    return sprint("%s/%s-%s", base_path, name, uuid_sstring);
 }
 
 future<>
 keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
-    auto cfdir = column_family_directory(name, uuid);
-    return seastar::async([cfdir = std::move(cfdir)] {
-        io_check(touch_directory, cfdir).get();
-        io_check(touch_directory, cfdir + "/upload").get();
+    std::vector<sstring> cfdirs;
+    for (auto& extra : _config.all_datadirs) {
+        cfdirs.push_back(column_family_directory(extra, name, uuid));
+    }
+    return seastar::async([cfdirs = std::move(cfdirs)] {
+        for (auto& cfdir : cfdirs) {
+            io_check(recursive_touch_directory, cfdir).get();
+        }
+        io_check(touch_directory, cfdirs[0] + "/upload").get();
     });
 }
 
@@ -3604,10 +3624,12 @@ future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, c
 
 keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) {
-    // FIXME support multiple directories
     keyspace::config cfg;
     if (_cfg->data_file_directories().size() > 0) {
         cfg.datadir = sprint("%s/%s", _cfg->data_file_directories()[0], ksm.name());
+        for (auto& extra : _cfg->data_file_directories()) {
+            cfg.all_datadirs.push_back(sprint("%s/%s", extra, ksm.name()));
+        }
         cfg.enable_disk_writes = !_cfg->enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();

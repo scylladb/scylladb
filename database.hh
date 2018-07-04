@@ -301,6 +301,7 @@ using column_family = table;
 class table : public enable_lw_shared_from_this<table> {
 public:
     struct config {
+        std::vector<sstring> all_datadirs;
         sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
@@ -1029,6 +1030,7 @@ public:
 class keyspace {
 public:
     struct config {
+        std::vector<sstring> all_datadirs;
         sstring datadir;
         bool enable_commitlog = true;
         bool enable_disk_reads = true;
@@ -1106,6 +1108,7 @@ public:
         return _config.datadir;
     }
 
+    sstring column_family_directory(const sstring& base_path, const sstring& name, utils::UUID uuid) const;
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
 
