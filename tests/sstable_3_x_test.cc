@@ -2819,3 +2819,22 @@ SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
     assert_that(get_index_reader(sst)).is_empty(*s);
 }
 
+/*
+ * Test files taken from write_wide_partitions test
+ */
+SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
+    sstring table_name = "rows_only_index";
+    // CREATE TABLE rows_only_index (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck", utf8_type, column_kind::clustering_key);
+    builder.with_column("st", utf8_type, column_kind::static_column);
+    builder.with_column("rc", utf8_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+}
+
