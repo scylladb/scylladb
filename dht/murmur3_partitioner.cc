@@ -290,6 +290,11 @@ murmur3_partitioner::token_for_next_shard(const token& t, shard_id shard, unsign
     return bias(n);
 }
 
+unsigned
+murmur3_partitioner::sharding_ignore_msb() const {
+    return _sharding_ignore_msb_bits;
+}
+
 
 using registry = class_registrator<i_partitioner, murmur3_partitioner, const unsigned&, const unsigned&>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
