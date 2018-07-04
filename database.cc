@@ -4068,18 +4068,18 @@ future<bool> table::snapshot_exists(sstring tag) {
 future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
-        auto datadir = _config.datadir;
+        for (auto& datadir : _config.all_datadirs) {
         lister::path snapshots_dir = lister::path(datadir) / "snapshots";
         auto file_exists = io_check([&snapshots_dir] { return engine().file_exists(snapshots_dir.native()); }).get0();
         if (!file_exists) {
-            return all_snapshots;
+            continue;
         }
 
         lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, datadir, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
             auto snapshot_name = de.name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
-            return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
-                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
+            return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
+                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
                     // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                     // For it, we account the total size, but zero it for the true size calculation.
                     //
@@ -4091,9 +4091,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                     } else {
                         size = 0;
                     }
-                    // FIXME: When we support multiple data directories, the file may not necessarily
-                    // live in this same location. May have to test others as well.
-                    return io_check(file_size, (lister::path(_config.datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                    return io_check(file_size, (lister::path(datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
                         try {
                             // File exists in the main SSTable directory. Snapshots are not contributing to size
                             fut.get0();
@@ -4108,6 +4106,7 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
                 });
             });
         }).get();
+        }
         return all_snapshots;
     });
 }
