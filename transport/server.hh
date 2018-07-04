@@ -47,6 +47,8 @@ class database;
 
 namespace cql_transport {
 
+class request_reader;
+
 enum class cql_compression {
     none,
     lz4,
@@ -195,14 +197,14 @@ private:
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
         future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
-        future<response_type> process_startup(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_options(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_query(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_execute(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_batch(uint16_t stream, bytes_view buf, service::client_state client_state);
-        future<response_type> process_register(uint16_t stream, bytes_view buf, service::client_state client_state);
+        future<response_type> process_startup(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_auth_response(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_options(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_query(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_prepare(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_execute(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_batch(uint16_t stream, request_reader in, service::client_state client_state);
+        future<response_type> process_register(uint16_t stream, request_reader in, service::client_state client_state);
 
         std::unique_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state);
         std::unique_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state);
@@ -223,27 +225,6 @@ private:
         std::unique_ptr<cql_server::response> make_auth_challenge(int16_t, bytes, const tracing::trace_state_ptr& tr_state);
 
         void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, cql_compression compression = cql_compression::none);
-
-        void check_room(bytes_view& buf, size_t n);
-        void validate_utf8(sstring_view s);
-        int8_t read_byte(bytes_view& buf);
-        int32_t read_int(bytes_view& buf);
-        int64_t read_long(bytes_view& buf);
-        uint16_t read_short(bytes_view& buf);
-        sstring read_string(bytes_view& buf);
-        sstring_view read_string_view(bytes_view& buf);
-        sstring_view read_long_string_view(bytes_view& buf);
-        bytes_opt read_bytes(bytes_view& buf);
-        bytes read_short_bytes(bytes_view& buf);
-        cql3::raw_value read_value(bytes_view& buf);
-        cql3::raw_value_view read_value_view(bytes_view& buf);
-        void read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values);
-        void read_string_list(bytes_view& buf, std::vector<sstring>& strings);
-        void read_value_view_list(bytes_view& buf, std::vector<cql3::raw_value_view>& values);
-        db::consistency_level read_consistency(bytes_view& buf);
-        std::unordered_map<sstring, sstring> read_string_map(bytes_view& buf);
-        std::unique_ptr<cql3::query_options> read_options(bytes_view& buf);
-        std::unique_ptr<cql3::query_options> read_options(bytes_view& buf, uint8_t);
 
         void init_cql_serialization_format();
 
