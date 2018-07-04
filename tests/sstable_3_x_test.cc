@@ -1818,6 +1818,75 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_simple_read) {
     .produces_end_of_stream();
 }
 
+// Following tests run on files in tests/sstables/3.x/uncompressed/range_tombstones_partial
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck1 INT, ck2 INT, PRIMARY KEY(pk, ck1, ck2))
+//      WITH compression = { 'enabled' : false };
+//
+// DELETE FROM test_ks.test_table WHERE pk = 1 AND ck1 > 1 AND ck1 < 3;
+// INSERT INTO test_ks.test_table(pk, ck1, ck2) VALUES(1, 2, 13);
+// DELETE FROM test_ks.test_table WHERE pk = 1 AND ck1 > 3;
+
+static thread_local const sstring UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_PATH = "tests/sstables/3.x/uncompressed/range_tombstones_partial";
+static thread_local const schema_ptr UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck1", int32_type, column_kind::clustering_key)
+        .with_column("ck2", int32_type, column_kind::clustering_key)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_range_tombstones_partial_read) {
+    sstable_assertions sst(UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA,
+                           UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, pk);
+    };
+
+    auto to_ck = [] (int ck) {
+        return clustering_key::from_single_value(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA,
+                                                 int32_type->decompose(ck));
+    };
+
+    assert_that(sst.read_rows_flat())
+    .produces_partition_start(to_key(1))
+    .produces_range_tombstone(range_tombstone(to_ck(1),
+                              bound_kind::excl_start,
+                              clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
+                                  int32_type->decompose(2),
+                                  int32_type->decompose(13)
+                              }),
+                              bound_kind::incl_end,
+                              tombstone(api::timestamp_type{1530543711595401},
+                              gc_clock::time_point(gc_clock::duration(1530543711)))))
+    .produces_row_with_key(clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
+                                                            int32_type->decompose(2),
+                                                            int32_type->decompose(13)
+                                                        }))
+    .produces_range_tombstone(range_tombstone(clustering_key::from_exploded(*UNCOMPRESSED_RANGE_TOMBSTONES_PARTIAL_SCHEMA, {
+                                  int32_type->decompose(2),
+                                  int32_type->decompose(13)
+                              }),
+                              bound_kind::incl_start,
+                              to_ck(3),
+                              bound_kind::excl_end,
+                              tombstone(api::timestamp_type{1530543711595401},
+                              gc_clock::time_point(gc_clock::duration(1530543711)))))
+    .produces_range_tombstone(range_tombstone(to_ck(3),
+                              bound_kind::excl_start,
+                              clustering_key_prefix::make_empty(),
+                              bound_kind::incl_end,
+                              tombstone(api::timestamp_type{1530543761322213},
+                              gc_clock::time_point(gc_clock::duration(1530543761)))))
+    .produces_partition_end()
+    .produces_end_of_stream();
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/simple
 // They were created using following CQL statements:
 //
