@@ -1471,7 +1471,7 @@ void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vect
     names.reserve(size);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
-        names.emplace_back(read_string(buf));
+        names.emplace_back(read_string_view(buf));
         values.emplace_back(read_value_view(buf));
     }
 }
