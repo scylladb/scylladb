@@ -63,4 +63,14 @@ bytes get_bytes() {
     return get_bytes(get_int<unsigned>(128 * 1024));
 }
 
+sstring get_sstring(size_t n) {
+    sstring str(sstring::initialized_later(), n);
+    boost::generate(str, [] { return get_int<sstring::value_type>('a', 'z'); });
+    return str;
+}
+
+sstring get_sstring() {
+    return get_sstring(get_int<unsigned>(1024));
+}
+
 }
