@@ -384,6 +384,10 @@ public:
         return "biased-token-round-robin";
     }
 
+    virtual unsigned sharding_ignore_msb() const {
+        return 0;
+    }
+
     friend bool operator==(token_view t1, token_view t2);
     friend bool operator<(token_view t1, token_view t2);
     friend int tri_compare(token_view t1, token_view t2);
