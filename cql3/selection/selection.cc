@@ -337,6 +337,10 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
                                                          const query::result_row_view& row) const {
     static logging::logger rlogger("restrictions_filter");
 
+    if (_current_pratition_key_does_not_match || _current_static_row_does_not_match) {
+        return false;
+    }
+
     auto static_row_iterator = static_row.iterator();
     auto row_iterator = row.iterator();
     auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
@@ -368,6 +372,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
                     regular_restriction_matches = restriction.is_satisfied_by(bytes(), cql3::query_options({ }));
                 }
                 if (!regular_restriction_matches) {
+                    _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
                     return false;
                 }
 
@@ -382,6 +387,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
             const bytes& value_to_check = partition_key[cdef->id];
             bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
             if (!pk_restriction_matches) {
+                _current_pratition_key_does_not_match = true;
                 return false;
             }
             }

@@ -253,13 +253,21 @@ public:
         inline bool operator()(const selection&, const std::vector<bytes>&, const std::vector<bytes>&, const query::result_row_view&, const query::result_row_view&) const {
             return true;
         }
+        void reset() {
+        }
     };
     class restrictions_filter {
         ::shared_ptr<restrictions::statement_restrictions> _restrictions;
+        mutable bool _current_pratition_key_does_not_match = false;
+        mutable bool _current_static_row_does_not_match = false;
     public:
         restrictions_filter() = default;
         explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions) : _restrictions(restrictions) {}
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
+        void reset() {
+            _current_pratition_key_does_not_match = false;
+            _current_static_row_does_not_match = false;
+        }
     };
 
     result_set_builder(const selection& s, gc_clock::time_point now, cql_serialization_format sf);
@@ -315,10 +323,12 @@ public:
         void accept_new_partition(const partition_key& key, uint32_t row_count) {
             _partition_key = key.explode(_schema);
             _row_count = row_count;
+            _filter.reset();
         }
 
         void accept_new_partition(uint32_t row_count) {
             _row_count = row_count;
+            _filter.reset();
         }
 
         void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) {
