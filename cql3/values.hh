@@ -28,6 +28,8 @@
 
 #include <experimental/optional>
 
+#include <seastar/util/variant_utils.hh>
+
 namespace cql3 {
 
 struct null_value {
@@ -90,6 +92,30 @@ public:
     }
     const bytes_view& operator*() const {
         return boost::get<bytes_view>(_data);
+    }
+
+    bool operator==(const raw_value_view& other) const {
+        if (_data.which() != other._data.which()) {
+            return false;
+        }
+        if (is_value() && **this != *other) {
+            return false;
+        }
+        return true;
+    }
+    bool operator!=(const raw_value_view& other) const {
+        return !(*this == other);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
+        seastar::visit(value._data, [&] (bytes_view v) {
+            os << "{ value: " << v << " }";
+        }, [&] (null_value) {
+            os << "{ null }";
+        }, [&] (unset_value) {
+            os << "{ unset }";
+        });
+        return os;
     }
 };
 
