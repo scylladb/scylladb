@@ -48,6 +48,7 @@ class database;
 namespace cql_transport {
 
 class request_reader;
+class response;
 
 enum class cql_compression {
     none,
@@ -137,7 +138,7 @@ public:
     future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();
 public:
-    class response;
+    using response = cql_transport::response;
     using response_type = std::pair<std::unique_ptr<cql_server::response>, service::client_state>;
 private:
     class fmt_visitor;

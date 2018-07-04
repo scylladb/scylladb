@@ -46,7 +46,7 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
-class cql_server::response {
+class response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
@@ -138,7 +138,7 @@ private:
 };
 
 template<>
-class cql_server::response::placeholder<int32_t> {
+class response::placeholder<int32_t> {
     int8_t* _pointer;
 public:
     explicit placeholder(int8_t* ptr) : _pointer(ptr) { }
