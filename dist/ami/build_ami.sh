@@ -62,7 +62,7 @@ SSH_USERNAME=centos
 
 if [ $LOCALRPM -eq 1 ]; then
     sudo rm -rf build/*
-    REPO=`./scripts/scylla_current_repo --target $TARGET`
+    REPO=`./scripts/scylla_current_repo --target centos`
     INSTALL_ARGS="$INSTALL_ARGS --localrpm --repo $REPO"
     if [ ! -f /usr/bin/git ]; then
         pkg_install git
