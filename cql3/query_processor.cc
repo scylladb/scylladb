@@ -206,6 +206,30 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
                             _cql_stats.secondary_index_rows_read,
                             sm::description("Counts a total number of rows read during CQL requests performed using secondary indexes.")),
 
+                    // read requests that required ALLOW FILTERING
+                    sm::make_derive(
+                            "filtered_read_requests",
+                            _cql_stats.filtered_reads,
+                            sm::description("Counts a total number of CQL read requests that required ALLOW FILTERING. See filtered_rows_read_total to compare how many rows needed to be filtered.")),
+
+                    // rows read with filtering enabled (because ALLOW FILTERING was required)
+                    sm::make_derive(
+                            "filtered_rows_read_total",
+                            _cql_stats.filtered_rows_read_total,
+                            sm::description("Counts a total number of rows read during CQL requests that required ALLOW FILTERING. See filtered_rows_matched_total and filtered_rows_dropped_total for information how accurate filtering queries are.")),
+
+                    // rows read with filtering enabled and accepted by the filter
+                    sm::make_derive(
+                            "filtered_rows_matched_total",
+                            _cql_stats.filtered_rows_matched_total,
+                            sm::description("Counts a number of rows read during CQL requests that required ALLOW FILTERING and accepted by the filter. Number similar to filtered_rows_read_total indicates that filtering is accurate.")),
+
+                    // rows read with filtering enabled and rejected by the filter
+                    sm::make_derive(
+                            "filtered_rows_dropped_total",
+                            [this]() {return _cql_stats.filtered_rows_read_total - _cql_stats.filtered_rows_matched_total;},
+                            sm::description("Counts a number of rows read during CQL requests that required ALLOW FILTERING and dropped by the filter. Number similar to filtered_rows_read_total indicates that filtering is not accurate and might cause performance degradation.")),
+
                     sm::make_derive(
                             "authorized_prepared_statements_cache_evictions",
                             [] { return authorized_prepared_statements_cache::shard_stats().authorized_prepared_statements_cache_evictions; },
