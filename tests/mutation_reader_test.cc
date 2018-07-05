@@ -384,7 +384,7 @@ struct sst_factory {
     schema_ptr s;
     sstring path;
     unsigned gen;
-    int level;
+    uint32_t level;
 
     sst_factory(schema_ptr s, const sstring& path, unsigned gen, int level)
         : s(s)
@@ -396,140 +396,115 @@ struct sst_factory {
     sstables::shared_sstable operator()() {
         auto sst = sstables::make_sstable(s, path, gen, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         sst->set_unshared();
-
-        //TODO set sstable level, to make the test more interesting
+        //sst->set_sstable_level(level);
+        sst->get_metadata_collector().sstable_level(level);
 
         return sst;
     }
 };
 
-SEASTAR_TEST_CASE(combined_mutation_reader_test) {
-    return seastar::async([] {
-        storage_service_for_tests ssft;
-        //logging::logger_registry().set_logger_level("database", logging::log_level::trace);
+SEASTAR_THREAD_TEST_CASE(combined_mutation_reader_test) {
+    storage_service_for_tests ssft;
 
-        simple_schema s;
+    simple_schema s;
 
-        const auto pkeys = s.make_pkeys(4);
-        const auto ckeys = s.make_ckeys(4);
+    auto pkeys = s.make_pkeys(6);
+    const auto ckeys = s.make_ckeys(4);
 
-        std::vector<mutation> base_mutations = boost::copy_range<std::vector<mutation>>(
-                pkeys | boost::adaptors::transformed([&s](const auto& k) { return mutation(s.schema(), k); }));
+    boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+        return a.less_compare(*s.schema(), b);
+    });
 
-        // Data layout:
-        //   d[xx]
-        // b[xx][xx]c
-        // a[x    x]
+    auto make_sstable_mutations = [&] (sstring value_prefix, unsigned ckey_index, bool static_row, std::vector<unsigned> pkey_indexes) {
+        std::vector<mutation> muts;
 
-        int i{0};
+        for (auto pkey_index : pkey_indexes) {
+            muts.emplace_back(s.schema(), pkeys[pkey_index]);
+            auto& mut = muts.back();
+            s.add_row(mut, ckeys[ckey_index], sprint("%s_%i_val", value_prefix, ckey_index));
 
-        // sstable d
-        std::vector<mutation> table_d_mutations;
-
-        i = 1;
-        table_d_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_d_mutations.back(), ckeys[i], sprint("val_d_%i", i));
-
-        i = 2;
-        table_d_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_d_mutations.back(), ckeys[i], sprint("val_d_%i", i));
-        const auto t_static_row = s.add_static_row(table_d_mutations.back(), sprint("%i_static_val", i));
-
-        // sstable b
-        std::vector<mutation> table_b_mutations;
-
-        i = 0;
-        table_b_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_b_mutations.back(), ckeys[i], sprint("val_b_%i", i));
-
-        i = 1;
-        table_b_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_b_mutations.back(), ckeys[i], sprint("val_b_%i", i));
-
-        // sstable c
-        std::vector<mutation> table_c_mutations;
-
-        i = 2;
-        table_c_mutations.emplace_back(base_mutations[i]);
-        const auto t_row = s.add_row(table_c_mutations.back(), ckeys[i], sprint("val_c_%i", i));
-
-        i = 3;
-        table_c_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_c_mutations.back(), ckeys[i], sprint("val_c_%i", i));
-
-        // sstable a
-        std::vector<mutation> table_a_mutations;
-
-        i = 0;
-        table_a_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_a_mutations.back(), ckeys[i], sprint("val_a_%i", i));
-
-        i = 3;
-        table_a_mutations.emplace_back(base_mutations[i]);
-        s.add_row(table_a_mutations.back(), ckeys[i], sprint("val_a_%i", i));
-
-        auto tmp = make_lw_shared<tmpdir>();
-
-        unsigned gen{0};
-
-        std::vector<sstables::shared_sstable> tables = {
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 0), table_a_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 1), table_b_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 1), table_c_mutations),
-                make_sstable_containing(sst_factory(s.schema(), tmp->path, gen++, 2), table_d_mutations)
-        };
-
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
-        auto sstables = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
-
-        std::vector<flat_mutation_reader> sstable_mutation_readers;
-
-        for (auto table : tables) {
-            sstables->insert(table);
-
-            sstable_mutation_readers.emplace_back(
-                table->read_range_rows_flat(
-                    s.schema(),
-                    query::full_partition_range,
-                    s.schema()->full_slice(),
-                    seastar::default_priority_class(),
-                    no_resource_tracking(),
-                    streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes));
+            if (static_row) {
+                s.add_static_row(mut, sprint("%s_static_val", value_prefix));
+            }
         }
 
-        auto list_reader = make_combined_reader(s.schema(),
-                std::move(sstable_mutation_readers));
+        return muts;
+    };
 
-        auto incremental_reader = make_local_shard_sstable_reader(
+    std::vector<mutation> sstable_level_0_0_mutations = make_sstable_mutations("level_0_0", 0, true,  {0, 1,       4   });
+    std::vector<mutation> sstable_level_1_0_mutations = make_sstable_mutations("level_1_0", 1, false, {0, 1            });
+    std::vector<mutation> sstable_level_1_1_mutations = make_sstable_mutations("level_1_1", 1, false, {      2, 3      });
+    std::vector<mutation> sstable_level_2_0_mutations = make_sstable_mutations("level_2_0", 2, false, {   1,       4   });
+    std::vector<mutation> sstable_level_2_1_mutations = make_sstable_mutations("level_2_1", 2, false, {               5});
+
+    const mutation expexted_mutation_0 = sstable_level_0_0_mutations[0] + sstable_level_1_0_mutations[0];
+    const mutation expexted_mutation_1 = sstable_level_0_0_mutations[1] + sstable_level_1_0_mutations[1] + sstable_level_2_0_mutations[0];
+    const mutation expexted_mutation_2 = sstable_level_1_1_mutations[0];
+    const mutation expexted_mutation_3 = sstable_level_1_1_mutations[1];
+    const mutation expexted_mutation_4 = sstable_level_0_0_mutations[2] + sstable_level_2_0_mutations[1];
+    const mutation expexted_mutation_5 = sstable_level_2_1_mutations[0];
+
+    auto tmp = make_lw_shared<tmpdir>();
+
+    unsigned gen{0};
+    std::vector<sstables::shared_sstable> sstable_list = {
+            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 0), std::move(sstable_level_0_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 1), std::move(sstable_level_1_1_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_0_mutations)),
+            make_sstable_containing(sst_factory(s.schema(), tmp->path, ++gen, 2), std::move(sstable_level_2_1_mutations)),
+    };
+
+    auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
+    auto sstable_set = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
+
+    std::vector<flat_mutation_reader> sstable_mutation_readers;
+
+    for (auto sst : sstable_list) {
+        sstable_set->insert(sst);
+
+        sstable_mutation_readers.emplace_back(
+            sst->as_mutation_source().make_reader(
                 s.schema(),
-                sstables,
                 query::full_partition_range,
                 s.schema()->full_slice(),
                 seastar::default_priority_class(),
-                no_resource_tracking(),
                 nullptr,
                 streamed_mutation::forwarding::no,
-                mutation_reader::forwarding::yes);
+                mutation_reader::forwarding::no));
+    }
 
-        // merge c[0] with d[1]
-        i = 2;
-        auto c_d_merged = mutation(s.schema(), pkeys[i]);
-        s.add_row(c_d_merged, ckeys[i], sprint("val_c_%i", i), t_row);
-        s.add_static_row(c_d_merged, sprint("%i_static_val", i), t_static_row);
+    auto list_reader = make_combined_reader(s.schema(),
+            std::move(sstable_mutation_readers));
 
-        assert_that(std::move(list_reader))
-            .produces(table_a_mutations.front())
-            .produces(table_b_mutations[1])
-            .produces(c_d_merged)
-            .produces(table_a_mutations.back());
+    auto incremental_reader = make_local_shard_sstable_reader(
+            s.schema(),
+            sstable_set,
+            query::full_partition_range,
+            s.schema()->full_slice(),
+            seastar::default_priority_class(),
+            no_resource_tracking(),
+            nullptr,
+            streamed_mutation::forwarding::no,
+            mutation_reader::forwarding::no);
 
-        assert_that(std::move(incremental_reader))
-            .produces(table_a_mutations.front())
-            .produces(table_b_mutations[1])
-            .produces(c_d_merged)
-            .produces(table_a_mutations.back());
-    });
+    assert_that(std::move(list_reader))
+        .produces(expexted_mutation_0)
+        .produces(expexted_mutation_1)
+        .produces(expexted_mutation_2)
+        .produces(expexted_mutation_3)
+        .produces(expexted_mutation_4)
+        .produces(expexted_mutation_5)
+        .produces_end_of_stream();
+
+    assert_that(std::move(incremental_reader))
+        .produces(expexted_mutation_0)
+        .produces(expexted_mutation_1)
+        .produces(expexted_mutation_2)
+        .produces(expexted_mutation_3)
+        .produces(expexted_mutation_4)
+        .produces(expexted_mutation_5)
+        .produces_end_of_stream();
 }
 
 static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) {
@@ -541,17 +516,17 @@ static mutation make_mutation_with_key(simple_schema& s, dht::decorated_key dk) 
 }
 
 class dummy_incremental_selector : public reader_selector {
+    // To back _selector_position.
+    dht::ring_position _position;
     std::vector<std::vector<mutation>> _readers_mutations;
     streamed_mutation::forwarding _fwd;
     dht::partition_range _pr;
 
-    const dht::token& position() const {
-        return _readers_mutations.back().front().token();
-    }
     flat_mutation_reader pop_reader() {
         auto muts = std::move(_readers_mutations.back());
         _readers_mutations.pop_back();
-        _selector_position = _readers_mutations.empty() ? dht::ring_position::max() : dht::ring_position::starting_at(position());
+        _position = _readers_mutations.empty() ? dht::ring_position::max() : _readers_mutations.back().front().decorated_key();
+        _selector_position = _position;
         return flat_mutation_reader_from_mutations(std::move(muts), _pr, _fwd);
     }
 public:
@@ -563,33 +538,34 @@ public:
             std::vector<std::vector<mutation>> reader_mutations,
             dht::partition_range pr = query::full_partition_range,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no)
-        : reader_selector(s, dht::ring_position::min())
+        : reader_selector(s, dht::ring_position_view::min())
+        , _position(dht::ring_position::min())
         , _readers_mutations(std::move(reader_mutations))
         , _fwd(fwd)
         , _pr(std::move(pr)) {
         // So we can pop the next reader off the back
         boost::reverse(_readers_mutations);
-        _selector_position = dht::ring_position::starting_at(position());
     }
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
         if (_readers_mutations.empty()) {
             return {};
         }
 
         std::vector<flat_mutation_reader> readers;
 
-        if (!t) {
+        if (!pos) {
             readers.emplace_back(pop_reader());
             return readers;
         }
 
-        while (!_readers_mutations.empty() && *t >= _selector_position.token()) {
+        while (!_readers_mutations.empty() && dht::ring_position_tri_compare(*_s, _selector_position, *pos) <= 0) {
             readers.emplace_back(pop_reader());
         }
         return readers;
     }
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
-        return create_new_readers(&pr.start()->value().token());
+        _pr = pr;
+        return create_new_readers(dht::ring_position_view::for_range_start(_pr));
     }
 };
 
@@ -599,6 +575,10 @@ SEASTAR_TEST_CASE(reader_selector_gap_between_readers_test) {
 
         simple_schema s;
         auto pkeys = s.make_pkeys(3);
+
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
         auto mut1 = make_mutation_with_key(s, pkeys[0]);
         auto mut2a = make_mutation_with_key(s, pkeys[1]);
@@ -629,7 +609,11 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
         storage_service_for_tests ssft;
 
         simple_schema s;
-        auto pkeys = s.make_pkeys(3);
+        auto pkeys = s.make_pkeys(4);
+
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
         auto mut1 = make_mutation_with_key(s, pkeys[0]);
         auto mut2a = make_mutation_with_key(s, pkeys[1]);
@@ -637,14 +621,27 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
         auto mut3a = make_mutation_with_key(s, pkeys[2]);
         auto mut3b = make_mutation_with_key(s, pkeys[2]);
         auto mut3c = make_mutation_with_key(s, pkeys[2]);
+        auto mut4a = make_mutation_with_key(s, pkeys[3]);
+        auto mut4b = make_mutation_with_key(s, pkeys[3]);
 
         tombstone tomb(100, {});
         mut2b.partition().apply(tomb);
 
+        s.add_row(mut2a, s.make_ckey(1), "a");
+        s.add_row(mut2b, s.make_ckey(2), "b");
+
+        s.add_row(mut3a, s.make_ckey(1), "a");
+        s.add_row(mut3b, s.make_ckey(2), "b");
+        s.add_row(mut3c, s.make_ckey(3), "c");
+
+        s.add_row(mut4a, s.make_ckey(1), "a");
+        s.add_row(mut4b, s.make_ckey(2), "b");
+
         std::vector<std::vector<mutation>> readers_mutations{
             {mut1, mut2a, mut3a},
             {mut2b, mut3b},
-            {mut3c}
+            {mut3c, mut4a},
+            {mut4b},
         };
 
         auto reader = make_combined_reader(s.schema(),
@@ -656,6 +653,7 @@ SEASTAR_TEST_CASE(reader_selector_overlapping_readers_test) {
             .produces_partition(mut1)
             .produces_partition(mut2a + mut2b)
             .produces_partition(mut3a + mut3b + mut3c)
+            .produces_partition(mut4a + mut4b)
             .produces_end_of_stream();
     });
 }
@@ -666,6 +664,10 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
         simple_schema s;
         auto pkeys = s.make_pkeys(5);
+
+        boost::sort(pkeys, [&s] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*s.schema(), b);
+        });
 
         auto mut1a = make_mutation_with_key(s, pkeys[0]);
         auto mut1b = make_mutation_with_key(s, pkeys[0]);

@@ -3886,12 +3886,18 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     auto key_and_token_pair = token_generation_for_current_shard(8);
+    auto decorated_keys = boost::copy_range<std::vector<dht::decorated_key>>(
+            key_and_token_pair | boost::adaptors::transformed([&s] (const std::pair<sstring, dht::token>& key_and_token) {
+                auto value = bytes(reinterpret_cast<const signed char*>(key_and_token.first.data()), key_and_token.first.size());
+                auto pk = sstables::key::from_bytes(value).to_partition_key(*s);
+                return dht::global_partitioner().decorate_key(*s, std::move(pk));
+            }));
 
-    auto check = [] (sstable_set::incremental_selector& selector, const dht::token& token, std::unordered_set<int64_t> expected_gens) {
-        auto sstables = selector.select(token).sstables;
-        BOOST_REQUIRE(sstables.size() == expected_gens.size());
+    auto check = [] (sstable_set::incremental_selector& selector, const dht::decorated_key& key, std::unordered_set<int64_t> expected_gens) {
+        auto sstables = selector.select(key).sstables;
+        BOOST_REQUIRE_EQUAL(sstables.size(), expected_gens.size());
         for (auto& sst : sstables) {
-            BOOST_REQUIRE(expected_gens.count(sst->generation()) == 1);
+            BOOST_REQUIRE_EQUAL(expected_gens.count(sst->generation()), 1);
         }
     };
 
@@ -3904,14 +3910,14 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
 
         sstable_set::incremental_selector sel = set.make_incremental_selector();
-        check(sel, key_and_token_pair[0].second, {1, 2});
-        check(sel, key_and_token_pair[1].second, {1, 2});
-        check(sel, key_and_token_pair[2].second, {});
-        check(sel, key_and_token_pair[3].second, {3});
-        check(sel, key_and_token_pair[4].second, {3, 4, 5});
-        check(sel, key_and_token_pair[5].second, {5});
-        check(sel, key_and_token_pair[6].second, {});
-        check(sel, key_and_token_pair[7].second, {});
+        check(sel, decorated_keys[0], {1, 2});
+        check(sel, decorated_keys[1], {1, 2});
+        check(sel, decorated_keys[2], {});
+        check(sel, decorated_keys[3], {3});
+        check(sel, decorated_keys[4], {3, 4, 5});
+        check(sel, decorated_keys[5], {5});
+        check(sel, decorated_keys[6], {});
+        check(sel, decorated_keys[7], {});
     }
 
     {
@@ -3924,14 +3930,14 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         set.insert(sstable_for_overlapping_test(s, 5, key_and_token_pair[4].first, key_and_token_pair[5].first, 1));
 
         sstable_set::incremental_selector sel = set.make_incremental_selector();
-        check(sel, key_and_token_pair[0].second, {0, 1, 2});
-        check(sel, key_and_token_pair[1].second, {0, 1, 2});
-        check(sel, key_and_token_pair[2].second, {0});
-        check(sel, key_and_token_pair[3].second, {0, 3});
-        check(sel, key_and_token_pair[4].second, {0, 3, 4, 5});
-        check(sel, key_and_token_pair[5].second, {0, 5});
-        check(sel, key_and_token_pair[6].second, {0});
-        check(sel, key_and_token_pair[7].second, {0});
+        check(sel, decorated_keys[0], {0, 1, 2});
+        check(sel, decorated_keys[1], {0, 1, 2});
+        check(sel, decorated_keys[2], {0});
+        check(sel, decorated_keys[3], {0, 3});
+        check(sel, decorated_keys[4], {0, 3, 4, 5});
+        check(sel, decorated_keys[5], {0, 5});
+        check(sel, decorated_keys[6], {0});
+        check(sel, decorated_keys[7], {0});
     }
 
     return make_ready_future<>();

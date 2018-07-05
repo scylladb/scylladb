@@ -529,6 +529,7 @@ public:
 // Such range includes all keys k such that v1 <= k < v2, with order defined by ring_position_comparator.
 //
 class ring_position_view {
+    friend int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
     friend class ring_position_comparator;
 
     // Order is lexicographical on (_token, _key) tuples, where _key part may be missing, and
@@ -543,6 +544,7 @@ class ring_position_view {
     const partition_key* _key; // Can be nullptr
     int8_t _weight;
 public:
+    using token_bound = ring_position::token_bound;
     struct after_key_tag {};
     using after_key = bool_class<after_key_tag>;
 
@@ -578,6 +580,14 @@ public:
         return ring_position_view(after_key_tag(), view);
     }
 
+    static ring_position_view starting_at(const dht::token& t) {
+        return ring_position_view(t, token_bound::start);
+    }
+
+    static ring_position_view ending_at(const dht::token& t) {
+        return ring_position_view(t, token_bound::end);
+    }
+
     ring_position_view(const dht::ring_position& pos, after_key after = after_key::no)
         : _token(&pos.token())
         , _key(pos.has_key() ? &*pos.key() : nullptr)
@@ -605,16 +615,24 @@ public:
         , _weight(weight)
     { }
 
-    explicit ring_position_view(const dht::token& token, int8_t weight = -1)
+    explicit ring_position_view(const dht::token& token, token_bound bound = token_bound::start)
         : _token(&token)
         , _key(nullptr)
-        , _weight(weight)
+        , _weight(static_cast<std::underlying_type_t<token_bound>>(bound))
     { }
 
+    const dht::token& token() const { return *_token; }
     const partition_key* key() const { return _key; }
+
+    // Only when key() == nullptr
+    token_bound get_token_bound() const { return token_bound(_weight); }
+    // Only when key() != nullptr
+    after_key is_after_key() const { return after_key(_weight == 1); }
 
     friend std::ostream& operator<<(std::ostream&, ring_position_view);
 };
+
+int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh);
 
 // Trichotomic comparator for ring order
 struct ring_position_comparator {

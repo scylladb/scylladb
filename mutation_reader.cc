@@ -184,13 +184,11 @@ private:
     // end, a call to next_partition() or a call to
     // fast_forward_to(dht::partition_range).
     reader_and_last_fragment_kind _single_reader;
-    dht::decorated_key_opt _key;
     const schema_ptr _schema;
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
 private:
-    const dht::token* current_position() const;
-    void maybe_add_readers(const dht::token* const t);
+    void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
     future<> prepare_next();
     // Collect all forwardable readers into _next, and remove them from
@@ -236,7 +234,7 @@ class list_reader_selector : public reader_selector {
 
 public:
     explicit list_reader_selector(schema_ptr s, std::vector<flat_mutation_reader> readers)
-        : reader_selector(s, dht::ring_position::min())
+        : reader_selector(s, dht::ring_position_view::min())
         , _readers(std::move(readers)) {
     }
 
@@ -246,8 +244,8 @@ public:
     list_reader_selector(list_reader_selector&&) = default;
     list_reader_selector& operator=(list_reader_selector&&) = default;
 
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const) override {
-        _selector_position = dht::ring_position::max();
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>&) override {
+        _selector_position = dht::ring_position_view::max();
         return std::exchange(_readers, {});
     }
 
@@ -256,12 +254,10 @@ public:
     }
 };
 
-void mutation_reader_merger::maybe_add_readers(const dht::token* const t) {
-    if (!_selector->has_new_readers(t)) {
-        return;
+void mutation_reader_merger::maybe_add_readers(const std::optional<dht::ring_position_view>& pos) {
+    if (_selector->has_new_readers(pos)) {
+        add_readers(_selector->create_new_readers(pos));
     }
-
-    add_readers(_selector->create_new_readers(t));
 }
 
 void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_readers) {
@@ -270,14 +266,6 @@ void mutation_reader_merger::add_readers(std::vector<flat_mutation_reader> new_r
         auto* r = &_all_readers.back();
         _next.emplace_back(r, mutation_fragment::kind::partition_end);
     }
-}
-
-const dht::token* mutation_reader_merger::current_position() const {
-    if (!_key) {
-        return nullptr;
-    }
-
-    return &_key->token();
 }
 
 struct mutation_reader_merger::reader_heap_compare {
@@ -338,12 +326,10 @@ future<> mutation_reader_merger::prepare_next() {
         // waiting for a fast-forward so there is nothing to do.
         if (_fragment_heap.empty() && _halted_readers.empty()) {
             if (_reader_heap.empty()) {
-                _key = {};
+                maybe_add_readers(std::nullopt);
             } else {
-                _key = _reader_heap.front().fragment.as_partition_start().key();
+                maybe_add_readers(_reader_heap.front().fragment.as_partition_start().key());
             }
-
-            maybe_add_readers(current_position());
         }
     });
 }
@@ -371,7 +357,7 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     , _schema(std::move(schema))
     , _fwd_sm(fwd_sm)
     , _fwd_mr(fwd_mr) {
-    maybe_add_readers(nullptr);
+    maybe_add_readers(std::nullopt);
 }
 
 future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()() {

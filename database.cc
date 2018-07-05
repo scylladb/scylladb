@@ -237,7 +237,7 @@ partition_presence_checker
 table::make_partition_presence_checker(lw_shared_ptr<sstables::sstable_set> sstables) {
     auto sel = make_lw_shared(sstables->make_incremental_selector());
     return [this, sstables = std::move(sstables), sel = std::move(sel)] (const dht::decorated_key& key) {
-        auto& sst = sel->select(key.token()).sstables;
+        auto& sst = sel->select(key).sstables;
         if (sst.empty()) {
             return partition_presence_checker_result::definitely_doesnt_exist;
         }
@@ -453,7 +453,7 @@ public:
             const dht::partition_range& pr,
             tracing::trace_state_ptr trace_state,
             sstable_reader_factory_type fn)
-        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position::min())
+        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position_view::min())
         , _pr(&pr)
         , _sstables(std::move(sstables))
         , _trace_state(std::move(trace_state))
@@ -472,47 +472,34 @@ public:
     incremental_reader_selector(incremental_reader_selector&&) = delete;
     incremental_reader_selector& operator=(incremental_reader_selector&&) = delete;
 
-    virtual std::vector<flat_mutation_reader> create_new_readers(const dht::token* const t) override {
-        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(t));
+    virtual std::vector<flat_mutation_reader> create_new_readers(const std::optional<dht::ring_position_view>& pos) override {
+        dblog.trace("incremental_reader_selector {}: {}({})", this, __FUNCTION__, seastar::lazy_deref(pos));
 
-        const auto& position = (t ? *t : _selector_position.token());
-        // we only pass _selector_position's token to _selector::select() when T is nullptr
-        // because it means gap between sstables, and the lower bound of the first interval
-        // after the gap is guaranteed to be inclusive.
-        auto selection = _selector.select(position);
+        auto readers = std::vector<flat_mutation_reader>();
 
-        if (selection.sstables.empty()) {
-            // For the lower bound of the token range the _selector
-            // might not return any sstables, in this case try again
-            // with next_token unless it's maximum token.
-            if (!selection.next_position.is_max()
-                    && position == (_pr->start() ? _pr->start()->value().token() : dht::minimum_token())) {
-                dblog.trace("incremental_reader_selector {}: no sstables intersect with the lower bound, retrying", this);
-                _selector_position = std::move(selection.next_position);
-                return create_new_readers(nullptr);
-            }
+        do {
+            auto selection = _selector.select(_selector_position);
+            _selector_position = selection.next_position;
 
-            _selector_position = dht::ring_position::max();
-            return {};
-        }
+            dblog.trace("incremental_reader_selector {}: {} sstables to consider, advancing selector to {}", this, selection.sstables.size(),
+                    _selector_position);
 
-        _selector_position = std::move(selection.next_position);
+            readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
+                    | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
+                    | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
+        } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
-        dblog.trace("incremental_reader_selector {}: {} new sstables to consider, advancing selector to {}", this, selection.sstables.size(), _selector_position);
+        dblog.trace("incremental_reader_selector {}: created {} new readers", this, readers.size());
 
-        return boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
-                | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
-                | boost::adaptors::transformed([this] (auto& sst) {
-                    return this->create_reader(sst);
-                }));
+        return readers;
     }
 
     virtual std::vector<flat_mutation_reader> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         _pr = &pr;
 
-        dht::ring_position_comparator cmp(*_s);
-        if (cmp(dht::ring_position_view::for_range_start(*_pr), _selector_position) >= 0) {
-            return create_new_readers(&_pr->start()->value().token());
+        auto pos = dht::ring_position_view::for_range_start(*_pr);
+        if (dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0) {
+            return create_new_readers(pos);
         }
 
         return {};
@@ -1566,7 +1553,7 @@ future<std::unordered_set<sstring>> table::get_sstables_by_partition_key(const s
             [this] (std::unordered_set<sstring>& filenames, lw_shared_ptr<sstables::sstable_set::incremental_selector>& sel, partition_key& pk) {
         return do_with(dht::decorated_key(dht::global_partitioner().decorate_key(*_schema, pk)),
                 [this, &filenames, &sel, &pk](dht::decorated_key& dk) mutable {
-            auto sst = sel->select(dk.token()).sstables;
+            auto sst = sel->select(dk).sstables;
             auto hk = sstables::sstable::make_hashed_key(*_schema, dk.key());
 
             return do_for_each(sst, [this, &filenames, &dk, hk = std::move(hk)] (std::vector<sstables::shared_sstable>::const_iterator::reference s) mutable {
@@ -4614,14 +4601,11 @@ flat_mutation_reader make_local_shard_sstable_reader(schema_ptr s,
         }
         return reader;
     };
-    auto all_readers = boost::copy_range<std::vector<flat_mutation_reader>>(
-            *sstables->all()
-            | boost::adaptors::transformed([&] (sstables::shared_sstable sst) -> flat_mutation_reader {
-                return reader_factory_fn(sst, pr);
-            })
-    );
-    return make_combined_reader(s,
-            std::move(all_readers),
+    return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
+                    std::move(sstables),
+                    pr,
+                    std::move(trace_state),
+                    std::move(reader_factory_fn)),
             fwd,
             fwd_mr);
 }
@@ -4640,14 +4624,11 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
     auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
         return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr, monitor_generator(sst));
     };
-    auto sstable_readers = boost::copy_range<std::vector<flat_mutation_reader>>(
-            *sstables->all()
-            | boost::adaptors::transformed([&] (sstables::shared_sstable sst) {
-                return reader_factory_fn(sst, pr);
-            })
-    );
-    return make_combined_reader(s,
-            std::move(sstable_readers),
+    return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
+                    std::move(sstables),
+                    pr,
+                    std::move(trace_state),
+                    std::move(reader_factory_fn)),
             fwd,
             fwd_mr);
 }

@@ -461,7 +461,7 @@ bool ring_position::less_compare(const schema& s, const ring_position& other) co
     return tri_compare(s, other) < 0;
 }
 
-int ring_position_comparator::operator()(ring_position_view lh, ring_position_view rh) const {
+int ring_position_tri_compare(const schema& s, ring_position_view lh, ring_position_view rh) {
     auto token_cmp = tri_compare(*lh._token, *rh._token);
     if (token_cmp) {
         return token_cmp;
@@ -480,6 +480,10 @@ int ring_position_comparator::operator()(ring_position_view lh, ring_position_vi
     } else {
         return rh._weight > 0 ? -1 : 1;
     }
+}
+
+int ring_position_comparator::operator()(ring_position_view lh, ring_position_view rh) const {
+    return ring_position_tri_compare(s, lh, rh);
 }
 
 int ring_position_comparator::operator()(ring_position_view lh, sstables::decorated_key_view rh) const {
