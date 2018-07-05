@@ -29,13 +29,17 @@ import io
 import shlex
 import shutil
 
-def curl(url):
+def curl(url, byte=False):
     max_retries = 5
     retries = 0
     while True:
         try:
             req = urllib.request.Request(url)
-            return urllib.request.urlopen(req).read().decode('utf-8')
+            with urllib.request.urlopen(req) as res:
+                if byte:
+                    return res.read()
+                else:
+                    return res.read().decode('utf-8')
         except urllib.error.HTTPError:
             logging.warn("Failed to grab %s..." % url)
             time.sleep(5)
