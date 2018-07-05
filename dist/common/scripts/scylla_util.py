@@ -345,6 +345,45 @@ def is_unused_disk(dev):
             return False
     return True
 
+CONCOLORS = {'green':'\033[1;32m', 'red':'\033[1;31m', 'nocolor':'\033[0m'}
+def colorprint(msg):
+    print(msg.format(**CONCOLORS))
+
+def get_mode_cpu_set(nic, mode):
+    try:
+        mode_cpu_mask=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
+        return hex2list(mode_cpu_mask)
+    except subprocess.CalledProcessError:
+        return '-1'
+
+def get_cur_cpuset():
+    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+    cpuset=cfg.get('CPUSET')
+    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
+
+def get_tune_mode(nic):
+    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
+        return
+    cur_cpuset=get_cur_cpuset()
+    mq_cpuset=get_mode_cpus_set(nic, 'mq')
+    sq_cpuset=get_mode_cpus_set(nic, 'sq')
+    sq_split_cpuset=get_mode_cpus_set(nic, 'sq_split')
+
+    if cur_cpuset == mq_cpuset:
+        return 'mq'
+    elif cur_cpuset == sq_cpuset:
+        return 'sq'
+    elif cur_cpuset == sq_split_cpuset:
+        return 'sq_split'
+
+def create_perftune_conf(nic='eth0'):
+    if os.path.exists('/etc/scylla.d/perftune.yaml'):
+        return
+    mode=get_tune_mode(nic)
+    yaml=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
+    with open('/etc/scylla.d/perftune.yaml', 'w') as f:
+        f.write(yaml)
+
 class SystemdException(Exception):
     pass
 
