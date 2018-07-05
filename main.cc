@@ -389,7 +389,13 @@ int main(int ac, char** av) {
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
             stdx::optional<std::vector<sstring>> hinted_handoff_enabled = cfg->experimental() ? parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled()) : stdx::nullopt;
-            auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
+            auto prom_addr = [&] {
+                try {
+                    return seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
+                } catch (...) {
+                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve prometheus_address {}", cfg->prometheus_address())));
+                }
+            }();
             supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
             if (pport) {
@@ -467,7 +473,13 @@ int main(int ac, char** av) {
             // #293 - do not stop anything
             // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             supervisor::notify("determining DNS name");
-            auto e = seastar::net::dns::get_host_by_name(api_address).get0();
+            auto e = [&] {
+                try {
+                    return seastar::net::dns::get_host_by_name(api_address).get0();
+                } catch (...) {
+                    std::throw_with_nested(std::runtime_error(fmt::format("Unable to resolve api_address {}", api_address)));
+                }
+            }();
             supervisor::notify("starting API server");
             auto ip = e.addr_list.front();
             ctx.http_server.start("API").get();
