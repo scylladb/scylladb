@@ -1831,78 +1831,78 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
             }
 
             parallel_for_each(cf->_config.all_datadirs, [&db, cf] (const sstring& directory) {
-            auto candidates = get_all_shared_sstables(db, directory, cf).get0();
-            dblog.debug("{} candidates for resharding for {}.{}", candidates.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
-            auto jobs = cf->get_compaction_strategy().get_resharding_jobs(*cf, std::move(candidates));
-            dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
+                auto candidates = get_all_shared_sstables(db, directory, cf).get0();
+                dblog.debug("{} candidates for resharding for {}.{}", candidates.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
+                auto jobs = cf->get_compaction_strategy().get_resharding_jobs(*cf, std::move(candidates));
+                dblog.debug("{} resharding jobs for {}.{}", jobs.size(), cf->schema()->ks_name(), cf->schema()->cf_name());
 
-            return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
-                auto creator = [&cf, directory] (shard_id shard) mutable {
-                    // we need generation calculated by instance of cf at requested shard,
-                    // or resource usage wouldn't be fairly distributed among shards.
-                    auto gen = smp::submit_to(shard, [&cf] () {
-                        return cf->calculate_generation_for_new_table();
-                    }).get0();
+                return invoke_all_resharding_jobs(cf, directory, std::move(jobs), [directory, &cf] (auto sstables, auto level, auto max_sstable_bytes) {
+                    auto creator = [&cf, directory] (shard_id shard) mutable {
+                        // we need generation calculated by instance of cf at requested shard,
+                        // or resource usage wouldn't be fairly distributed among shards.
+                        auto gen = smp::submit_to(shard, [&cf] () {
+                            return cf->calculate_generation_for_new_table();
+                        }).get0();
 
-                    auto sst = sstables::make_sstable(cf->schema(), directory, gen,
-                        get_highest_supported_format(), sstables::sstable::format_types::big,
-                        gc_clock::now(), default_io_error_handler_gen());
-                    return sst;
-                };
-                auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
+                        auto sst = sstables::make_sstable(cf->schema(), directory, gen,
+                            get_highest_supported_format(), sstables::sstable::format_types::big,
+                            gc_clock::now(), default_io_error_handler_gen());
+                        return sst;
+                    };
+                    auto f = sstables::reshard_sstables(sstables, *cf, creator, max_sstable_bytes, level);
 
-                return f.then([&cf, sstables = std::move(sstables), directory] (std::vector<sstables::shared_sstable> new_sstables) mutable {
-                    // an input sstable may belong to shard 1 and 2 and only have data which
-                    // token belongs to shard 1. That means resharding will only create a
-                    // sstable for shard 1, but both shards opened the sstable. So our code
-                    // below should ask both shards to remove the resharded table, or it
-                    // wouldn't be deleted by our deletion manager, and resharding would be
-                    // triggered again in the subsequent boot.
-                    return parallel_for_each(boost::irange(0u, smp::count), [&cf, directory, sstables, new_sstables] (auto shard) {
-                        auto old_sstables_for_shard = sstables_for_shard(sstables, shard);
-                        // nothing to do if no input sstable belongs to this shard.
-                        if (old_sstables_for_shard.empty()) {
-                            return make_ready_future<>();
-                        }
-                        auto new_sstables_for_shard = sstables_for_shard(new_sstables, shard);
-                        // sanity checks
-                        for (auto& sst : new_sstables_for_shard) {
-                            auto& shards = sst->get_shards_for_this_sstable();
-                            if (shards.size() != 1) {
-                                throw std::runtime_error(sprint("resharded sstable %s doesn't belong to only one shard", sst->get_filename()));
+                    return f.then([&cf, sstables = std::move(sstables), directory] (std::vector<sstables::shared_sstable> new_sstables) mutable {
+                        // an input sstable may belong to shard 1 and 2 and only have data which
+                        // token belongs to shard 1. That means resharding will only create a
+                        // sstable for shard 1, but both shards opened the sstable. So our code
+                        // below should ask both shards to remove the resharded table, or it
+                        // wouldn't be deleted by our deletion manager, and resharding would be
+                        // triggered again in the subsequent boot.
+                        return parallel_for_each(boost::irange(0u, smp::count), [&cf, directory, sstables, new_sstables] (auto shard) {
+                            auto old_sstables_for_shard = sstables_for_shard(sstables, shard);
+                            // nothing to do if no input sstable belongs to this shard.
+                            if (old_sstables_for_shard.empty()) {
+                                return make_ready_future<>();
                             }
-                            if (shards.front() != shard) {
-                                throw std::runtime_error(sprint("resharded sstable %s should belong to shard %d", sst->get_filename(), shard));
+                            auto new_sstables_for_shard = sstables_for_shard(new_sstables, shard);
+                            // sanity checks
+                            for (auto& sst : new_sstables_for_shard) {
+                                auto& shards = sst->get_shards_for_this_sstable();
+                                if (shards.size() != 1) {
+                                    throw std::runtime_error(sprint("resharded sstable %s doesn't belong to only one shard", sst->get_filename()));
+                                }
+                                if (shards.front() != shard) {
+                                    throw std::runtime_error(sprint("resharded sstable %s should belong to shard %d", sst->get_filename(), shard));
+                                }
                             }
-                        }
 
-                        if (new_sstables_for_shard.empty()) {
-                            // handles case where sstable needing rewrite doesn't produce any sstable
-                            // for a shard it belongs to when resharded (the reason is explained above).
-                            std::unordered_set<uint64_t> ancestors;
-                            boost::range::transform(old_sstables_for_shard, std::inserter(ancestors, ancestors.end()),
-                                std::mem_fn(&sstables::sstable::generation));
+                            if (new_sstables_for_shard.empty()) {
+                                // handles case where sstable needing rewrite doesn't produce any sstable
+                                // for a shard it belongs to when resharded (the reason is explained above).
+                                std::unordered_set<uint64_t> ancestors;
+                                boost::range::transform(old_sstables_for_shard, std::inserter(ancestors, ancestors.end()),
+                                    std::mem_fn(&sstables::sstable::generation));
 
-                            return smp::submit_to(shard, [cf, ancestors = std::move(ancestors)] () mutable {
-                                cf->remove_ancestors_needed_rewrite(ancestors);
+                                return smp::submit_to(shard, [cf, ancestors = std::move(ancestors)] () mutable {
+                                    cf->remove_ancestors_needed_rewrite(ancestors);
+                                });
+                            } else {
+                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf] (auto sstables) {
+                                    cf->replace_ancestors_needed_rewrite(sstables);
+                                });
+                            }
+                        }).then([&cf, sstables] {
+                            // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
+                            sstables::delete_atomically(std::move(sstables), *cf->get_large_partition_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
+                                try {
+                                    std::rethrow_exception(eptr);
+                                } catch (...) {
+                                    dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
+                                }
                             });
-                        } else {
-                            return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf] (auto sstables) {
-                                cf->replace_ancestors_needed_rewrite(sstables);
-                            });
-                        }
-                    }).then([&cf, sstables] {
-                        // schedule deletion of shared sstables after we're certain that new unshared ones were successfully forwarded to respective shards.
-                        sstables::delete_atomically(std::move(sstables), *cf->get_large_partition_handler()).handle_exception([op = sstables::background_jobs().start()] (std::exception_ptr eptr) {
-                            try {
-                                std::rethrow_exception(eptr);
-                            } catch (...) {
-                                dblog.warn("Exception in resharding when deleting sstable file: {}", eptr);
-                            }
                         });
                     });
                 });
-            });
             }).get();
         });
     });
@@ -4015,23 +4015,23 @@ future<> table::snapshot(sstring name) {
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
             return io_check(recursive_touch_directory, jsondir).then([this, name, jsondir, &tables] {
-            return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
-                auto dir = sstable->get_dir() + "/snapshots/" + name;
-                return io_check(recursive_touch_directory, dir).then([sstable, dir] {
-                    return sstable->create_links(dir).then_wrapped([] (future<> f) {
-                        // If the SSTables are shared, one of the CPUs will fail here.
-                        // That is completely fine, though. We only need one link.
-                        try {
-                            f.get();
-                        } catch (std::system_error& e) {
-                            if (e.code() != std::error_code(EEXIST, std::system_category())) {
-                                throw;
+                return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
+                    auto dir = sstable->get_dir() + "/snapshots/" + name;
+                    return io_check(recursive_touch_directory, dir).then([sstable, dir] {
+                        return sstable->create_links(dir).then_wrapped([] (future<> f) {
+                            // If the SSTables are shared, one of the CPUs will fail here.
+                            // That is completely fine, though. We only need one link.
+                            try {
+                                f.get();
+                            } catch (std::system_error& e) {
+                                if (e.code() != std::error_code(EEXIST, std::system_category())) {
+                                    throw;
+                                }
                             }
-                        }
-                        return make_ready_future<>();
+                            return make_ready_future<>();
+                        });
                     });
                 });
-            });
             }).then([jsondir, &tables] {
                 return io_check(sync_directory, std::move(jsondir));
             }).finally([this, &tables, jsondir] {
@@ -4092,43 +4092,43 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     return seastar::async([this] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         for (auto& datadir : _config.all_datadirs) {
-        lister::path snapshots_dir = lister::path(datadir) / "snapshots";
-        auto file_exists = io_check([&snapshots_dir] { return engine().file_exists(snapshots_dir.native()); }).get0();
-        if (!file_exists) {
-            continue;
-        }
+            lister::path snapshots_dir = lister::path(datadir) / "snapshots";
+            auto file_exists = io_check([&snapshots_dir] { return engine().file_exists(snapshots_dir.native()); }).get0();
+            if (!file_exists) {
+                continue;
+            }
 
-        lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, datadir, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
-            auto snapshot_name = de.name;
-            all_snapshots.emplace(snapshot_name, snapshot_details());
-            return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
-                return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
-                    // The manifest is the only file expected to be in this directory not belonging to the SSTable.
-                    // For it, we account the total size, but zero it for the true size calculation.
-                    //
-                    // All the others should just generate an exception: there is something wrong, so don't blindly
-                    // add it to the size.
-                    if (name != "manifest.json") {
-                        sstables::entry_descriptor::make_descriptor(snapshot_dir.native(), name);
-                        all_snapshots.at(snapshot_name).total += size;
-                    } else {
-                        size = 0;
-                    }
-                    return io_check(file_size, (lister::path(datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
-                        try {
-                            // File exists in the main SSTable directory. Snapshots are not contributing to size
-                            fut.get0();
-                        } catch (std::system_error& e) {
-                            if (e.code() != std::error_code(ENOENT, std::system_category())) {
-                                throw;
-                            }
-                            all_snapshots.at(snapshot_name).live += size;
+            lister::scan_dir(snapshots_dir,  { directory_entry_type::directory }, [this, datadir, &all_snapshots] (lister::path snapshots_dir, directory_entry de) {
+                auto snapshot_name = de.name;
+                all_snapshots.emplace(snapshot_name, snapshot_details());
+                return lister::scan_dir(snapshots_dir / snapshot_name.c_str(),  { directory_entry_type::regular }, [this, datadir, &all_snapshots, snapshot_name] (lister::path snapshot_dir, directory_entry de) {
+                    return io_check(file_size, (snapshot_dir / de.name.c_str()).native()).then([this, datadir, &all_snapshots, snapshot_name, snapshot_dir, name = de.name] (auto size) {
+                        // The manifest is the only file expected to be in this directory not belonging to the SSTable.
+                        // For it, we account the total size, but zero it for the true size calculation.
+                        //
+                        // All the others should just generate an exception: there is something wrong, so don't blindly
+                        // add it to the size.
+                        if (name != "manifest.json") {
+                            sstables::entry_descriptor::make_descriptor(snapshot_dir.native(), name);
+                            all_snapshots.at(snapshot_name).total += size;
+                        } else {
+                            size = 0;
                         }
-                        return make_ready_future<>();
+                        return io_check(file_size, (lister::path(datadir) / name.c_str()).native()).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                            try {
+                                // File exists in the main SSTable directory. Snapshots are not contributing to size
+                                fut.get0();
+                            } catch (std::system_error& e) {
+                                if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                                    throw;
+                                }
+                                all_snapshots.at(snapshot_name).live += size;
+                            }
+                            return make_ready_future<>();
+                        });
                     });
                 });
-            });
-        }).get();
+            }).get();
         }
         return all_snapshots;
     });
