@@ -100,6 +100,11 @@ class aws_instance:
         """Returns the class of the instance we are running in. i.e.: i3"""
         return self._type.split(".")[0]
 
+    def is_supported_instance_class(self):
+        if self.instance_class() in ['i2', 'i3']:
+            return True
+        return False
+
     def disks(self):
         """Returns all disks in the system, as visible from the AWS registry"""
         disks = set()
@@ -416,8 +421,7 @@ class systemd_unit:
         return run('systemctl disable {}'.format(self._unit))
 
     def is_active(self):
-        res = out('systemctl is-active {}'.format(self._unit), exception=False)
-        return True if re.match(r'^active', res, flags=re.MULTILINE) else False
+        return out('systemctl is-active {}'.format(self._unit), exception=False)
 
     def mask(self):
         return run('systemctl mask {}'.format(self._unit))
