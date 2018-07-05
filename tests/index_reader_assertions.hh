@@ -33,7 +33,10 @@ public:
     { }
 
     index_reader_assertions& has_monotonic_positions(const schema& s) {
-        auto pos_cmp = sstables::promoted_index_block_compare(s);
+        auto pos_cmp = [&s] (const sstables::promoted_index_block& lhs, const sstables::promoted_index_block& rhs) {
+            sstables::promoted_index_block_compare cmp(s);
+            return cmp(rhs.start(s), lhs.end(s));
+        };
         auto rp_cmp = dht::ring_position_comparator(s);
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
@@ -55,18 +58,15 @@ public:
                 if (infos->empty()) {
                     continue;
                 }
-                auto& prev = (*infos)[0];
-                for (size_t i = 1; i < infos->size(); ++i) {
-                    auto& cur = (*infos)[i];
-                    if (pos_cmp(cur.start(s), prev.end(s))) {
-                        std::cout << "promoted index:\n";
-                        for (auto& e : *infos) {
-                            std::cout << "  " << e.start(s) << "-" << e.end(s)
-                                      << ": +" << e.offset() << " len=" << e.width() << std::endl;
-                        }
-                        BOOST_FAIL(sprint("Index blocks are not monotonic: %s >= %s", prev.end(s), cur.start(s)));
+                auto it = std::adjacent_find(infos->begin(), infos->end(), pos_cmp);
+                if (it != infos->end()) {
+                    std::cout << "promoted index:\n";
+                    for (auto& e : *infos) {
+                        std::cout << "  " << e.start(s) << "-" << e.end(s)
+                                  << ": +" << e.offset() << " len=" << e.width() << std::endl;
                     }
-                    cur = std::move(prev);
+                    auto next = std::next(it);
+                    BOOST_FAIL(sprint("Index blocks are not monotonic: %s >= %s", it->end(s), next->start(s)));
                 }
             }
             _r->advance_to_next_partition().get();
