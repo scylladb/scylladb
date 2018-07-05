@@ -53,17 +53,17 @@ if __name__ == '__main__':
     driver = match.group(1)
 
     if not en:
-        print('{bold_red}{type} doesn\'t support enahanced networking!{no_color}'.format(bold_red=concolor.BOLD_RED, type=type, no_color=concolor.NO_COLOR))
+        colorprint('{red}{type} doesn\'t support enahanced networking!{nocolor}'.format(type=type))
         print('''To enable enhanced networking, please use the instance type which supports it.
 More documentation available at:
 http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking''')
         sys.exit(1)
     elif not is_vpc_enabled():
-        print('{bold_red}VPC is not enabled!{no_color}'.format(bold_red=concolor.BOLD_RED, no_color=concolor.NO_COLOR))
+        colorprint('{red}VPC is not enabled!{nocolor}')
         print('To enable enhanced networking, please enable VPC.')
         sys.exit(1)
     elif driver != en:
-        print('{bold_red}Enhanced networking is disabled!{no_color}'.format(bold_red=concolor.BOLD_RED, no_color=concolor.NO_COLOR))
+        colorprint('{red}Enhanced networking is disabled!{nocolor}')
         print('''More documentation available at:
 http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html''')
         sys.exit(1)

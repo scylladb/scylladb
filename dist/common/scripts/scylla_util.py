@@ -463,9 +463,3 @@ class sysconfig_parser:
     def commit(self):
         with open(self._filename, 'w') as f:
             f.write(self._data)
-
-class concolor:
-    GREEN = '\033[0;32m'
-    RED = '\033[0;31m'
-    BOLD_RED = '\033[1;31m'
-    NO_COLOR = '\033[0m'
