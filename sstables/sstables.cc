@@ -3775,7 +3775,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
     static std::regex la("la-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/upload)?/?");
+    static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/upload|/snapshots/[^/]+)?/?");
 
     std::smatch match;
 
