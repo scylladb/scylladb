@@ -70,7 +70,7 @@ namespace pager {
  * is done even though it is.
  */
 class query_pager {
-private:
+protected:
     // remember if we use clustering. if not, each partition == one row
     const bool _has_clustering_keys;
     bool _exhausted = false;
@@ -95,6 +95,7 @@ public:
                 db::timeout_clock::duration timeout,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges);
+    virtual ~query_pager() {}
 
     /**
      * Fetches the next page.
@@ -107,7 +108,7 @@ public:
     /**
      * For more than one page.
      */
-    future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point);
+    virtual future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point);
 
     future<cql3::result_generator> fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats);
 
@@ -140,7 +141,7 @@ public:
      */
     ::shared_ptr<const paging_state> state() const;
 
-private:
+protected:
     template<typename Base>
     class query_result_visitor;
     

@@ -118,7 +118,8 @@ private:
         schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names,
         ::shared_ptr<selection::selection> selection,
-        bool for_view = false);
+        bool for_view = false,
+        bool allow_filtering = false);
 
     /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
     ::shared_ptr<term> prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names);

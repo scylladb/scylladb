@@ -95,7 +95,32 @@ public:
     uint32_t size() const override {
         return uint32_t(get_column_defs().size());
     }
+
+    bool has_unrestricted_components(const schema& schema) const;
+
+    virtual bool needs_filtering(const schema& schema) const;
 };
+
+template<>
+inline bool primary_key_restrictions<partition_key>::has_unrestricted_components(const schema& schema) const {
+    return size() < schema.partition_key_size();
+}
+
+template<>
+inline bool primary_key_restrictions<clustering_key>::has_unrestricted_components(const schema& schema) const {
+    return size() < schema.clustering_key_size();
+}
+
+template<>
+inline bool primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const  {
+    return !empty() && !is_on_token() && (has_unrestricted_components(schema) || is_contains() || is_slice());
+}
+
+template<>
+inline bool primary_key_restrictions<clustering_key>::needs_filtering(const schema& schema) const  {
+    // Currently only overloaded single_column_primary_key_restrictions will require ALLOW FILTERING
+    return false;
+}
 
 }
 }

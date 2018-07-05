@@ -330,93 +330,86 @@ std::unique_ptr<result_set> result_set_builder::build() {
     return std::move(_result_set);
 }
 
-result_set_builder::visitor::visitor(
-        cql3::selection::result_set_builder& builder, const schema& s,
-        const selection& selection)
-        : _builder(builder), _schema(s), _selection(selection), _row_count(0) {
-}
+bool result_set_builder::restrictions_filter::operator()(const selection& selection,
+                                                         const std::vector<bytes>& partition_key,
+                                                         const std::vector<bytes>& clustering_key,
+                                                         const query::result_row_view& static_row,
+                                                         const query::result_row_view& row) const {
+    static logging::logger rlogger("restrictions_filter");
 
-void result_set_builder::visitor::add_value(const column_definition& def,
-        query::result_row_view::iterator_type& i) {
-    if (def.type->is_multi_cell()) {
-        auto cell = i.next_collection_cell();
-        if (!cell) {
-            _builder.add_empty();
-            return;
-        }
-        _builder.add_collection(def, cell->linearize());
-    } else {
-        auto cell = i.next_atomic_cell();
-        if (!cell) {
-            _builder.add_empty();
-            return;
-        }
-        _builder.add(def, *cell);
+    if (_current_pratition_key_does_not_match || _current_static_row_does_not_match) {
+        return false;
     }
-}
 
-void result_set_builder::visitor::accept_new_partition(const partition_key& key,
-        uint32_t row_count) {
-    _partition_key = key.explode(_schema);
-    _row_count = row_count;
-}
-
-void result_set_builder::visitor::accept_new_partition(uint32_t row_count) {
-    _row_count = row_count;
-}
-
-void result_set_builder::visitor::accept_new_row(const clustering_key& key,
-        const query::result_row_view& static_row,
-        const query::result_row_view& row) {
-    _clustering_key = key.explode(_schema);
-    accept_new_row(static_row, row);
-}
-
-void result_set_builder::visitor::accept_new_row(
-        const query::result_row_view& static_row,
-        const query::result_row_view& row) {
     auto static_row_iterator = static_row.iterator();
     auto row_iterator = row.iterator();
-    _builder.new_row();
-    for (auto&& def : _selection.get_columns()) {
-        switch (def->kind) {
-        case column_kind::partition_key:
-            _builder.add(_partition_key[def->component_index()]);
-            break;
-        case column_kind::clustering_key:
-            if (_clustering_key.size() > def->component_index()) {
-                _builder.add(_clustering_key[def->component_index()]);
+    auto non_pk_restrictions_map = _restrictions->get_non_pk_restriction();
+    auto partition_key_restrictions_map = _restrictions->get_single_column_partition_key_restrictions();
+    auto clustering_key_restrictions_map = _restrictions->get_single_column_clustering_key_restrictions();
+    for (auto&& cdef : selection.get_columns()) {
+        switch (cdef->kind) {
+        case column_kind::static_column:
+            // fallthrough
+        case column_kind::regular_column:
+            if (cdef->type->is_multi_cell()) {
+                rlogger.debug("Multi-cell filtering is not implemented yet", cdef->name_as_text());
             } else {
-                _builder.add({});
+                auto cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
+                auto cell = cell_iterator.next_atomic_cell();
+
+                auto restr_it = non_pk_restrictions_map.find(cdef);
+                if (restr_it == non_pk_restrictions_map.end()) {
+                    continue;
+                }
+                restrictions::single_column_restriction& restriction = *restr_it->second;
+
+                bool regular_restriction_matches;
+                if (cell) {
+                    regular_restriction_matches = cell->value().with_linearized([&restriction](bytes_view data) {
+                        return restriction.is_satisfied_by(data, cql3::query_options({ }));
+                    });
+                } else {
+                    regular_restriction_matches = restriction.is_satisfied_by(bytes(), cql3::query_options({ }));
+                }
+                if (!regular_restriction_matches) {
+                    _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
+                    return false;
+                }
+
             }
             break;
-        case column_kind::regular_column:
-            add_value(*def, row_iterator);
+        case column_kind::partition_key: {
+            auto restr_it = partition_key_restrictions_map.find(cdef);
+            if (restr_it == partition_key_restrictions_map.end()) {
+                continue;
+            }
+            restrictions::single_column_restriction& restriction = *restr_it->second;
+            const bytes& value_to_check = partition_key[cdef->id];
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            if (!pk_restriction_matches) {
+                _current_pratition_key_does_not_match = true;
+                return false;
+            }
+            }
             break;
-        case column_kind::static_column:
-            add_value(*def, static_row_iterator);
+        case column_kind::clustering_key: {
+            auto restr_it = clustering_key_restrictions_map.find(cdef);
+            if (restr_it == clustering_key_restrictions_map.end()) {
+                continue;
+            }
+            restrictions::single_column_restriction& restriction = *restr_it->second;
+            const bytes& value_to_check = clustering_key[cdef->id];
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            if (!pk_restriction_matches) {
+                return false;
+            }
+            }
             break;
         default:
-            assert(0);
+            break;
         }
     }
-}
-
-void result_set_builder::visitor::accept_partition_end(
-        const query::result_row_view& static_row) {
-    if (_row_count == 0) {
-        _builder.new_row();
-        auto static_row_iterator = static_row.iterator();
-        for (auto&& def : _selection.get_columns()) {
-            if (def->is_partition_key()) {
-                _builder.add(_partition_key[def->component_index()]);
-            } else if (def->is_static()) {
-                add_value(*def, static_row_iterator);
-            } else {
-                _builder.add_empty();
-            }
-        }
-    }
+    return true;
 }
 
 api::timestamp_type result_set_builder::timestamp_of(size_t idx) {

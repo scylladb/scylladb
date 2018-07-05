@@ -66,7 +66,8 @@ public:
             const cql3::query_options&,
             db::timeout_clock::duration timeout,
             lw_shared_ptr<query::read_command>,
-            dht::partition_range_vector);
+            dht::partition_range_vector,
+            ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions = nullptr);
 };
 
 }

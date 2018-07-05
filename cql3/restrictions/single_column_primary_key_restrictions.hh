@@ -314,6 +314,10 @@ public:
         fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
     }
 
+    const single_column_restrictions::restrictions_map& restrictions() const {
+        return _restrictions->restrictions();
+    }
+
     virtual bool has_supporting_index(const secondary_index::secondary_index_manager& index_manager) const override {
         return _restrictions->has_supporting_index(index_manager);
     }
@@ -349,6 +353,8 @@ public:
             _restrictions->restrictions() | boost::adaptors::map_values,
             [&] (auto&& r) { return r->is_satisfied_by(schema, key, ckey, cells, options, now); });
     }
+
+    virtual bool needs_filtering(const schema& schema) const override;
 };
 
 template<>
@@ -404,6 +410,29 @@ single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(con
         return eq_cmp(x.start()->value(), y.start()->value());
     }), bounds.end());
     return bounds;
+}
+
+template<>
+bool single_column_primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const {
+    return primary_key_restrictions<partition_key>::needs_filtering(schema);
+}
+
+template<>
+bool single_column_primary_key_restrictions<clustering_key>::needs_filtering(const schema& schema) const {
+    // Restrictions currently need filtering in three cases:
+    // 1. any of them is a CONTAINS restriction
+    // 2. restrictions do not form a contiguous prefix (i.e. there are gaps in it)
+    // 3. a SLICE restriction isn't on a last place
+    column_id position = 0;
+    for (const auto& restriction : _restrictions->restrictions() | boost::adaptors::map_values) {
+        if (restriction->is_contains() || position != restriction->get_column_def().id) {
+            return true;
+        }
+        if (!restriction->is_slice()) {
+            position = restriction->get_column_def().id + 1;
+        }
+    }
+    return false;
 }
 
 }
