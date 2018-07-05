@@ -264,6 +264,7 @@ future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_s
 
 class filtering_query_pager : public query_pager {
     ::shared_ptr<cql3::restrictions::statement_restrictions> _filtering_restrictions;
+    cql3::cql_stats& _stats;
 public:
     filtering_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
@@ -271,9 +272,11 @@ public:
                 db::timeout_clock::duration timeout,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
-                ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions)
+                ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
+                cql3::cql_stats& stats)
         : query_pager(s, selection, state, options, timeout, std::move(cmd), std::move(ranges))
         , _filtering_restrictions(std::move(filtering_restrictions))
+        , _stats(stats)
         {}
     virtual ~filtering_query_pager() {}
 
@@ -281,6 +284,8 @@ public:
         return do_fetch_page(page_size, now).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
+            qr.query_result->ensure_counts();
+            _stats.filtered_rows_read_total += *qr.query_result->row_count();
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection,
                           cql3::selection::result_set_builder::restrictions_filter(_filtering_restrictions)),
                           std::move(qr.query_result), page_size, now);
@@ -399,10 +404,11 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
         db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
+        cql3::cql_stats& stats,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions) {
     if (filtering_restrictions) {
         return ::make_shared<filtering_query_pager>(std::move(s), std::move(selection), state,
-                    options, timeout, std::move(cmd), std::move(ranges), std::move(filtering_restrictions));
+                    options, timeout, std::move(cmd), std::move(ranges), std::move(filtering_restrictions), stats);
     }
     return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
             options, timeout, std::move(cmd), std::move(ranges));

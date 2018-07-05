@@ -384,6 +384,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     auto now = gc_clock::now();
 
     ++_stats.reads;
+    _stats.filtered_reads += _restrictions->need_filtering();
 
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(),
         make_partition_slice(options), limit, now, tracing::make_trace_info(state.get_trace_state()), query::max_partitions, utils::UUID(), options.get_timestamp(state));
@@ -409,7 +410,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout = options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, timeout, command, std::move(key_ranges), _restrictions->need_filtering() ? _restrictions : nullptr);
+            state, options, timeout, command, std::move(key_ranges), _stats, _restrictions->need_filtering() ? _restrictions : nullptr);
 
     if (aggregate) {
         return do_with(
@@ -423,6 +424,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                     ).then([this, &builder] {
                                 auto rs = builder.build();
                                 update_stats_rows_read(rs->size());
+                                _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
                                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
                             });
@@ -456,6 +458,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
                 }
 
                 update_stats_rows_read(rs->size());
+                _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
                 auto msg = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
                 return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(msg));
             });
@@ -565,6 +568,8 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
     if (_restrictions->need_filtering()) {
+        results->ensure_counts();
+        _stats.filtered_rows_read_total += *results->row_count();
         query::result_view::consume(*results, cmd->slice,
                 cql3::selection::result_set_builder::visitor(builder, *_schema,
                         *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions)));
@@ -583,6 +588,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         rs->trim(cmd->row_limit);
     }
     update_stats_rows_read(rs->size());
+    _stats.filtered_rows_matched_total += _restrictions->need_filtering() ? rs->size() : 0;
     return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
 }
 
