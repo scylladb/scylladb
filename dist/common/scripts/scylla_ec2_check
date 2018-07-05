@@ -24,41 +24,23 @@ import sys
 import argparse
 from scylla_util import *
 
-def get_en_interface_type():
-    type, subtype = curl('http://169.254.169.254/latest/meta-data/instance-type').split('.')
-    if type in ['c3', 'c4', 'd2', 'i2', 'r3']:
-        return 'ixgbevf'
-    if type in ['c5', 'c5d', 'f1', 'g3', 'h1', 'i3', 'm5', 'm5d', 'p2', 'p3', 'r4', 'x1']:
-        return 'ena'
-    if type == 'm4':
-        if subtype == '16xlarge':
-            return 'ena'
-        else:
-            return 'ixgbevf'
-
-def is_vpc_enabled():
-    with open('/sys/class/net/eth0/address') as f:
-        mac = f.read().strip()
-    mac_stat = curl('http://169.254.169.254/latest/meta-data/network/interfaces/macs/{}/'.format(mac))
-    return True if re.search(r'^vpc-id$', mac_stat, flags=re.MULTILINE) else False
-
-
 if __name__ == '__main__':
     if not is_ec2():
         sys.exit(0)
 
-    type = curl('http://169.254.169.254/latest/meta-data/instance-type')
-    en = get_en_interface_type()
+    aws = aws_instance()
+    instance_class = aws.instance_class()
+    en = aws.get_en_interface_type()
     match = re.search(r'^driver: (\S+)$', out('ethtool -i eth0'), flags=re.MULTILINE)
     driver = match.group(1)
 
     if not en:
-        colorprint('{red}{type} doesn\'t support enahanced networking!{nocolor}'.format(type=type))
+        colorprint('{red}{instance_class} doesn\'t support enahanced networking!{nocolor}'.format(instance_class))
         print('''To enable enhanced networking, please use the instance type which supports it.
 More documentation available at:
 http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking''')
         sys.exit(1)
-    elif not is_vpc_enabled():
+    elif not aws.is_vpc_enabled():
         colorprint('{red}VPC is not enabled!{nocolor}')
         print('To enable enhanced networking, please enable VPC.')
         sys.exit(1)

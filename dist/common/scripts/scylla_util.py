@@ -84,6 +84,10 @@ class aws_instance:
                 continue
             self._disks[t] += [ self.__xenify(dev) ]
 
+    def __mac_address(self, nic='eth0'):
+        with open('/sys/class/net/{}/address'.format(nic)) as f:
+            return f.read().strip()
+
     def __init__(self):
         self._type = self.__instance_metadata("instance-type")
         self.__populate_disks()
@@ -104,6 +108,20 @@ class aws_instance:
         if self.instance_class() in ['i2', 'i3']:
             return True
         return False
+
+    def get_en_interface_type(self):
+        instance_class = self.instance_class()
+        instance_size = self.instance_size()
+        if instance_class in ['c3', 'c4', 'd2', 'i2', 'r3']:
+            return 'ixgbevf'
+        if instance_class in ['c5', 'c5d', 'f1', 'g3', 'h1', 'i3', 'm5', 'm5d', 'p2', 'p3', 'r4', 'x1']:
+            return 'ena'
+        if instance_class == 'm4':
+            if instance_size == '16xlarge':
+                return 'ena'
+            else:
+                return 'ixgbevf'
+        return None
 
     def disks(self):
         """Returns all disks in the system, as visible from the AWS registry"""
@@ -142,6 +160,11 @@ class aws_instance:
     def private_ipv4(self):
         """Returns the private IPv4 address of this instance"""
         return self.__instance_metadata("local-ipv4")
+
+    def is_vpc_enabled(self, nic='eth0'):
+        mac = self.__mac_address(nic)
+        mac_stat = self.__instance_metadata('network/interfaces/macs/{}'.format(mac))
+        return True if re.search(r'^vpc-id$', mac_stat, flags=re.MULTILINE) else False
 
 
 ## Regular expression helpers
