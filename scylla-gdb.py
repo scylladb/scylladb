@@ -58,6 +58,57 @@ class intrusive_list:
     def __bool__(self):
         return self.__nonzero__()
 
+class intrusive_set:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        self.node_type = container_type.template_argument(0)
+        member_hook = get_template_arg_with_prefix(container_type, "boost::intrusive::member_hook")
+        if not member_hook:
+            raise Exception('Expected member_hook<> option not found in container\'s template parameters')
+        self.link_offset = member_hook.template_argument(2).cast(self.size_t)
+        self.root = ref['holder']['root']['parent_']
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['left_']):
+                yield n
+
+            node_ptr = node.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+
+            for n in self.__visit(node['right_']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
+class intrusive_set_external_comparator:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        self.node_type = container_type.template_argument(0)
+        self.link_offset = container_type.template_argument(1).cast(self.size_t)
+        self.root = ref['_header']['parent_']
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['left_']):
+                yield n
+
+            node_ptr = node.cast(self.size_t) - self.link_offset
+            yield node_ptr.cast(self.node_type.pointer()).dereference()
+
+            for n in self.__visit(node['right_']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
 class std_array:
     def __init__(self, ref):
         self.ref = ref
@@ -120,6 +171,96 @@ class sstring_printer(gdb.printing.PrettyPrinter):
     def display_hint(self):
         return 'string'
 
+class managed_bytes_printer(gdb.printing.PrettyPrinter):
+    'print a managed_bytes'
+    def __init__(self, val):
+        self.val = val
+
+    def bytes(self):
+        def signed_chr(c):
+            return int(c).to_bytes(1, byteorder='little', signed=True)
+        if self.val['_u']['small']['size'] >= 0:
+            array = self.val['_u']['small']['data']
+            len = int(self.val['_u']['small']['size'])
+            return b''.join([signed_chr(array[x]) for x in range(len)])
+        else:
+            ref = self.val['_u']['ptr']
+            chunks = list()
+            while ref['ptr']:
+                array = ref['ptr']['data']
+                len = int(ref['ptr']['frag_size'])
+                ref = ref['ptr']['next']
+                chunks.append(b''.join([signed_chr(array[x]) for x in range(len)]))
+            return b''.join(chunks)
+
+    def to_string(self):
+        return str(self.bytes())
+
+    def display_hint(self):
+        return 'managed_bytes'
+
+class partition_entry_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        versions = list()
+        v = self.val['_version']['_version']
+        while v:
+            versions.append('@%s: %s' % (v, v.dereference()))
+            v = v['_next']
+        return '{_snapshot=%s, _version=%s, versions=[\n%s\n]}' % (self.val['_snapshot'], self.val['_version'], ',\n'.join(versions))
+
+    def display_hint(self):
+        return 'partition_entry'
+
+class mutation_partition_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        rows = list(str(r) for r in intrusive_set_external_comparator(self.val['_rows']))
+        range_tombstones = list(str(r) for r in intrusive_set(self.val['_row_tombstones']['_tombstones']))
+        return '{_tombstone=%s, _static_row=%s (cont=%s), _row_tombstones=[%s], _rows=[%s]}' % (
+            self.val['_tombstone'],
+            self.val['_static_row'],
+            ('no', 'yes')[self.val['_static_row_continuous']],
+            '\n' + ',\n'.join(range_tombstones) + '\n' if range_tombstones else '',
+            '\n' + ',\n'.join(rows) + '\n' if rows else '')
+
+    def display_hint(self):
+        return 'mutation_partition'
+
+class row_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        if self.val['_type'] == gdb.parse_and_eval('row::storage_type::vector'):
+            cells = str(self.val['_storage']['vector'])
+        elif self.val['_type'] == gdb.parse_and_eval('row::storage_type::set'):
+            cells = '[%s]' % (', '.join(str(cell) for cell in intrusive_set(self.val['_storage']['set'])))
+        else:
+            raise Exception('Unsupported storage type: ' + self.val['_type'])
+        return '{type=%s, cells=%s}' % (self.val['_type'], cells)
+
+    def display_hint(self):
+        return 'row'
+
+class managed_vector_printer(gdb.printing.PrettyPrinter):
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        size = int(self.val['_size'])
+        items = list()
+        for i in range(size):
+            items.append(str(self.val['_data'][i]))
+        return '{size=%d, items=[%s]}' % (size, ', '.join(items))
+
+    def display_hint(self):
+        return 'managed_vector'
+
 class uuid_printer(gdb.printing.PrettyPrinter):
     'print a uuid'
     def __init__(self, val):
@@ -135,6 +276,11 @@ class uuid_printer(gdb.printing.PrettyPrinter):
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
     pp.add_printer('sstring', r'^seastar::basic_sstring<char,.*>$', sstring_printer)
+    pp.add_printer('managed_bytes', r'^managed_bytes$', managed_bytes_printer)
+    pp.add_printer('partition_entry', r'^partition_entry$', partition_entry_printer)
+    pp.add_printer('mutation_partition', r'^mutation_partition$', mutation_partition_printer)
+    pp.add_printer('row', r'^row$', row_printer)
+    pp.add_printer('managed_vector', r'^managed_vector<.*>$', managed_vector_printer)
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
