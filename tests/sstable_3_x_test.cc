@@ -2838,3 +2838,21 @@ SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
     assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
+/*
+ * Test files taken from write_many_range_tombstones test
+ */
+SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
+    sstring table_name = "range_tombstones_only_index";
+    // CREATE TABLE range_tombstones_only_index (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+}
+
