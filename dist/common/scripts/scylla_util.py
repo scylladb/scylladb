@@ -405,7 +405,7 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        return self._cfg.get('global', key)
+        return self._cfg.get('global', key).strip('"')
 
     def set(self, key, val):
         if not self._cfg.has_option('global', key):
