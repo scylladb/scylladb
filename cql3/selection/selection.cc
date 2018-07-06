@@ -350,11 +350,12 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
         switch (cdef->kind) {
         case column_kind::static_column:
             // fallthrough
-        case column_kind::regular_column:
+        case column_kind::regular_column: {
+            auto& cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
             if (cdef->type->is_multi_cell()) {
+                cell_iterator.next_collection_cell();
                 rlogger.debug("Multi-cell filtering is not implemented yet", cdef->name_as_text());
             } else {
-                auto cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
                 auto cell = cell_iterator.next_atomic_cell();
 
                 auto restr_it = non_pk_restrictions_map.find(cdef);
@@ -376,6 +377,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
                     return false;
                 }
 
+            }
             }
             break;
         case column_kind::partition_key: {
