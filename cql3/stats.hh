@@ -41,6 +41,10 @@ struct cql_stats {
     int64_t secondary_index_drops = 0;
     int64_t secondary_index_reads = 0;
     int64_t secondary_index_rows_read = 0;
+
+    int64_t filtered_reads = 0;
+    int64_t filtered_rows_matched_total = 0;
+    int64_t filtered_rows_read_total = 0;
 };
 
 }
