@@ -847,6 +847,8 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                 try {
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
                     injector.cancel();
+                    assert_that(m).is_equal_to(expected)
+                        .has_same_continuity(expected);
                 } catch (const std::bad_alloc&) {
                     auto&& s = *gen.schema();
                     auto c1 = m.partition().get_continuity(s);
@@ -855,15 +857,14 @@ SEASTAR_TEST_CASE(test_apply_monotonically_is_monotonic) {
                     actual.add(s, c1);
                     actual.add(s, c2);
                     auto expected_cont = expected.partition().get_continuity(s);
-                    if (!actual.equals(s, expected_cont)) {
-                        BOOST_FAIL(sprint("Continuity differs, expected %s (%s + %s), got %s (%s + %s)",
+                    if (!actual.contained_in(expected_cont)) {
+                        BOOST_FAIL(sprint("Continuity should be contained in the expected one, expected %s (%s + %s), got %s (%s + %s)",
                             expected_cont, target.partition().get_continuity(s), second.partition().get_continuity(s),
                             actual, c1, c2));
                     }
                     m.partition().apply_monotonically(*m.schema(), std::move(m2), no_cache_tracker);
+                    assert_that(m).is_equal_to(expected);
                 }
-                assert_that(m).is_equal_to(expected)
-                    .has_same_continuity(expected);
             } while (injector.failed());
         });
     };
