@@ -164,26 +164,6 @@ public:
         return s;
     }
 
-    cql3::raw_value read_value(uint8_t version) {
-        auto len = read_int();
-        if (len < 0) {
-            if (version < 4) {
-                return cql3::raw_value::make_null();
-            }
-            if (len == -1) {
-                return cql3::raw_value::make_null();
-            } else if (len == -2) {
-                return cql3::raw_value::make_unset_value();
-            } else {
-                throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
-            }
-        }
-        check_room(len);
-        bytes b(reinterpret_cast<const int8_t*>(_in.begin()), len);
-        _in.remove_prefix(len);
-        return cql3::raw_value::make_value(std::move(b));
-    }
-
     cql3::raw_value_view read_value_view(uint8_t version) {
         auto len = read_int();
         if (len < 0) {
