@@ -461,13 +461,17 @@ void mutation_partition::apply_insert(const schema& s, clustering_key_view key, 
     clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
 }
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
-    auto e = current_allocator().construct<rows_entry>(key, std::move(row));
+    auto e = alloc_strategy_unique_ptr<rows_entry>(
+        current_allocator().construct<rows_entry>(key, std::move(row)));
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
+    e.release();
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
-    auto e = current_allocator().construct<rows_entry>(s, key, row);
+    auto e = alloc_strategy_unique_ptr<rows_entry>(
+        current_allocator().construct<rows_entry>(s, key, row));
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
+    e.release();
 }
 
 const row*
@@ -483,9 +487,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(std::move(key));
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(std::move(key)));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -494,9 +499,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(key));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -505,9 +511,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(key));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -516,9 +523,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     auto i = _rows.find(pos, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(s, pos, dummy, continuous);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }

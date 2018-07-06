@@ -124,7 +124,7 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     if (i == partitions.end() || !key.equal(*_schema, i->key())) {
         memtable_entry* entry = current_allocator().construct<memtable_entry>(
             _schema, dht::decorated_key(key), mutation_partition(_schema));
-        i = partitions.insert(i, *entry);
+        partitions.insert_before(i, *entry);
         return entry->partition();
     } else {
         upgrade_entry(*i);
