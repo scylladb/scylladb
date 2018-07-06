@@ -338,6 +338,7 @@ class index_reader {
         uint64_t current_pi_idx = 0; // Points to upper bound of the cursor.
         uint64_t data_file_position = 0;
         indexable_element element = indexable_element::partition;
+        std::optional<deletion_time> end_open_marker;
     };
 
     index_bound _lower_bound;
@@ -350,6 +351,7 @@ private:
         bound.data_file_position = data_file_end();
         bound.element = indexable_element::partition;
         bound.current_list = {};
+        bound.end_open_marker.reset();
     }
 
     // Must be called for non-decreasing summary_idx.
@@ -398,6 +400,7 @@ private:
             bound.current_pi_idx = 0;
             bound.data_file_position = (*bound.current_list)[0].position();
             bound.element = indexable_element::partition;
+            bound.end_open_marker.reset();
 
             if (sstlog.is_enabled(seastar::log_level::trace)) {
                 sstlog.trace("index {} bound {}: page:", this, &bound);
@@ -462,6 +465,7 @@ private:
             bound.current_pi_idx = 0;
             bound.data_file_position = (*bound.current_list)[bound.current_index_idx].position();
             bound.element = indexable_element::partition;
+            bound.end_open_marker.reset();
             return make_ready_future<>();
         }
         auto& summary = _sstable->get_summary();
@@ -529,6 +533,7 @@ private:
             bound.current_pi_idx = 0;
             bound.data_file_position = i->position();
             bound.element = indexable_element::partition;
+            bound.end_open_marker.reset();
             sstlog.trace("index {}: new page index = {}, pos={}", this, bound.current_index_idx, bound.data_file_position);
             return make_ready_future<>();
         });
@@ -707,6 +712,7 @@ public:
 
             _lower_bound.data_file_position = e.position() + i->offset();
             _lower_bound.element = indexable_element::cell;
+            _lower_bound.end_open_marker = i->end_open_marker();
             sstlog.trace("index {}: lower bound skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
             return make_ready_future<>();
@@ -720,6 +726,7 @@ public:
             }
             _lower_bound.data_file_position = e.position() + i->offset();
             _lower_bound.element = indexable_element::cell;
+            _lower_bound.end_open_marker = i->end_open_marker();
             sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
             return make_ready_future<>();
@@ -779,6 +786,10 @@ public:
     // Returns the kind of sstable element the cursor is pointing at.
     indexable_element element_kind() const {
         return _lower_bound.element;
+    }
+
+    std::optional<deletion_time> end_open_marker() const {
+        return _lower_bound.end_open_marker;
     }
 
     bool eof() const {

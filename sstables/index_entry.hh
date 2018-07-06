@@ -109,6 +109,7 @@ public:
     promoted_index_block_position end(const schema& s) const { return get_position(s, _end);}
     uint64_t offset() const { return _offset; }
     uint64_t width() const { return _width; }
+    std::optional<deletion_time> end_open_marker() const { return _end_open_marker; }
 
 };
 
