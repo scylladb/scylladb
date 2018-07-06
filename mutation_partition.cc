@@ -294,6 +294,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     auto p_i = p._rows.begin();
     auto i = _rows.begin();
     while (p_i != p._rows.end()) {
+      try {
         rows_entry& src_e = *p_i;
         if (i != _rows.end() && less(*i, src_e)) {
             i = _rows.lower_bound(src_e, less);
@@ -341,6 +342,16 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
             p_i->set_continuous(false);
             return stop_iteration::no;
         }
+      } catch (...) {
+          // We cannot leave p with the clustering range up to p_i->position()
+          // marked as continuous because some of its sub-ranges may have originally been discontinuous.
+          // This would result in the sum of this and p to have broader continuity after preemption,
+          // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
+          // if that's what we're merging here.
+          // It's always safe to mark the range as discontinuous.
+          p_i->set_continuous(false);
+          throw;
+      }
     }
     return stop_iteration::yes;
 }
