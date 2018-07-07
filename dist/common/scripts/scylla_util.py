@@ -255,37 +255,24 @@ class scylla_cpuinfo:
             return len(self._cpu_data["system"])
 
 def run(cmd, shell=False, silent=False, exception=True):
-    stdout=None
-    stderr=None
-    if silent:
-        stdout=subprocess.DEVNULL
-        stderr=subprocess.DEVNULL
-    if shell:
-        if exception:
-            return subprocess.check_call(cmd, shell=True, stdout=stdout, stderr=stderr)
-        else:
-            p = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
-            return p.wait()
+    stdout=subprocess.DEVNULL if silent else None
+    stderr=subprocess.DEVNULL if silent else None
+    if not shell:
+        cmd = shlex.split(cmd)
+    if exception:
+        return subprocess.check_call(cmd, shell=shell, stdout=stdout, stderr=stderr)
     else:
-        if exception:
-            return subprocess.check_call(shlex.split(cmd), stdout=stdout, stderr=stderr)
-        else:
-            p = subprocess.Popen(shlex.split(cmd), stdout=stdout, stderr=stderr)
-            return p.wait()
+        p = subprocess.Popen(cmd, shell=shell, stdout=stdout, stderr=stderr)
+        return p.wait()
 
 def out(cmd, shell=False, exception=True):
-    if shell:
-        if exception:
-            return subprocess.check_output(cmd, shell=True).strip().decode('utf-8')
-        else:
-            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-            return p.communicate()[0].strip().decode('utf-8')
+    if not shell:
+        cmd = shlex.split(cmd)
+    if exception:
+        return subprocess.check_output(cmd, shell=shell).strip().decode('utf-8')
     else:
-        if exception:
-            return subprocess.check_output(shlex.split(cmd)).strip().decode('utf-8')
-        else:
-            p = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE)
-            return p.communicate()[0].strip().decode('utf-8')
+        p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE)
+        return p.communicate()[0].strip().decode('utf-8')
 
 def is_debian_variant():
     return os.path.exists('/etc/debian_version')
