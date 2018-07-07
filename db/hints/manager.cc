@@ -36,6 +36,8 @@
 #include "lister.hh"
 #include "db/timeout_clock.hh"
 
+using namespace std::literals::chrono_literals;
+
 namespace db {
 namespace hints {
 
@@ -387,7 +389,10 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
             return _proxy.send_to_endpoint(std::move(m), end_point_key(), { }, write_type::SIMPLE);
         } else {
             manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", end_point_key());
-            return _proxy.mutate({std::move(m)}, consistency_level::ALL, nullptr);
+            // FIXME: using 1h as infinite timeout. If a node is down, we should get an
+            // unavailable exception.
+            auto timeout = db::timeout_clock::now() + 1h;
+            return _proxy.mutate({std::move(m)}, consistency_level::ALL, timeout, nullptr);
         }
     });
 }

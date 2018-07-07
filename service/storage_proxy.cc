@@ -1384,7 +1384,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
 }
 
 template<typename Range>
-future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
+future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     if (boost::empty(mutations)) {
         return make_ready_future<>();
     }
@@ -1402,7 +1402,6 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     }
 
     // Forward mutations to the leaders chosen for them
-    auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().counter_write_request_timeout_in_ms());
     auto my_address = utils::fb_utilities::get_broadcast_address();
     return parallel_for_each(leaders, [this, cl, timeout, tr_state = std::move(tr_state), my_address] (auto& endpoint_and_mutations) {
         auto endpoint = endpoint_and_mutations.first;
@@ -1455,17 +1454,17 @@ static thread_local auto mutate_stage = seastar::make_execution_stage("storage_p
  * @param consistency_level the consistency level for the operation
  * @param tr_state trace state handle
  */
-future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters) {
-    return mutate_stage(this, std::move(mutations), cl, std::move(tr_state), raw_counters);
+future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters) {
+    return mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
 }
 
-future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters) {
+future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters) {
     auto mid = raw_counters ? mutations.begin() : boost::range::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     });
     return seastar::when_all_succeed(
-        mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state),
-        mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state)
+        mutate_counters(boost::make_iterator_range(mutations.begin(), mid), cl, tr_state, timeout),
+        mutate_internal(boost::make_iterator_range(mid, mutations.end()), cl, false, tr_state, timeout)
     );
 }
 
@@ -1509,6 +1508,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
 
 future<>
 storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
+    clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
 #if 0
@@ -1519,9 +1519,9 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
 #endif
     if (should_mutate_atomically) {
         assert(!raw_counters);
-        return mutate_atomically(std::move(mutations), cl, std::move(tr_state));
+        return mutate_atomically(std::move(mutations), cl, timeout, std::move(tr_state));
     }
-    return mutate(std::move(mutations), cl, std::move(tr_state), raw_counters);
+    return mutate(std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
 #if 0
     }
 #endif
@@ -1537,7 +1537,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state) {
+storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
 
     utils::latency_counter lc;
     lc.start();
@@ -1546,6 +1546,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         storage_proxy& _p;
         std::vector<mutation> _mutations;
         db::consistency_level _cl;
+        clock_type::time_point _timeout;
         tracing::trace_state_ptr _trace_state;
         storage_proxy::stats& _stats;
 
@@ -1553,10 +1554,11 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         const std::unordered_set<gms::inet_address> _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, std::vector<mutation>&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state)
+        context(storage_proxy & p, std::vector<mutation>&& mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state)
                 : _p(p)
                 , _mutations(std::move(mutations))
                 , _cl(cl)
+                , _timeout(timeout)
                 , _trace_state(std::move(tr_state))
                 , _stats(p._stats)
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
@@ -1585,7 +1587,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats);
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
-                return _p.mutate_begin(std::move(ids), cl, _stats);
+                return _p.mutate_begin(std::move(ids), cl, _stats, _timeout);
             });
         }
         future<> sync_write_to_batchlog() {
@@ -1611,15 +1613,15 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state).then([this] (std::vector<unique_response_handler> ids) {
                 return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
-                    return _p.mutate_begin(std::move(ids), _cl, _stats);
+                    return _p.mutate_begin(std::move(ids), _cl, _stats, _timeout);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
     };
 
-    auto mk_ctxt = [this, tr_state] (std::vector<mutation> mutations, db::consistency_level cl) mutable {
+    auto mk_ctxt = [this, tr_state, timeout] (std::vector<mutation> mutations, db::consistency_level cl) mutable {
       try {
-          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, std::move(tr_state)));
+          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), cl, timeout, std::move(tr_state)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }

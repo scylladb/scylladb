@@ -160,11 +160,11 @@ future<> modification_statement::check_access(const service::client_state& state
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
+modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, tracing::trace_state_ptr trace_state) {
     auto json_cache = maybe_prepare_json_cache(options);
     auto keys = make_lw_shared(build_partition_keys(options, json_cache));
     auto ranges = make_lw_shared(create_clustering_ranges(options, json_cache));
-    return make_update_parameters(proxy, keys, ranges, options, local, now, std::move(trace_state)).then(
+    return make_update_parameters(proxy, keys, ranges, options, timeout, local, now, std::move(trace_state)).then(
             [this, keys, ranges, now, json_cache = std::move(json_cache)] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
@@ -186,10 +186,11 @@ modification_statement::make_update_parameters(
         lw_shared_ptr<dht::partition_range_vector> keys,
         lw_shared_ptr<query::clustering_row_ranges> ranges,
         const query_options& options,
+        db::timeout_clock::time_point timeout,
         bool local,
         int64_t now,
         tracing::trace_state_ptr trace_state) {
-    return read_required_rows(proxy, *keys, std::move(ranges), local, options, std::move(trace_state)).then(
+    return read_required_rows(proxy, *keys, std::move(ranges), local, options, timeout, std::move(trace_state)).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -275,6 +276,7 @@ modification_statement::read_required_rows(
         lw_shared_ptr<query::clustering_row_ranges> ranges,
         bool local,
         const query_options& options,
+        db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr trace_state) {
     if (!requires_read()) {
         return make_ready_future<update_parameters::prefetched_rows_type>(
@@ -308,7 +310,6 @@ modification_statement::read_required_rows(
                 query::partition_slice::option::collections_as_maps>());
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
-    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     return proxy.query(s, make_lw_shared(std::move(cmd)), std::move(keys),
             cl, {timeout, std::move(trace_state)}).then([this, ps] (auto qr) {
         return query::result_view::do_with(*qr.query_result, [&] (query::result_view v) {
@@ -408,12 +409,13 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
         db::validate_for_write(s->ks_name(), cl);
     }
 
-    return get_mutations(proxy, options, false, options.get_timestamp(qs), qs.get_trace_state()).then([this, cl, &proxy, &qs] (auto mutations) {
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    return get_mutations(proxy, options, timeout, false, options.get_timestamp(qs), qs.get_trace_state()).then([this, cl, timeout, &proxy, &qs] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
 
-        return proxy.mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
+        return proxy.mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
     });
 }
 

@@ -206,6 +206,7 @@ protected:
                 lw_shared_ptr<query::clustering_row_ranges> ranges,
                 bool local,
                 const query_options& options,
+                db::timeout_clock::time_point now,
                 tracing::trace_state_ptr trace_state);
 private:
     future<::shared_ptr<cql_transport::messages::result_message>>
@@ -349,7 +350,7 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now, tracing::trace_state_ptr trace_state);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, tracing::trace_state_ptr trace_state);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
@@ -357,6 +358,7 @@ public:
                 lw_shared_ptr<dht::partition_range_vector> keys,
                 lw_shared_ptr<query::clustering_row_ranges> ranges,
                 const query_options& options,
+                db::timeout_clock::time_point timeout,
                 bool local,
                 int64_t now,
                 tracing::trace_state_ptr trace_state);
