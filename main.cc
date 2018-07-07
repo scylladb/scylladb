@@ -388,7 +388,7 @@ int main(int ac, char** av) {
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
-            stdx::optional<std::vector<sstring>> hinted_handoff_enabled = cfg->experimental() ? parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled()) : stdx::nullopt;
+            stdx::optional<std::vector<sstring>> hinted_handoff_enabled = parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled());
             auto prom_addr = [&] {
                 try {
                     return seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
@@ -730,7 +730,11 @@ int main(int ac, char** av) {
             api::set_server_gossip_settle(ctx).get();
 
             supervisor::notify("starting hinted handoff manager");
-            db::hints::manager::rebalance().get();
+            if (hinted_handoff_enabled) {
+                db::hints::manager::rebalance(cfg->hints_directory()).get();
+            }
+            db::hints::manager::rebalance(cfg->data_file_directories()[0] + "/view_pending_updates").get();
+
             proxy.invoke_on_all([] (service::storage_proxy& local_proxy) {
                 local_proxy.start_hints_manager(gms::get_local_gossiper().shared_from_this(), service::get_local_storage_service().shared_from_this());
             }).get();

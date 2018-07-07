@@ -579,7 +579,7 @@ public:
             "The time interval for how often the snitch calculates node scores. Because score calculation is CPU intensive, be careful when reducing this interval."  \
     )   \
     val(hinted_handoff_enabled, sstring, "false", Used,     \
-            "Experimental: enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. " \
+            "Enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. " \
             "Related information: About hinted handoff writes"  \
     )   \
     val(hinted_handoff_throttle_in_kb, uint32_t, 1024, Unused,     \
