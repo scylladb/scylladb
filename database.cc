@@ -1501,7 +1501,7 @@ future<> table::run_compaction(sstables::compaction_descriptor descriptor) {
 }
 
 void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
-    dblog.info0("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
+    dblog.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
     _compaction_manager.register_backlog_tracker(new_cs.get_backlog_tracker());
