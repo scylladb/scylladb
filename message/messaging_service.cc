@@ -236,11 +236,12 @@ bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
 // Register a handler (a callback lambda) for verb
 template <typename Func>
 void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
-    ms->rpc()->register_handler(verb, std::move(func));
+    ms->rpc()->register_handler(verb, ms->scheduling_group_for_verb(verb), std::move(func));
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port, bool listen_now)
-    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000}, false, listen_now)
+    : messaging_service(std::move(ip), port, encrypt_what::none, compress_what::none, tcp_nodelay_what::all, 0, nullptr, memory_config{1'000'000},
+            scheduling_config{}, false, listen_now)
 {}
 
 static
@@ -310,6 +311,7 @@ messaging_service::messaging_service(gms::inet_address ip
         , uint16_t ssl_port
         , std::shared_ptr<seastar::tls::credentials_builder> credentials
         , messaging_service::memory_config mcfg
+        , scheduling_config scfg
         , bool sltba
         , bool listen_now)
     : _listen_address(ip)
@@ -322,6 +324,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
     , _mcfg(mcfg)
+    , _scheduling_config(scfg)
 {
     _rpc->set_logger([] (const sstring& log) {
             rpc_logger.info("{}", log);
@@ -408,6 +411,17 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
         idx = 3;
     }
     return idx;
+}
+
+scheduling_group
+messaging_service::scheduling_group_for_verb(messaging_verb verb) const {
+    static const scheduling_group scheduling_config::*idx_to_group[] = {
+        &scheduling_config::statement,
+        &scheduling_config::gossip,
+        &scheduling_config::streaming,
+        &scheduling_config::statement,
+    };
+    return _scheduling_config.*(idx_to_group[get_rpc_client_idx(verb)]);
 }
 
 /**

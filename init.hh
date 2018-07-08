@@ -38,6 +38,13 @@ extern logging::logger startlog;
 class bad_configuration_error : public std::exception {};
 
 void init_storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
+
+struct init_scheduling_config {
+    scheduling_group streaming;
+    scheduling_group statement;
+    scheduling_group gossip;
+};
+
 void init_ms_fd_gossiper(sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
@@ -51,6 +58,7 @@ void init_ms_fd_gossiper(sstring listen_address
                 , sstring ms_compress
                 , db::seed_provider_type seed_provider
                 , size_t available_memory
+                , init_scheduling_config scheduling_config
                 , sstring cluster_name = "Test Cluster"
                 , double phi = 8
                 , bool sltba = false);

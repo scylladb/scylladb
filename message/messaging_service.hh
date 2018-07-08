@@ -184,6 +184,12 @@ public:
         size_t rpc_memory_limit = 1'000'000;
     };
 
+    struct scheduling_config {
+        scheduling_group statement;
+        scheduling_group streaming;
+        scheduling_group gossip;
+    };
+
 private:
     gms::inet_address _listen_address;
     uint16_t _port;
@@ -203,7 +209,7 @@ private:
     bool _stopping = false;
     std::list<std::function<void(gms::inet_address ep)>> _connection_drop_notifiers;
     memory_config _mcfg;
-
+    scheduling_config _scheduling_config;
 public:
     using clock_type = lowres_clock;
 public:
@@ -211,7 +217,7 @@ public:
             uint16_t port = 7000, bool listen_now = true);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what, compress_what, tcp_nodelay_what,
             uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>,
-            memory_config mcfg, bool sltba = false, bool listen_now = true);
+            memory_config mcfg, scheduling_config scfg, bool sltba = false, bool listen_now = true);
     ~messaging_service();
 public:
     void start_listen();
@@ -360,6 +366,7 @@ public:
     void unregister_connection_drop_notifier(drop_notifier_handler h);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
     static msg_addr get_source(const rpc::client_info& client);
+    scheduling_group scheduling_group_for_verb(messaging_verb verb) const;
 };
 
 extern distributed<messaging_service> _the_messaging_service;
