@@ -38,7 +38,7 @@ class bytes_ostream {
 public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
-    static constexpr size_type max_chunk_size() { return 16 * 1024; }
+    static constexpr size_type max_chunk_size() { return 128 * 1024; }
 private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
     struct chunk {
