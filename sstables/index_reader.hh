@@ -92,11 +92,9 @@ private:
 
     trust_promoted_index _trust_pi;
     const schema& _s;
-    const sstable_version_types _version;
+    std::optional<column_values_fixed_lengths> _ck_values_fixed_lengths;
 
-    bool is_mc_format() const {
-        return _version == sstable_version_types::mc;
-    }
+    inline bool is_mc_format() const { return static_cast<bool>(_ck_values_fixed_lengths); }
 
 public:
     void verify_end_state() {
@@ -184,10 +182,19 @@ public:
             }
         state_CONSUME_ENTRY:
         case state::CONSUME_ENTRY: {
-            auto len = (_key.size() + _promoted_index_size + 14);
+            auto entry_header_length = is_mc_format()
+                    ? sizeof(uint16_t) + unsigned_vint::serialized_size(_position) + unsigned_vint::serialized_size(_promoted_index_size)
+                    : sizeof(uint16_t) + sizeof(uint64_t) + sizeof(uint32_t);
+            auto len = entry_header_length + _key.size() + _promoted_index_size;
+            size_t delta = 0;
             if (_deletion_time) {
                 _num_pi_blocks = get_uint32();
-                _promoted_index_size -= 16;
+                delta = is_mc_format()
+                        ? (unsigned_vint::serialized_size(_partition_header_length) + sizeof(uint32_t)
+                           + sizeof(uint64_t) + unsigned_vint::serialized_size(_num_pi_blocks))
+                        : sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint32_t);
+
+                _promoted_index_size -= delta;
             }
             auto data_size = data.size();
             std::optional<input_stream<char>> promoted_index_stream;
@@ -199,7 +206,7 @@ public:
                 } else {
                     promoted_index_stream = make_prepended_input_stream(
                             std::move(data),
-                            make_file_input_stream(_index_file, _entry_offset + _key.size() + 30 + data_size,
+                            make_file_input_stream(_index_file, _entry_offset + _key.size() + entry_header_length + delta + data_size,
                                    _promoted_index_size - data_size, _options).detach());
                 }
             } else {
@@ -207,7 +214,14 @@ public:
             }
             std::unique_ptr<promoted_index> index;
             if (promoted_index_stream) {
-                index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream), _promoted_index_size, _num_pi_blocks);
+                if (is_mc_format()) {
+                    index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
+                                  _promoted_index_size,
+                                  _num_pi_blocks, *_ck_values_fixed_lengths);
+                } else {
+                     index = std::make_unique<promoted_index>(_s, *_deletion_time, std::move(*promoted_index_stream),
+                                   _promoted_index_size, _num_pi_blocks);
+                }
             }
             _consumer.consume_entry(index_entry{std::move(_key), _position, std::move(index)}, _entry_offset);
             _entry_offset += len;
@@ -230,10 +244,10 @@ public:
 
     index_consume_entry_context(IndexConsumer& consumer, trust_promoted_index trust_pi, const schema& s,
             file index_file, file_input_stream_options options, uint64_t start,
-            uint64_t maxlen, sstable_version_types version)
+            uint64_t maxlen, std::optional<column_values_fixed_lengths> ck_values_fixed_lengths)
         : continuous_data_consumer(make_file_input_stream(index_file, start, maxlen, options), start, maxlen)
         , _consumer(consumer), _index_file(index_file), _options(options)
-        , _entry_offset(start), _trust_pi(trust_pi), _s(s), _version(version)
+        , _entry_offset(start), _trust_pi(trust_pi), _s(s), _ck_values_fixed_lengths(std::move(ck_values_fixed_lengths))
     {}
 
     void reset(uint64_t offset) {
@@ -308,7 +322,10 @@ class index_reader {
             : _consumer(quantity)
             , _context(_consumer,
                        trust_promoted_index(sst->has_correct_promoted_index_entries()), *sst->_schema, sst->_index_file,
-                       get_file_input_stream_options(sst, pc), begin, end - begin, sst->get_version())
+                       get_file_input_stream_options(sst, pc), begin, end - begin,
+                       (sst->get_version() == sstable_version_types::mc
+                           ? std::make_optional(get_clustering_values_fixed_lengths(sst->get_serialization_header()))
+                           : std::optional<column_values_fixed_lengths>{}))
         { }
     };
 

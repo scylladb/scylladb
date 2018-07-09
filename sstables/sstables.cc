@@ -3597,7 +3597,10 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                 return do_with(summary_generator(_components->summary),
                         [this, &pc, options = std::move(options), index_file, index_size] (summary_generator& s) mutable {
                     auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
-                            s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size, _version);
+                            s, trust_promoted_index::yes, *_schema, index_file, std::move(options), 0, index_size,
+                            (_version == sstable_version_types::mc
+                                ? std::make_optional(get_clustering_values_fixed_lengths(get_serialization_header()))
+                                : std::optional<column_values_fixed_lengths>{}));
                     return ctx->consume_input().finally([ctx] {
                         return ctx->close();
                     }).then([this, ctx, &s] {
