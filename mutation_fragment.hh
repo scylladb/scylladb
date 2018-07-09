@@ -125,7 +125,7 @@ public:
         return _ck.equal(s, other._ck)
                && _t == other._t
                && _marker == other._marker
-               && _cells.equal(column_kind::static_column, s, other._cells, s);
+               && _cells.equal(column_kind::regular_column, s, other._cells, s);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const clustering_row& row);
