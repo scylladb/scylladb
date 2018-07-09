@@ -1995,18 +1995,12 @@ public:
         } catch (rpc::timeout_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
-        } catch(std::exception& e) {
-            why = e.what();
         } catch(...) {
-            why = "Unknown exception";
+            slogger.error("Exception when communicating with {}: {}", ep, eptr);
         }
 
         if (!_request_failed) { // request may fail only once.
             on_error(ep);
-        }
-
-        if (why.length()) {
-            slogger.error("Exception when communicating with {}: {}", ep, why);
         }
     }
 };
