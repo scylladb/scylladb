@@ -20,45 +20,95 @@
  */
 
 #pragma once
+#include <variant>
+#include "position_in_partition.hh"
 #include "consumer.hh"
 #include "types.hh"
+#include "column_translation.hh"
+#include "m_format_read_helpers.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace sstables {
 
-class promoted_index_block {
+using promoted_index_block_position = std::variant<composite_view, position_in_partition_view>;
+
+class promoted_index_block_compare {
+    const position_in_partition::composite_less_compare _cmp;
 public:
+    explicit promoted_index_block_compare(const schema& s) : _cmp{s} {}
+
+    bool operator()(const promoted_index_block_position& lhs, position_in_partition_view rhs) const {
+        return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
+    }
+
+    bool operator()(position_in_partition_view lhs, const promoted_index_block_position& rhs) const {
+        return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
+    }
+
+    bool operator()(const promoted_index_block_position& lhs, composite_view rhs) const {
+        return std::visit([this, rhs] (const auto& pos) { return _cmp(pos, rhs); }, lhs);
+    }
+
+    bool operator()(composite_view lhs, const promoted_index_block_position& rhs) const {
+        return std::visit([this, lhs] (const auto& pos) { return _cmp(lhs, pos); }, rhs);
+    }
+
+    bool operator()(const promoted_index_block_position& lhs, const promoted_index_block_position& rhs) const {
+        return std::visit([this, &lhs] (const auto& pos) { return (*this)(lhs, pos); }, rhs);
+    }
+};
+
+class promoted_index_block {
+    /*
+     * Block bounds are read and stored differently for ka/la and mc formats.
+     * For ka/la formats, we just read and store the whole sequence of bytes representing a 'composite' key,
+     * but for 'mc' we need to parse the clustering key prefix entirely along with its bound_kind.
+     * So we store them as a discriminated union, aka std::variant.
+     * As those representations are used differently for comparing positions in partition,
+     * we expose it through a discriminated union of views.
+     */
+    using bound_storage = std::variant<temporary_buffer<char>, position_in_partition>;
+    bound_storage _start;
+    bound_storage _end;
+    uint64_t _offset;
+    uint64_t _width;
+    std::optional<deletion_time> _end_open_marker;
+
+    inline static
+    promoted_index_block_position get_position(const schema& s, const bound_storage& storage) {
+        return std::visit(overloaded_functor{
+            [&s] (const temporary_buffer<char>& buf) -> promoted_index_block_position {
+                return composite_view{to_bytes_view(buf), s.is_compound()}; },
+            [] (const position_in_partition& pos) -> promoted_index_block_position {
+                return pos;
+            }}, storage);
+    }
+
+public:
+    // Constructor for ka/la format blocks
     promoted_index_block(temporary_buffer<char>&& start, temporary_buffer<char>&& end,
             uint64_t offset, uint64_t width)
         : _start(std::move(start)), _end(std::move(end))
         , _offset(offset), _width(width)
     {}
-    promoted_index_block(const promoted_index_block& rhs)
-        : _start(rhs._start.get(), rhs._start.size()), _end(rhs._end.get(), rhs._end.size())
-        , _offset(rhs._offset), _width(rhs._width)
+    // Constructor for mc format blocks
+    promoted_index_block(position_in_partition&& start, position_in_partition&& end,
+            uint64_t offset, uint64_t width, std::optional<deletion_time>&& end_open_marker)
+        : _start{std::move(start)}, _end{std::move(end)}
+        , _offset{offset}, _width{width}, _end_open_marker{end_open_marker}
     {}
+
+    promoted_index_block(const promoted_index_block&) = delete;
     promoted_index_block(promoted_index_block&&) noexcept = default;
 
-    promoted_index_block& operator=(const promoted_index_block& rhs) {
-        if (this != &rhs) {
-            _start = temporary_buffer<char>(rhs._start.get(), rhs._start.size());
-            _end = temporary_buffer<char>(rhs._end.get(), rhs._end.size());
-            _offset = rhs._offset;
-            _width = rhs._width;
-        }
-        return *this;
-    }
+    promoted_index_block& operator=(const promoted_index_block&) = delete;
     promoted_index_block& operator=(promoted_index_block&&) noexcept = default;
 
-    composite_view start(const schema& s) const { return composite_view(to_bytes_view(_start), s.is_compound());}
-    composite_view end(const schema& s) const { return composite_view(to_bytes_view(_end), s.is_compound());}
+    promoted_index_block_position start(const schema& s) const { return get_position(s, _start);}
+    promoted_index_block_position end(const schema& s) const { return get_position(s, _end);}
     uint64_t offset() const { return _offset; }
     uint64_t width() const { return _width; }
 
-private:
-    temporary_buffer<char> _start;
-    temporary_buffer<char> _end;
-    uint64_t _offset;
-    uint64_t _width;
 };
 
 using promoted_index_blocks = seastar::circular_buffer<promoted_index_block>;
@@ -332,5 +382,10 @@ public:
     }
 };
 
+}
+
+inline std::ostream& operator<<(std::ostream& out, const sstables::promoted_index_block_position& pos) {
+    std::visit([&out] (const auto& pos) mutable { out << pos; }, pos);
+    return out;
 }
 

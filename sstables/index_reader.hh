@@ -555,7 +555,7 @@ private:
         }
 
         const schema& s = *_sstable->_schema;
-        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s), s]
+        auto cmp_with_start = [pos_cmp = promoted_index_block_compare(s), s]
                 (position_in_partition_view pos, const promoted_index_block& info) -> bool {
             return pos_cmp(pos, info.start(s));
         };
@@ -666,7 +666,7 @@ public:
         }
 
         const schema& s = *_sstable->_schema;
-        auto cmp_with_start = [pos_cmp = position_in_partition::composite_less_compare(s), s]
+        auto cmp_with_start = [pos_cmp = promoted_index_block_compare(s), s]
                 (position_in_partition_view pos, const promoted_index_block& info) -> bool {
             return pos_cmp(pos, info.start(s));
         };

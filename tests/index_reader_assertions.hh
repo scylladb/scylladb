@@ -33,7 +33,7 @@ public:
     { }
 
     index_reader_assertions& has_monotonic_positions(const schema& s) {
-        auto pos_cmp = position_in_partition::composite_less_compare(s);
+        auto pos_cmp = sstables::promoted_index_block_compare(s);
         auto rp_cmp = dht::ring_position_comparator(s);
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
@@ -66,7 +66,7 @@ public:
                         }
                         BOOST_FAIL(sprint("Index blocks are not monotonic: %s >= %s", prev.end(s), cur.start(s)));
                     }
-                    cur = prev;
+                    cur = std::move(prev);
                 }
             }
             _r->advance_to_next_partition().get();
