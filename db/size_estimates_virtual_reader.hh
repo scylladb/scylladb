@@ -306,7 +306,7 @@ private:
         };
         dht::token_range_vector ranges;
         compat::unwrap_into(
-            wrapping_range<dht::token>({{ from_bytes(r.start) }}, {{ from_bytes(r.end) }}),
+            wrapping_range<dht::token>({{ from_bytes(r.start), false }}, {{ from_bytes(r.end) }}),
             dht::token_comparator(),
             [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
         for (auto&& r : ranges) {
