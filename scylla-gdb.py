@@ -151,6 +151,26 @@ class std_vector:
     def __bool__(self):
         return self.__nonzero__()
 
+class static_vector:
+    def __init__(self, ref):
+        self.ref = ref
+
+    def __len__(self):
+        return int(self.ref['m_holder']['m_size'])
+
+    def __iter__(self):
+        t = self.ref.type.strip_typedefs()
+        value_type = t.template_argument(0)
+        data = self.ref['m_holder']['storage']['dummy'].cast(value_type.pointer())
+        for i in range(self.__len__()):
+            yield data[i]
+
+    def __nonzero__(self):
+        return self.__len__() > 0
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
