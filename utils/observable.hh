@@ -28,6 +28,26 @@
 
 namespace utils {
 
+// observable/observer - a publish/subscribe utility
+//
+// An observable is an object that can broadcast notifications
+// about changes in some state. An observer listens for such notifications
+// in a particular observable it is connected to. Multiple observers can
+// observe a single observable.
+//
+// A connection between an observer and an observable is established when
+// the observer is constructed (using observable::observe()); from then
+// on their life cycles are separate, either can be moved or destroyed
+// without affecting the other.
+//
+// During construction, the observer specifies how to react to a change
+// in the observable's state by specifying a function to be called on
+// a state change. An observable causes the function to be executed
+// by calling its operator()() method.
+//
+// All observers are called without preemption, so an observer should have
+// a small number of observers.
+
 template <typename... Args>
 class observable {
 public:
@@ -66,6 +86,8 @@ public:
         ~observer() {
             disconnect();
         }
+        // Stops observing the observable immediately, instead of
+        // during destruction.
         void disconnect() {
             if (_observable) {
                 _observable->destroyed(this);
@@ -126,6 +148,8 @@ public:
     }
 };
 
+// An observer<Args...> can receive notifications about changes
+// in an observable<Args...>'s state.
 template <typename... Args>
 using observer = typename observable<Args...>::observer;
 
