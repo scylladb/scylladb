@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <functional>
+#include <seastar/util/noncopyable_function.hh>
 #include <vector>
 #include <boost/range/algorithm/replace.hpp>
 #include <boost/range/algorithm/remove.hpp>
@@ -38,7 +38,7 @@ public:
     class observer {
         friend class observable;
         observable* _observable;
-        std::function<void (Args...)> _callback;
+        seastar::noncopyable_function<void (Args...)> _callback;
     private:
         void moved(observer* from) {
             if (_observable) {
@@ -46,7 +46,7 @@ public:
             }
         }
     public:
-        observer(observable* o, std::function<void (Args...)> callback) noexcept
+        observer(observable* o, seastar::noncopyable_function<void (Args...)> callback) noexcept
                 : _observable(o), _callback(std::move(callback)) {
         }
         observer(observer&& o) noexcept
