@@ -830,7 +830,7 @@ static future<> repair_cf_range(repair_info& ri,
                             live_neighbors_checksum.push_back(checksums[i].get0());
                         }
                     }
-                    if (!checksums[0].available() || live_neighbors.empty() || live_neighbors_checksum.empty()) {
+                    if (checksums[0].failed() || live_neighbors.empty()) {
                         return make_ready_future<>();
                     }
                     // If one of the available checksums is different, repair
