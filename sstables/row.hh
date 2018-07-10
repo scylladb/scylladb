@@ -164,7 +164,8 @@ public:
                                    bytes_view value,
                                    api::timestamp_type timestamp,
                                    gc_clock::duration ttl,
-                                   gc_clock::time_point local_deletion_time) = 0;
+                                   gc_clock::time_point local_deletion_time,
+                                   bool is_deleted) = 0;
 
     virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
                                                  tombstone tomb) = 0;
@@ -1025,7 +1026,8 @@ public:
                                              to_bytes_view(_column_value),
                                              _column_timestamp,
                                              _column_ttl,
-                                             _column_local_deletion_time) == consumer_m::proceed::no) {
+                                             _column_local_deletion_time,
+                                             _column_flags.is_deleted()) == consumer_m::proceed::no) {
                     return consumer_m::proceed::no;
                 }
             }
