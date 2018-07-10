@@ -1281,7 +1281,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
         .produces_end_of_stream();
 }
 
-// Following tests run on files in tests/sstables/3.x/uncompressed/simple
+// Following tests run on files in tests/sstables/3.x/uncompressed/compound_ck
 // They were created using following CQL statements:
 //
 // CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
