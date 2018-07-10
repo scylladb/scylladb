@@ -3264,3 +3264,66 @@ SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, f list<int>, g set<int>, PRIMARY KEY(a, b));").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 1, 1, 1, 1, [1], {})").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 2, 3, 4, 5, [1, 2], {1, 2, 3})").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 3, 5, 1, 9, [1, 2, 3], {1, 2})").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e, f, g) VALUES (1, 4, 5, 7, 5, [], {1})").get();
+
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE c = 5").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE d = 1").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE e = 5").get(), exceptions::invalid_request_exception);
+
+        // Collection filtering queries are not supported yet
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE f contains 2").get(), exceptions::invalid_request_exception);
+        BOOST_CHECK_THROW(e.execute_cql("SELECT * FROM t WHERE g contains 1").get(), exceptions::invalid_request_exception);
+
+        auto msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 3 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(1),
+            int32_type->decompose(2),
+            int32_type->decompose(3),
+            int32_type->decompose(4),
+            int32_type->decompose(5)
+        }});
+
+        msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE e >= 5 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(3),
+                int32_type->decompose(4),
+                int32_type->decompose(5)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(3),
+                int32_type->decompose(5),
+                int32_type->decompose(1),
+                int32_type->decompose(9)
+           },
+           {
+                int32_type->decompose(1),
+                int32_type->decompose(4),
+                int32_type->decompose(5),
+                int32_type->decompose(7),
+                int32_type->decompose(5)
+           }
+        });
+
+        msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 5 and e = 9 and d = 1 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({{
+            int32_type->decompose(1),
+            int32_type->decompose(3),
+            int32_type->decompose(5),
+            int32_type->decompose(1),
+            int32_type->decompose(9)
+        }});
+    });
+}
