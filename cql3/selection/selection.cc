@@ -354,7 +354,11 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
             auto& cell_iterator = (cdef->kind == column_kind::static_column) ? static_row_iterator : row_iterator;
             if (cdef->type->is_multi_cell()) {
                 cell_iterator.next_collection_cell();
-                rlogger.debug("Multi-cell filtering is not implemented yet", cdef->name_as_text());
+                auto restr_it = non_pk_restrictions_map.find(cdef);
+                if (restr_it == non_pk_restrictions_map.end()) {
+                    continue;
+                }
+                throw exceptions::invalid_request_exception("Collection filtering is not supported yet");
             } else {
                 auto cell = cell_iterator.next_atomic_cell();
 
