@@ -1279,10 +1279,14 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
             }
         })();
         if (engine().cpu_id() != 0) {
-            return make_ready_future();
+            // Shard 0 can't remove the entry in the build progress system table on behalf of the
+            // current shard, since shard 0 may have already processed the notification, and this
+            // shard may since have updated the system table if the drop happened concurrently
+            // with the build.
+            return system_keyspace::remove_view_build_progress(ks_name, view_name);
         }
         return when_all_succeed(
-                    system_keyspace::remove_view_build_progress_across_all_shards(ks_name, view_name),
+                    system_keyspace::remove_view_build_progress(ks_name, view_name),
                     system_keyspace::remove_built_view(ks_name, view_name),
                     _sys_dist_ks.remove_view(ks_name, view_name)).handle_exception([ks_name, view_name] (std::exception_ptr ep) {
             vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
@@ -1509,6 +1513,8 @@ future<> view_builder::maybe_mark_view_as_built(view_ptr view, dht::token next_t
                 return seastar::when_all_succeed(
                         system_keyspace::mark_view_as_built(view->ks_name(), view->cf_name()),
                         builder._sys_dist_ks.finish_view_build(view->ks_name(), view->cf_name())).then([view] {
+                    // The view is built, so shard 0 can remove the entry in the build progress system table on
+                    // behalf of all shards. It is guaranteed to have a higher timestamp than the per-shard entries.
                     return system_keyspace::remove_view_build_progress_across_all_shards(view->ks_name(), view->cf_name());
                 }).then([&builder, view] {
                     auto it = builder._build_notifiers.find(std::pair(view->ks_name(), view->cf_name()));
