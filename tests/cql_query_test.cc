@@ -3239,28 +3239,32 @@ SEASTAR_TEST_CASE(test_allow_filtering_static_column) {
         e.execute_cql("INSERT INTO t (a, s) VALUES (3, 3)").get();
         e.execute_cql("INSERT INTO t (a, b, c, s) VALUES (2, 1, 1, 2)").get();
 
-        auto msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 2 ALLOW FILTERING").get0();
-        assert_that(msg).is_rows().with_rows({{
-            int32_type->decompose(2),
-            int32_type->decompose(1),
-            int32_type->decompose(2),
-            int32_type->decompose(1)
-        }});
-
-        msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 1 ALLOW FILTERING").get0();
-        assert_that(msg).is_rows().with_rows({
-            {
-                int32_type->decompose(1),
-                int32_type->decompose(1),
-                int32_type->decompose(1),
-                int32_type->decompose(1)
-            },
-            {
-                int32_type->decompose(1),
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 2 ALLOW FILTERING").get0();
+            assert_that(msg).is_rows().with_rows({{
                 int32_type->decompose(2),
                 int32_type->decompose(1),
+                int32_type->decompose(2),
                 int32_type->decompose(1)
-           }
+            }});
+        });
+
+        eventually([&] {
+            auto msg = e.execute_cql("SELECT * FROM t WHERE c = 1 AND s = 1 ALLOW FILTERING").get0();
+            assert_that(msg).is_rows().with_rows({
+                {
+                    int32_type->decompose(1),
+                    int32_type->decompose(1),
+                    int32_type->decompose(1),
+                    int32_type->decompose(1)
+                },
+                {
+                    int32_type->decompose(1),
+                    int32_type->decompose(2),
+                    int32_type->decompose(1),
+                    int32_type->decompose(1)
+               }
+            });
         });
     });
 }
