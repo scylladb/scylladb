@@ -137,7 +137,7 @@ class build_progress_virtual_reader {
                         mf = range_tombstone(
                                 adjust_ckey(scylla_in_progress_rt.start),
                                 scylla_in_progress_rt.start_kind,
-                                scylla_in_progress_rt.end,
+                                adjust_ckey(scylla_in_progress_rt.end),
                                 scylla_in_progress_rt.end_kind,
                                 scylla_in_progress_rt.tomb);
                     }
