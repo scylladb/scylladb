@@ -212,12 +212,13 @@ statement_restrictions::statement_restrictions(database& db,
     auto& cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     bool has_queriable_clustering_column_index = _clustering_columns_restrictions->has_supporting_index(sim);
+    bool has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim);
     bool has_queriable_index = has_queriable_clustering_column_index
-            || _partition_key_restrictions->has_supporting_index(sim)
+            || has_queriable_pk_index
             || _nonprimary_key_restrictions->has_supporting_index(sim);
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(has_queriable_index, for_view, allow_filtering);
+    process_partition_key_restrictions(has_queriable_pk_index, for_view, allow_filtering);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -237,7 +238,7 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(has_queriable_index, select_a_collection, for_view, allow_filtering);
+    process_clustering_columns_restrictions(has_queriable_clustering_column_index, select_a_collection, for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && has_queriable_clustering_column_index) {
