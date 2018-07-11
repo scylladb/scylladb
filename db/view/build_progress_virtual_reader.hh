@@ -100,14 +100,14 @@ class build_progress_virtual_reader {
             return slice;
         }
 
-        clustering_key adjust_ckey(clustering_key& ck) {
-            if (ck.size(underlying_schema()) < 3) {
-                return std::move(ck);
+        clustering_key adjust_ckey(clustering_key& underlying_ck) {
+            if (underlying_ck.size(underlying_schema()) < 3) {
+                return std::move(underlying_ck);
             }
             // Drop the cpu_id from the clustering key
-            auto end = ck.begin(*_schema);
+            auto end = underlying_ck.begin(underlying_schema());
             std::advance(end, 1);
-            auto r = boost::make_iterator_range(ck.begin(*_schema), std::move(end));
+            auto r = boost::make_iterator_range(underlying_ck.begin(underlying_schema()), std::move(end));
             return clustering_key_prefix::from_exploded(r);
         }
 
