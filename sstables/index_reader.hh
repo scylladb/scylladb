@@ -659,6 +659,11 @@ public:
         sstlog.trace("index {}: advance_to({}), current data_file_pos={}",
                  this, pos, _lower_bound.data_file_position);
 
+        const schema& s = *_sstable->_schema;
+        if (pos.is_before_all_fragments(s)) {
+            return make_ready_future<>();
+        }
+
         if (!partition_data_ready()) {
             return read_partition_data().then([this, pos] {
                 sstlog.trace("index {}: page done", this);
@@ -682,7 +687,6 @@ public:
             return make_ready_future<>();
         }
 
-        const schema& s = *_sstable->_schema;
         auto cmp_with_start = [pos_cmp = promoted_index_block_compare(s), s]
                 (position_in_partition_view pos, const promoted_index_block& info) -> bool {
             return pos_cmp(pos, info.start(s));

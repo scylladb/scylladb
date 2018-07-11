@@ -330,9 +330,6 @@ private:
         if (!pos) {
             return make_ready_future<>();
         }
-        if (pos->is_before_all_fragments(*_schema)) {
-            return make_ready_future<>();
-        }
         assert (_current_partition_key);
         return [this] {
             if (!_index_in_current_partition) {
