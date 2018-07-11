@@ -160,6 +160,7 @@ public:
     const timeout_config& get_timeout_config() const { return _timeout_config; }
     cql3::raw_value_view get_value_at(size_t idx) const;
     cql3::raw_value_view make_temporary(cql3::raw_value value) const;
+    bytes_view linearize(fragmented_temporary_buffer::view) const;
     size_t get_values_count() const;
     bool skip_metadata() const;
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */

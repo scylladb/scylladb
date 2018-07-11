@@ -161,6 +161,23 @@ cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
     return cql3::raw_value_view::make_null();
 }
 
+bytes_view query_options::linearize(fragmented_temporary_buffer::view view) const
+{
+    if (view.empty()) {
+        return { };
+    } else if (std::next(view.begin()) == view.end()) {
+        return *view.begin();
+    } else {
+        auto ptr = _temporaries.write_place_holder(view.size_bytes());
+        auto dst = ptr;
+        using boost::range::for_each;
+        for_each(view, [&] (bytes_view bv) {
+            dst = std::copy(bv.begin(), bv.end(), dst);
+        });
+        return bytes_view(ptr, view.size_bytes());
+    }
+}
+
 bool query_options::skip_metadata() const
 {
     return _skip_metadata;
