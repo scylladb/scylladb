@@ -87,7 +87,7 @@ def run_setup_script(name, script):
     res = run(script, exception=False)
     if res != 0:
         if interactive:
-            print('{red}{name} setup failed. Press any key to continue...{no_color}'.format(red=concolor.BOLD_RED, name=name, no_color=concolor.NO_COLOR))
+            colorprint('{red}{name} setup failed. Press any key to continue...{nocolor}'.format(name=name))
             input()
         else:
             print('{} setup failed.'.format(name))
@@ -175,7 +175,7 @@ if __name__ == '__main__':
     fstrim_setup = not args.no_fstrim_setup
     selinux_reboot_required = False
 
-    print('{green}Skip any of the following steps by answering \'no\'{no_color}'.format(green=concolor.GREEN, no_color=concolor.NO_COLOR))
+    colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
 
     if is_ec2():
         if interactive:

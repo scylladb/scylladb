@@ -1,6 +1,8 @@
-#!/bin/sh
+#!/usr/bin/python3
 #
-# Copyright 2016 ScyllaDB
+# Copyright 2018 ScyllaDB
+#
+
 #
 # This file is part of Scylla.
 #
@@ -17,42 +19,46 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-if [ "`id -u`" -ne 0 ]; then
-    echo "Requires root permission."
-    exit 1
-fi
+import os
+import sys
+import tempfile
+import tarfile
+from scylla_util import *
 
-if [ -f /usr/bin/node_exporter ] || [ -f /usr/bin/prometheus-node_exporter ]; then
-    echo "node_exporter already installed"
-    exit 1
-fi
+VERSION='0.14.0'
+INSTALL_DIR='/usr/lib/scylla/Prometheus/node_exporter'
 
-. /usr/lib/scylla/scylla_lib.sh
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
 
-if is_gentoo_variant; then
-    emerge -uq app-metrics/node_exporter
-    if is_systemd; then
-       echo "app-metrics/node_exporter does not install systemd service files, please fill a bug if you need them."
-    else
-        rc-update add node_exporter default
-        rc-service node_exporter start
-    fi
-else
-    version=0.14.0
-    dir=/usr/lib/scylla/Prometheus/node_exporter
-    mkdir -p $dir
-    cd $dir
-    curl -L https://github.com/prometheus/node_exporter/releases/download/v$version/node_exporter-$version.linux-amd64.tar.gz -o $dir/node_exporter-$version.linux-amd64.tar.gz
-    tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
-    rm $dir/node_exporter-$version.linux-amd64.tar.gz
-    ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
-    . /etc/os-release
+    if os.path.exists('/usr/bin/node_exporter') or os.path.exists('/usr/bin/prometheus-node_exporter'):
+        print('node_exporter already installed')
+        sys.exit(1)
 
-     if is_systemd; then
-        systemctl enable node-exporter
-        systemctl start node-exporter
-    else
-        cat <<EOT >> /etc/init/node_exporter.conf
+    if is_gentoo_variant():
+        run('emerge -uq app-metrics/node_exporter')
+        if is_systemd():
+            print('app-metrics/node_exporter does not install systemd service files, please fill a bug if you need them.')
+            sys.exit(1)
+        else:
+            run('rc-update add node_exporter default')
+            run('rc-service node_exporter start')
+    else:
+        data = curl('https://github.com/prometheus/node_exporter/releases/download/v{version}/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION), byte=True)
+        with open('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION), 'wb') as f:
+            f.write(data)
+        with tarfile.open('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION)) as tf:
+            tf.extractall(INSTALL_DIR)
+        os.remove('/var/tmp/node_exporter-{version}.linux-amd64.tar.gz'.format(version=VERSION))
+        os.symlink('{install_dir}/node_exporter-{version}.linux-amd64/node_exporter'.format(install_dir=INSTALL_DIR, version=VERSION), '/usr/bin/node_exporter')
+        if is_systemd():
+            node_exporter = systemd_unit('node-exporter.service')
+            node_exporter.enable()
+            node_exporter.start()
+        else:
+            conf = '''
 # Run node_exporter
 
 start on startup
@@ -60,9 +66,9 @@ start on startup
 script
    /usr/bin/node_exporter
 end script
-EOT
-        service node_exporter start
-    fi
-fi
+'''[1:-1]
+            with open('/etc/init/node_exporter.conf', 'w') as f:
+                f.write(conf)
+            run('service node_exporter start')
 
-printf "node_exporter successfully installed\n"
+    print('node_exporter successfully installed')

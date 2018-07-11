@@ -29,13 +29,17 @@ import io
 import shlex
 import shutil
 
-def curl(url):
+def curl(url, byte=False):
     max_retries = 5
     retries = 0
     while True:
         try:
             req = urllib.request.Request(url)
-            return urllib.request.urlopen(req).read().decode('utf-8')
+            with urllib.request.urlopen(req) as res:
+                if byte:
+                    return res.read()
+                else:
+                    return res.read().decode('utf-8')
         except urllib.error.HTTPError:
             logging.warn("Failed to grab %s..." % url)
             time.sleep(5)
@@ -80,6 +84,10 @@ class aws_instance:
                 continue
             self._disks[t] += [ self.__xenify(dev) ]
 
+    def __mac_address(self, nic='eth0'):
+        with open('/sys/class/net/{}/address'.format(nic)) as f:
+            return f.read().strip()
+
     def __init__(self):
         self._type = self.__instance_metadata("instance-type")
         self.__populate_disks()
@@ -95,6 +103,25 @@ class aws_instance:
     def instance_class(self):
         """Returns the class of the instance we are running in. i.e.: i3"""
         return self._type.split(".")[0]
+
+    def is_supported_instance_class(self):
+        if self.instance_class() in ['i2', 'i3']:
+            return True
+        return False
+
+    def get_en_interface_type(self):
+        instance_class = self.instance_class()
+        instance_size = self.instance_size()
+        if instance_class in ['c3', 'c4', 'd2', 'i2', 'r3']:
+            return 'ixgbevf'
+        if instance_class in ['c5', 'c5d', 'f1', 'g3', 'h1', 'i3', 'm5', 'm5d', 'p2', 'p3', 'r4', 'x1']:
+            return 'ena'
+        if instance_class == 'm4':
+            if instance_size == '16xlarge':
+                return 'ena'
+            else:
+                return 'ixgbevf'
+        return None
 
     def disks(self):
         """Returns all disks in the system, as visible from the AWS registry"""
@@ -133,6 +160,11 @@ class aws_instance:
     def private_ipv4(self):
         """Returns the private IPv4 address of this instance"""
         return self.__instance_metadata("local-ipv4")
+
+    def is_vpc_enabled(self, nic='eth0'):
+        mac = self.__mac_address(nic)
+        mac_stat = self.__instance_metadata('network/interfaces/macs/{}'.format(mac))
+        return True if re.search(r'^vpc-id$', mac_stat, flags=re.MULTILINE) else False
 
 
 ## Regular expression helpers
@@ -223,37 +255,24 @@ class scylla_cpuinfo:
             return len(self._cpu_data["system"])
 
 def run(cmd, shell=False, silent=False, exception=True):
-    stdout=None
-    stderr=None
-    if silent:
-        stdout=subprocess.DEVNULL
-        stderr=subprocess.DEVNULL
-    if shell:
-        if exception:
-            return subprocess.check_call(cmd, shell=True, stdout=stdout, stderr=stderr)
-        else:
-            p = subprocess.Popen(cmd, shell=True, stdout=stdout, stderr=stderr)
-            return p.wait()
+    stdout=subprocess.DEVNULL if silent else None
+    stderr=subprocess.DEVNULL if silent else None
+    if not shell:
+        cmd = shlex.split(cmd)
+    if exception:
+        return subprocess.check_call(cmd, shell=shell, stdout=stdout, stderr=stderr)
     else:
-        if exception:
-            return subprocess.check_call(shlex.split(cmd), stdout=stdout, stderr=stderr)
-        else:
-            p = subprocess.Popen(shlex.split(cmd), stdout=stdout, stderr=stderr)
-            return p.wait()
+        p = subprocess.Popen(cmd, shell=shell, stdout=stdout, stderr=stderr)
+        return p.wait()
 
 def out(cmd, shell=False, exception=True):
-    if shell:
-        if exception:
-            return subprocess.check_output(cmd, shell=True).strip().decode('utf-8')
-        else:
-            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-            return p.communicate()[0].strip().decode('utf-8')
+    if not shell:
+        cmd = shlex.split(cmd)
+    if exception:
+        return subprocess.check_output(cmd, shell=shell).strip().decode('utf-8')
     else:
-        if exception:
-            return subprocess.check_output(shlex.split(cmd)).strip().decode('utf-8')
-        else:
-            p = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE)
-            return p.communicate()[0].strip().decode('utf-8')
+        p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE)
+        return p.communicate()[0].strip().decode('utf-8')
 
 def is_debian_variant():
     return os.path.exists('/etc/debian_version')
@@ -330,6 +349,45 @@ def is_unused_disk(dev):
     except OSError:
         return False
 
+CONCOLORS = {'green':'\033[1;32m', 'red':'\033[1;31m', 'nocolor':'\033[0m'}
+def colorprint(msg):
+    print(msg.format(**CONCOLORS))
+
+def get_mode_cpu_set(nic, mode):
+    try:
+        mode_cpu_mask=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
+        return hex2list(mode_cpu_mask)
+    except subprocess.CalledProcessError:
+        return '-1'
+
+def get_cur_cpuset():
+    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+    cpuset=cfg.get('CPUSET')
+    return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
+
+def get_tune_mode(nic):
+    if not os.path.exists('/etc/scylla.d/cpuset.conf'):
+        return
+    cur_cpuset=get_cur_cpuset()
+    mq_cpuset=get_mode_cpus_set(nic, 'mq')
+    sq_cpuset=get_mode_cpus_set(nic, 'sq')
+    sq_split_cpuset=get_mode_cpus_set(nic, 'sq_split')
+
+    if cur_cpuset == mq_cpuset:
+        return 'mq'
+    elif cur_cpuset == sq_cpuset:
+        return 'sq'
+    elif cur_cpuset == sq_split_cpuset:
+        return 'sq_split'
+
+def create_perftune_conf(nic='eth0'):
+    if os.path.exists('/etc/scylla.d/perftune.yaml'):
+        return
+    mode=get_tune_mode(nic)
+    yaml=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
+    with open('/etc/scylla.d/perftune.yaml', 'w') as f:
+        f.write(yaml)
+
 class SystemdException(Exception):
     pass
 
@@ -358,8 +416,7 @@ class systemd_unit:
         return run('systemctl disable {}'.format(self._unit))
 
     def is_active(self):
-        res = out('systemctl is-active {}'.format(self._unit), exception=False)
-        return True if re.match(r'^active', res, flags=re.MULTILINE) else False
+        return out('systemctl is-active {}'.format(self._unit), exception=False)
 
     def mask(self):
         return run('systemctl mask {}'.format(self._unit))
@@ -401,9 +458,3 @@ class sysconfig_parser:
     def commit(self):
         with open(self._filename, 'w') as f:
             f.write(self._data)
-
-class concolor:
-    GREEN = '\033[0;32m'
-    RED = '\033[0;31m'
-    BOLD_RED = '\033[1;31m'
-    NO_COLOR = '\033[0m'
