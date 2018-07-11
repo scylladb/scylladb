@@ -113,6 +113,7 @@ boost_tests = [
     'meta_test',
     'reusable_buffer_test',
     'multishard_writer_test',
+    'observable_test',
 ]
 
 other_tests = [
