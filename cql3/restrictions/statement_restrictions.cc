@@ -72,6 +72,9 @@ public:
         // throw? should not reach?
         return {};
     }
+    bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
+        return {};
+    }
     std::vector<T> values_as_keys(const query_options& options) const override {
         // throw? should not reach?
         return {};
@@ -212,12 +215,13 @@ statement_restrictions::statement_restrictions(database& db,
     auto& cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     bool has_queriable_clustering_column_index = _clustering_columns_restrictions->has_supporting_index(sim);
+    bool has_queriable_pk_index = _partition_key_restrictions->has_supporting_index(sim);
     bool has_queriable_index = has_queriable_clustering_column_index
-            || _partition_key_restrictions->has_supporting_index(sim)
+            || has_queriable_pk_index
             || _nonprimary_key_restrictions->has_supporting_index(sim);
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(has_queriable_index, for_view, allow_filtering);
+    process_partition_key_restrictions(has_queriable_pk_index, for_view, allow_filtering);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -237,7 +241,7 @@ statement_restrictions::statement_restrictions(database& db,
         }
     }
 
-    process_clustering_columns_restrictions(has_queriable_index, select_a_collection, for_view, allow_filtering);
+    process_clustering_columns_restrictions(has_queriable_clustering_column_index, select_a_collection, for_view, allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && has_queriable_clustering_column_index) {
@@ -422,10 +426,11 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
 }
 
 bool statement_restrictions::need_filtering() const {
-    uint32_t number_of_restricted_columns = 0;
+    uint32_t number_of_restricted_columns_for_indexing = 0;
     for (auto&& restrictions : _index_restrictions) {
-        number_of_restricted_columns += restrictions->size();
+        number_of_restricted_columns_for_indexing += restrictions->size();
     }
+    int number_of_all_restrictions = _partition_key_restrictions->size() + _clustering_columns_restrictions->size() + _nonprimary_key_restrictions->size();
 
     if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {
         // TODO(sarna): Implement ALLOW FILTERING support for multi-column restrictions - return false for now
@@ -433,10 +438,11 @@ bool statement_restrictions::need_filtering() const {
         return false;
     }
 
-    return number_of_restricted_columns > 1
-            || (number_of_restricted_columns == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
-            || (number_of_restricted_columns != 0 && _nonprimary_key_restrictions->has_multiple_contains())
-            || (number_of_restricted_columns != 0 && !_uses_secondary_indexing);
+    return number_of_restricted_columns_for_indexing > 1
+            || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
+            || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
+            || (number_of_restricted_columns_for_indexing != 0 && !_uses_secondary_indexing)
+            || (_uses_secondary_indexing && number_of_all_restrictions > 1);
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {

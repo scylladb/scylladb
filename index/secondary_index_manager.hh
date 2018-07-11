@@ -60,6 +60,9 @@ public:
     bool depends_on(const column_definition& cdef) const;
     bool supports_expression(const column_definition& cdef, const cql3::operator_type& op) const;
     const index_metadata& metadata() const;
+    const sstring& target_column() const {
+        return _target_column;
+    }
 };
 
 class secondary_index_manager {

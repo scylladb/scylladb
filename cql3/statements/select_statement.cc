@@ -773,6 +773,8 @@ get_index_schema(service::storage_proxy& proxy,
 static future<service::storage_proxy::coordinator_query_result>
 read_posting_list(service::storage_proxy& proxy,
                   schema_ptr view_schema,
+                  schema_ptr base_schema,
+                  const secondary_index::index& index,
                   const std::vector<::shared_ptr<restrictions::restrictions>>& index_restrictions,
                   const query_options& options,
                   int32_t limit,
@@ -784,11 +786,19 @@ read_posting_list(service::storage_proxy& proxy,
     // FIXME: there should be only one index restriction for this index!
     // Perhaps even one index restriction entirely (do we support
     // intersection queries?).
-    for (const auto& restriction : index_restrictions) {
-        auto pk = partition_key::from_optional_exploded(*view_schema, restriction->values(options));
-        auto dk = dht::global_partitioner().decorate_key(*view_schema, pk);
-        auto range = dht::partition_range::make_singular(dk);
-        partition_ranges.emplace_back(range);
+    for (const auto& restrictions : index_restrictions) {
+        const column_definition* cdef = base_schema->get_column_definition(to_bytes(index.target_column()));
+        if (!cdef) {
+            throw exceptions::invalid_request_exception("Indexed column not found in schema");
+        }
+
+        bytes_opt value = restrictions->value_for(*cdef, options);
+        if (value) {
+            auto pk = partition_key::from_single_value(*view_schema, *value);
+            auto dk = dht::global_partitioner().decorate_key(*view_schema, pk);
+            auto range = dht::partition_range::make_singular(dk);
+            partition_ranges.emplace_back(range);
+        }
     }
     partition_slice_builder partition_slice_builder{*view_schema};
     auto cmd = ::make_lw_shared<query::read_command>(
@@ -818,7 +828,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+    return read_posting_list(proxy, view, _schema, _index, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
             [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
@@ -870,7 +880,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list(proxy, view, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+    return read_posting_list(proxy, view, _schema, _index, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
             [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
