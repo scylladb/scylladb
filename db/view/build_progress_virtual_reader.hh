@@ -101,12 +101,12 @@ class build_progress_virtual_reader {
         }
 
         clustering_key adjust_ckey(clustering_key& underlying_ck) {
-            if (underlying_ck.size(underlying_schema()) < 3) {
+            if (!underlying_ck.is_full(underlying_schema())) {
                 return std::move(underlying_ck);
             }
             // Drop the cpu_id from the clustering key
             auto end = underlying_ck.begin(underlying_schema());
-            std::advance(end, 1);
+            std::advance(end, underlying_schema().clustering_key_size() - 1);
             auto r = boost::make_iterator_range(underlying_ck.begin(underlying_schema()), std::move(end));
             return clustering_key_prefix::from_exploded(r);
         }
