@@ -148,7 +148,7 @@ public:
                 throw exceptions::protocol_exception(sprint("invalid value length: %d", len));
             }
         }
-        return cql3::raw_value_view::make_value(_in.read_bytes_view(len, *_linearization_buffer, exception_thrower()));
+        return cql3::raw_value_view::make_value(_in.read_view(len, exception_thrower()));
     }
 
     void read_name_and_value_list(uint8_t version, std::vector<sstring_view>& names, std::vector<cql3::raw_value_view>& values) {

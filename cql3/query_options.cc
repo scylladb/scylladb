@@ -156,7 +156,7 @@ cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
         auto value_view = *value;
         auto ptr = _temporaries.write_place_holder(value_view.size());
         std::copy_n(value_view.data(), value_view.size(), ptr);
-        return cql3::raw_value_view::make_value(bytes_view{ptr, value_view.size()});
+        return cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{ptr, value_view.size()}));
     }
     return cql3::raw_value_view::make_null();
 }
@@ -254,7 +254,7 @@ void query_options::fill_value_views()
 {
     for (auto&& value : _values) {
         if (value) {
-            _value_views.emplace_back(cql3::raw_value_view::make_value(bytes_view{*value}));
+            _value_views.emplace_back(cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{*value})));
         } else {
             _value_views.emplace_back(cql3::raw_value_view::make_null());
         }

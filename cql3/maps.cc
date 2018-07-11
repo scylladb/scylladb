@@ -152,18 +152,20 @@ maps::literal::to_string() const {
 }
 
 maps::value
-maps::value::from_serialized(bytes_view value, map_type type, cql_serialization_format sf) {
+maps::value::from_serialized(const fragmented_temporary_buffer::view& fragmented_value, map_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
+      return with_linearized(fragmented_value, [&] (bytes_view value) {
         auto m = value_cast<map_type_impl::native_type>(type->deserialize(value, sf));
         std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
             map.emplace(type->get_keys_type()->decompose(e.first),
                         type->get_values_type()->decompose(e.second));
         }
-        return { std::move(map) };
+        return maps::value { std::move(map) };
+      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -233,10 +235,10 @@ maps::delayed_value::bind(const query_options& options) {
         if (key_bytes.is_unset_value()) {
             throw exceptions::invalid_request_exception("unset value is not supported inside collections");
         }
-        if (key_bytes->size() > std::numeric_limits<uint16_t>::max()) {
+        if (key_bytes->size_bytes() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
                                                    std::numeric_limits<uint16_t>::max(),
-                                                   key_bytes->size()));
+                                                   key_bytes->size_bytes()));
         }
         auto value_bytes = value->bind_and_get(options);
         if (value_bytes.is_null()) {
@@ -331,7 +333,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
 
         auto ctype = static_pointer_cast<const map_type_impl>(column.type);
         for (auto&& e : map_value->map) {
-            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), e.second, atomic_cell::collection_member::yes));
+            mut.cells.emplace_back(e.first, params.make_cell(*ctype->get_values_type(), fragmented_temporary_buffer::view(e.second), atomic_cell::collection_member::yes));
         }
         auto col_mut = ctype->serialize_mutation_form(std::move(mut));
         m.set_cell(prefix, column, std::move(col_mut));
@@ -342,7 +344,7 @@ maps::do_put(mutation& m, const clustering_key_prefix& prefix, const update_para
         } else {
             auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
                     cql_serialization_format::internal());
-            m.set_cell(prefix, column, params.make_cell(*column.type, std::move(v)));
+            m.set_cell(prefix, column, params.make_cell(*column.type, fragmented_temporary_buffer::view(std::move(v))));
         }
     }
 }

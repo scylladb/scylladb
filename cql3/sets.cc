@@ -120,17 +120,19 @@ sets::literal::to_string() const {
 }
 
 sets::value
-sets::value::from_serialized(bytes_view v, set_type type, cql_serialization_format sf) {
+sets::value::from_serialized(const fragmented_temporary_buffer::view& val, set_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
+      return with_linearized(val, [&] (bytes_view v) {
         auto s = value_cast<set_type_impl::native_type>(type->deserialize(v, sf));
         std::set<bytes, serialized_compare> elements(type->get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
             elements.insert(elements.end(), type->get_elements_type()->decompose(element));
         }
         return value(std::move(elements));
+      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -198,10 +200,10 @@ sets::delayed_value::bind(const query_options& options) {
             return constants::UNSET_VALUE;
         }
         // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-        if (b->size() > std::numeric_limits<uint16_t>::max()) {
+        if (b->size_bytes() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(sprint("Set value is too long. Set values are limited to %d bytes but %d bytes value provided",
                     std::numeric_limits<uint16_t>::max(),
-                    b->size()));
+                    b->size_bytes()));
         }
 
         buffers.insert(buffers.end(), std::move(to_bytes(*b)));
@@ -279,7 +281,7 @@ sets::adder::do_add(mutation& m, const clustering_key_prefix& row_key, const upd
         auto v = set_type->serialize_partially_deserialized_form(
                 {set_value->_elements.begin(), set_value->_elements.end()},
                 cql_serialization_format::internal());
-        m.set_cell(row_key, column, params.make_cell(*column.type, std::move(v)));
+        m.set_cell(row_key, column, params.make_cell(*column.type, fragmented_temporary_buffer::view(v)));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());
     }

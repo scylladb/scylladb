@@ -333,9 +333,10 @@ int32_t select_statement::get_limit(const query_options& options) const {
     if (val.is_unset_value()) {
         return std::numeric_limits<int32_t>::max();
     }
+  return with_linearized(*val, [&] (bytes_view bv) {
     try {
-        int32_type->validate(*val);
-        auto l = value_cast<int32_t>(int32_type->deserialize(*val));
+        int32_type->validate(bv);
+        auto l = value_cast<int32_t>(int32_type->deserialize(bv));
         if (l <= 0) {
             throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
         }
@@ -343,6 +344,7 @@ int32_t select_statement::get_limit(const query_options& options) const {
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception("Invalid limit value");
     }
+  });
 }
 
 bool select_statement::needs_post_query_ordering() const {

@@ -30,6 +30,8 @@
 
 #include <seastar/util/variant_utils.hh>
 
+#include "utils/fragmented_temporary_buffer.hh"
+
 namespace cql3 {
 
 struct null_value {
@@ -42,7 +44,7 @@ struct unset_value {
 ///
 /// \see raw_value
 struct raw_value_view {
-    boost::variant<bytes_view, null_value, unset_value> _data;
+    boost::variant<fragmented_temporary_buffer::view, null_value, unset_value> _data;
 
     raw_value_view(null_value&& data)
         : _data{std::move(data)}
@@ -50,10 +52,7 @@ struct raw_value_view {
     raw_value_view(unset_value&& data)
         : _data{std::move(data)}
     {}
-    raw_value_view(bytes_view&& data)
-        : _data{std::move(data)}
-    {}
-    raw_value_view(const bytes_view& data)
+    raw_value_view(fragmented_temporary_buffer::view data)
         : _data{data}
     {}
 public:
@@ -63,10 +62,7 @@ public:
     static raw_value_view make_unset_value() {
         return raw_value_view{std::move(unset_value{})};
     }
-    static raw_value_view make_value(bytes_view &&view) {
-        return raw_value_view{std::move(view)};
-    }
-    static raw_value_view make_value(const bytes_view& view) {
+    static raw_value_view make_value(fragmented_temporary_buffer::view view) {
         return raw_value_view{view};
     }
     bool is_null() const {
@@ -78,20 +74,20 @@ public:
     bool is_value() const {
         return _data.which() == 0;
     }
-    bytes_view_opt data() const {
+    std::optional<fragmented_temporary_buffer::view> data() const {
         if (_data.which() == 0) {
-            return boost::get<bytes_view>(_data);
+            return boost::get<fragmented_temporary_buffer::view>(_data);
         }
         return {};
     }
     explicit operator bool() const {
         return _data.which() == 0;
     }
-    const bytes_view* operator->() const {
-        return &boost::get<bytes_view>(_data);
+    const fragmented_temporary_buffer::view* operator->() const {
+        return &boost::get<fragmented_temporary_buffer::view>(_data);
     }
-    const bytes_view& operator*() const {
-        return boost::get<bytes_view>(_data);
+    const fragmented_temporary_buffer::view& operator*() const {
+        return boost::get<fragmented_temporary_buffer::view>(_data);
     }
 
     bool operator==(const raw_value_view& other) const {
@@ -108,8 +104,11 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const raw_value_view& value) {
-        seastar::visit(value._data, [&] (bytes_view v) {
-            os << "{ value: " << v << " }";
+        seastar::visit(value._data, [&] (fragmented_temporary_buffer::view v) {
+            os << "{ value: ";
+            using boost::range::for_each;
+            for_each(v, [&os] (bytes_view bv) { os << bv; });
+            os << " }";
         }, [&] (null_value) {
             os << "{ null }";
         }, [&] (unset_value) {
@@ -153,7 +152,7 @@ public:
         if (view.is_unset_value()) {
             return make_unset_value();
         }
-        return make_value(to_bytes(*view));
+        return make_value(linearized(*view));
     }
     static raw_value make_value(bytes&& bytes) {
         return raw_value{std::move(bytes)};
@@ -193,7 +192,7 @@ public:
     }
     raw_value_view to_view() const {
         switch (_data.which()) {
-        case 0:  return raw_value_view::make_value(bytes_view{boost::get<bytes>(_data)});
+        case 0:  return raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{boost::get<bytes>(_data)}));
         case 1:  return raw_value_view::make_null();
         default: return raw_value_view::make_unset_value();
         }
@@ -202,10 +201,19 @@ public:
 
 }
 
+inline bytes to_bytes(const cql3::raw_value_view& view)
+{
+    return linearized(*view);
+}
+
 inline bytes_opt to_bytes_opt(const cql3::raw_value_view& view) {
-    return to_bytes_opt(view.data());
+    auto buffer_view = view.data();
+    if (buffer_view) {
+        return bytes_opt(linearized(*buffer_view));
+    }
+    return bytes_opt();
 }
 
 inline bytes_opt to_bytes_opt(const cql3::raw_value& value) {
-    return value.data();
+    return to_bytes_opt(value.to_view());
 }
