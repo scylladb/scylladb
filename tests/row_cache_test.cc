@@ -735,7 +735,8 @@ SEASTAR_TEST_CASE(test_eviction) {
         std::shuffle(keys.begin(), keys.end(), std::default_random_engine(random()));
 
         for (auto&& key : keys) {
-            auto rd = cache.make_reader(s, dht::partition_range::make_singular(key));
+            auto pr = dht::partition_range::make_singular(key);
+            auto rd = cache.make_reader(s, pr);
             rd.set_max_buffer_size(1);
             rd.fill_buffer().get();
         }
@@ -763,7 +764,8 @@ SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
         cache.set_schema(s2);
 
         {
-            auto rd = cache.make_reader(s2, dht::partition_range::make_singular(m.decorated_key()));
+            auto pr = dht::partition_range::make_singular(m.decorated_key());
+            auto rd = cache.make_reader(s2, pr);
             rd.set_max_buffer_size(1);
             rd.fill_buffer().get();
         }
@@ -2140,7 +2142,8 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
                 injector.fail_after(i++);
 
                 // Make snapshot on pkeys[2]
-                snap = mt->make_flat_reader(s.schema(), dht::partition_range::make_singular(pkeys[2]));
+                auto pr = dht::partition_range::make_singular(pkeys[2]);
+                snap = mt->make_flat_reader(s.schema(), pr);
                 snap->set_max_buffer_size(1);
                 snap->fill_buffer().get();
 
@@ -3295,13 +3298,15 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
 
             populate_range(cache);
 
-            auto rd1 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            auto pr1 = dht::partition_range::make_singular(pk);
+            auto rd1 = cache.make_reader(s, pr1);
             rd1.set_max_buffer_size(1);
             rd1.fill_buffer().get();
 
             apply(cache, underlying, m2);
 
-            auto rd2 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            auto pr2 = dht::partition_range::make_singular(pk);
+            auto rd2 = cache.make_reader(s, pr2);
             rd2.set_max_buffer_size(1);
 
             auto rd1_a = assert_that(std::move(rd1));
@@ -3319,6 +3324,7 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
             row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
 
             auto pk = table.make_pkey();
+            auto pr = dht::partition_range::make_singular(pk);
 
             mutation m1(s, pk);
             table.add_row(m1, table.make_ckey(0), "1");
@@ -3330,22 +3336,17 @@ SEASTAR_TEST_CASE(test_eviction_after_old_snapshot_touches_overriden_rows_keeps_
 
             apply(cache, underlying, m1);
 
-            populate_range(cache, dht::partition_range::make_singular(pk),
-                query::clustering_range::make_singular(table.make_ckey(0)));
+            populate_range(cache, pr, query::clustering_range::make_singular(table.make_ckey(0)));
+            populate_range(cache, pr, query::clustering_range::make_singular(table.make_ckey(1)));
+            populate_range(cache, pr, query::clustering_range::make_singular(table.make_ckey(2)));
 
-            populate_range(cache, dht::partition_range::make_singular(pk),
-                query::clustering_range::make_singular(table.make_ckey(1)));
-
-            populate_range(cache, dht::partition_range::make_singular(pk),
-                query::clustering_range::make_singular(table.make_ckey(2)));
-
-            auto rd1 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            auto rd1 = cache.make_reader(s, pr);
             rd1.set_max_buffer_size(1);
             rd1.fill_buffer().get();
 
             apply(cache, underlying, m2);
 
-            auto rd2 = cache.make_reader(s, dht::partition_range::make_singular(pk));
+            auto rd2 = cache.make_reader(s, pr);
             rd2.set_max_buffer_size(1);
 
             auto rd1_a = assert_that(std::move(rd1));
