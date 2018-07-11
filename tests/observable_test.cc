@@ -22,7 +22,8 @@
 #define BOOST_TEST_MODULE observable_test
 
 #include <boost/test/unit_test.hpp>
-
+#include <variant>
+#include <numeric>
 
 #include "../utils/observable.hh"
 
@@ -68,4 +69,18 @@ BOOST_AUTO_TEST_CASE(test_exceptions) {
         caught = true;
     }
     BOOST_REQUIRE(caught);
+}
+
+BOOST_AUTO_TEST_CASE(test_disconnect_fully_disconnects) {
+    std::variant<observable<>, std::array<char, 100>> pub = observable<>();
+    observer<> sub = std::get<observable<>>(pub).observe([] {});
+    sub.disconnect();
+    auto x = std::array<char, 100>{};
+    std::iota(x.begin(), x.end(), 'X');
+    // Once upon a time, disconnect() still remembered the observable's address.
+    // Simulate a the observable being freed and its memory reused for something
+    // else by assigning garbage to the variant that holds its data
+    pub = x;
+    // Would have accessed the overwritten observable before the bug fix.
+    sub.disconnect();
 }

@@ -92,6 +92,7 @@ public:
             if (_observable) {
                 _observable->destroyed(this);
             }
+            _observable = nullptr;
         }
     };
     friend class observer;
