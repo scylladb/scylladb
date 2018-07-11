@@ -426,10 +426,11 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
 }
 
 bool statement_restrictions::need_filtering() const {
-    uint32_t number_of_restricted_columns = 0;
+    uint32_t number_of_restricted_columns_for_indexing = 0;
     for (auto&& restrictions : _index_restrictions) {
-        number_of_restricted_columns += restrictions->size();
+        number_of_restricted_columns_for_indexing += restrictions->size();
     }
+    int number_of_all_restrictions = _partition_key_restrictions->size() + _clustering_columns_restrictions->size() + _nonprimary_key_restrictions->size();
 
     if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {
         // TODO(sarna): Implement ALLOW FILTERING support for multi-column restrictions - return false for now
@@ -437,10 +438,11 @@ bool statement_restrictions::need_filtering() const {
         return false;
     }
 
-    return number_of_restricted_columns > 1
-            || (number_of_restricted_columns == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
-            || (number_of_restricted_columns != 0 && _nonprimary_key_restrictions->has_multiple_contains())
-            || (number_of_restricted_columns != 0 && !_uses_secondary_indexing);
+    return number_of_restricted_columns_for_indexing > 1
+            || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
+            || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
+            || (number_of_restricted_columns_for_indexing != 0 && !_uses_secondary_indexing)
+            || (_uses_secondary_indexing && number_of_all_restrictions > 1);
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {
