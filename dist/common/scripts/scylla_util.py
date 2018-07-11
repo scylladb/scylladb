@@ -353,7 +353,7 @@ CONCOLORS = {'green':'\033[1;32m', 'red':'\033[1;31m', 'nocolor':'\033[0m'}
 def colorprint(msg):
     print(msg.format(**CONCOLORS))
 
-def get_mode_cpu_set(nic, mode):
+def get_mode_cpuset(nic, mode):
     try:
         mode_cpu_mask=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
         return hex2list(mode_cpu_mask)
@@ -369,9 +369,9 @@ def get_tune_mode(nic):
     if not os.path.exists('/etc/scylla.d/cpuset.conf'):
         return
     cur_cpuset=get_cur_cpuset()
-    mq_cpuset=get_mode_cpus_set(nic, 'mq')
-    sq_cpuset=get_mode_cpus_set(nic, 'sq')
-    sq_split_cpuset=get_mode_cpus_set(nic, 'sq_split')
+    mq_cpuset=get_mode_cpuset(nic, 'mq')
+    sq_cpuset=get_mode_cpuset(nic, 'sq')
+    sq_split_cpuset=get_mode_cpuset(nic, 'sq_split')
 
     if cur_cpuset == mq_cpuset:
         return 'mq'
