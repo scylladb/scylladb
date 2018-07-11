@@ -50,6 +50,7 @@
 #include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
 #include "stdx.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 class tuple_type_impl;
 class big_decimal;
@@ -466,6 +467,11 @@ public:
     };
     virtual void validate(bytes_view v) const {
         // FIXME
+    }
+    virtual void validate(const fragmented_temporary_buffer::view& view) const {
+        with_linearized(view, [this] (bytes_view bv) {
+            validate(bv);
+        });
     }
     virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const {
         validate(v);
