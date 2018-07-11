@@ -1,0 +1,118 @@
+#!/usr/bin/python3
+#
+# Copyright 2018 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+
+import os
+import sys
+import argparse
+sys.path.append('/usr/lib/scylla')
+from scylla_util import *
+
+MSG_HEADER = '''
+
+   _____            _ _       _____  ____  
+  / ____|          | | |     |  __ \|  _ \ 
+ | (___   ___ _   _| | | __ _| |  | | |_) |
+  \___ \ / __| | | | | |/ _` | |  | |  _ < 
+  ____) | (__| |_| | | | (_| | |__| | |_) |
+ |_____/ \___|\__, |_|_|\__,_|_____/|____/ 
+               __/ |                       
+              |___/                        
+
+
+Nodetool:
+	nodetool help
+CQL Shell:
+	cqlsh
+More documentation available at: 
+	http://www.scylladb.com/doc/
+By default, Scylla sends certain information about this node to a data collection server. For information, see http://www.scylladb.com/privacy/
+
+'''[1:-1]
+MSG_UNSUPPORTED_INSTANCE_TYPE = '''
+    {red}{type} is not supported instance type!{nocolor}
+To continue startup ScyllaDB on this instance, run 'sudo scylla_io_setup' then 'systemctl start scylla-server'.
+For a list of optimized instance types and more EC2 instructions see http://www.scylladb.com/doc/getting-started-amazon/"
+
+'''[1:-1]
+MSG_SETUP_ACTIVATING = '''
+    {green}Constructing RAID volume...{nocolor}
+
+Please wait for setup. To see status, run 
+ 'systemctl status scylla-ami-setup'
+
+After setup finished, scylla-server service will launch.
+To see status of scylla-server, run 
+ 'systemctl status scylla-server'
+
+'''[1:-1]
+MSG_SETUP_FAILED = '''
+    {red}AMI initial configuration failed!{nocolor}
+
+To see status, run 
+ 'systemctl status scylla-ami-setup'
+
+'''[1:-1]
+MSG_SCYLLA_ACTIVATING = '''
+    {green}ScyllaDB is starting...{nocolor}
+
+Please wait for start. To see status, run 
+ 'systemctl status scylla-server'
+
+'''[1:-1]
+MSG_SCYLLA_FAILED = '''
+    {red}ScyllaDB is not started!{nocolor}
+Please wait for startup. To see status of ScyllaDB, run 
+ 'systemctl status scylla-server'
+
+'''[1:-1]
+MSG_SCYLLA_ACTIVE = '''
+    {green}ScyllaDB is active.{nocolor}
+
+$ nodetool status
+
+'''[1:-1]
+
+if __name__ == '__main__':
+    colorprint(MSG_HEADER)
+    aws = aws_instance()
+    if not aws.is_supported_instance_class():
+        colorprint(MSG_UNSUPPORTED_INSTANCE_TYPE.format(type=aws.instance_class()))
+    else:
+        setup = systemd_unit('scylla-ami-setup.service')
+        res = setup.is_active()
+        if res == 'activating':
+            colorprint(MSG_SETUP_ACTIVATING)
+        elif res == 'failed':
+            colorprint(MSG_SETUP_FAILED)
+        else:
+            server = systemd_unit('scylla-server.service')
+            res = server.is_active()
+            if res == 'activating':
+                colorprint(MSG_SCYLLA_ACTIVATING)
+            elif res == 'failed':
+                colorprint(MSG_SCYLLA_FAILED)
+            else:
+                colorprint(MSG_SCYLLA_ACTIVE)
+                run('nodetool status', exception=False)
+        print('    ', end='')
+        res = run('/usr/lib/scylla/scylla_ec2_check', exception=False)
+        if res == 0:
+            print('')
