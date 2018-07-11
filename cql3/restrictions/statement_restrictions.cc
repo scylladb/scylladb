@@ -72,6 +72,9 @@ public:
         // throw? should not reach?
         return {};
     }
+    bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
+        return {};
+    }
     std::vector<T> values_as_keys(const query_options& options) const override {
         // throw? should not reach?
         return {};

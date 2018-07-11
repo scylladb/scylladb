@@ -310,6 +310,11 @@ public:
         }
         return res;
     }
+
+    virtual bytes_opt value_for(const column_definition& cdef, const query_options& options) const override {
+        return _restrictions->value_for(cdef, options);
+    }
+
     std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
         // TODO: if this proved to be required.
         fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
