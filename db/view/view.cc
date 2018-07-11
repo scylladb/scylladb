@@ -1204,9 +1204,10 @@ future<> view_builder::calculate_shard_build_step(
 future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     vlogger.info0("Building view {}.{}, starting at token {}", view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
+    auto f = engine().cpu_id() == 0 ? _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()) : make_ready_future<>();
     return when_all_succeed(
-            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()),
-            _sys_dist_ks.start_view_build(view->ks_name(), view->cf_name()));
+            std::move(f),
+            system_keyspace::register_view_for_building(view->ks_name(), view->cf_name(), step.current_token()));
 }
 
 static future<> flush_base(lw_shared_ptr<column_family> base, abort_source& as) {
