@@ -49,6 +49,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 namespace cql3 {
 
@@ -358,7 +359,7 @@ public:
 };
 
 template<>
-dht::partition_range_vector
+inline dht::partition_range_vector
 single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
     dht::partition_range_vector ranges;
     ranges.reserve(size());
@@ -376,7 +377,7 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 }
 
 template<>
-std::vector<query::clustering_range>
+inline std::vector<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
     auto wrapping_bounds = compute_bounds(options);
     auto bounds = boost::copy_range<query::clustering_row_ranges>(wrapping_bounds
@@ -413,12 +414,12 @@ single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(con
 }
 
 template<>
-bool single_column_primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const {
+inline bool single_column_primary_key_restrictions<partition_key>::needs_filtering(const schema& schema) const {
     return primary_key_restrictions<partition_key>::needs_filtering(schema);
 }
 
 template<>
-bool single_column_primary_key_restrictions<clustering_key>::needs_filtering(const schema& schema) const {
+inline bool single_column_primary_key_restrictions<clustering_key>::needs_filtering(const schema& schema) const {
     // Restrictions currently need filtering in three cases:
     // 1. any of them is a CONTAINS restriction
     // 2. restrictions do not form a contiguous prefix (i.e. there are gaps in it)
