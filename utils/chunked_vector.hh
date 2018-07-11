@@ -428,7 +428,10 @@ chunked_vector<T, max_contiguous_allocation>::shrink_to_fit() {
 template <typename T, size_t max_contiguous_allocation>
 void
 chunked_vector<T, max_contiguous_allocation>::clear() {
-    resize(0);
+    while (_size > 0) {
+        pop_back();
+    }
+    shrink_to_fit();
 }
 
 }
