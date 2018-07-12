@@ -42,6 +42,8 @@
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
+#include "partition_slice_builder.hh"
+#include "schema.hh"
 
 using namespace sstables;
 
@@ -80,6 +82,24 @@ public:
     flat_mutation_reader read_rows_flat() {
         return _sst->read_rows_flat(_sst->_schema);
     }
+
+    flat_mutation_reader read_range_rows_flat(
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            const io_priority_class& pc = default_priority_class(),
+            reader_resource_tracker resource_tracker = no_resource_tracking(),
+            streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+            mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
+            read_monitor& monitor = default_read_monitor()) {
+        return _sst->read_range_rows_flat(_sst->_schema,
+                                          range,
+                                          slice,
+                                          pc,
+                                          std::move(resource_tracker),
+                                          fwd,
+                                          fwd_mr,
+                                          monitor);
+    }
     void assert_toc(const std::set<component_type>& expected_components) {
         for (auto& expected : expected_components) {
             if(_sst->_recognized_components.count(expected) == 0) {
@@ -99,6 +119,216 @@ public:
         }
     }
 };
+
+// Following tests run on files in tests/sstables/3.x/uncompressed/filtering_and_forwarding
+// They were created using following CQL statements:
+//
+// CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+//
+// CREATE TABLE test_ks.test_table ( pk INT, ck INT, s INT STATIC, val INT, PRIMARY KEY(pk, ck))
+//      WITH compression = { 'enabled' : false };
+//
+// INSERT INTO test_ks.test_table(pk, s) VALUES(1, 1);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 101, 1001);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 102, 1002);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 103, 1003);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 104, 1004);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 105, 1005);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 106, 1006);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 107, 1007);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 108, 1008);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 109, 1009);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(1, 110, 1010);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 101, 1001);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 102, 1002);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 103, 1003);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 104, 1004);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 105, 1005);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 106, 1006);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 107, 1007);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 108, 1008);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 109, 1009);
+// INSERT INTO test_ks.test_table(pk, ck, val) VALUES(2, 110, 1010);
+
+static thread_local const sstring UNCOMPRESSED_FILTERING_AND_FORWARDING_PATH =
+    "tests/sstables/3.x/uncompressed/filtering_and_forwarding";
+static thread_local const schema_ptr UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("s", int32_type, column_kind::static_column)
+        .with_column("val", int32_type)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
+    sstable_assertions sst(UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA,
+                           UNCOMPRESSED_FILTERING_AND_FORWARDING_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA, pk);
+    };
+
+    auto to_ck = [] (int ck) {
+        return clustering_key::from_single_value(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA,
+                                                 int32_type->decompose(ck));
+    };
+
+    auto s_cdef = UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->get_column_definition(to_bytes("s"));
+    BOOST_REQUIRE(s_cdef);
+    auto val_cdef = UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->get_column_definition(to_bytes("val"));
+    BOOST_REQUIRE(val_cdef);
+
+    auto to_expected = [val_cdef] (int val) {
+        return std::vector<flat_reader_assertions::expected_column>{{val_cdef, int32_type->decompose(int32_t(val))}};
+    };
+
+    // Sequential read
+    {
+        assert_that(sst.read_rows_flat())
+            .produces_partition_start(to_key(1))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
+            .produces_row(to_ck(101), to_expected(1001))
+            .produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_row(to_ck(104), to_expected(1004))
+            .produces_row(to_ck(105), to_expected(1005))
+            .produces_row(to_ck(106), to_expected(1006))
+            .produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_row(to_ck(109), to_expected(1009))
+            .produces_row(to_ck(110), to_expected(1010))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_static_row({})
+            .produces_row(to_ck(101), to_expected(1001))
+            .produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_row(to_ck(104), to_expected(1004))
+            .produces_row(to_ck(105), to_expected(1005))
+            .produces_row(to_ck(106), to_expected(1006))
+            .produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_row(to_ck(109), to_expected(1009))
+            .produces_row(to_ck(110), to_expected(1010))
+            .produces_partition_end()
+            .produces_end_of_stream();
+    }
+
+    // filtering read
+    {
+        auto slice =  partition_slice_builder(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA)
+            .with_range(query::clustering_range::make({to_ck(102), true}, {to_ck(104), false}))
+            .with_range(query::clustering_range::make({to_ck(106), false}, {to_ck(108), true}))
+            .build();
+        assert_that(sst.read_range_rows_flat(query::full_partition_range, slice))
+            .produces_partition_start(to_key(1))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
+            .produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_partition_end()
+            .produces_partition_start(to_key(2))
+            .produces_static_row({})
+            .produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_partition_end()
+            .produces_end_of_stream();
+    }
+
+    // forwarding read
+    {
+        auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
+                                                      UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA->full_slice(),
+                                                      default_priority_class(),
+                                                      no_resource_tracking(),
+                                                      streamed_mutation::forwarding::yes));
+        r.produces_partition_start(to_key(1))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(102), to_ck(105));
+
+        r.produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_row(to_ck(104), to_expected(1004))
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(107), to_ck(109));
+
+        r.produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_end_of_stream();
+
+        r.next_partition();
+
+        r.produces_partition_start(to_key(2))
+            .produces_static_row({})
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(103), to_ck(104));
+
+        r.produces_row(to_ck(103), to_expected(1003))
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(106), to_ck(111));
+
+        r.produces_row(to_ck(106), to_expected(1006))
+            .produces_row(to_ck(107), to_expected(1007))
+            .produces_row(to_ck(108), to_expected(1008))
+            .produces_row(to_ck(109), to_expected(1009))
+            .produces_row(to_ck(110), to_expected(1010))
+            .produces_end_of_stream();
+    }
+
+    // filtering and forwarding read
+    {
+        auto slice =  partition_slice_builder(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA)
+            .with_range(query::clustering_range::make({to_ck(102), true}, {to_ck(103), true}))
+            .with_range(query::clustering_range::make({to_ck(109), true}, {to_ck(110), true}))
+            .build();
+        auto r = assert_that(sst.read_range_rows_flat(query::full_partition_range,
+                                                      slice,
+                                                      default_priority_class(),
+                                                      no_resource_tracking(),
+                                                      streamed_mutation::forwarding::yes));
+
+        r.produces_partition_start(to_key(1))
+            .produces_static_row({{s_cdef, int32_type->decompose(int32_t(1))}})
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(102), to_ck(105));
+
+        r.produces_row(to_ck(102), to_expected(1002))
+            .produces_row(to_ck(103), to_expected(1003))
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(107), to_ck(109));
+
+        r.produces_end_of_stream();
+
+        r.next_partition();
+
+        r.produces_partition_start(to_key(2))
+            .produces_static_row({})
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(103), to_ck(104));
+
+        r.produces_row(to_ck(103), to_expected(1003))
+            .produces_end_of_stream();
+        r.fast_forward_to(to_ck(106), to_ck(111));
+
+        r.produces_row(to_ck(109), to_expected(1009))
+            .produces_row(to_ck(110), to_expected(1010))
+            .produces_end_of_stream();
+    }
+}
+
 
 // Following tests run on files in tests/sstables/3.x/uncompressed/static_row
 // They were created using following CQL statements:
