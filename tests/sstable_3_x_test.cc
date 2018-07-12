@@ -119,6 +119,7 @@ static thread_local const sstring UNCOMPRESSED_STATIC_ROW_PATH =
 static thread_local const schema_ptr UNCOMPRESSED_STATIC_ROW_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("s", int32_type, column_kind::static_column)
         .with_column("val", int32_type)
         .build();
@@ -202,6 +203,7 @@ static thread_local const sstring UNCOMPRESSED_COMPOUND_STATIC_ROW_PATH =
 static thread_local const schema_ptr UNCOMPRESSED_COMPOUND_STATIC_ROW_SCHEMA =
     schema_builder("test_ks", "test_table")
         .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
         .with_column("s_int", int32_type, column_kind::static_column)
         .with_column("s_text", utf8_type, column_kind::static_column)
         .with_column("s_inet", inet_addr_type, column_kind::static_column)
