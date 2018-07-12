@@ -48,6 +48,21 @@ def interactive_ask_service(msg1, msg2, default = None):
         elif ans == 'no' or ans =='n':
             return False
 
+def interactive_choose_nic():
+    nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if n != '/sys/class/net/lo']
+    if len(nics) == 0:
+        print('A NIC was not found.')
+        sys.exit(1)
+    elif len(nics) == 1:
+        return nics[0]
+    else:
+        print('Please select a NIC from the following list:')
+        while True:
+            print(nics)
+            n = input('> ')
+            if is_valid_nic(n):
+                return nic
+
 def do_verify_package(pkg):
     if is_debian_variant():
         res = run('dpkg -s {}'.format(pkg), silent=True, exception=False)
@@ -101,7 +116,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configure environment for Scylla.')
     parser.add_argument('--disks',
                         help='specify disks for RAID')
-    parser.add_argument('--nic',
+    parser.add_argument('--nic', default='eth0',
                         help='specify NIC')
     parser.add_argument('--ntp-domain',
                         help='specify NTP domain')
@@ -112,7 +127,7 @@ if __name__ == '__main__':
     parser.add_argument('--developer-mode', action='store_true', default=False,
                         help='enable developer mode')
     parser.add_argument('--no-ec2-check', action='store_true', default=False,
-                        help='skip EC2 configuration check(only on EC2)')
+                        help='skip EC2 configuration check')
     parser.add_argument('--no-kernel-check', action='store_true', default=False,
                         help='skip kernel version check')
     parser.add_argument('--no-verify-package', action='store_true', default=False,
@@ -147,12 +162,14 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         interactive = True
 
-    if not interactive and not args.no_raid_setup and not args.disks:
-        parser.print_help()
-        sys.exit(1)
-    if not interactive and not args.no_sysconfig_setup and not args.nic:
-        parser.print_help()
-        sys.exit(1)
+    if not interactive:
+        if not args.no_raid_setup and not args.disks:
+            parser.print_help()
+            sys.exit(1)
+        if not args.no_sysconfig_setup or (is_ec2() and not args.no_ec2_check):
+            if not is_valid_nic(args.nic):
+                print('NIC {} doesn\'t exist.'.format(args.nic))
+                sys.exit(1)
 
     disks = args.disks
     nic = args.nic
@@ -180,8 +197,10 @@ if __name__ == '__main__':
     if is_ec2():
         if interactive:
             ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylls. No - skips the configuration check.', 'yes')
+            if ec2_check:
+                nic = interactive_choose_nic()
         if ec2_check:
-            run('/usr/lib/scylla/scylla_ec2_check')
+            run('/usr/lib/scylla/scylla_ec2_check --nic {}'.format(nic))
 
     if interactive:
         kernel_check = interactive_ask_service('Do you want to run check your kernel version?', 'Yes - runs a  script to verify that the kernel for this instance qualifies to run Scylla. No - skips the kernel check.', 'yes')
@@ -316,20 +335,7 @@ if __name__ == '__main__':
     if interactive:
         sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', 'yes')
     if sysconfig_setup:
-        nics = [os.path.basename(n) for n in glob.glob('/sys/class/net/*') if n != '/sys/class/net/lo']
-        if len(nics) == 0:
-            print('A NIC was not found.')
-            sys.exit(1)
-        elif len(nics) == 1:
-            nic=nics[0]
-        else:
-            print('Please select a NIC from the following list:')
-            while True:
-                print(nics)
-                n = input('> ')
-                if os.path.exists('/sys/class/net/{}'.format(n)):
-                    nic = n
-                    break
+        nic = interactive_choose_nic()
         set_nic = interactive_ask_service('Do you want to enable Network Interface Card (NIC) optimization?', 'Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
     if sysconfig_setup:
         setup_args = '--setup-nic' if set_nic else ''

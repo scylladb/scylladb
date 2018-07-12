@@ -388,6 +388,9 @@ def create_perftune_conf(nic='eth0'):
     with open('/etc/scylla.d/perftune.yaml', 'w') as f:
         f.write(yaml)
 
+def is_valid_nic(nic):
+    return os.path.exists('/sys/class/net/{}'.format(nic))
+
 class SystemdException(Exception):
     pass
 

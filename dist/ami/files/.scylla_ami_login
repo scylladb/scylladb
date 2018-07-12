@@ -113,6 +113,6 @@ if __name__ == '__main__':
                 colorprint(MSG_SCYLLA_ACTIVE)
                 run('nodetool status', exception=False)
         print('    ', end='')
-        res = run('/usr/lib/scylla/scylla_ec2_check', exception=False)
+        res = run('/usr/lib/scylla/scylla_ec2_check --nic eth0', exception=False)
         if res == 0:
             print('')
