@@ -244,7 +244,7 @@ private:
     temporary_buffer<char> _key;
     mutable std::optional<dht::token> _token;
     uint64_t _position;
-    std::optional<promoted_index> _index;
+    std::unique_ptr<promoted_index> _index;
 
 public:
 
@@ -275,7 +275,7 @@ public:
 
     uint32_t get_promoted_index_size() const { return _index ? _index->get_promoted_index_size() : 0; }
 
-    index_entry(temporary_buffer<char>&& key, uint64_t position, std::optional<promoted_index>&& index)
+    index_entry(temporary_buffer<char>&& key, uint64_t position, std::unique_ptr<promoted_index>&& index)
         : _key(std::move(key))
         , _position(position)
         , _index(std::move(index))
