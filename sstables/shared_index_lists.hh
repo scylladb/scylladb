@@ -25,10 +25,11 @@
 #include <vector>
 #include <seastar/core/future.hh>
 #include "utils/loading_shared_values.hh"
+#include "utils/chunked_vector.hh"
 
 namespace sstables {
 
-using index_list = std::vector<index_entry>;
+using index_list = utils::chunked_vector<index_entry>;
 
 // Associative cache of summary index -> index_list
 // Entries stay around as long as there is any live external reference (list_ptr) to them.

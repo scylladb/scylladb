@@ -244,6 +244,8 @@ public:
     using iterator = iterator_type<T>;
     using const_iterator = iterator_type<const T>;
 public:
+    const T& front() const { return *cbegin(); }
+    T& front() { return *begin(); }
     iterator begin() const { return iterator(_chunks.data(), 0); }
     iterator end() const { return iterator(_chunks.data(), _size); }
     const_iterator cbegin() const { return const_iterator(_chunks.data(), 0); }
@@ -426,7 +428,10 @@ chunked_vector<T, max_contiguous_allocation>::shrink_to_fit() {
 template <typename T, size_t max_contiguous_allocation>
 void
 chunked_vector<T, max_contiguous_allocation>::clear() {
-    resize(0);
+    while (_size > 0) {
+        pop_back();
+    }
+    shrink_to_fit();
 }
 
 }
