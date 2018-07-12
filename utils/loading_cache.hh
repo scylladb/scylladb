@@ -468,7 +468,8 @@ private:
     }
 
     future<> reload(ts_value_lru_entry& lru_entry) {
-        return _load(lru_entry.key()).then_wrapped([this, key = lru_entry.key()] (auto&& f) mutable {
+        Key key = lru_entry.key();
+        return _load(lru_entry.key()).then_wrapped([this, key = std::move(key)] (auto&& f) mutable {
             // if the entry has been evicted by now - simply end here
             set_iterator it = this->set_find(key);
             if (it == this->set_end()) {
