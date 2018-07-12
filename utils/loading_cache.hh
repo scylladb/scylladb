@@ -360,9 +360,7 @@ public:
 
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
-            return _load(k).then([] (Tp val) {
-                return make_ready_future<Tp>(std::move(val));
-            });
+            return _load(k);
         }
 
         return get_ptr(k).then([] (value_ptr v_ptr) {
