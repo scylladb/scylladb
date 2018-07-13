@@ -555,7 +555,7 @@ private:
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();
                     })
-                    | boost::adaptors::transformed([this] (ts_value_lru_entry& lru_entry) {
+                    | boost::adaptors::transformed([] (ts_value_lru_entry& lru_entry) {
                         return &lru_entry;
                     }));
 
