@@ -31,8 +31,7 @@
 class clustering_ranges_walker {
     const schema& _schema;
     const query::clustering_row_ranges& _ranges;
-    query::clustering_row_ranges::const_iterator _current;
-    query::clustering_row_ranges::const_iterator _end;
+    boost::iterator_range<query::clustering_row_ranges::const_iterator> _current;
     bool _in_current; // next position is known to be >= _current_start
     bool _with_static_row;
     position_in_partition_view _current_start;
@@ -43,59 +42,49 @@ private:
     bool advance_to_next_range() {
         _in_current = false;
         if (!_current_start.is_static_row()) {
-            if (_current == _end) {
+            if (!_current) {
                 return false;
             }
-            ++_current;
+            _current.advance_begin(1);
         }
         ++_change_counter;
-        if (_current == _end) {
+        if (!_current) {
             _current_end = _current_start = position_in_partition_view::after_all_clustered_rows();
             return false;
         }
-        _current_start = position_in_partition_view::for_range_start(*_current);
-        _current_end = position_in_partition_view::for_range_end(*_current);
+        _current_start = position_in_partition_view::for_range_start(_current.front());
+        _current_end = position_in_partition_view::for_range_end(_current.front());
         return true;
     }
-public:
-    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges, bool with_static_row = true)
-        : _schema(s)
-        , _ranges(ranges)
-        , _current(ranges.begin())
-        , _end(ranges.end())
-        , _in_current(with_static_row)
-        , _with_static_row(with_static_row)
-        , _current_start(position_in_partition_view::for_static_row())
-        , _current_end(position_in_partition_view::before_all_clustered_rows())
-    {
-        if (!with_static_row) {
-            if (_current == _end) {
+
+    void set_current_positions() {
+         if (!_with_static_row) {
+            if (!_current) {
                 _current_start = position_in_partition_view::before_all_clustered_rows();
             } else {
-                _current_start = position_in_partition_view::for_range_start(*_current);
-                _current_end = position_in_partition_view::for_range_end(*_current);
+                _current_start = position_in_partition_view::for_range_start(_current.front());
+                _current_end = position_in_partition_view::for_range_end(_current.front());
             }
         }
     }
-    clustering_ranges_walker(clustering_ranges_walker&& o) noexcept
-        : _schema(o._schema)
-        , _ranges(o._ranges)
-        , _current(o._current)
-        , _end(o._end)
-        , _in_current(o._in_current)
-        , _with_static_row(o._with_static_row)
-        , _current_start(o._current_start)
-        , _current_end(o._current_end)
-        , _trim(std::move(o._trim))
-        , _change_counter(o._change_counter)
-    { }
-    clustering_ranges_walker& operator=(clustering_ranges_walker&& o) {
-        if (this != &o) {
-            this->~clustering_ranges_walker();
-            new (this) clustering_ranges_walker(std::move(o));
-        }
-        return *this;
+
+public:
+    clustering_ranges_walker(const schema& s, const query::clustering_row_ranges& ranges, bool with_static_row = true)
+            : _schema(s)
+            , _ranges(ranges)
+            , _current(ranges)
+            , _in_current(with_static_row)
+            , _with_static_row(with_static_row)
+            , _current_start(position_in_partition_view::for_static_row())
+            , _current_end(position_in_partition_view::before_all_clustered_rows()) {
+        set_current_positions();
     }
+
+    clustering_ranges_walker(const clustering_ranges_walker&) = delete;
+    clustering_ranges_walker(clustering_ranges_walker&&) = delete;
+
+    clustering_ranges_walker& operator=(const clustering_ranges_walker&) = delete;
+    clustering_ranges_walker& operator=(clustering_ranges_walker&&) = delete;
 
     // Excludes positions smaller than pos from the ranges.
     // pos should be monotonic.
@@ -173,17 +162,15 @@ public:
             return false;
         }
 
-        auto i = _current;
-        while (i != _end) {
-            auto range_start = position_in_partition_view::for_range_start(*i);
+        for (const auto& rng : _current) {
+            auto range_start = position_in_partition_view::for_range_start(rng);
             if (!less(range_start, end)) {
                 return false;
             }
-            auto range_end = position_in_partition_view::for_range_end(*i);
+            auto range_end = position_in_partition_view::for_range_end(rng);
             if (less(start, range_end)) {
                 return true;
             }
-            ++i;
         }
 
         return false;
@@ -191,7 +178,7 @@ public:
 
     // Returns true if advanced past all contained positions. Any later advance_to() until reset() will return false.
     bool out_of_range() const {
-        return !_in_current && _current == _end;
+        return !_in_current && !_current;
     }
 
     // Resets the state of the walker so that advance_to() can be now called for new sequence of positions.
@@ -199,7 +186,12 @@ public:
     void reset() {
         auto trim = std::move(_trim);
         auto ctr = _change_counter;
-        *this = clustering_ranges_walker(_schema, _ranges, _with_static_row);
+        _current = _ranges;
+        _in_current = _with_static_row;
+        _current_start = position_in_partition_view::for_static_row();
+        _current_end = position_in_partition_view::before_all_clustered_rows();
+        set_current_positions();
+
         _change_counter = ctr + 1;
         if (trim) {
             trim_front(std::move(*trim));
