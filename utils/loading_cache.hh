@@ -36,6 +36,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/chunked_vector.hh"
 #include "log.hh"
 
 namespace bi = boost::intrusive;
@@ -550,7 +551,7 @@ private:
 
         // Reload all those which value needs to be reloaded.
         with_gate(_timer_reads_gate, [this] {
-            auto to_reload = boost::copy_range<std::vector<ts_value_lru_entry*>>(_lru_list
+            auto to_reload = boost::copy_range<utils::chunked_vector<ts_value_lru_entry*>>(_lru_list
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();
                     })
