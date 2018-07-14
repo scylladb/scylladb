@@ -379,6 +379,14 @@ int main(int ac, char** av) {
                 }
             }
             dht::set_global_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
+            auto make_sched_group = [&] (sstring name, unsigned shares) {
+                if (cfg->cpu_scheduler()) {
+                    return seastar::create_scheduling_group(name, shares).get0();
+                } else {
+                    return seastar::scheduling_group();
+                }
+            };
+            auto maintenance_scheduling_group = make_sched_group("streaming", 200);
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
             ctx.api_dir = cfg->api_ui_dir();
@@ -406,9 +414,11 @@ int main(int ac, char** av) {
                     return prometheus_server.stop();
                 });
                 prometheus::start(prometheus_server, pctx);
-                prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
+                with_scheduling_group(maintenance_scheduling_group, [&] {
+                  return prometheus_server.listen(ipv4_addr{prom_addr.addr_list.front(), pport}).handle_exception([pport, &cfg] (auto ep) {
                     startlog.error("Could not start Prometheus API server on {}:{}: {}", cfg->prometheus_address(), pport, ep);
                     return make_exception_future<>(ep);
+                  });
                 }).get();
             }
             if (!broadcast_address.empty()) {
@@ -484,7 +494,9 @@ int main(int ac, char** av) {
             auto ip = e.addr_list.front();
             ctx.http_server.start("API").get();
             api::set_server_init(ctx).get();
-            ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
+            with_scheduling_group(maintenance_scheduling_group, [&] {
+                return ctx.http_server.listen(ipv4_addr{ip, api_port});
+            }).get();
             startlog.info("Scylla API server listening on {}:{} ...", api_address, api_port);
             static sharded<auth::service> auth_service;
             static sharded<db::system_distributed_keyspace> sys_dist_ks;
@@ -494,16 +506,9 @@ int main(int ac, char** av) {
 
             // Note: changed from using a move here, because we want the config object intact.
             database_config dbcfg;
-            auto make_sched_group = [&] (sstring name, unsigned shares) {
-                if (cfg->cpu_scheduler()) {
-                    return seastar::create_scheduling_group(name, shares).get0();
-                } else {
-                    return seastar::scheduling_group();
-                }
-            };
             dbcfg.compaction_scheduling_group = make_sched_group("compaction", 1000);
             dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", 1000);
-            dbcfg.streaming_scheduling_group = make_sched_group("streaming", 200);
+            dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
             dbcfg.statement_scheduling_group = make_sched_group("statement", 1000);
             dbcfg.memtable_scheduling_group = make_sched_group("memtable", 1000);
             dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", 200);
