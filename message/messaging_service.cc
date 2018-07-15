@@ -404,12 +404,9 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_DIGEST_ACK:
     case messaging_verb::DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
-    case messaging_verb::REPLICATION_FINISHED:
     case messaging_verb::MIGRATION_REQUEST:
-    case messaging_verb::REPAIR_CHECKSUM_RANGE:
     case messaging_verb::SCHEMA_CHECK:
     case messaging_verb::COUNTER_MUTATION:
-    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
         return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
@@ -426,6 +423,9 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::STREAM_MUTATION:
     case messaging_verb::STREAM_MUTATION_DONE:
     case messaging_verb::COMPLETE_MESSAGE:
+    case messaging_verb::REPLICATION_FINISHED:
+    case messaging_verb::REPAIR_CHECKSUM_RANGE:
+    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
