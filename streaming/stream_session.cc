@@ -58,10 +58,46 @@
 #include "service/priority_manager.hh"
 #include "query-request.hh"
 #include "schema_registry.hh"
+#include "multishard_writer.hh"
+#include "sstables/sstables.hh"
 
 namespace streaming {
 
 logging::logger sslog("stream_session");
+
+
+/*
+ * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
+ * generating_reader.
+ *
+ */
+class generating_reader final : public flat_mutation_reader::impl {
+    std::function<future<mutation_fragment_opt> ()> _get_next_fragment;
+public:
+    generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment)
+        : impl(std::move(s)), _get_next_fragment(std::move(get_next_fragment))
+    { }
+    virtual future<> fill_buffer(db::timeout_clock::time_point) override {
+        return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            return _get_next_fragment().then([this] (mutation_fragment_opt mopt) {
+                if (!mopt) {
+                    _end_of_stream = true;
+                } else {
+                    push_mutation_fragment(std::move(*mopt));
+                }
+            });
+        });
+    }
+    virtual void next_partition() override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+    virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override {
+        throw std::bad_function_call();
+    }
+};
 
 static auto get_stream_result_future(utils::UUID plan_id) {
     auto& sm = get_local_stream_manager();
@@ -145,6 +181,64 @@ void stream_session::init_messaging_service_handler() {
                         }
                         return make_ready_future<>();
                     });
+                });
+            });
+        });
+    });
+    ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::source<frozen_mutation_fragment> source) {
+        auto from = netw::messaging_service::get_source(cinfo);
+        return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, cf_id, source] () mutable {
+            auto src_cpu_id = from.cpu_id;
+            return smp::submit_to(src_cpu_id % smp::count, [from, estimated_partitions, plan_id, schema_id, cf_id, source] () mutable {
+                return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source] (schema_ptr s) mutable {
+                    auto sink = ms().make_sink_for_stream_mutation_fragments(source);
+                    auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
+                        return source().then([plan_id, from, s] (stdx::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
+                            if (fmf_opt) {
+                                frozen_mutation_fragment& fmf = std::get<0>(fmf_opt.value());
+                                auto sz = fmf.representation().size();
+                                auto mf = fmf.unfreeze(*s);
+                                streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+                                return make_ready_future<mutation_fragment_opt>(std::move(mf));
+                            } else {
+                                return make_ready_future<mutation_fragment_opt>();
+                            }
+                        });
+                    };
+                    distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
+                        make_flat_mutation_reader<generating_reader>(s, std::move(get_next_mutation_fragment)),
+                        [cf_id, plan_id, s, estimated_partitions] (flat_mutation_reader reader) {
+                            auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
+                            sstables::sstable_writer_config sst_cfg;
+                            sst_cfg.large_partition_handler = cf.get_large_partition_handler();
+                            sstables::shared_sstable sst = cf.make_streaming_sstable_for_write();
+                            schema_ptr s = reader.schema();
+                            return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg).then([sst] {
+                                return sst->open_data();
+                            }).then([&cf, sst] {
+                                return cf.add_sstable_and_update_cache(sst);
+                            });
+                        }
+                    ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
+                        int32_t status = 0;
+                        uint64_t received_partitions = 0;
+                        if (f.failed()) {
+                            f.ignore_ready_future();
+                            status = -1;
+                        } else {
+                            received_partitions = f.get0();
+                        }
+                        if (received_partitions) {
+                            sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
+                                    plan_id, s->ks_name(), s->cf_name(), estimated_partitions, received_partitions);
+                        }
+                        return sink(status).finally([sink] () mutable {
+                            return sink.close();
+                        });
+                    }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+                        sslog.error("[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS for ks={}, cf={}, peer={}: {}", plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                    });
+                    return make_ready_future<rpc::sink<int>>(sink);
                 });
             });
         });

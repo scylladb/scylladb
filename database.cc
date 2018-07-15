@@ -681,6 +681,17 @@ table::make_reader(schema_ptr s,
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
+sstables::shared_sstable
+table::make_streaming_sstable_for_write() {
+    sstring dir = _config.datadir;
+    auto newtab = sstables::make_sstable(_schema,
+            dir, calculate_generation_for_new_table(),
+            get_highest_supported_format(),
+            sstables::sstable::format_types::big);
+    dblog.debug("Created sstable for streaming: ks={}, cf={}, dir={}", schema()->ks_name(), schema()->cf_name(), dir);
+    return newtab;
+}
+
 flat_mutation_reader
 table::make_streaming_reader(schema_ptr s,
                            const dht::partition_range_vector& ranges) const {
@@ -813,6 +824,16 @@ void table::add_sstable(sstables::shared_sstable sstable, const std::vector<unsi
     _sstables = std::move(new_sstables);
     update_stats_for_new_sstable(sstable->bytes_on_disk(), shards_for_the_sstable);
     _compaction_strategy.get_backlog_tracker().add_sstable(sstable);
+}
+
+future<>
+table::add_sstable_and_update_cache(sstables::shared_sstable sst) {
+    return get_row_cache().invalidate([this, sst] () noexcept {
+        // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
+        // atomically load all opened sstables into column family.
+        add_sstable(sst, {engine().cpu_id()});
+        trigger_compaction();
+    }, dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
 future<>

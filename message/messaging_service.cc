@@ -81,6 +81,9 @@
 #include "stdx.hh"
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
+#include "frozen_mutation.hh"
+#include "flat_mutation_reader.hh"
+#include "streaming/stream_manager.hh"
 
 namespace netw {
 
@@ -260,6 +263,7 @@ void messaging_service::start_listen() {
     if (_compress_what != compress_what::none) {
         so.compressor_factory = &compressor_factory;
     }
+    so.streaming_domain = rpc::streaming_domain_type(0x55AA);
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
@@ -594,6 +598,25 @@ void messaging_service::remove_rpc_client(msg_addr id) {
 
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {
     return _rpc;
+}
+
+rpc::sink<int32_t> messaging_service::make_sink_for_stream_mutation_fragments(rpc::source<frozen_mutation_fragment>& source) {
+    return source.make_sink<netw::serializer, int32_t>();
+}
+
+future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>
+messaging_service::make_sink_and_source_for_stream_mutation_fragments(utils::UUID schema_id, utils::UUID plan_id, utils::UUID cf_id, uint64_t estimated_partitions, msg_addr id) {
+    rpc_protocol::client& rpc_client = *get_rpc_client(messaging_verb::STREAM_MUTATION_FRAGMENTS, id);
+    return rpc_client.make_stream_sink<netw::serializer, frozen_mutation_fragment>().then([this, plan_id, schema_id, cf_id, estimated_partitions, &rpc_client] (rpc::sink<frozen_mutation_fragment> sink) mutable {
+        auto rpc_handler = rpc()->make_client<rpc::source<int32_t> (utils::UUID, utils::UUID, utils::UUID, uint64_t, rpc::sink<frozen_mutation_fragment>)>(messaging_verb::STREAM_MUTATION_FRAGMENTS);
+        return rpc_handler(rpc_client , plan_id, schema_id, cf_id, estimated_partitions, sink).then([sink] (rpc::source<int32_t> source) mutable {
+            return make_ready_future<rpc::sink<frozen_mutation_fragment>, rpc::source<int32_t>>(std::move(sink), std::move(source));
+        });
+    });
+}
+
+void messaging_service::register_stream_mutation_fragments(std::function<future<rpc::sink<int32_t>> (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::source<frozen_mutation_fragment> source)>&& func) {
+    register_handler(this, messaging_verb::STREAM_MUTATION_FRAGMENTS, std::move(func));
 }
 
 // Send a message for verb
