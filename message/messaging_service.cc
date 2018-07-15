@@ -396,6 +396,21 @@ rpc::no_wait_type messaging_service::no_wait() {
 
 static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     switch (verb) {
+    case messaging_verb::CLIENT_ID:
+    case messaging_verb::MUTATION:
+    case messaging_verb::READ_DATA:
+    case messaging_verb::READ_MUTATION_DATA:
+    case messaging_verb::READ_DIGEST:
+    case messaging_verb::GOSSIP_DIGEST_ACK:
+    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::TRUNCATE:
+    case messaging_verb::REPLICATION_FINISHED:
+    case messaging_verb::MIGRATION_REQUEST:
+    case messaging_verb::REPAIR_CHECKSUM_RANGE:
+    case messaging_verb::SCHEMA_CHECK:
+    case messaging_verb::COUNTER_MUTATION:
+    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
+        return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
     // as well as reduce latency as there are potentially many requests
@@ -415,8 +430,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
         return 3;
-    default:
-        return 0;
+    case messaging_verb::LAST:
+        return -1; // should never happen
     }
 }
 
