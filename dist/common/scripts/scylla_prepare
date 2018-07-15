@@ -36,7 +36,7 @@ if __name__ == '__main__':
     mode = cfg.get('NETWORK_MODE')
 
     if ami == 'yes' and os.path.exists('/etc/scylla/ami_disabled'):
-        rm /etc/scylla/ami_disabled
+        os.remove('/etc/scylla/ami_disabled')
         sys.exit(1)
 
     if mode == 'virtio':
