@@ -393,7 +393,8 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
-static unsigned get_rpc_client_idx(messaging_verb verb) {
+
+static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     unsigned idx = 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
@@ -415,6 +416,20 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
         idx = 3;
     }
     return idx;
+}
+
+static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
+    std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
+    for (size_t i = 0; i < tab.size(); ++i) {
+        tab[i] = do_get_rpc_client_idx(messaging_verb(i));
+    }
+    return tab;
+}
+
+static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
+
+static unsigned get_rpc_client_idx(messaging_verb verb) {
+    return s_rpc_client_idx_table[static_cast<size_t>(verb)];
 }
 
 scheduling_group
