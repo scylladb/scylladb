@@ -33,6 +33,7 @@
 #include "bytes_ostream.hh"
 #include "utils/input_stream.hh"
 #include "utils/fragment_range.hh"
+#include "utils/chunked_vector.hh"
 
 #include <boost/range/algorithm/for_each.hpp>
 

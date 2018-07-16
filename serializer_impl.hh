@@ -94,6 +94,20 @@ struct container_traits<std::vector<T>> {
     }
 };
 
+template<typename T>
+struct container_traits<utils::chunked_vector<T>> {
+    struct back_emplacer {
+        utils::chunked_vector<T>& c;
+        back_emplacer(utils::chunked_vector<T>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace_back(std::move(v));
+        }
+    };
+    void resize(utils::chunked_vector<T>& c, size_t size) {
+        c.resize(size);
+    }
+};
+
 template<typename T, size_t N>
 struct container_traits<std::array<T, N>> {
     struct back_emplacer {
@@ -163,6 +177,28 @@ struct serializer<std::vector<T>> {
     }
     template<typename Output>
     static void write(Output& out, const std::vector<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        serialize_array<T>(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        skip_array<T>(in, sz);
+    }
+};
+
+template<typename T>
+struct serializer<utils::chunked_vector<T>> {
+    template<typename Input>
+    static utils::chunked_vector<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        utils::chunked_vector<T> v;
+        v.reserve(sz);
+        deserialize_array<T>(in, v, sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const utils::chunked_vector<T>& v) {
         safe_serialize_as_uint32(out, v.size());
         serialize_array<T>(out, v);
     }
