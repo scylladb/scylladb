@@ -3302,9 +3302,22 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     slogger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
             result_rows_per_range, cmd->row_limit, ranges.size(), concurrency_factor);
 
+    // The call to `query_partition_key_range_concurrent()` below
+    // updates `cmd` directly when processing the results. Under
+    // some circumstances, when the query executes without deferring,
+    // this updating will happen before the lambda object is constructed
+    // and hence the updates will be visible to the lambda. This will
+    // result in the merger below trimming the results according to the
+    // updated (decremented) limits and causing the paging logic to
+    // declare the query exhausted due to the non-full page. To avoid
+    // this save the original values of the limits here and pass these
+    // to the lambda below.
+    const auto row_limit = cmd->row_limit;
+    const auto partition_limit = cmd->partition_limit;
+
     return query_partition_key_range_concurrent(query_options.timeout(*this), std::move(results), cmd, cl, ranges.begin(), std::move(ranges),
             concurrency_factor, std::move(query_options.trace_state), cmd->row_limit, cmd->partition_limit)
-            .then([row_limit = cmd->row_limit, partition_limit = cmd->partition_limit](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
+            .then([row_limit, partition_limit](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
         query::result_merger merger(row_limit, partition_limit);
         merger.reserve(results.size());
 
