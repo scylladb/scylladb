@@ -1411,12 +1411,17 @@ row::row(const schema& s, column_kind kind, const row& o)
     if (_type == storage_type::vector) {
         auto& other_vec = o._storage.vector;
         auto& vec = *new (&_storage.vector) vector_storage;
-        vec.present = other_vec.present;
-        vec.v.reserve(other_vec.v.size());
-        column_id id = 0;
-        for (auto& cell : other_vec.v) {
-            auto& cdef = s.column_at(kind, id++);
-            vec.v.emplace_back(cell_and_hash { cell.cell.copy(*cdef.type), cell.hash });
+        try {
+            vec.present = other_vec.present;
+            vec.v.reserve(other_vec.v.size());
+            column_id id = 0;
+            for (auto& cell : other_vec.v) {
+                auto& cdef = s.column_at(kind, id++);
+                vec.v.emplace_back(cell_and_hash{cell.cell.copy(*cdef.type), cell.hash});
+            }
+        } catch (...) {
+            _storage.vector.~vector_storage();
+            throw;
         }
     } else {
         auto cloner = [&] (const auto& x) {
