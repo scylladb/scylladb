@@ -169,7 +169,7 @@ void gossiper::set_last_processed_message_at(clk::time_point tp) {
  * Sort this list. Now loop through the sorted list and retrieve the GossipDigest corresponding
  * to the endpoint from the map that was initially constructed.
 */
-void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
+void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) {
     /* Construct a map of endpoint to GossipDigest. */
     std::map<inet_address, gossip_digest> ep_to_digest_map;
     for (auto g_digest : g_digest_list) {
@@ -180,7 +180,7 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
      * These digests have their maxVersion set to the difference of the version
      * of the local EndpointState and the version found in the GossipDigest.
     */
-    std::vector<gossip_digest> diff_digests;
+    utils::chunked_vector<gossip_digest> diff_digests;
     for (auto g_digest : g_digest_list) {
         auto ep = g_digest.get_endpoint();
         auto* ep_state = this->get_endpoint_state_for_endpoint_ptr(ep);
@@ -224,7 +224,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
     auto g_digest_list = syn_msg.get_gossip_digests();
     do_sort(g_digest_list);
-    std::vector<gossip_digest> delta_gossip_digest_list;
+    utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
     std::map<inet_address, endpoint_state> delta_ep_state_map;
     this->examine_gossiper(g_digest_list, delta_gossip_digest_list, delta_ep_state_map);
     gms::gossip_digest_ack ack_msg(std::move(delta_gossip_digest_list), std::move(delta_ep_state_map));
@@ -394,7 +394,7 @@ void gossiper::uninit_messaging_service_handler() {
 }
 
 future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
-    std::vector<inet_address> __live_endpoints(epset.begin(), epset.end());
+    utils::chunked_vector<inet_address> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
     if (size < 1) {
         return make_ready_future<>();
@@ -451,7 +451,7 @@ void gossiper::notify_failure_detector(inet_address endpoint, const endpoint_sta
 
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> map) {
     auto start = std::chrono::steady_clock::now();
-    auto endpoints = boost::copy_range<std::vector<inet_address>>(map | boost::adaptors::map_keys);
+    auto endpoints = boost::copy_range<utils::chunked_vector<inet_address>>(map | boost::adaptors::map_keys);
     std::shuffle(endpoints.begin(), endpoints.end(), _random_engine);
     auto node_is_seed = [this] (gms::inet_address ip) { return is_seed(ip); };
     boost::partition(endpoints, node_is_seed);
@@ -538,7 +538,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    _live_endpoints.erase(std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint), _live_endpoints.end());
+    _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), endpoint)));
     _live_endpoints_just_added.remove(endpoint);
     _unreachable_endpoints.erase(endpoint);
     quarantine_endpoint(endpoint);
@@ -619,7 +619,7 @@ void gossiper::run() {
             hbs.update_heart_beat();
 
             logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
-            std::vector<gossip_digest> g_digests;
+            utils::chunked_vector<gossip_digest> g_digests;
             this->make_random_gossip_digest(g_digests);
 
             if (g_digests.size() > 0) {
@@ -627,7 +627,7 @@ void gossiper::run() {
 
                 _gossiped_to_seed = false;
 
-                auto get_random_node = [this] (const std::vector<inet_address>& nodes) {
+                auto get_random_node = [this] (const utils::chunked_vector<inet_address>& nodes) {
                     std::uniform_int_distribution<int> dist(0, nodes.size() - 1);
                     int index = dist(this->_random);
                     return nodes[index];
@@ -888,12 +888,12 @@ void gossiper::replaced_endpoint(inet_address endpoint) {
     replacement_quarantine(endpoint);
 }
 
-void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) {
+void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) {
     int generation = 0;
     int max_version = 0;
 
     // local epstate will be part of endpoint_state_map
-    std::vector<inet_address> endpoints;
+    utils::chunked_vector<inet_address> endpoints;
     for (auto&& x : endpoint_state_map) {
         endpoints.push_back(x.first);
     }
@@ -928,7 +928,7 @@ future<> gossiper::replicate(inet_address ep, const endpoint_state& es) {
     });
 }
 
-future<> gossiper::replicate(inet_address ep, const std::map<application_state, versioned_value>& src, const std::vector<application_state>& changed) {
+future<> gossiper::replicate(inet_address ep, const std::map<application_state, versioned_value>& src, const utils::chunked_vector<application_state>& changed) {
     return container().invoke_on_all([ep, &src, &changed, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
         if (engine().cpu_id() != orig) {
             for (auto&& key : changed) {
@@ -1325,7 +1325,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
-    _live_endpoints.erase(std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr), _live_endpoints.end());
+    _live_endpoints.resize(std::distance(_live_endpoints.begin(), std::remove(_live_endpoints.begin(), _live_endpoints.end(), addr)));
     _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("InetAddress {} is now DOWN, status = {}", addr, get_gossip_status(local_state));
@@ -1425,7 +1425,7 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     //     local_state.get_heart_beat_state().get_heart_beat_version(), oldVersion, addr);
     // }
 
-    std::vector<application_state> changed;
+    utils::chunked_vector<application_state> changed;
     auto&& remote_map = remote_state.get_application_state_map();
 
     // Exceptions thrown from listeners will result in abort because that could leave the node in a bad
@@ -1482,7 +1482,7 @@ void gossiper::do_on_change_notifications(inet_address addr, const application_s
 }
 
 void gossiper::request_all(gossip_digest& g_digest,
-    std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation) {
+    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation) {
     /* We are here since we have no data for this endpoint locally so request everthing. */
     delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation, 0);
     logger.trace("request_all for {}", g_digest.get_endpoint());
@@ -1499,8 +1499,8 @@ void gossiper::send_all(gossip_digest& g_digest,
     }
 }
 
-void gossiper::examine_gossiper(std::vector<gossip_digest>& g_digest_list,
-    std::vector<gossip_digest>& delta_gossip_digest_list,
+void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
+    utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
     std::map<inet_address, endpoint_state>& delta_ep_state_map) {
     if (g_digest_list.size() == 0) {
         /* we've been sent a *completely* empty syn, which should normally
@@ -1616,7 +1616,7 @@ future<> gossiper::do_shadow_round() {
         while (this->_in_shadow_round) {
             // send a completely empty syn
             for (inet_address seed : _seeds) {
-                std::vector<gossip_digest> digests;
+                utils::chunked_vector<gossip_digest> digests;
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
                 auto id = get_msg_addr(seed);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
@@ -1691,7 +1691,7 @@ future<> gossiper::add_local_application_state(application_state state, versione
 future<> gossiper::add_local_application_state(std::initializer_list<std::pair<application_state, utils::in<versioned_value>>> args) {
     using in_pair_type = std::pair<application_state, utils::in<versioned_value>>;
     using out_pair_type = std::pair<application_state, versioned_value>;
-    using vector_type = std::vector<out_pair_type>;
+    using vector_type = std::list<out_pair_type>;
 
     return add_local_application_state(boost::copy_range<vector_type>(args | boost::adaptors::transformed([](const in_pair_type& p) {
         return out_pair_type(p.first, p.second.move());
@@ -1711,7 +1711,7 @@ future<> gossiper::add_local_application_state(std::initializer_list<std::pair<a
 // change later, if needed.
 // Retaining the slightly broken signature is also cosistent with origin. Hooray.
 //
-future<> gossiper::add_local_application_state(std::vector<std::pair<application_state, versioned_value>> states) {
+future<> gossiper::add_local_application_state(std::list<std::pair<application_state, versioned_value>> states) {
     if (states.empty()) {
         return make_ready_future<>();
     }

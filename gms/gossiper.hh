@@ -104,7 +104,7 @@ private:
     future<> handle_shutdown_msg(inet_address from);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
-    void do_sort(std::vector<gossip_digest>& g_digest_list);
+    void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
@@ -199,7 +199,7 @@ private:
     } _subscribers;
 
     /* live member set */
-    std::vector<inet_address> _live_endpoints;
+    utils::chunked_vector<inet_address> _live_endpoints;
     std::list<inet_address> _live_endpoints_just_added;
 
     /* nodes are being marked as alive */
@@ -224,7 +224,7 @@ private:
     clk::time_point _last_processed_message_at = now();
 
     std::unordered_map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
-    std::vector<inet_address> _shadow_live_endpoints;
+    utils::chunked_vector<inet_address> _shadow_live_endpoints;
 
     void run();
     // Replicates given endpoint_state to all other shards.
@@ -232,7 +232,7 @@ private:
     future<> replicate(inet_address, const endpoint_state&);
     // Replicates "states" from "src" to all other shards.
     // "src" and "states" must be kept alive until completes and must not change.
-    future<> replicate(inet_address, const std::map<application_state, versioned_value>& src, const std::vector<application_state>& states);
+    future<> replicate(inet_address, const std::map<application_state, versioned_value>& src, const utils::chunked_vector<application_state>& states);
     // Replicates given value to all other shards.
     // The value must be kept alive until completes and not change.
     future<> replicate(inet_address, application_state key, const versioned_value& value);
@@ -341,7 +341,7 @@ private:
      *
      * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(std::vector<gossip_digest>& g_digests);
+    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests);
 
 public:
     /**
@@ -469,7 +469,7 @@ private:
     void do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
-    void request_all(gossip_digest& g_digest, std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
+    void request_all(gossip_digest& g_digest, utils::chunked_vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
 
     /* Send all the data with version greater than max_remote_version */
     void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, int max_remote_version);
@@ -479,8 +479,8 @@ public:
         This method is used to figure the state that the Gossiper has but Gossipee doesn't. The delta digests
         and the delta state are built up.
     */
-    void examine_gossiper(std::vector<gossip_digest>& g_digest_list,
-                         std::vector<gossip_digest>& delta_gossip_digest_list,
+    void examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
+                         utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
@@ -518,7 +518,7 @@ public:
      * Applies all states in set "atomically", as in guaranteed monotonic versions and
      * inserted into endpoint state together (and assuming same grouping, overwritten together).
      */
-    future<> add_local_application_state(std::vector<std::pair<application_state, versioned_value>>);
+    future<> add_local_application_state(std::list<std::pair<application_state, versioned_value>>);
 
     /**
      * Intentionally overenginered to avoid very rare string copies.

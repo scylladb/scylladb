@@ -69,10 +69,9 @@ public:
             auto ep2 = inet_address("2.2.2.2");
             int32_t gen = 800;
             int32_t ver = 900;
-            std::vector<gms::gossip_digest> digests{
-                {ep1, gen++, ver++},
-                {ep2, gen++, ver++},
-            };
+            utils::chunked_vector<gms::gossip_digest> digests;
+            digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
+            digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
             std::map<inet_address, endpoint_state> eps{
                 {ep1, endpoint_state()},
                 {ep2, endpoint_state()},
@@ -126,10 +125,9 @@ public:
         auto ep2 = inet_address("2.2.2.2");
         int32_t gen = 100;
         int32_t ver = 900;
-        std::vector<gms::gossip_digest> digests{
-            {ep1, gen++, ver++},
-            {ep2, gen++, ver++},
-        };
+        utils::chunked_vector<gms::gossip_digest> digests;
+        digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
+        digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
         gms::gossip_digest_syn syn("my_cluster", "my_partition", digests);
         return ms.send_gossip_digest_syn(id, std::move(syn)).then([this] {
             return digest_test_done.get_future();
