@@ -336,7 +336,8 @@ if __name__ == '__main__':
         sysconfig_setup = interactive_ask_service('Do you want to setup a system-wide customized configuration for Scylla?', 'Yes - setup the sysconfig file. No - skips this step.', 'yes')
     if sysconfig_setup:
         nic = interactive_choose_nic()
-        set_nic = interactive_ask_service('Do you want to enable Network Interface Card (NIC) optimization?', 'Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
+        if interactive:
+            set_nic = interactive_ask_service('Do you want to enable Network Interface Card (NIC) optimization?', 'Yes - optimize the NIC queue settings. Selecting Yes greatly improves performance. No - skip this step.', 'yes')
     if sysconfig_setup:
         setup_args = '--setup-nic' if set_nic else ''
         run_setup_script('NIC queue', '/usr/lib/scylla/scylla_sysconfig_setup --nic {nic} {setup_args}'.format(nic=nic, setup_args=setup_args))
