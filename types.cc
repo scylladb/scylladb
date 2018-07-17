@@ -400,6 +400,7 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     virtual data_value deserialize(bytes_view v) const override {
         return make_value(std::make_unique<native_type>(v.begin(), v.end()));
     }
+    virtual void validate(const fragmented_temporary_buffer::view&) const override { }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
