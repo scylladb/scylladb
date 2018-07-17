@@ -30,6 +30,21 @@
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
 }
+
+std::ostream& operator<<(std::ostream& out, const partition_key::with_schema_wrapper& pk) {
+    auto type_iterator = pk.pkey.get_compound_type(pk.s)->types().begin();
+    bool first = true;
+    for (auto&& e : pk.pkey.components(pk.s)) {
+        if (!first) {
+            out << ":";
+        }
+        first = false;
+        out << (*type_iterator)->to_string(to_bytes(e));
+        ++type_iterator;
+    }
+    return out;
+}
+
 std::ostream& operator<<(std::ostream& out, const partition_key_view& pk) {
     return out << "pk{" << to_hex(pk.representation()) << "}";
 }
