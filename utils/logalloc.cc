@@ -189,6 +189,7 @@ private:
 private:
     template<typename Function>
     void run_and_handle_errors(Function&& fn) noexcept {
+        memory::disable_failure_guard dfg;
         if (_broken) {
             return;
         }
