@@ -59,7 +59,7 @@ future<> cql_table_large_partition_handler::update_large_partitions(const schema
     auto ks_name = s.ks_name();
     auto cf_name = s.cf_name();
     std::ostringstream oss;
-    oss << dht::global_partitioner().decorate_key(s, key.to_partition_key(s));
+    oss << key.to_partition_key(s).with_schema(s);
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
     auto key_str = oss.str();
     return db::execute_cql(req, ks_name, cf_name, sstable_name, int64_t(partition_size), key_str, timestamp)
