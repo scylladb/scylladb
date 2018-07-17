@@ -629,6 +629,25 @@ static inline bytes_view to_bytes_view(temporary_buffer<char>& b)
     return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
 }
 
+namespace compression_buffers {
+
+// Reusable buffers for compression and decompression. Cleared every
+// clear_buffers_trigger uses.
+static constexpr size_t clear_buffers_trigger = 100'000;
+static thread_local size_t buffer_use_count = 0;
+static thread_local utils::reusable_buffer input_buffer;
+static thread_local utils::reusable_buffer output_buffer;
+
+void on_compression_buffer_use() {
+    if (++buffer_use_count == clear_buffers_trigger) {
+        input_buffer.clear();
+        output_buffer.clear();
+        buffer_use_count = 0;
+    }
+}
+
+}
+
 future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame(size_t length, uint8_t flags)
 {
     if (flags & cql_frame_flags::compression) {
@@ -1240,10 +1259,6 @@ scattered_message<char> cql_server::response::make_message(uint8_t version, cql_
     return msg;
 }
 
-thread_local size_t cql_server::response::_buffer_use_count = 0;
-thread_local utils::reusable_buffer cql_server::response::_input_buffer;
-thread_local utils::reusable_buffer cql_server::response::_output_buffer;
-
 void cql_server::response::compress(cql_compression compression)
 {
     switch (compression) {
@@ -1261,12 +1276,13 @@ void cql_server::response::compress(cql_compression compression)
 
 void cql_server::response::compress_lz4()
 {
-    auto view = _input_buffer.get_linearized_view(_body);
+    using namespace compression_buffers;
+    auto view = input_buffer.get_linearized_view(_body);
     const char* input = reinterpret_cast<const char*>(view.data());
     size_t input_len = view.size();
 
     size_t output_len = LZ4_COMPRESSBOUND(input_len) + 4;
-  _body = _output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
+  _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
     char* output = reinterpret_cast<char*>(output_view.data());
     output[0] = (input_len >> 24) & 0xFF;
     output[1] = (input_len >> 16) & 0xFF;
@@ -1287,12 +1303,13 @@ void cql_server::response::compress_lz4()
 
 void cql_server::response::compress_snappy()
 {
-    auto view = _input_buffer.get_linearized_view(_body);
+    using namespace compression_buffers;
+    auto view = input_buffer.get_linearized_view(_body);
     const char* input = reinterpret_cast<const char*>(view.data());
     size_t input_len = view.size();
 
     size_t output_len = snappy_max_compressed_length(input_len);
-  _body = _output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
+  _body = output_buffer.make_buffer(output_len, [&] (bytes_mutable_view output_view) {
     char* output = reinterpret_cast<char*>(output_view.data());
     if (snappy_compress(input, input_len, output, &output_len) != SNAPPY_OK) {
         throw std::runtime_error("CQL frame Snappy compression failure");
@@ -1300,15 +1317,6 @@ void cql_server::response::compress_snappy()
     return output_len;
   });
     on_compression_buffer_use();
-}
-
-void cql_server::response::on_compression_buffer_use()
-{
-    if (++_buffer_use_count == _clear_buffers_trigger) {
-        _input_buffer.clear();
-        _output_buffer.clear();
-        _buffer_use_count = 0;
-    }
 }
 
 void cql_server::response::serialize(const event::schema_change& event, uint8_t version)
