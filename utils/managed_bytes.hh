@@ -138,6 +138,7 @@ private:
         }
     }
     const bytes_view::value_type* read_linearize() const {
+        seastar::memory::on_alloc_point();
         if (!external()) {
             return _u.small.data;
         } else  if (!_u.ptr->next) {

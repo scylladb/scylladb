@@ -616,6 +616,10 @@ public:
         // FIXME: Avoid copy
         return _set.find(position_in_partition_with_schema(s.shared_from_this(), position_in_partition(pos))) != _set.end();
     }
+    // Returns true iff this set is fully contained in the other set.
+    bool contained_in(clustering_interval_set& other) const {
+        return boost::icl::within(_set, other._set);
+    }
     bool overlaps(const schema& s, const position_range& range) const {
         // FIXME: Avoid copy
         auto r = _set.equal_range(make_interval(s, range));
@@ -625,6 +629,11 @@ public:
     // The range may overlap with this set.
     void add(const schema& s, const position_range& r) {
         _set += make_interval(s, r);
+    }
+    void add(const schema& s, const clustering_interval_set& other) {
+        for (auto&& r : other) {
+            add(s, r);
+        }
     }
     position_range_iterator begin() const { return {_set.begin()}; }
     position_range_iterator end() const { return {_set.end()}; }

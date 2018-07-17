@@ -294,6 +294,7 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
     auto p_i = p._rows.begin();
     auto i = _rows.begin();
     while (p_i != p._rows.end()) {
+      try {
         rows_entry& src_e = *p_i;
         if (i != _rows.end() && less(*i, src_e)) {
             i = _rows.lower_bound(src_e, less);
@@ -314,6 +315,12 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
         } else {
             auto continuous = i->continuous() || src_e.continuous();
             auto dummy = i->dummy() && src_e.dummy();
+            i->set_continuous(continuous);
+            i->set_dummy(dummy);
+            // Clear continuity in the source first, so that in case of exception
+            // we don't end up with the range up to src_e being marked as continuous,
+            // violating exception guarantees.
+            src_e.set_continuous(false);
             if (tracker) {
                 tracker->on_remove(*i);
                 i->_lru_link.swap_nodes(src_e._lru_link);
@@ -323,8 +330,6 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
                 memory::on_alloc_point();
                 i->_row.apply_monotonically(s, std::move(src_e._row));
             }
-            i->set_continuous(continuous);
-            i->set_dummy(dummy);
             p_i = p._rows.erase_and_dispose(p_i, del);
         }
         if (preemptible && need_preempt() && p_i != p._rows.end()) {
@@ -337,6 +342,16 @@ stop_iteration mutation_partition::apply_monotonically(const schema& s, mutation
             p_i->set_continuous(false);
             return stop_iteration::no;
         }
+      } catch (...) {
+          // We cannot leave p with the clustering range up to p_i->position()
+          // marked as continuous because some of its sub-ranges may have originally been discontinuous.
+          // This would result in the sum of this and p to have broader continuity after preemption,
+          // also possibly violating the invariant of non-overlapping continuity between MVCC versions,
+          // if that's what we're merging here.
+          // It's always safe to mark the range as discontinuous.
+          p_i->set_continuous(false);
+          throw;
+      }
     }
     return stop_iteration::yes;
 }
@@ -461,13 +476,17 @@ void mutation_partition::apply_insert(const schema& s, clustering_key_view key, 
     clustered_row(s, key).apply(row_marker(created_at, ttl, expiry));
 }
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
-    auto e = current_allocator().construct<rows_entry>(key, std::move(row));
+    auto e = alloc_strategy_unique_ptr<rows_entry>(
+        current_allocator().construct<rows_entry>(key, std::move(row)));
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
+    e.release();
 }
 
 void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
-    auto e = current_allocator().construct<rows_entry>(s, key, row);
+    auto e = alloc_strategy_unique_ptr<rows_entry>(
+        current_allocator().construct<rows_entry>(s, key, row));
     _rows.insert(_rows.end(), *e, rows_entry::compare(s));
+    e.release();
 }
 
 const row*
@@ -483,9 +502,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key&& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(std::move(key));
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(std::move(key)));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -494,9 +514,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, const clustering_key& key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(key));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -505,9 +526,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, clustering_key_view key) {
     auto i = _rows.find(key, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(key);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(key));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -516,9 +538,10 @@ deletable_row&
 mutation_partition::clustered_row(const schema& s, position_in_partition_view pos, is_dummy dummy, is_continuous continuous) {
     auto i = _rows.find(pos, rows_entry::compare(s));
     if (i == _rows.end()) {
-        auto e = current_allocator().construct<rows_entry>(s, pos, dummy, continuous);
-        _rows.insert(i, *e, rows_entry::compare(s));
-        return e->row();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(
+            current_allocator().construct<rows_entry>(s, pos, dummy, continuous));
+        i = _rows.insert(i, *e, rows_entry::compare(s));
+        e.release();
     }
     return i->row();
 }
@@ -2205,6 +2228,40 @@ void mutation_partition::make_fully_continuous() {
             i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
         } else {
             i->set_continuous(true);
+            ++i;
+        }
+    }
+}
+
+void mutation_partition::set_continuity(const schema& s, const position_range& pr, is_continuous cont) {
+    auto less = rows_entry::compare(s);
+
+    if (!less(pr.start(), pr.end())) {
+        return; // empty range
+    }
+
+    auto end = _rows.lower_bound(pr.end(), less);
+    if (end == _rows.end() || less(pr.end(), end->position())) {
+        end = _rows.insert_before(end, *current_allocator().construct<rows_entry>(s, pr.end(), is_dummy::yes,
+            end == _rows.end() ? is_continuous::yes : end->continuous()));
+    }
+
+    auto i = _rows.lower_bound(pr.start(), less);
+    if (less(pr.start(), i->position())) {
+        i = _rows.insert_before(i, *current_allocator().construct<rows_entry>(s, pr.start(), is_dummy::yes, i->continuous()));
+    }
+
+    assert(i != end);
+    ++i;
+
+    while (1) {
+        i->set_continuous(cont);
+        if (i == end) {
+            break;
+        }
+        if (i->dummy()) {
+            i = _rows.erase_and_dispose(i, alloc_strategy_deleter<rows_entry>());
+        } else {
             ++i;
         }
     }
