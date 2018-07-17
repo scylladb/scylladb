@@ -1856,6 +1856,14 @@ future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring v
             std::move(view_name)).discard_result();
 }
 
+future<> remove_view_build_progress(sstring ks_name, sstring view_name) {
+    return execute_cql(
+            sprint("DELETE FROM system.%s WHERE keyspace_name = ? AND view_name = ? AND cpu_id = ?", v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS),
+            std::move(ks_name),
+            std::move(view_name),
+            int32_t(engine().cpu_id())).discard_result();
+}
+
 future<> mark_view_as_built(sstring ks_name, sstring view_name) {
     return execute_cql(
             sprint("INSERT INTO system.%s (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),

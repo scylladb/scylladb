@@ -659,6 +659,7 @@ mutation make_size_estimates_mutation(const sstring& ks, std::vector<range_estim
 
 future<> register_view_for_building(sstring ks_name, sstring view_name, const dht::token& token);
 future<> update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token);
+future<> remove_view_build_progress(sstring ks_name, sstring view_name);
 future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
 future<> mark_view_as_built(sstring ks_name, sstring view_name);
 future<> remove_built_view(sstring ks_name, sstring view_name);
