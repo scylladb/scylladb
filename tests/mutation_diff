@@ -5,5 +5,9 @@
 # Usage: mutation_diff <path-to-test-output-file>
 #
 
-colordiff -u <(sed -n '/expected/,/got:/p' $1 | head -n-1) \
-             <(sed -n '/got:/,/^$/p' $1) | less -R
+function filter {
+    sed 's/@0x[0-9a-f]*//g'
+}
+
+colordiff -u <(sed -n '/expected/,/got:/p' $1 | head -n-1 | filter) \
+             <(sed -n '/got:/,/^$/p' $1 | filter) | less -R
