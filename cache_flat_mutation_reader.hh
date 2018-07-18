@@ -60,6 +60,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
         // - _next_row_in_range = _next.position() < _upper_bound
         // - _last_row points at a direct predecessor of the next row which is going to be read.
         //   Used for populating continuity.
+        // - _population_range_starts_before_all_rows is set accordingly
         reading_from_underlying,
 
         end_of_stream
@@ -85,6 +86,13 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     lw_shared_ptr<read_context> _read_context;
     partition_snapshot_row_cursor _next_row;
     bool _next_row_in_range = false;
+
+    // True iff current population interval, since the previous clustering row, starts before all clustered rows.
+    // We cannot just look at _lower_bound, because emission of range tombstones changes _lower_bound and
+    // because we mark clustering intervals as continuous when consuming a clustering_row, it would prevent
+    // us from marking the interval as continuous.
+    // Valid when _state == reading_from_underlying.
+    bool _population_range_starts_before_all_rows;
 
     // Whether _lower_bound was changed within current fill_buffer().
     // If it did not then we cannot break out of it (e.g. on preemption) because
@@ -228,6 +236,7 @@ inline
 future<> cache_flat_mutation_reader::do_fill_buffer(db::timeout_clock::time_point timeout) {
     if (_state == state::move_to_underlying) {
         _state = state::reading_from_underlying;
+        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema);
         auto end = _next_row_in_range ? position_in_partition(_next_row.position())
                                       : position_in_partition(_upper_bound);
         return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)}, timeout).then([this, timeout] {
@@ -357,7 +366,7 @@ future<> cache_flat_mutation_reader::read_from_underlying(db::timeout_clock::tim
 
 inline
 bool cache_flat_mutation_reader::ensure_population_lower_bound() {
-    if (!_ck_ranges_curr->start()) {
+    if (_population_range_starts_before_all_rows) {
         return true;
     }
     if (!_last_row.refresh(*_snp)) {
@@ -412,6 +421,7 @@ inline
 void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
         _last_row = nullptr;
+        _population_range_starts_before_all_rows = false;
         _read_context->cache().on_mispopulate();
         return;
     }
@@ -445,6 +455,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         with_allocator(standard_allocator(), [&] {
             _last_row = partition_snapshot_row_weakref(*_snp, it, true);
         });
+        _population_range_starts_before_all_rows = false;
     });
 }
 
