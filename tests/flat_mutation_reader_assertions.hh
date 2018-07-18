@@ -239,6 +239,17 @@ public:
         return *this;
     }
 
+    flat_reader_assertions& produces(const schema& s, const mutation_fragment& mf) {
+        auto mfopt = read_next();
+        if (!mfopt) {
+            BOOST_FAIL(sprint("Expected %s, but got end of stream", mf));
+        }
+        if (!mfopt->equal(s, mf)) {
+            BOOST_FAIL(sprint("Expected %s, but got %s", mf, *mfopt));
+        }
+        return *this;
+    }
+
     flat_reader_assertions& produces_end_of_stream() {
         BOOST_TEST_MESSAGE("Expecting end of stream");
         auto mfopt = read_next();
