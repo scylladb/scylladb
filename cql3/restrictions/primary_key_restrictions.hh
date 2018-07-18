@@ -100,6 +100,9 @@ public:
     bool has_unrestricted_components(const schema& schema) const;
 
     virtual bool needs_filtering(const schema& schema) const;
+    virtual bool is_all_eq() const {
+        return false;
+    }
 };
 
 template<>

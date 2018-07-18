@@ -123,6 +123,10 @@ public:
         return _in;
     }
 
+    virtual bool is_all_eq() const override {
+        return _restrictions->is_all_eq();
+    }
+
     virtual bool has_bound(statements::bound b) const override {
         return boost::algorithm::all_of(_restrictions->restrictions(), [b] (auto&& r) { return r.second->has_bound(b); });
     }
