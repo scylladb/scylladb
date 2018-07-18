@@ -749,6 +749,46 @@ SEASTAR_TEST_CASE(test_eviction) {
     });
 }
 
+#ifndef DEFAULT_ALLOCATOR // Depends on eviction, which is absent with the std allocator
+
+SEASTAR_TEST_CASE(test_eviction_from_invalidated) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+        row_cache cache(gen.schema(), snapshot_source_from_snapshot(mt->as_data_source()), tracker);
+
+        auto prev_evictions = tracker.get_stats().partition_evictions;
+
+        std::vector<dht::decorated_key> keys;
+        while (tracker.get_stats().partition_evictions == prev_evictions) {
+            auto dk = dht::global_partitioner().decorate_key(*gen.schema(), new_key(gen.schema()));
+            auto m = mutation(gen.schema(), dk, make_fully_continuous(gen()).partition());
+            keys.emplace_back(dk);
+            cache.populate(m);
+        }
+
+        std::random_device random;
+        std::shuffle(keys.begin(), keys.end(), std::default_random_engine(random()));
+
+        for (auto&& key : keys) {
+            cache.make_reader(s, dht::partition_range::make_singular(key));
+        }
+
+        cache.invalidate([] {}).get();
+
+        std::vector<sstring> tmp;
+        auto alloc_size = logalloc::segment_size * 10;
+        while (tracker.region().occupancy().total_space() > alloc_size) {
+            tmp.push_back(sstring(sstring::initialized_later(), alloc_size));
+        }
+    });
+}
+
+#endif
+
 SEASTAR_TEST_CASE(test_eviction_after_schema_change) {
     return seastar::async([] {
         auto s = make_schema();
