@@ -108,14 +108,10 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
-                auto r2 = flat_mutation_reader_from_mutations({m});
-                auto start = r2().get0();
-                BOOST_REQUIRE(start);
-                BOOST_REQUIRE(start->is_partition_start());
+                auto r2 = assert_that(flat_mutation_reader_from_mutations({m}));
+                r2.produces_partition_start(m.decorated_key(), m.partition().partition_tombstone());
                 for (auto& mf : result._fragments) {
-                    auto mfopt = r2().get0();
-                    BOOST_REQUIRE(mfopt);
-                    BOOST_REQUIRE(mf.equal(*m.schema(), *mfopt));
+                    r2.produces(*m.schema(), mf);
                 }
             }
         });
