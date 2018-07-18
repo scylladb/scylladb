@@ -63,6 +63,8 @@ class single_column_primary_key_restrictions : public primary_key_restrictions<V
     using range_type = query::range<ValueType>;
     using range_bound = typename range_type::bound;
     using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
+    template<typename OtherValueType>
+    friend class single_column_primary_key_restrictions;
 private:
     schema_ptr _schema;
     bool _allow_filtering;
@@ -79,6 +81,27 @@ public:
         , _contains(false)
         , _in(false)
     { }
+
+    // Convert another primary key restrictions type into this type, possibly using different schema
+    template<typename OtherValueType>
+    explicit single_column_primary_key_restrictions(schema_ptr schema, const single_column_primary_key_restrictions<OtherValueType>& other)
+        : _schema(schema)
+        , _allow_filtering(other._allow_filtering)
+        , _restrictions(::make_shared<single_column_restrictions>(schema))
+        , _slice(other._slice)
+        , _contains(other._contains)
+        , _in(other._in)
+    {
+        for (const auto& entry : other._restrictions->restrictions()) {
+            const column_definition* other_cdef = entry.first;
+            const column_definition* this_cdef = _schema->get_column_definition(other_cdef->name());
+            if (!this_cdef) {
+                throw exceptions::invalid_request_exception(sprint("Base column %s not found in view index schema", other_cdef->name_as_text()));
+            }
+            ::shared_ptr<single_column_restriction> restriction = entry.second;
+            _restrictions->add_restriction(restriction->apply_to(*this_cdef));
+        }
+    }
 
     virtual bool is_on_token() const override {
         return false;
