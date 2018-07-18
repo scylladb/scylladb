@@ -75,7 +75,7 @@ private:
     const std::experimental::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
-    mutable std::vector<std::vector<int8_t>> _temporaries;
+    mutable bytes_ostream _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;

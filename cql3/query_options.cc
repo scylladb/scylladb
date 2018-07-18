@@ -153,9 +153,10 @@ size_t query_options::get_values_count() const
 cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
 {
     if (value) {
-        _temporaries.emplace_back(value->begin(), value->end());
-        auto& temporary = _temporaries.back();
-        return cql3::raw_value_view::make_value(bytes_view{temporary.data(), temporary.size()});
+        auto value_view = *value;
+        auto ptr = _temporaries.write_place_holder(value_view.size());
+        std::copy_n(value_view.data(), value_view.size(), ptr);
+        return cql3::raw_value_view::make_value(bytes_view{ptr, value_view.size()});
     }
     return cql3::raw_value_view::make_null();
 }
