@@ -41,8 +41,10 @@
 #include "flat_mutation_reader_assertions.hh"
 #include "simple_schema.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/make_random_string.hh"
 
 using namespace sstables;
+using namespace std::chrono_literals;
 
 static db::nop_large_partition_handler nop_lp_handler;
 
@@ -1247,4 +1249,86 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
             .produces_end_of_stream();
       }
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
+    // We create a sequence of partitions such that first we have a partition with a very long key, then
+    // series of partitions with small keys. This should result in large index page.
+
+    storage_service_for_tests ssft;
+    auto dir = make_lw_shared<tmpdir>();
+
+    simple_schema ss;
+    auto s = ss.schema();
+
+    const size_t large_key_pad_size = 9000;
+    const size_t small_key_pad_size = 16;
+    const size_t n_small_keys = 100000;
+
+    auto make_pkey_text = [] (size_t pad_size) -> sstring {
+        static int i = 0;
+        return sprint("pkey_0x%x_%s", i++, make_random_string(pad_size));
+    };
+
+    // Choose min from several random keys
+    stdx::optional<dht::decorated_key> large_key;
+    for (int i = 0; i < 10; ++i) {
+        auto pk = ss.make_pkey(make_pkey_text(large_key_pad_size));
+        if (!large_key || pk.less_compare(*s, *large_key)) {
+            large_key = std::move(pk);
+        }
+    }
+
+    std::vector<dht::decorated_key> small_keys; // only larger than *large_key
+    while (small_keys.size() < n_small_keys) {
+        auto pk = ss.make_pkey(make_pkey_text(small_key_pad_size));
+        if (large_key->less_compare(*s, pk)) {
+            small_keys.emplace_back(std::move(pk));
+        }
+    }
+
+    std::sort(small_keys.begin(), small_keys.end(), dht::decorated_key::less_comparator(s));
+
+    seastar::memory::scoped_large_allocation_warning_threshold mtg(logalloc::segment_size);
+
+    auto mt = make_lw_shared<memtable>(s);
+    {
+        mutation m(s, *large_key);
+        ss.add_row(m, ss.make_ckey(0), "v");
+        mt->apply(m);
+    }
+
+    for (auto&& key : small_keys) {
+        mutation m(s, key);
+        auto value = make_random_string(128);
+        ss.add_row(m, ss.make_ckey(0), value);
+        mt->apply(m);
+    }
+
+    auto sst = sstables::make_sstable(s,
+                                      dir->path,
+                                      1 /* generation */,
+                                      sstable_version_types::ka,
+                                      sstables::sstable::format_types::big);
+    sstable_writer_config cfg;
+    cfg.large_partition_handler = &nop_lp_handler;
+    sst->write_components(mt->make_flat_reader(s), 1, s, cfg).get();
+    sst->load().get();
+
+    auto pr = dht::partition_range::make_singular(small_keys[0]);
+
+    auto mt_reader = mt->make_flat_reader(s, pr);
+    mutation expected = *read_mutation_from_flat_mutation_reader(mt_reader).get0();
+
+    auto t0 = std::chrono::steady_clock::now();
+    auto large_allocs_before = memory::stats().large_allocations();
+    auto sst_reader = sst->as_mutation_source().make_reader(s, pr);
+    mutation actual = *read_mutation_from_flat_mutation_reader(sst_reader).get0();
+    auto large_allocs_after = memory::stats().large_allocations();
+    auto duration = std::chrono::steady_clock::now() - t0;
+
+    BOOST_TEST_MESSAGE(sprint("Read took %d us", duration / 1us));
+
+    assert_that(actual).is_equal_to(expected);
+    BOOST_REQUIRE_EQUAL(large_allocs_after - large_allocs_before, 0);
 }
