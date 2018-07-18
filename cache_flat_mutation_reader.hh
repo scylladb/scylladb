@@ -60,6 +60,7 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
         // - _next_row_in_range = _next.position() < _upper_bound
         // - _last_row points at a direct predecessor of the next row which is going to be read.
         //   Used for populating continuity.
+        // - _population_range_starts_before_all_rows is set accordingly
         reading_from_underlying,
 
         end_of_stream
@@ -95,6 +96,13 @@ class cache_flat_mutation_reader final : public flat_mutation_reader::impl {
     lw_shared_ptr<read_context> _read_context;
     partition_snapshot_row_cursor _next_row;
     bool _next_row_in_range = false;
+
+    // True iff current population interval, since the previous clustering row, starts before all clustered rows.
+    // We cannot just look at _lower_bound, because emission of range tombstones changes _lower_bound and
+    // because we mark clustering intervals as continuous when consuming a clustering_row, it would prevent
+    // us from marking the interval as continuous.
+    // Valid when _state == reading_from_underlying.
+    bool _population_range_starts_before_all_rows;
 
     future<> do_fill_buffer();
     void copy_from_cache_to_buffer();
@@ -225,6 +233,7 @@ inline
 future<> cache_flat_mutation_reader::do_fill_buffer() {
     if (_state == state::move_to_underlying) {
         _state = state::reading_from_underlying;
+        _population_range_starts_before_all_rows = _lower_bound.is_before_all_clustered_rows(*_schema);
         auto end = _next_row_in_range ? position_in_partition(_next_row.position())
                                       : position_in_partition(_upper_bound);
         return _read_context->fast_forward_to(position_range{_lower_bound, std::move(end)}).then([this] {
@@ -348,7 +357,7 @@ future<> cache_flat_mutation_reader::read_from_underlying() {
 
 inline
 void cache_flat_mutation_reader::maybe_update_continuity() {
-    if (can_populate() && (!_ck_ranges_curr->start() || _last_row.refresh(*_snp))) {
+    if (can_populate() && (_population_range_starts_before_all_rows || _last_row.refresh(*_snp))) {
             if (_next_row.is_in_latest_version()) {
                 clogger.trace("csm {}: mark {} continuous", this, _next_row.get_iterator_in_latest_version()->position());
                 _next_row.get_iterator_in_latest_version()->set_continuous(true);
@@ -387,6 +396,7 @@ inline
 void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
     if (!can_populate()) {
         _last_row = nullptr;
+        _population_range_starts_before_all_rows = false;
         _read_context->cache().on_mispopulate();
         return;
     }
@@ -417,6 +427,7 @@ void cache_flat_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         with_allocator(standard_allocator(), [&] {
             _last_row = partition_snapshot_row_weakref(*_snp, it);
         });
+        _population_range_starts_before_all_rows = false;
     });
 }
 

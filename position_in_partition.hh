@@ -259,6 +259,11 @@ public:
         return is_partition_end() || (_ck && _ck->is_empty(s) && _bound_weight > 0);
     }
 
+    bool is_before_all_clustered_rows(const schema& s) const {
+        return _type < partition_region::clustered
+               || (_type == partition_region::clustered && _ck->is_empty(s) && _bound_weight < 0);
+    }
+
     template<typename Hasher>
     void feed_hash(Hasher& hasher, const schema& s) const {
         ::feed_hash(hasher, _bound_weight);
