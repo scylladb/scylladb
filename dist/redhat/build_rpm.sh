@@ -98,12 +98,19 @@ rm -f version
 
 pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST }" > build/scylla.spec
 
+# mock generates files owned by root, fix this up
+fix_ownership() {
+    sudo chown "$(id -u):$(id -g)" -R "$@"
+}
+
 if [ $JOBS -gt 0 ]; then
     RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
 fi
 sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
+fix_ownership build/srpms
 if [[ "$TARGET" =~ ^epel-7- ]]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
 sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/scylla-$VERSION*.src.rpm
+fix_ownership build/rpms
