@@ -181,6 +181,21 @@ public:
         return count;
     }
 
+    ::shared_ptr<single_column_primary_key_restrictions<clustering_key>> get_longest_prefix_restrictions() {
+        static_assert(std::is_same_v<ValueType, clustering_key>, "Only clustering key can produce longest prefix restrictions");
+        size_t current_prefix_size = prefix_size();
+        if (current_prefix_size == _restrictions->restrictions().size()) {
+            return dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(this->shared_from_this());
+        }
+
+        auto longest_prefix_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key>>(_schema, _allow_filtering);
+        auto restriction_it = _restrictions->restrictions().begin();
+        for (size_t i = 0; i < current_prefix_size; ++i) {
+            longest_prefix_restrictions->merge_with((restriction_it++)->second);
+        }
+        return longest_prefix_restrictions;
+    }
+
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
         if (restriction->is_multi_column()) {
             throw exceptions::invalid_request_exception(
