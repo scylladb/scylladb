@@ -42,6 +42,7 @@
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"
+#include "utils/chunked_vector.hh"
 
 namespace gms {
 
@@ -52,18 +53,18 @@ namespace gms {
 class gossip_digest_ack {
 private:
     using inet_address = gms::inet_address;
-    std::vector<gossip_digest> _digests;
+    utils::chunked_vector<gossip_digest> _digests;
     std::map<inet_address, endpoint_state> _map;
 public:
     gossip_digest_ack() {
     }
 
-    gossip_digest_ack(std::vector<gossip_digest> d, std::map<inet_address, endpoint_state> m)
+    gossip_digest_ack(utils::chunked_vector<gossip_digest> d, std::map<inet_address, endpoint_state> m)
         : _digests(std::move(d))
         , _map(std::move(m)) {
     }
 
-    std::vector<gossip_digest> get_gossip_digest_list() const {
+    const utils::chunked_vector<gossip_digest>& get_gossip_digest_list() const {
         return _digests;
     }
 
