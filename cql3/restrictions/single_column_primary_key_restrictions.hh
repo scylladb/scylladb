@@ -165,6 +165,22 @@ public:
         _restrictions->add_restriction(restriction);
     }
 
+    virtual size_t prefix_size() const override {
+        size_t count = 0;
+        if (_schema->clustering_key_columns().empty()) {
+            return count;
+        }
+        column_id expected_column_id = _schema->clustering_key_columns().begin()->id;
+        for (const auto& restriction_entry : _restrictions->restrictions()) {
+            if (_schema->position(*restriction_entry.first) != expected_column_id) {
+                return count;
+            }
+            expected_column_id++;
+            count++;
+        }
+        return count;
+    }
+
     virtual void merge_with(::shared_ptr<restriction> restriction) override {
         if (restriction->is_multi_column()) {
             throw exceptions::invalid_request_exception(

@@ -103,6 +103,9 @@ public:
     virtual bool is_all_eq() const {
         return false;
     }
+    virtual size_t prefix_size() const {
+        return 0;
+    }
 };
 
 template<>
