@@ -88,6 +88,7 @@ public:
 
     using restrictions::uses_function;
     using restrictions::has_supporting_index;
+    using restrictions::values;
 
     bool empty() const override {
         return get_column_defs().empty();
@@ -99,6 +100,9 @@ public:
     bool has_unrestricted_components(const schema& schema) const;
 
     virtual bool needs_filtering(const schema& schema) const;
+    virtual bool is_all_eq() const {
+        return false;
+    }
 };
 
 template<>

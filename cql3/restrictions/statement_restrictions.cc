@@ -430,7 +430,15 @@ bool statement_restrictions::need_filtering() const {
     for (auto&& restrictions : _index_restrictions) {
         number_of_restricted_columns_for_indexing += restrictions->size();
     }
-    int number_of_all_restrictions = _partition_key_restrictions->size() + _clustering_columns_restrictions->size() + _nonprimary_key_restrictions->size();
+
+    int number_of_filtering_restrictions = _nonprimary_key_restrictions->size();
+    // If the whole partition key is restricted, it does not imply filtering
+    if (_partition_key_restrictions->has_unrestricted_components(*_schema) || !_partition_key_restrictions->is_all_eq()) {
+        number_of_filtering_restrictions += _partition_key_restrictions->size();
+        if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
+            number_of_filtering_restrictions += _clustering_columns_restrictions->size();
+        }
+    }
 
     if (_partition_key_restrictions->is_multi_column() || _clustering_columns_restrictions->is_multi_column()) {
         // TODO(sarna): Implement ALLOW FILTERING support for multi-column restrictions - return false for now
@@ -442,7 +450,7 @@ bool statement_restrictions::need_filtering() const {
             || (number_of_restricted_columns_for_indexing == 0 && _partition_key_restrictions->empty() && !_clustering_columns_restrictions->empty())
             || (number_of_restricted_columns_for_indexing != 0 && _nonprimary_key_restrictions->has_multiple_contains())
             || (number_of_restricted_columns_for_indexing != 0 && !_uses_secondary_indexing)
-            || (_uses_secondary_indexing && number_of_all_restrictions > 1);
+            || (_uses_secondary_indexing && number_of_filtering_restrictions > 1);
 }
 
 void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) {

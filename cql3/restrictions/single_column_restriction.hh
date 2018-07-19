@@ -95,6 +95,7 @@ public:
     virtual bool is_supported_by(const secondary_index::index& index) const = 0;
     using abstract_restriction::is_satisfied_by;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const = 0;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) = 0;
 #if 0
     /**
      * Check if this type of restriction is supported by the specified index.
@@ -169,6 +170,9 @@ public:
                                  const query_options& options,
                                  gc_clock::time_point now) const override;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        return ::make_shared<EQ>(cdef, _value);
+    }
 
 #if 0
         @Override
@@ -205,6 +209,9 @@ public:
                                  const query_options& options,
                                  gc_clock::time_point now) const override;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        throw std::logic_error("IN superclass should never be cloned directly");
+    }
 
 #if 0
     @Override
@@ -239,6 +246,10 @@ public:
     virtual sstring to_string() const override {
         return sprint("IN(%s)", std::to_string(_values));
     }
+
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        return ::make_shared<IN_with_values>(cdef, _values);
+    }
 };
 
 class single_column_restriction::IN_with_marker : public IN {
@@ -264,6 +275,10 @@ public:
     virtual sstring to_string() const override {
         return "IN ?";
     }
+
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        return ::make_shared<IN_with_marker>(cdef, _marker);
+    }
 };
 
 class single_column_restriction::slice : public single_column_restriction {
@@ -273,6 +288,11 @@ public:
     slice(const column_definition& column_def, statements::bound bound, bool inclusive, ::shared_ptr<term> term)
         : single_column_restriction(column_def)
         , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
+    { }
+
+    slice(const column_definition& column_def, term_slice slice)
+        : single_column_restriction(column_def)
+        , _slice(slice)
     { }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
@@ -361,6 +381,9 @@ public:
                                  const query_options& options,
                                  gc_clock::time_point now) const override;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        return ::make_shared<slice>(cdef, _slice);
+    }
 };
 
 // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
@@ -483,6 +506,9 @@ public:
                                  const query_options& options,
                                  gc_clock::time_point now) const override;
     virtual bool is_satisfied_by(bytes_view data, const query_options& options) const override;
+    virtual ::shared_ptr<single_column_restriction> apply_to(const column_definition& cdef) override {
+        throw std::logic_error("Cloning 'contains' restriction is not implemented.");
+    }
 
 #if 0
         private List<ByteBuffer> keys(const query_options& options) {

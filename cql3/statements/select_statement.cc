@@ -45,6 +45,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
+#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
@@ -775,7 +776,7 @@ read_posting_list(service::storage_proxy& proxy,
                   schema_ptr view_schema,
                   schema_ptr base_schema,
                   const secondary_index::index& index,
-                  const std::vector<::shared_ptr<restrictions::restrictions>>& index_restrictions,
+                  ::shared_ptr<restrictions::statement_restrictions> base_restrictions,
                   const query_options& options,
                   int32_t limit,
                   service::query_state& state,
@@ -786,7 +787,7 @@ read_posting_list(service::storage_proxy& proxy,
     // FIXME: there should be only one index restriction for this index!
     // Perhaps even one index restriction entirely (do we support
     // intersection queries?).
-    for (const auto& restrictions : index_restrictions) {
+    for (const auto& restrictions : base_restrictions->index_restrictions()) {
         const column_definition* cdef = base_schema->get_column_definition(to_bytes(index.target_column()));
         if (!cdef) {
             throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -800,7 +801,33 @@ read_posting_list(service::storage_proxy& proxy,
             partition_ranges.emplace_back(range);
         }
     }
+
     partition_slice_builder partition_slice_builder{*view_schema};
+
+    if (!base_restrictions->has_partition_key_unrestricted_components()) {
+        auto single_pk_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<partition_key>>(base_restrictions->get_partition_key_restrictions());
+        // Only EQ restrictions on base partition key can be used in an index view query
+        if (single_pk_restrictions && single_pk_restrictions->is_all_eq()) {
+            auto clustering_restrictions = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *single_pk_restrictions);
+            // Computed token column needs to be added to index view restrictions
+            const column_definition& token_cdef = *view_schema->clustering_key_columns().begin();
+            auto base_pk = partition_key::from_optional_exploded(*base_schema, base_restrictions->get_partition_key_restrictions()->values(options));
+            bytes token_value = dht::global_partitioner().token_to_bytes(dht::global_partitioner().get_token(*base_schema, base_pk));
+            auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
+            clustering_restrictions->merge_with(token_restriction);
+
+            if (!base_restrictions->has_unrestricted_clustering_columns()) {
+                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<clustering_key>>(base_restrictions->get_partition_key_restrictions());
+                if (single_ck_restrictions) {
+                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *single_pk_restrictions);
+                    clustering_restrictions->merge_with(clustering_restrictions_from_base);
+                }
+            }
+
+            partition_slice_builder.with_ranges(clustering_restrictions->bounds_ranges(options));
+        }
+    }
+
     auto cmd = ::make_lw_shared<query::read_command>(
             view_schema->id(),
             view_schema->version(),
@@ -828,7 +855,7 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list(proxy, view, _schema, _index, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+    return read_posting_list(proxy, view, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout).then(
             [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
@@ -880,7 +907,7 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list(proxy, view, _schema, _index, _restrictions->index_restrictions(), options, get_limit(options), state, now, timeout).then(
+    return read_posting_list(proxy, view, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout).then(
             [this, now, &options, view] (service::storage_proxy::coordinator_query_result qr) {
         std::vector<const column_definition*> columns;
         for (const column_definition& cdef : _schema->partition_key_columns()) {
