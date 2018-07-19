@@ -46,6 +46,8 @@
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "service/storage_service.hh"
+#include <seastar/core/semaphore.hh>
+#include <boost/range/adaptors.hpp>
 
 namespace dht {
 
@@ -281,10 +283,13 @@ future<> range_streamer::do_stream_async() {
     return do_for_each(_to_stream, [this, start, description = _description] (auto& stream) {
         const auto& keyspace = stream.first;
         auto& ip_range_vec = stream.second;
+        auto ips = boost::copy_range<std::list<inet_address>>(ip_range_vec | boost::adaptors::map_keys);
         // Fetch from or send to peer node in parallel
+        logger.info("{} with {} for keyspace={} started, nodes_to_stream={}", description, ips, keyspace, ip_range_vec.size());
         return parallel_for_each(ip_range_vec, [this, description, keyspace] (auto& ip_range) {
-            auto& source = ip_range.first;
-            auto& range_vec = ip_range.second;
+          auto& source = ip_range.first;
+          auto& range_vec = ip_range.second;
+          return seastar::with_semaphore(_limiter, 1, [this, description, keyspace, source, &range_vec] () mutable {
             return seastar::async([this, description, keyspace, source, &range_vec] () mutable {
                 // TODO: It is better to use fiber instead of thread here because
                 // creating a thread per peer can be some memory in a large cluster.
@@ -330,8 +335,8 @@ future<> range_streamer::do_stream_async() {
                 }
                 auto t = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
                 logger.info("{} with {} for keyspace={} succeeded, took {} seconds", description, source, keyspace, t);
-            });
-
+              });
+          });
         });
     }).finally([this, start] {
         auto t = std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start).count();
