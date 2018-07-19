@@ -393,28 +393,60 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
-static unsigned get_rpc_client_idx(messaging_verb verb) {
-    unsigned idx = 0;
+
+static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
+    switch (verb) {
+    case messaging_verb::CLIENT_ID:
+    case messaging_verb::MUTATION:
+    case messaging_verb::READ_DATA:
+    case messaging_verb::READ_MUTATION_DATA:
+    case messaging_verb::READ_DIGEST:
+    case messaging_verb::GOSSIP_DIGEST_ACK:
+    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::TRUNCATE:
+    case messaging_verb::MIGRATION_REQUEST:
+    case messaging_verb::SCHEMA_CHECK:
+    case messaging_verb::COUNTER_MUTATION:
+        return 0;
     // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
     // sent on a different connection to avoid potential deadlocks
     // as well as reduce latency as there are potentially many requests
     // blocked on schema version request.
-    if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
-        verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
-        verb == messaging_verb::GOSSIP_SHUTDOWN ||
-        verb == messaging_verb::GOSSIP_ECHO ||
-        verb == messaging_verb::GET_SCHEMA_VERSION) {
-        idx = 1;
-    } else if (verb == messaging_verb::PREPARE_MESSAGE ||
-               verb == messaging_verb::PREPARE_DONE_MESSAGE ||
-               verb == messaging_verb::STREAM_MUTATION ||
-               verb == messaging_verb::STREAM_MUTATION_DONE ||
-               verb == messaging_verb::COMPLETE_MESSAGE) {
-        idx = 2;
-    } else if (verb == messaging_verb::MUTATION_DONE || verb == messaging_verb::MUTATION_FAILED) {
-        idx = 3;
+    case messaging_verb::GOSSIP_DIGEST_SYN:
+    case messaging_verb::GOSSIP_DIGEST_ACK2:
+    case messaging_verb::GOSSIP_SHUTDOWN:
+    case messaging_verb::GOSSIP_ECHO:
+    case messaging_verb::GET_SCHEMA_VERSION:
+        return 1;
+    case messaging_verb::PREPARE_MESSAGE:
+    case messaging_verb::PREPARE_DONE_MESSAGE:
+    case messaging_verb::STREAM_MUTATION:
+    case messaging_verb::STREAM_MUTATION_DONE:
+    case messaging_verb::COMPLETE_MESSAGE:
+    case messaging_verb::REPLICATION_FINISHED:
+    case messaging_verb::REPAIR_CHECKSUM_RANGE:
+    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
+        return 2;
+    case messaging_verb::MUTATION_DONE:
+    case messaging_verb::MUTATION_FAILED:
+        return 3;
+    case messaging_verb::LAST:
+        return -1; // should never happen
     }
-    return idx;
+}
+
+static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
+    std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
+    for (size_t i = 0; i < tab.size(); ++i) {
+        tab[i] = do_get_rpc_client_idx(messaging_verb(i));
+    }
+    return tab;
+}
+
+static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
+
+static unsigned get_rpc_client_idx(messaging_verb verb) {
+    return s_rpc_client_idx_table[static_cast<size_t>(verb)];
 }
 
 scheduling_group
