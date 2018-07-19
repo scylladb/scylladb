@@ -875,6 +875,7 @@ public:
     }
 
     void setup_for_partition(const partition_key& pk) {
+        sstlog.trace("mp_row_consumer_m {}: setup_for_partition({})", this, pk);
         _is_mutation_end = false;
         set_up_ck_ranges(pk);
     }
@@ -917,6 +918,8 @@ public:
     }
 
     virtual proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_partition_start(deltime=({}, {})), _is_mutation_end={}", this,
+            deltime.local_deletion_time, deltime.marked_for_delete_at, _is_mutation_end);
         if (!_is_mutation_end) {
             return proceed::yes;
         }
@@ -928,17 +931,21 @@ public:
     virtual proceed consume_row_start(const std::vector<temporary_buffer<char>>& ecp) override {
         _in_progress_row = clustering_row(clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); })));
+        sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", this, _in_progress_row.position());
         _cells.clear();
         return proceed::yes;
     }
 
     virtual proceed consume_row_marker_and_tombstone(const liveness_info& info, tombstone t) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_row_marker_and_tombstone({}, {}), key={}",
+            this, info.to_row_marker(), t, _in_progress_row.position());
         _in_progress_row.apply(t);
         _in_progress_row.apply(info.to_row_marker());
         return proceed::yes;
     }
 
     virtual proceed consume_static_row_start() override {
+        sstlog.trace("mp_row_consumer_m {}: consume_static_row_start()", this);
         _inside_static_row = true;
         _in_progress_static_row = static_row();
         _cells.clear();
@@ -952,6 +959,8 @@ public:
                                    gc_clock::duration ttl,
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_column(id={}, path={}, value={}, ts={}, ttl={}, del_time={}, deleted={})", this,
+            column_id, cell_path, value, timestamp, ttl.count(), local_deletion_time.time_since_epoch().count(), is_deleted);
         if (!column_id) {
             return proceed::yes;
         }
@@ -980,12 +989,14 @@ public:
 
     virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
                                                  tombstone tomb) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", this, column_id, tomb);
         _cm.tomb = tomb;
         _cm.cells.clear();
         return proceed::yes;
     }
 
     virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", this, column_id);
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
             auto ctype = static_pointer_cast<const collection_type_impl>(column_def.type);
@@ -1000,6 +1011,7 @@ public:
     virtual proceed consume_counter_column(stdx::optional<column_id> column_id,
                                            bytes_view value,
                                            api::timestamp_type timestamp) override {
+        sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, value, timestamp);
         if (!column_id) {
             return proceed::yes;
         }
@@ -1025,6 +1037,7 @@ public:
 
         if (_inside_static_row) {
             fill_cells(column_kind::static_column, _in_progress_static_row.cells());
+            sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_static_row={})", this, _in_progress_static_row);
             _reader->push_mutation_fragment(std::move(_in_progress_static_row));
             _inside_static_row = false;
         } else {
@@ -1038,6 +1051,7 @@ public:
             } else {
                 fill_cells(column_kind::regular_column, _in_progress_row.cells());
             }
+            sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_row={})", this, _in_progress_row);
             _reader->push_mutation_fragment(std::move(_in_progress_row));
         }
 
@@ -1045,12 +1059,14 @@ public:
     }
 
     virtual proceed consume_partition_end() override {
+        sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
         _is_mutation_end = true;
         _out_of_range = true;
         return proceed::no;
     }
 
     virtual void reset(sstables::indexable_element el) override {
+        sstlog.trace("mp_row_consumer_m {}: reset({})", this, static_cast<int>(el));
         if (el == indexable_element::partition) {
             _is_mutation_end = true;
             _out_of_range = true;
