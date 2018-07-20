@@ -50,6 +50,14 @@ static logging::logger qlogger("paging");
 
 namespace service::pager {
 
+struct noop_visitor {
+    void accept_new_partition(uint32_t) { }
+    void accept_new_partition(const partition_key& key, uint32_t row_count) { }
+    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) { }
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) { }
+    void accept_partition_end(const query::result_row_view& static_row) { }
+};
+
 static bool has_clustering_keys(const schema& s, const query::read_command& cmd) {
     return s.clustering_key_size() > 0
             && !cmd.slice.options.contains<query::partition_slice::option::distinct>();
@@ -247,14 +255,6 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
 future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats) {
     return do_fetch_page(page_size, now).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
-        struct noop_visitor {
-            void accept_new_partition(uint32_t) { }
-            void accept_new_partition(const partition_key& key, uint32_t row_count) { }
-            void accept_new_row(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) { }
-            void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) { }
-            void accept_partition_end(const query::result_row_view& static_row) { }
-        };
-
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
@@ -335,24 +335,47 @@ public:
             const foreign_ptr<lw_shared_ptr<query::result>>& results,
             uint32_t page_size, gc_clock::time_point now) {
 
-        query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
-        query::result_view::consume(*results, _cmd->slice, v);
-
-        if (_last_pkey) {
+        auto update_slice = [&] (const partition_key& last_pkey) {
             // refs #752, when doing aggregate queries we will re-use same
             // slice repeatedly. Since "specific ck ranges" only deal with
             // a single extra range, we must clear out the old one
             // Even if it was not so of course, leaving junk in the slice
             // is bad.
-            _cmd->slice.clear_range(*_schema, *_last_pkey);
+            _cmd->slice.clear_range(*_schema, last_pkey);
+        };
+
+        auto view = query::result_view(*results);
+
+        uint32_t row_count;
+        if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
+            query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
+            view.consume(_cmd->slice, v);
+
+            if (_last_pkey) {
+                update_slice(*_last_pkey);
+            }
+
+            row_count = v.total_rows;
+            _max = _max - row_count;
+            _exhausted = (v.total_rows < page_size && !results->is_short_read()) || _max == 0;
+            _last_pkey = v.last_pkey;
+            _last_ckey = v.last_ckey;
+        } else {
+            row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
+            _max = _max - row_count;
+            _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
+
+            if (!_exhausted) {
+                if (_last_pkey) {
+                    update_slice(*_last_pkey);
+                }
+                auto [ last_pkey, last_ckey ] = view.get_last_partition_and_clustering_key();
+                _last_pkey = std::move(last_pkey);
+                _last_ckey = std::move(last_ckey);
+            }
         }
 
-        _max = _max - v.total_rows;
-        _exhausted = (v.total_rows < page_size && !results->is_short_read()) || _max == 0;
-        _last_pkey = v.last_pkey;
-        _last_ckey = v.last_ckey;
-
-        qlogger.debug("Fetched {} rows, max_remain={} {}", v.total_rows, _max, _exhausted ? "(exh)" : "");
+        qlogger.debug("Fetched {} rows, max_remain={} {}", row_count, _max, _exhausted ? "(exh)" : "");
 
         if (_last_pkey) {
             qlogger.debug("Last partition key: {}", *_last_pkey);
