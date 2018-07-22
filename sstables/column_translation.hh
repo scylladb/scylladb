@@ -31,6 +31,22 @@
 
 namespace sstables {
 
+using column_values_fixed_lengths = std::vector<std::optional<uint32_t>>;
+
+/*
+ * A helper method to get fixed lengths of clustering key values
+ */
+inline column_values_fixed_lengths get_clustering_values_fixed_lengths(const serialization_header& header) {
+    column_values_fixed_lengths lengths;
+    lengths.reserve(header.clustering_key_types_names.elements.size());
+    for (auto&& t : header.clustering_key_types_names.elements) {
+        auto type = abstract_type::parse_type(sstring(std::cbegin(t.value), std::cend(t.value)));
+        lengths.push_back(type->value_length_if_fixed());
+    }
+
+    return lengths;
+}
+
 /*
  * This class caches a mapping from columns present in sstable to their column_id.
  * This way we don't need to looku them up by column name every time.
@@ -86,9 +102,9 @@ class column_translation {
         utils::UUID schema_uuid;
         std::vector<stdx::optional<column_id>> regular_schema_column_id_from_sstable;
         std::vector<stdx::optional<column_id>> static_schema_column_id_from_sstable;
-        std::vector<std::optional<uint32_t>> regular_column_value_fix_lengths;
-        std::vector<std::optional<uint32_t>> static_column_value_fix_lengths;
-        std::vector<std::optional<uint32_t>> clustering_column_value_fix_lengths;
+        column_values_fixed_lengths regular_column_value_fix_lengths;
+        column_values_fixed_lengths static_column_value_fix_lengths;
+        column_values_fixed_lengths clustering_column_value_fix_lengths;
         std::vector<bool> static_column_is_collection;
         std::vector<bool> regular_column_is_collection;
         std::vector<bool> static_column_is_counter;
@@ -101,8 +117,7 @@ class column_translation {
         state& operator=(state&&) = default;
 
         state(const schema& s, const serialization_header& header)
-            : schema_uuid(s.version())
-        {
+                : schema_uuid(s.version()) {
             std::tie(regular_schema_column_id_from_sstable,
                      regular_column_value_fix_lengths,
                      regular_column_is_collection,
@@ -113,11 +128,7 @@ class column_translation {
                      static_column_is_collection,
                      static_column_is_counter) =
                     build(s, header.static_columns.elements, true);
-            clustering_column_value_fix_lengths.reserve(header.clustering_key_types_names.elements.size());
-            for (auto&& t : header.clustering_key_types_names.elements) {
-                auto type = abstract_type::parse_type(sstring(std::cbegin(t.value), std::cend(t.value)));
-                clustering_column_value_fix_lengths.push_back(type->value_length_if_fixed());
-            }
+            clustering_column_value_fix_lengths = get_clustering_values_fixed_lengths(header);
         }
     };
 

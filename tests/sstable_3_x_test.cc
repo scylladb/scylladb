@@ -38,6 +38,7 @@
 #include "tests/test_services.hh"
 #include "tests/tmpdir.hh"
 #include "tests/sstable_utils.hh"
+#include "tests/index_reader_assertions.hh"
 #include "sstables/types.hh"
 #include "keys.hh"
 #include "types.hh"
@@ -1308,7 +1309,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_load) {
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read_index) {
     sstable_assertions sst(UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
     auto vec = sst.read_index().get0();
-    BOOST_REQUIRE_EQUAL(1, vec.size());
+    BOOST_REQUIRE_EQUAL(5, vec.size());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_uncompressed_simple_read) {
@@ -2789,5 +2790,95 @@ SEASTAR_THREAD_TEST_CASE(test_write_overlapped_range_tombstones) {
     mt2->apply(mut2);
 
     write_and_compare_sstables(s, mt1, mt2, table_name);
+}
+
+static sstring get_read_index_test_path(sstring table_name) {
+    return format("tests/sstables/3.x/uncompressed/read_{}", table_name);
+}
+
+static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
+    return std::make_unique<index_reader>(sst, default_priority_class());
+}
+
+/*
+ * The SSTables read is generated using the following queries:
+ *
+ *  CREATE TABLE empty_index (pk text, PRIMARY KEY (pk)) WITH compression = {'sstable_compression': ''};
+ *  INSERT INTO empty_index (pk) VALUES ('привет');
+*/
+
+SEASTAR_THREAD_TEST_CASE(test_read_empty_index) {
+    sstring table_name = "empty_index";
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).is_empty(*s);
+}
+
+/*
+ * Test files taken from write_wide_partitions test
+ */
+SEASTAR_THREAD_TEST_CASE(test_read_rows_only_index) {
+    sstring table_name = "rows_only_index";
+    // CREATE TABLE rows_only_index (pk text, ck text, st text, rc text, PRIMARY KEY (pk, ck) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck", utf8_type, column_kind::clustering_key);
+    builder.with_column("st", utf8_type, column_kind::static_column);
+    builder.with_column("rc", utf8_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+}
+
+/*
+ * Test files taken from write_many_range_tombstones test
+ */
+SEASTAR_THREAD_TEST_CASE(test_read_range_tombstones_only_index) {
+    sstring table_name = "range_tombstones_only_index";
+    // CREATE TABLE range_tombstones_only_index (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
+}
+
+/*
+ * Generated with the following code:
+ *  query = SimpleStatement("""
+	DELETE FROM range_tombstone_boundaries_index USING TIMESTAMP %(ts)s
+	WHERE pk = 'key1' AND ck1 > %(a)s AND ck1 <= %(b)s
+        """, consistency_level=ConsistencyLevel.ONE)
+
+    for i in range(1024):
+        session.execute(query, dict(a="%s%d" % ('a' * 1024, i), b="%s%d" %('a' * 1024, i + 1), ts=(1525385507816568 + i)))
+
+ */
+SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
+    sstring table_name = "range_tombstone_boundaries_index";
+    // CREATE TABLE range_tombstone_boundaries_index (pk text, ck1 text, ck2 text, PRIMARY KEY (pk, ck1, ck2) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck1", utf8_type, column_kind::clustering_key);
+    builder.with_column("ck2", utf8_type, column_kind::clustering_key);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    auto sst = sstables::make_sstable(s, get_read_index_test_path(table_name), 1, sstable_version_types::mc , sstable_format_types::big);
+    sst->load().get0();
+    assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
