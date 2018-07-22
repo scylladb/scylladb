@@ -1,0 +1,41 @@
+#!/usr/bin/python3
+
+#
+# Copyright (C) 2018 ScyllaDB
+#
+
+#
+# This file is part of Scylla.
+#
+# Scylla is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Scylla is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# Guess and print out a good number of compiler jobs to
+# run. Note that on an interactive desktop you will want
+# to reduce this to allow more memory for your desktop,
+# to avoid swapping. This is oriented at continuous
+# integration machines that do not serve an interactive
+# load as well.
+
+import os
+
+procs = os.sysconf('SC_NPROCESSORS_ONLN')
+mem = os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGESIZE')
+
+job_mem = 4000000000
+
+jobs = min(procs, mem // job_mem)
+jobs = max(jobs, 1)
+
+print(jobs)
