@@ -172,7 +172,9 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) {
-    sstring json_string = utf8_type->to_string(_term->bind_and_get(options).data().value().to_string());
+    sstring json_string = with_linearized(_term->bind_and_get(options).data().value(), [&] (bytes_view value) {
+        return utf8_type->to_string(value.to_string());
+    });
     return json_helpers::parse(std::move(json_string), s->all_columns(), options.get_cql_serialization_format());
 }
 
@@ -181,20 +183,20 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
     if (!value) {
         m.set_cell(prefix, column, std::move(operation::make_dead_cell(params)));
     } else if (!column.type->is_collection()) {
-        constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(bytes_view(*value)));
+        constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(fragmented_temporary_buffer::view(*value)));
         return;
     }
 
     auto& k = static_pointer_cast<const collection_type_impl>(column.type)->_kind;
     cql_serialization_format sf = params._options.get_cql_serialization_format();
     if (&k == &collection_type_impl::kind::list) {
-        auto list_terminal = make_shared<lists::value>(lists::value::from_serialized(*value, dynamic_pointer_cast<const list_type_impl>(column.type), sf));
+        auto list_terminal = make_shared<lists::value>(lists::value::from_serialized(fragmented_temporary_buffer::view(*value), dynamic_pointer_cast<const list_type_impl>(column.type), sf));
         lists::setter::execute(m, prefix, params, column, std::move(list_terminal));
     } else if (&k == &collection_type_impl::kind::set) {
-        auto set_terminal = make_shared<sets::value>(sets::value::from_serialized(*value, dynamic_pointer_cast<const set_type_impl>(column.type), sf));
+        auto set_terminal = make_shared<sets::value>(sets::value::from_serialized(fragmented_temporary_buffer::view(*value), dynamic_pointer_cast<const set_type_impl>(column.type), sf));
         sets::setter::execute(m, prefix, params, column, std::move(set_terminal));
     } else if (&k == &collection_type_impl::kind::map) {
-        auto map_terminal = make_shared<maps::value>(maps::value::from_serialized(*value, dynamic_pointer_cast<const map_type_impl>(column.type), sf));
+        auto map_terminal = make_shared<maps::value>(maps::value::from_serialized(fragmented_temporary_buffer::view(*value), dynamic_pointer_cast<const map_type_impl>(column.type), sf));
         maps::setter::execute(m, prefix, params, column, std::move(map_terminal));
     } else {
         throw exceptions::invalid_request_exception("Incorrect value kind in JSON INSERT statement");

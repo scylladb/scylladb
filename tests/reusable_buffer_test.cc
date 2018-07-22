@@ -42,6 +42,20 @@ BOOST_AUTO_TEST_CASE(test_get_linearized_view) {
         BOOST_REQUIRE_EQUAL(view.size(), n);
         BOOST_REQUIRE(view == original);
         BOOST_REQUIRE(bo.linearize() == original);
+
+        std::vector<temporary_buffer<char>> tbufs;
+        bytes_view left = original;
+        while (!left.empty()) {
+            auto this_size = std::min<size_t>(left.size(), fragmented_temporary_buffer::default_fragment_size);
+            tbufs.emplace_back(reinterpret_cast<const char*>(left.data()), this_size);
+            left.remove_prefix(this_size);
+        }
+
+        auto fbuf = fragmented_temporary_buffer(std::move(tbufs), original.size());
+        view = buffer.get_linearized_view(fragmented_temporary_buffer::view(fbuf));
+        BOOST_REQUIRE_EQUAL(view.size(), n);
+        BOOST_REQUIRE(view == original);
+        BOOST_REQUIRE(linearized(fragmented_temporary_buffer::view(fbuf)) == original);
     };
 
     for (auto j = 0; j < 2; j++) {
@@ -65,16 +79,24 @@ BOOST_AUTO_TEST_CASE(test_make_buffer) {
         BOOST_TEST_MESSAGE("Testing maximum buffer size " << maximum << ", actual: " << actual);
         
         bytes original;
-        auto bo = buffer.make_buffer(maximum, [&] (bytes_mutable_view view) {
+        auto make_buffer_fn = [&] (bytes_mutable_view view) {
             original = tests::random::get_bytes(actual);
             BOOST_REQUIRE_EQUAL(maximum, view.size());
             BOOST_REQUIRE_LE(actual, view.size());
             boost::range::copy(original, view.begin());
             return actual;
-        });
+        };
+
+        auto bo = buffer.make_buffer(maximum, make_buffer_fn);
 
         BOOST_REQUIRE_EQUAL(bo.size(), actual);
         BOOST_REQUIRE(bo.linearize() == original);
+
+        auto fbuf = buffer.make_fragmented_temporary_buffer(maximum, fragmented_temporary_buffer::default_fragment_size, make_buffer_fn);
+        auto view = fragmented_temporary_buffer::view(fbuf);
+
+        BOOST_REQUIRE_EQUAL(view.size_bytes(), actual);
+        BOOST_REQUIRE(linearized(view) == original);
     };
 
     for (auto j = 0; j < 2; j++) {

@@ -596,7 +596,8 @@ static query::range<bytes_view> to_range(const term_slice& slice, const query_op
         if (!value) {
             return { };
         }
-        return { range_type::bound(*value, slice.is_inclusive(bound)) };
+        auto value_view = options.linearize(*value);
+        return { range_type::bound(value_view, slice.is_inclusive(bound)) };
     };
     return range_type(
         extract_bound(statements::bound::START),
@@ -661,10 +662,12 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
             if (!val) {
                 continue;
             }
-            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
+            auto found = with_linearized(*val, [&] (bytes_view bv) {
+              return std::find_if(elements.begin(), end, [&] (auto&& element) {
                 return element.second.value().with_linearized([&] (bytes_view value_bv) {
-                    return element_type->compare(value_bv, *val) == 0;
+                    return element_type->compare(value_bv, bv) == 0;
                 });
+              });
             });
             if (found == end) {
                 return false;
@@ -675,8 +678,10 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
             if (!k) {
                 continue;
             }
-            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
-                return map_key_type->compare(element.first, *k) == 0;
+            auto found = with_linearized(*k, [&] (bytes_view bv) {
+              return std::find_if(elements.begin(), end, [&] (auto&& element) {
+                return map_key_type->compare(element.first, bv) == 0;
+              });
             });
             if (found == end) {
                 return false;
@@ -688,14 +693,18 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
             if (!map_key || !map_value) {
                 continue;
             }
-            auto found = std::find_if(elements.begin(), end, [&] (auto&& element) {
-                return map_key_type->compare(element.first, *map_key) == 0;
+            auto found = with_linearized(*map_key, [&] (bytes_view map_key_bv) {
+              return std::find_if(elements.begin(), end, [&] (auto&& element) {
+                return map_key_type->compare(element.first, map_key_bv) == 0;
+              });
             });
             if (found == end) {
                 return false;
             }
-            auto cmp = found->second.value().with_linearized([&] (bytes_view value_bv) {
-                return element_type->compare(value_bv, *map_value);
+            auto cmp = with_linearized(*map_value, [&] (bytes_view map_value_bv) {
+              return found->second.value().with_linearized([&] (bytes_view value_bv) {
+                return element_type->compare(value_bv, map_value_bv);
+              });
             });
             if (cmp != 0) {
                 return false;
@@ -712,13 +721,14 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
             return _column_def.type->deserialize(cell_value_bv);
         });
         for (auto&& value : _values) {
-            auto val = value->bind_and_get(options);
-            if (!val) {
+            auto fragmented_val = value->bind_and_get(options);
+            if (!fragmented_val) {
                 continue;
             }
+          return with_linearized(*fragmented_val, [&] (bytes_view val) {
             auto exists_in = [&](auto&& range) {
                 auto found = std::find_if(range.begin(), range.end(), [&] (auto&& element) {
-                    return element_type->compare(element.serialize(), *val) == 0;
+                    return element_type->compare(element.serialize(), val) == 0;
                 });
                 return found != range.end();
             };
@@ -736,6 +746,8 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
                     return false;
                 }
             }
+            return true;
+          });
         }
         if (col_type->is_map()) {
             auto& data_map = value_cast<map_type_impl::native_type>(deserialized);
@@ -744,8 +756,10 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
                 if (!k) {
                     continue;
                 }
-                auto found = std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
-                    return map_key_type->compare(element.first.serialize(), *k) == 0;
+                auto found = with_linearized(*k, [&] (bytes_view k_bv) {
+                  return std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
+                    return map_key_type->compare(element.first.serialize(), k_bv) == 0;
+                  });
                 });
                 if (found == data_map.end()) {
                     return false;
@@ -757,10 +771,15 @@ bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
                 if (!map_key || !map_value) {
                     continue;
                 }
-                auto found = std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
-                    return map_key_type->compare(element.first.serialize(), *map_key) == 0;
+                auto found = with_linearized(*map_key, [&] (bytes_view map_key_bv) {
+                  return std::find_if(data_map.begin(), data_map.end(), [&] (auto&& element) {
+                    return map_key_type->compare(element.first.serialize(), map_key_bv) == 0;
+                  });
                 });
-                if (found == data_map.end() || element_type->compare(found->second.serialize(), *map_value) != 0) {
+                if (found == data_map.end()
+                    || with_linearized(*map_value, [&] (bytes_view map_value_bv) {
+                         return element_type->compare(found->second.serialize(), map_value_bv);
+                       }) != 0) {
                     return false;
                 }
             }

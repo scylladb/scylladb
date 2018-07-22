@@ -115,11 +115,12 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_format sf) {
+lists::value::from_serialized(const fragmented_temporary_buffer::view& val, list_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
+      return with_linearized(val, [&] (bytes_view v) {
         auto l = value_cast<list_type_impl::native_type>(type->deserialize(v, sf));
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
@@ -128,6 +129,7 @@ lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_fo
             elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
+      });
     } catch (marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
@@ -285,7 +287,9 @@ lists::setter_by_index::execute(mutation& m, const clustering_key_prefix& prefix
         return;
     }
 
-    auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
+    auto idx = with_linearized(*index, [] (bytes_view v) {
+        return value_cast<int32_t>(data_type_for<int32_t>()->deserialize(v));
+    });
     auto&& existing_list_opt = params.get_prefetched_list(m.key().view(), prefix.view(), column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");

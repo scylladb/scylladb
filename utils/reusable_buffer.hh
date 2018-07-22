@@ -25,6 +25,7 @@
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
+#include "utils/fragmented_temporary_buffer.hh"
 
 namespace utils {
 
@@ -90,6 +91,22 @@ public:
         return bytes_view(mutable_view);
     }
 
+
+    bytes_view get_linearized_view(const fragmented_temporary_buffer::view& data) {
+        if (data.empty()) {
+            return { };
+        } else if (std::next(data.begin()) == data.end()) {
+            return *data.begin();
+        }
+        auto mutable_view = reserve(data.size_bytes());
+        auto dst = mutable_view.begin();
+        using boost::range::for_each;
+        for_each(data, [&] (bytes_view fragment) {
+            dst = std::copy(fragment.begin(), fragment.end(), dst);
+        });
+        return bytes_view(mutable_view);
+    }
+
     /// Creates a bytes_ostream
     ///
     /// make_buffer calls provided function object and gives it a mutable
@@ -117,6 +134,35 @@ public:
             output.remove_suffix(output.size() - actual_length);
         }
         return output;
+    }
+
+    template<typename Function>
+    GCC6_CONCEPT(requires requires(Function fn, bytes_mutable_view view) {
+        { fn(view) } -> size_t;
+    })
+    fragmented_temporary_buffer make_fragmented_temporary_buffer(size_t maximum_length, size_t maximum_fragment_size, Function&& fn) {
+        std::vector<temporary_buffer<char>> fragments;
+        bytes_mutable_view view = [&] {
+            if (maximum_length <= maximum_fragment_size) {
+                fragments.emplace_back(maximum_length);
+                return bytes_mutable_view(reinterpret_cast<bytes::pointer>(fragments.back().get_write()), maximum_length);
+            }
+            return reserve(maximum_length);
+        }();
+        size_t actual_length = fn(view);
+        if (fragments.empty()) {
+            auto left = actual_length;
+            auto src = reinterpret_cast<const bytes::value_type*>(_buffer.get());
+            while (left) {
+                auto this_length = std::min(left, maximum_fragment_size);
+                fragments.emplace_back(reinterpret_cast<const char*>(src), this_length);
+                src += this_length;
+                left -= this_length;
+            }
+        } else {
+            fragments.back().trim(actual_length);
+        }
+        return fragmented_temporary_buffer(std::move(fragments), actual_length);
     }
 
     /// Releases all allocated memory.

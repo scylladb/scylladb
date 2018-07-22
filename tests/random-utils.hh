@@ -27,8 +27,19 @@
 
 namespace tests::random {
 
-static std::random_device rd;
-static std::default_random_engine gen(rd());
+namespace internal {
+
+std::random_device::result_type get_seed()
+{
+    std::random_device rd;
+    auto seed = rd();
+    std::cout << "tests::random seed = " << seed << "\n";
+    return seed;
+}
+
+}
+
+static std::default_random_engine gen(internal::get_seed());
 
 template<typename T>
 T get_int() {
@@ -61,6 +72,16 @@ bytes get_bytes(size_t n) {
 
 bytes get_bytes() {
     return get_bytes(get_int<unsigned>(128 * 1024));
+}
+
+sstring get_sstring(size_t n) {
+    sstring str(sstring::initialized_later(), n);
+    boost::generate(str, [] { return get_int<sstring::value_type>('a', 'z'); });
+    return str;
+}
+
+sstring get_sstring() {
+    return get_sstring(get_int<unsigned>(1024));
 }
 
 }

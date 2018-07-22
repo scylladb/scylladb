@@ -461,9 +461,9 @@ function_call::make_terminal(shared_ptr<function> fun, cql3::raw_value result, c
     }
 
     auto ctype = static_pointer_cast<const collection_type_impl>(fun->return_type());
-    bytes_view res;
+    fragmented_temporary_buffer::view res;
     if (result) {
-        res = *result;
+        res = fragmented_temporary_buffer::view(bytes_view(*result));
     }
     if (&ctype->_kind == &collection_type_impl::kind::list) {
         return make_shared(lists::value::from_serialized(std::move(res), static_pointer_cast<const list_type_impl>(ctype), sf));

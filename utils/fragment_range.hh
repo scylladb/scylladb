@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <boost/range/algorithm/copy.hpp>
+#include <boost/range/algorithm/for_each.hpp>
+
 #include <seastar/util/gcc6-concepts.hh>
 
 #include "bytes.hh"
@@ -103,3 +106,33 @@ static_assert(FragmentRange<single_fragment_range<mutable_view::no>>);
 static_assert(FragmentRange<single_fragment_range<mutable_view::yes>>);
 
 )
+
+template<typename FragmentedBuffer>
+GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+bytes linearized(const FragmentedBuffer& buffer)
+{
+    bytes b(bytes::initialized_later(), buffer.size_bytes());
+    auto dst = b.begin();
+    using boost::range::for_each;
+    for_each(buffer, [&] (bytes_view fragment) {
+        dst = boost::copy(fragment, dst);
+    });
+    return b;
+}
+
+template<typename FragmentedBuffer, typename Function>
+GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer> && requires (Function fn, bytes_view bv) {
+    fn(bv);
+})
+decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
+{
+    bytes b;
+    bytes_view bv;
+    if (__builtin_expect(!buffer.empty() && std::next(buffer.begin()) == buffer.end(), true)) {
+        bv = *buffer.begin();
+    } else if (!buffer.empty()) {
+        b = linearized(buffer);
+        bv = b;
+    }
+    return fn(bv);
+}

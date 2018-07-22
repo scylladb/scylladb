@@ -75,7 +75,7 @@ private:
     const std::experimental::optional<std::vector<sstring_view>> _names;
     std::vector<cql3::raw_value> _values;
     std::vector<cql3::raw_value_view> _value_views;
-    mutable std::vector<std::vector<int8_t>> _temporaries;
+    mutable bytes_ostream _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
     cql_serialization_format _cql_serialization_format;
@@ -160,6 +160,7 @@ public:
     const timeout_config& get_timeout_config() const { return _timeout_config; }
     cql3::raw_value_view get_value_at(size_t idx) const;
     cql3::raw_value_view make_temporary(cql3::raw_value value) const;
+    bytes_view linearize(fragmented_temporary_buffer::view) const;
     size_t get_values_count() const;
     bool skip_metadata() const;
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */

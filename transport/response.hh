@@ -46,7 +46,7 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
-class cql_server::response {
+class response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
     uint8_t           _flags = 0; // a bitwise OR mask of zero or more cql_frame_flags values
@@ -99,17 +99,9 @@ public:
         return _opcode;
     }
 private:
-    // Reusable buffers for compression. Cleared every _clear_buffers_trigger
-    // uses.
-    static constexpr size_t _clear_buffers_trigger = 100'000;
-    static thread_local size_t _buffer_use_count;
-    static thread_local utils::reusable_buffer _input_buffer;
-    static thread_local utils::reusable_buffer _output_buffer;
-
     void compress(cql_compression compression);
     void compress_lz4();
     void compress_snappy();
-    void on_compression_buffer_use();
 
     template <typename CqlFrameHeaderType>
     sstring make_frame_one(uint8_t version, size_t length) {
@@ -138,7 +130,7 @@ private:
 };
 
 template<>
-class cql_server::response::placeholder<int32_t> {
+class response::placeholder<int32_t> {
     int8_t* _pointer;
 public:
     explicit placeholder(int8_t* ptr) : _pointer(ptr) { }
