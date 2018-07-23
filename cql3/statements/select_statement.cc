@@ -818,11 +818,14 @@ read_posting_list(service::storage_proxy& proxy,
             auto token_restriction = ::make_shared<restrictions::single_column_restriction::EQ>(token_cdef, ::make_shared<cql3::constants::value>(cql3::raw_value::make_value(token_value)));
             clustering_restrictions->merge_with(token_restriction);
 
-            if (!base_restrictions->has_unrestricted_clustering_columns()) {
-                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<clustering_key>>(base_restrictions->get_partition_key_restrictions());
+            if (base_restrictions->get_clustering_columns_restrictions()->prefix_size() > 0) {
+                auto single_ck_restrictions = dynamic_pointer_cast<restrictions::single_column_primary_key_restrictions<clustering_key>>(base_restrictions->get_clustering_columns_restrictions());
                 if (single_ck_restrictions) {
-                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *single_pk_restrictions);
-                    clustering_restrictions->merge_with(clustering_restrictions_from_base);
+                    auto prefix_restrictions = single_ck_restrictions->get_longest_prefix_restrictions();
+                    auto clustering_restrictions_from_base = ::make_shared<restrictions::single_column_primary_key_restrictions<clustering_key_prefix>>(view_schema, *prefix_restrictions);
+                    for (auto restriction_it : clustering_restrictions_from_base->restrictions()) {
+                        clustering_restrictions->merge_with(restriction_it.second);
+                    }
                 }
             }
 

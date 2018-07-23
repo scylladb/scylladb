@@ -417,9 +417,10 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
     if (_clustering_columns_restrictions->empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    // TODO(sarna): For filtering to work, clustering range is not bounded at all. For filtering to work faster,
-    // the biggest clustering prefix restriction should be used here.
     if (_clustering_columns_restrictions->needs_filtering(*_schema)) {
+        if (auto single_ck_restrictions = dynamic_pointer_cast<single_column_primary_key_restrictions<clustering_key>>(_clustering_columns_restrictions)) {
+            return single_ck_restrictions->get_longest_prefix_restrictions()->bounds_ranges(options);
+        }
         return {query::clustering_range::make_open_ended_both_sides()};
     }
     return _clustering_columns_restrictions->bounds_ranges(options);
@@ -436,7 +437,7 @@ bool statement_restrictions::need_filtering() const {
     if (_partition_key_restrictions->has_unrestricted_components(*_schema) || !_partition_key_restrictions->is_all_eq()) {
         number_of_filtering_restrictions += _partition_key_restrictions->size();
         if (_clustering_columns_restrictions->has_unrestricted_components(*_schema)) {
-            number_of_filtering_restrictions += _clustering_columns_restrictions->size();
+            number_of_filtering_restrictions += _clustering_columns_restrictions->size() - _clustering_columns_restrictions->prefix_size();
         }
     }
 
