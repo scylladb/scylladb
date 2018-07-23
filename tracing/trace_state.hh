@@ -638,7 +638,7 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->trace(std::forward<A>(a)...);
     }
 }
