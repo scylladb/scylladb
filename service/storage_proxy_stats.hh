@@ -130,6 +130,8 @@ struct stats : public write_stats {
     uint64_t replica_digest_reads = 0;
     uint64_t replica_mutation_data_reads = 0;
 
+    uint64_t replica_cross_shard_ops = 0;
+
     utils::timed_rate_moving_average_and_histogram read;
     utils::timed_rate_moving_average_and_histogram range;
     utils::estimated_histogram estimated_read;

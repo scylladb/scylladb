@@ -731,6 +731,9 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_total_operations("reads", _stats.replica_digest_reads,
                        sm::description("number of remote digest read requests this Node received"), {storage_proxy_stats::split_stats::op_type_label("digest")}),
 
+        sm::make_total_operations("cross_shard_ops", _stats.replica_cross_shard_ops,
+                       sm::description("number of operations that crossed a shard boundary")),
+
     });
 
     _stats.register_metrics_local();
@@ -1149,6 +1152,7 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 future<>
 storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
+    _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m), timeout] (database& db) -> future<> {
         return db.apply(s, m, timeout);
     });
@@ -1157,6 +1161,7 @@ storage_proxy::mutate_locally(const mutation& m, clock_type::time_point timeout)
 future<>
 storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, clock_type::time_point timeout) {
     auto shard = _db.local().shard_of(m);
+    _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s), timeout] (database& db) -> future<> {
         return db.apply(gs, m, timeout);
     });
@@ -1186,6 +1191,7 @@ future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state) {
     auto shard = _db.local().shard_of(fm);
+    _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, [gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) {
         auto trace_state = gt.get();
         return db.apply_counter_update(gs, fm, timeout, trace_state).then([cl, timeout, trace_state] (mutation m) mutable {
@@ -1197,6 +1203,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 future<>
 storage_proxy::mutate_streaming_mutation(const schema_ptr& s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {
     auto shard = _db.local().shard_of(m);
+    _stats.replica_cross_shard_ops += shard != engine().cpu_id();
     return _db.invoke_on(shard, [&m, plan_id, fragmented, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
         return db.apply_streaming_mutation(gs, plan_id, m, fragmented);
     });
@@ -3051,6 +3058,7 @@ storage_proxy::query_result_local(schema_ptr s, lw_shared_ptr<query::read_comman
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
+        _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return _db.invoke_on(shard, [max_size, gs = global_schema_ptr(s), prv = dht::partition_range_vector({pr}) /* FIXME: pr is copied */, cmd, opts, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
             tracing::trace(gt, "Start querying the token range that starts with {}", seastar::value_of([&prv] { return prv.begin()->start()->value().token(); }));
             return db.query(gs, *cmd, opts, prv, gt, max_size, timeout).then([trace_state = gt.get()](auto&& f, cache_temperature ht) {
@@ -3966,15 +3974,17 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_mutation_done([] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation_done([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
             sp.got_response(response_id, from);
             return netw::messaging_service::no_wait();
         });
     });
-    ms.register_mutation_failed([] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed) {
+    ms.register_mutation_failed([this] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id, size_t num_failed) {
         auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return get_storage_proxy().invoke_on(shard, [from, response_id, num_failed] (storage_proxy& sp) {
             sp.got_failure_response(response_id, from, num_failed);
             return netw::messaging_service::no_wait();
@@ -4073,7 +4083,8 @@ void storage_proxy::init_messaging_service() {
         });
     });
 
-    ms.register_get_schema_version([] (unsigned shard, table_schema_version v) {
+    ms.register_get_schema_version([this] (unsigned shard, table_schema_version v) {
+        _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return get_storage_proxy().invoke_on(shard, [v] (auto&& sp) {
             slogger.debug("Schema version request for {}", v);
             return local_schema_registry().get_frozen(v);
@@ -4270,6 +4281,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (pr.is_singular()) {
         unsigned shard = _db.local().shard_of(pr.start()->value().token());
+        _stats.replica_cross_shard_ops += shard != engine().cpu_id();
         return _db.invoke_on(shard, [max_size, cmd, &pr, gs=global_schema_ptr(s), timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state))] (database& db) mutable {
           return db.get_result_memory_limiter().new_mutation_read(max_size).then([&] (query::result_memory_accounter ma) {
             return db.query_mutations(gs, *cmd, pr, std::move(ma), gt, timeout).then([] (reconcilable_result&& result, cache_temperature ht) {
@@ -4401,6 +4413,7 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                 auto&& shard = elem_shard_range.first.shard;
                 auto&& range = elem_shard_range.second.pr;
                 auto sort_key_shard_order = elem_shard_range.second.sort_key_shard_order;
+                _stats.replica_cross_shard_ops += shard != engine().cpu_id();
                 return _db.invoke_on(shard, [&, range, gt, fstate = mrm.memory().state_for_another_shard(), timeout] (database& db) {
                     query::result_memory_accounter accounter(db.get_result_memory_limiter(), std::move(fstate));
                     return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt), timeout).then([&hit_rate] (reconcilable_result&& rr, cache_temperature ht) {
