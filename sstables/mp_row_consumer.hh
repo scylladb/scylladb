@@ -1008,7 +1008,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_row_end(const liveness_info& liveness_info) override {
+    virtual proceed consume_row_end() override {
         auto fill_cells = [this] (column_kind kind, row& cells) {
             auto max_id = boost::max_element(_cells, [](auto &&a, auto &&b) {
                 return a.id < b.id;
@@ -1035,14 +1035,7 @@ public:
                 throw runtime_exception("We should never need to store static row");
             }
         } else {
-            if (_cells.empty()) {
-                if (liveness_info.timestamp() != api::missing_timestamp) {
-                    row_marker rm(liveness_info.timestamp(),
-                                  liveness_info.ttl(),
-                                  liveness_info.local_deletion_time());
-                    _in_progress_row->apply(std::move(rm));
-                }
-            } else {
+            if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
 

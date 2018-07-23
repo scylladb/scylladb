@@ -175,7 +175,7 @@ public:
     virtual proceed consume_counter_column(stdx::optional<column_id> column_id, bytes_view value,
                                            api::timestamp_type timestamp) = 0;
 
-    virtual proceed consume_row_end(const sstables::liveness_info&) = 0;
+    virtual proceed consume_row_end() = 0;
 
     // Called when the reader is fast forwarded to given element.
     virtual void reset(sstables::indexable_element) = 0;
@@ -919,7 +919,7 @@ public:
             if (_subcolumns_to_read == 0) {
                 if (no_more_columns()) {
                     _state = state::FLAGS;
-                    if (_consumer.consume_row_end(_liveness) == consumer_m::proceed::no) {
+                    if (_consumer.consume_row_end() == consumer_m::proceed::no) {
                         return consumer_m::proceed::no;
                     }
                     goto flags_label;
