@@ -135,21 +135,6 @@ query_options::query_options(std::vector<cql3::raw_value> values)
           db::consistency_level::ONE, infinite_timeout_config, std::move(values))
 {}
 
-db::consistency_level query_options::get_consistency() const
-{
-    return _consistency;
-}
-
-cql3::raw_value_view query_options::get_value_at(size_t idx) const
-{
-    return _value_views.at(idx);
-}
-
-size_t query_options::get_values_count() const
-{
-    return _value_views.size();
-}
-
 cql3::raw_value_view query_options::make_temporary(cql3::raw_value value) const
 {
     if (value) {
@@ -176,56 +161,6 @@ bytes_view query_options::linearize(fragmented_temporary_buffer::view view) cons
         });
         return bytes_view(ptr, view.size_bytes());
     }
-}
-
-bool query_options::skip_metadata() const
-{
-    return _skip_metadata;
-}
-
-int32_t query_options::get_page_size() const
-{
-    return get_specific_options().page_size;
-}
-
-::shared_ptr<service::pager::paging_state> query_options::get_paging_state() const
-{
-    return get_specific_options().state;
-}
-
-std::experimental::optional<db::consistency_level> query_options::get_serial_consistency() const
-{
-    return get_specific_options().serial_consistency;
-}
-
-api::timestamp_type query_options::get_timestamp(service::query_state& state) const
-{
-    auto tstamp = get_specific_options().timestamp;
-    return tstamp != api::missing_timestamp ? tstamp : state.get_timestamp();
-}
-
-int query_options::get_protocol_version() const
-{
-    return _cql_serialization_format.protocol_version();
-}
-
-cql_serialization_format query_options::get_cql_serialization_format() const
-{
-    return _cql_serialization_format;
-}
-
-const query_options::specific_options& query_options::get_specific_options() const
-{
-    return _options;
-}
-
-const query_options& query_options::for_statement(size_t i) const
-{
-    if (!_batch_options) {
-        // No per-statement options supplied, so use the "global" options
-        return *this;
-    }
-    return _batch_options->at(i);
 }
 
 void query_options::prepare(const std::vector<::shared_ptr<column_specification>>& specs)

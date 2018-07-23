@@ -156,34 +156,76 @@ public:
             std::vector<cql3::raw_value> values, specific_options options = specific_options::DEFAULT);
     explicit query_options(std::unique_ptr<query_options>, ::shared_ptr<service::pager::paging_state> paging_state);
 
-    db::consistency_level get_consistency() const;
     const timeout_config& get_timeout_config() const { return _timeout_config; }
-    cql3::raw_value_view get_value_at(size_t idx) const;
+
+    db::consistency_level get_consistency() const {
+        return _consistency;
+    }
+
+    cql3::raw_value_view get_value_at(size_t idx) const {
+        return _value_views.at(idx);
+    }
+
+    size_t get_values_count() const {
+        return _value_views.size();
+    }
+
     cql3::raw_value_view make_temporary(cql3::raw_value value) const;
     bytes_view linearize(fragmented_temporary_buffer::view) const;
-    size_t get_values_count() const;
-    bool skip_metadata() const;
-    /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */
-    int32_t get_page_size() const;
+
+    bool skip_metadata() const {
+        return _skip_metadata;
+    }
+
+    int32_t get_page_size() const {
+        return get_specific_options().page_size;
+    }
+
     /** The paging state for this query, or null if not relevant. */
-    ::shared_ptr<service::pager::paging_state> get_paging_state() const;
+    ::shared_ptr<service::pager::paging_state> get_paging_state() const {
+        return get_specific_options().state;
+    }
+
     /**  Serial consistency for conditional updates. */
-    std::experimental::optional<db::consistency_level> get_serial_consistency() const;
+    std::experimental::optional<db::consistency_level> get_serial_consistency() const {
+        return get_specific_options().serial_consistency;
+    }
+
+    api::timestamp_type get_timestamp(service::query_state& state) const {
+        auto tstamp = get_specific_options().timestamp;
+        return tstamp != api::missing_timestamp ? tstamp : state.get_timestamp();
+    }
+
+    /**
+     * The protocol version for the query. Will be 3 if the object don't come from
+     * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
+     */
+    int get_protocol_version() const {
+        return _cql_serialization_format.protocol_version();
+    }
+
+    cql_serialization_format get_cql_serialization_format() const {
+        return _cql_serialization_format;
+    }
+
+    const query_options::specific_options& get_specific_options() const {
+        return _options;
+    }
+
+    // Mainly for the sake of BatchQueryOptions
+    const query_options& for_statement(size_t i) const {
+        if (!_batch_options) {
+            // No per-statement options supplied, so use the "global" options
+            return *this;
+        }
+        return _batch_options->at(i);
+    }
+
 
     const std::experimental::optional<std::vector<sstring_view>>& get_names() const noexcept {
         return _names;
     }
 
-    api::timestamp_type get_timestamp(service::query_state& state) const;
-    /**
-     * The protocol version for the query. Will be 3 if the object don't come from
-     * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
-     */
-    int get_protocol_version() const;
-    cql_serialization_format get_cql_serialization_format() const;
-    // Mainly for the sake of BatchQueryOptions
-    const specific_options& get_specific_options() const;
-    const query_options& for_statement(size_t i) const;
     void prepare(const std::vector<::shared_ptr<column_specification>>& specs);
 private:
     void fill_value_views();
