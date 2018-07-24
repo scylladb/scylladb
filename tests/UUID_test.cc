@@ -50,3 +50,30 @@ BOOST_AUTO_TEST_CASE(test_UUID_comparison) {
         BOOST_REQUIRE_GT(p.first, p.second);
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_from_string) {
+    auto check = [] (sstring_view sv) {
+        auto uuid = UUID(sv);
+        BOOST_CHECK_EQUAL(uuid.version(), 4);
+        BOOST_CHECK_EQUAL(uuid.to_sstring(), sv);
+        BOOST_CHECK_EQUAL((uuid.get_least_significant_bits() >> 62) & 0x3, 2);
+    };
+
+    check("b1415756-49c3-4fa8-9b72-d1b867b032af");
+    check("85859d5c-fcf3-4b0b-9089-197b8b06735c");
+    check("e596c2f2-d29d-44a0-bb89-0a90ff928490");
+    check("f28f86f5-cbc2-4526-ba25-db90c226ec6a");
+    check("ce84997b-6ea2-4468-9f02-8a65abf4141a");
+}
+
+BOOST_AUTO_TEST_CASE(test_make_random_uuid) {
+    std::vector<UUID> uuids;
+    for (auto i = 0; i < 100; i++) {
+        auto uuid = utils::make_random_uuid();
+        BOOST_CHECK_EQUAL(uuid.version(), 4);
+        BOOST_CHECK_EQUAL((uuid.get_least_significant_bits() >> 62) & 0x3, 2);
+        uuids.emplace_back(uuid);
+    }
+    std::sort(uuids.begin(), uuids.end());
+    BOOST_CHECK(std::unique(uuids.begin(), uuids.end()) == uuids.end());
+}
