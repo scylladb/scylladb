@@ -116,6 +116,9 @@ if [ ! -f /usr/bin/pystache ]; then
         sudo apt-get install -y python-pystache
     fi
 fi
+if is_debian_variant && [ ! -f /usr/share/doc/python-pkg-resources/copyright ]; then
+    sudo apt-get install -y python-pkg-resources
+fi
 
 if [ -z "$TARGET" ]; then
     if is_debian_variant; then
