@@ -2167,7 +2167,7 @@ void write_collection_value(bytes::iterator& out, cql_serialization_format sf, b
 }
 
 sstring abstract_type::quote_json_string(const sstring& s) {
-    return Json::valueToQuotedString(s.c_str());
+    return json::value_to_quoted_string(s);
 }
 
 void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
