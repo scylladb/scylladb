@@ -641,9 +641,9 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
     }
-    if (!gossiper.seen_any_seed()) {
-         throw std::runtime_error("Unable to contact any seeds!");
-    }
+
+    gossiper.check_seen_seeds();
+
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
     bs.bootstrap().get(); // handles token update

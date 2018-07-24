@@ -241,7 +241,7 @@ public:
     void set_last_processed_message_at();
     void set_last_processed_message_at(clk::time_point tp);
 
-    bool seen_any_seed();
+    void check_seen_seeds();
 
     /**
      * Register for interesting state changes.

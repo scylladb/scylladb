@@ -94,8 +94,8 @@ std::set<inet_address> gossiper::get_seeds() {
     return _seeds_from_config;
 }
 
-void gossiper::set_seeds(std::set<inet_address> _seeds) {
-    _seeds_from_config = _seeds;
+void gossiper::set_seeds(std::set<inet_address> seeds) {
+    _seeds_from_config = std::move(seeds);
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() {
@@ -748,14 +748,21 @@ void gossiper::run() {
     });
 }
 
-bool gossiper::seen_any_seed() {
-    return std::any_of(endpoint_state_map.begin(), endpoint_state_map.end(), [this] (auto& entry) {
+void gossiper::check_seen_seeds() {
+    auto seen = std::any_of(endpoint_state_map.begin(), endpoint_state_map.end(), [this] (auto& entry) {
         if (_seeds.count(entry.first)) {
             return true;
         }
         auto* internal_ip = entry.second.get_application_state_ptr(application_state::INTERNAL_IP);
         return internal_ip && _seeds.count(inet_address(internal_ip->value));
     });
+    logger.info("Known endpoints={}, current_seeds={}, seeds_from_config={}, seen_any_seed={}",
+        boost::copy_range<std::list<inet_address>>(endpoint_state_map | boost::adaptors::map_keys),
+        _seeds, _seeds_from_config, seen);
+    if (!seen) {
+        dump_endpoint_state_map();
+        throw std::runtime_error("Unable to contact any seeds!");
+    }
 }
 
 bool gossiper::is_seed(const gms::inet_address& endpoint) const {
@@ -1867,9 +1874,11 @@ clk::time_point gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
+    logger.info("=== endpoint_state_map dump starts == ");
     for (auto& x : endpoint_state_map) {
-        logger.debug("ep={}, eps={}", x.first, x.second);
+        logger.info("endpoint={}, endpoint_state={}", x.first, x.second);
     }
+    logger.info("=== endpoint_state_map dump ends ===");
 }
 
 void gossiper::debug_show() {
