@@ -70,18 +70,29 @@ public:
 
     using flag_enum_set = enum_set<flag_enum>;
 
-private:
-    flag_enum_set _flags;
-
-public:
+    struct column_info {
     // Please note that columnCount can actually be smaller than names, even if names is not null. This is
     // used to include columns in the resultSet that we need to do post-query re-orderings
     // (SelectStatement.orderResults) but that shouldn't be sent to the user as they haven't been requested
     // (CASSANDRA-4911). So the serialization code will exclude any columns in name whose index is >= columnCount.
-    std::vector<::shared_ptr<column_specification>> names;
+        std::vector<::shared_ptr<column_specification>> _names;
+        uint32_t _column_count;
+
+        column_info(std::vector<::shared_ptr<column_specification>> names, uint32_t column_count)
+            : _names(std::move(names))
+            , _column_count(column_count)
+        { }
+
+        explicit column_info(std::vector<::shared_ptr<column_specification>> names)
+            : _names(std::move(names))
+            , _column_count(_names.size())
+        { }
+    };
+private:
+    flag_enum_set _flags;
 
 private:
-    uint32_t _column_count;
+    lw_shared_ptr<column_info> _column_info;
     ::shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:
@@ -105,11 +116,13 @@ public:
 
     flag_enum_set flags() const;
 
-    uint32_t column_count() const;
+    uint32_t column_count() const { return _column_info->_column_count; }
 
     ::shared_ptr<const service::pager::paging_state> paging_state() const;
 
-    const std::vector<::shared_ptr<column_specification>>& get_names() const;
+    const std::vector<::shared_ptr<column_specification>>& get_names() const {
+        return _column_info->_names;
+    }
 };
 
 ::shared_ptr<const cql3::metadata> make_empty_metadata();
