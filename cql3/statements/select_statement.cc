@@ -410,18 +410,18 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto timeout = options.get_timeout_config().*get_timeout_config_selector();
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, timeout, command, std::move(key_ranges), _stats, _restrictions->need_filtering() ? _restrictions : nullptr);
+            state, options, command, std::move(key_ranges), _stats, _restrictions->need_filtering() ? _restrictions : nullptr);
 
     if (aggregate) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_cql_serialization_format()),
-                [this, p, page_size, now](auto& builder) {
+                [this, p, page_size, now, timeout](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
-                            [p, &builder, page_size, now] {
-                                return p->fetch_page(builder, page_size, now);
+                            [p, &builder, page_size, now, timeout] {
+                                return p->fetch_page(builder, page_size, now, timeout);
                             }
                     ).then([this, &builder] {
                                 auto rs = builder.build();
@@ -440,7 +440,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     }
 
     if (_selection->is_trivial() && !_restrictions->need_filtering()) {
-        return p->fetch_page_generator(page_size, now, _stats).then([this, p, limit] (result_generator generator) {
+        return p->fetch_page_generator(page_size, now, timeout, _stats).then([this, p, limit] (result_generator generator) {
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
@@ -457,7 +457,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
         });
     }
 
-    return p->fetch_page(page_size, now).then(
+    return p->fetch_page(page_size, now, timeout).then(
             [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
                 if (!p->is_exhausted()) {
