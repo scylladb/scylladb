@@ -236,14 +236,14 @@ public:
 class result {
     std::unique_ptr<cql3::result_set> _result_set;
     result_generator _result_generator;
-    shared_ptr<cql3::metadata> _metadata;
+    shared_ptr<const cql3::metadata> _metadata;
 public:
     explicit result(std::unique_ptr<cql3::result_set> rs)
         : _result_set(std::move(rs))
         , _metadata(_result_set->_metadata)
     { }
 
-    explicit result(result_generator generator, shared_ptr<metadata> m)
+    explicit result(result_generator generator, shared_ptr<const metadata> m)
         : _result_generator(std::move(generator))
         , _metadata(std::move(m))
     { }
@@ -253,7 +253,7 @@ public:
         if (_result_set) {
             return *_result_set;
         } else {
-            auto builder = result_set::builder(_metadata);
+            auto builder = result_set::builder(make_shared<cql3::metadata>(*_metadata));
             _result_generator.visit(builder);
             return std::move(builder).get_result_set();
         }
