@@ -307,6 +307,7 @@ scylla_tests = [
     'tests/observable_test',
     'tests/transport_test',
     'tests/fragmented_temporary_buffer_test',
+    'tests/json_test'
 ]
 
 perf_tests = [
@@ -747,6 +748,7 @@ pure_boost_tests = set([
     'tests/partition_data_test',
     'tests/reusable_buffer_test',
     'tests/observable_test',
+    'tests/json_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
