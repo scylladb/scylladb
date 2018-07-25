@@ -307,6 +307,7 @@ scylla_tests = [
     'tests/observable_test',
     'tests/transport_test',
     'tests/fragmented_temporary_buffer_test',
+    'tests/json_test'
 ]
 
 perf_tests = [
@@ -410,6 +411,7 @@ scylla_core = (['database.cc',
                  'mutation_reader.cc',
                  'flat_mutation_reader.cc',
                  'mutation_query.cc',
+                 'json.cc',
                  'keys.cc',
                  'counters.cc',                 
                  'compress.cc',
@@ -746,6 +748,7 @@ pure_boost_tests = set([
     'tests/partition_data_test',
     'tests/reusable_buffer_test',
     'tests/observable_test',
+    'tests/json_test',
 ])
 
 tests_not_using_seastar_test_framework = set([
