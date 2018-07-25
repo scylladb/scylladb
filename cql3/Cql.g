@@ -473,9 +473,9 @@ insertStatement returns [::shared_ptr<raw::modification_statement> expr]
         ::shared_ptr<cql3::term::raw> json_value;
     }
     : K_INSERT K_INTO cf=columnFamilyName
-          '(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
-        ( K_VALUES
-              '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
+        ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
+            K_VALUES
+            '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
             ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
             ( usingClause[attrs] )?
               {

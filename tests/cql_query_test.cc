@@ -2783,7 +2783,7 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
 
         e.require_table_exists("ks", "all_types").get();
         e.execute_cql(
-            "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) JSON '"
+            "INSERT INTO all_types JSON '"
                 "{\"a\": \"ascii\", "
                 "\"b\": 123456789, "
                 "\"c\": \"0xdeadbeef\", "
@@ -2863,7 +2863,7 @@ SEASTAR_TEST_CASE(test_insert_json_collections) {
         e.require_table_exists("ks", "collections").get();
 
         e.execute_cql(
-            "INSERT INTO collections (a, b, c, d) JSON '"
+            "INSERT INTO collections JSON '"
                 "{\"a\": \"key\", "
                 "\"b\": {\"1\": \"abc\", \"2\": \"!\", \"3\": \"de\"}, "
                 "\"c\": [0, 1.125, 2.25, 4.5], "
@@ -2898,10 +2898,10 @@ SEASTAR_TEST_CASE(test_prepared_json) {
 
         cql3::prepared_cache_key_type prepared_id = e.prepare(
             "begin batch \n"
-                "  insert into json_data (k, v) json :named_bound0; \n"
-                "  insert into json_data (k, v) json ?; \n"
-                "  insert into json_data (k, v) json :named_bound1; \n"
-                "  insert into json_data (k, v) json ?; \n"
+                "  insert into json_data json :named_bound0; \n"
+                "  insert into json_data json ?; \n"
+                "  insert into json_data json :named_bound1; \n"
+                "  insert into json_data json ?; \n"
                 "apply batch;").get0();
 
         std::vector<cql3::raw_value> raw_values;
