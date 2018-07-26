@@ -75,8 +75,7 @@ private:
     unsigned _cpu = 0;
     bool _stop = false;
 
-    std::random_device _rd;
-    std::default_random_engine _e1;
+    std::default_random_engine _e1{std::random_device{}()};
 
     future<> replay_all_failed_batches();
 public:

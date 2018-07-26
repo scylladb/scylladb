@@ -128,8 +128,7 @@ static bool checkpw(const sstring& pass, const sstring& salted_hash) {
 static sstring gensalt() {
     static sstring prefix;
 
-    std::random_device rd;
-    std::default_random_engine e1(rd());
+    std::default_random_engine e1{std::random_device{}()};
     std::uniform_int_distribution<char> dist;
 
     sstring valid_salt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";

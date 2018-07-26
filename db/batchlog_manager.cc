@@ -76,8 +76,7 @@ const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
-        : _qp(qp)
-        , _e1(_rd()) {
+        : _qp(qp) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("batchlog_manager", {

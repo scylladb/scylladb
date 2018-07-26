@@ -401,7 +401,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     }
     /* Generate a random number from 0 -> size */
     std::uniform_int_distribution<int> dist(0, size - 1);
-    int index = dist(_random);
+    int index = dist(_random_engine);
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
@@ -629,7 +629,7 @@ void gossiper::run() {
 
                 auto get_random_node = [this] (const utils::chunked_vector<inet_address>& nodes) {
                     std::uniform_int_distribution<int> dist(0, nodes.size() - 1);
-                    int index = dist(this->_random);
+                    int index = dist(this->_random_engine);
                     return nodes[index];
                 };
 
@@ -1072,7 +1072,7 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         /* based on some probability */
         double prob = unreachable_endpoint_count / (live_endpoint_count + 1);
         std::uniform_real_distribution<double> dist(0, 1);
-        double rand_dbl = dist(_random);
+        double rand_dbl = dist(_random_engine);
         if (rand_dbl < prob) {
             std::set<inet_address> addrs;
             for (auto&& x : _unreachable_endpoints) {
@@ -1103,7 +1103,7 @@ future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
             /* Gossip with the seed with some probability. */
             double probability = _seeds.size() / (double) (_live_endpoints.size() + _unreachable_endpoints.size());
             std::uniform_real_distribution<double> dist(0, 1);
-            double rand_dbl = dist(_random);
+            double rand_dbl = dist(_random_engine);
             if (rand_dbl <= probability) {
                 logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", _live_endpoints.size(), _seeds.size());
                 return send_gossip(prod, _seeds);

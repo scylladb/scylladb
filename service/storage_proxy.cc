@@ -1383,8 +1383,7 @@ gms::inet_address storage_proxy::find_leader_for_counter_update(const mutation& 
         return live_endpoints[0];
     } else {
         // FIXME: favour ourselves to avoid additional hop?
-        static thread_local std::random_device rd;
-        static thread_local std::default_random_engine re(rd());
+        static thread_local std::default_random_engine re{std::random_device{}()};
         std::uniform_int_distribution<> dist(0, local_endpoints.size() - 1);
         return local_endpoints[dist(re)];
     }

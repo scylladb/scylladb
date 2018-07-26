@@ -28,8 +28,7 @@ logging::logger hr_logger("heat_load_balance");
 // Return a uniformly-distributed random number in [0,1)
 // We use per-thread state for thread safety.  We seed the random number generator
 // once with a real random value, if available,
-static thread_local std::random_device r;
-static thread_local std::default_random_engine random_engine(r());
+static thread_local std::default_random_engine random_engine{std::random_device{}()};
 float
 rand_float() {
     static thread_local std::uniform_real_distribution<float> u(0, 1);

@@ -160,8 +160,7 @@ public:
     static std::chrono::milliseconds quarantine_delay();
 private:
 
-    std::random_device _random;
-    std::default_random_engine _random_engine{_random()};
+    std::default_random_engine _random_engine{std::random_device{}()};
 
     /**
      * subscribers for interest in EndpointState change

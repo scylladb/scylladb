@@ -165,8 +165,7 @@ std::ostream& operator<<(std::ostream& out, const token& t);
 
 template <typename T>
 inline auto get_random_number() {
-    static thread_local std::random_device rd;
-    static thread_local std::default_random_engine re(rd());
+    static thread_local std::default_random_engine re{std::random_device{}()};
     static thread_local std::uniform_int_distribution<T> dist{};
     return dist(re);
 }
