@@ -49,7 +49,8 @@ if __name__ == '__main__':
         if is_systemd():
             ntp = systemd_unit('ntp.service')
             ntp.stop()
-            run('ntpdate ntp.ubuntu.com')
+            // ignore error, ntpd may able to adjust clock later
+            run('ntpdate ntp.ubuntu.com', exception=False)
             ntp.start()
         else:
             run('service ntp stop')
@@ -70,7 +71,8 @@ if __name__ == '__main__':
             sntpd.start()
         else:
             run('rc-service ntpd stop', exception=False)
-            run('ntpdate {}'.format(server))
+            // ignore error, ntpd may able to adjust clock later
+            run('ntpdate {}'.format(server), exception=False)
             run('rc-update add ntpd default')
             run('rc-service ntpd start')
 
@@ -87,6 +89,7 @@ if __name__ == '__main__':
         server = match.group(1)
         ntpd = systemd_unit('ntpd.service')
         ntpd.stop()
-        run('ntpdate {}'.format(server))
+        // ignore error, ntpd may able to adjust clock later
+        run('ntpdate {}'.format(server), Exception=False)
         ntpd.enable()
         ntpd.start()
