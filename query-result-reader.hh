@@ -156,6 +156,7 @@ class result_view {
 public:
     result_view(const bytes_ostream& v) : _v(ser::query_result_view{ser::as_input_stream(v)}) {}
     result_view(ser::query_result_view v) : _v(v) {}
+    explicit result_view(const query::result& res) : result_view(res.buf()) { }
 
     template <typename Func>
     static auto do_with(const query::result& res, Func&& func) {
@@ -165,14 +166,12 @@ public:
 
     template <typename ResultVisitor>
     static void consume(const query::result& res, const partition_slice& slice, ResultVisitor&& visitor) {
-        do_with(res, [&] (result_view v) {
-            v.consume(slice, visitor);
-        });
+        result_view(res).consume(slice, visitor);
     }
 
     template <typename Visitor>
     GCC6_CONCEPT(requires ResultVisitor<Visitor>)
-    void consume(const partition_slice& slice, Visitor&& visitor) {
+    void consume(const partition_slice& slice, Visitor&& visitor) const {
         for (auto&& p : _v.partitions()) {
             auto rows = p.rows();
             auto row_count = rows.size();
@@ -198,12 +197,20 @@ public:
         }
     }
 
-    std::tuple<uint32_t, uint32_t> count_partitions_and_rows() {
+    std::tuple<uint32_t, uint32_t> count_partitions_and_rows() const {
         auto&& ps = _v.partitions();
         auto rows = boost::accumulate(ps | boost::adaptors::transformed([] (auto& p) {
             return std::max(p.rows().size(), size_t(1));
         }), uint32_t(0));
         return std::make_tuple(ps.size(), rows);
+    }
+
+    std::tuple<partition_key, stdx::optional<clustering_key>>
+    get_last_partition_and_clustering_key() const {
+        auto ps = _v.partitions();
+        auto& p = ps.back();
+        auto rs = p.rows();
+        return { p.key().value(), !rs.empty() ? rs.back().key() : stdx::optional<clustering_key>() };
     }
 };
 

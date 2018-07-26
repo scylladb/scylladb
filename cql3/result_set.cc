@@ -45,27 +45,25 @@ namespace cql3 {
 
 metadata::metadata(std::vector<::shared_ptr<column_specification>> names_)
         : _flags(flag_enum_set())
-        , names(std::move(names_)) {
-    _column_count = names.size();
-}
+        , _column_info(make_lw_shared<column_info>(std::move(names_)))
+{ }
 
 metadata::metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
         ::shared_ptr<const service::pager::paging_state> paging_state)
     : _flags(flags)
-    , names(std::move(names_))
-    , _column_count(column_count)
+    , _column_info(make_lw_shared<column_info>(std::move(names_), column_count))
     , _paging_state(std::move(paging_state))
 { }
 
 // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
 uint32_t metadata::value_count() const {
-    return _flags.contains<flag::NO_METADATA>() ? _column_count : names.size();
+    return _flags.contains<flag::NO_METADATA>() ? _column_info->_column_count : _column_info->_names.size();
 }
 
 void metadata::add_non_serialized_column(::shared_ptr<column_specification> name) {
     // See comment above. Because columnCount doesn't account the newly added name, it
     // won't be serialized.
-    names.emplace_back(std::move(name));
+    _column_info->_names.emplace_back(std::move(name));
 }
 
 bool metadata::all_in_same_cf() const {
@@ -73,7 +71,7 @@ bool metadata::all_in_same_cf() const {
         return false;
     }
 
-    return column_specification::all_in_same_table(names);
+    return column_specification::all_in_same_table(_column_info->_names);
 }
 
 void metadata::set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
@@ -93,16 +91,8 @@ metadata::flag_enum_set metadata::flags() const {
     return _flags;
 }
 
-uint32_t metadata::column_count() const {
-    return _column_count;
-}
-
 ::shared_ptr<const service::pager::paging_state> metadata::paging_state() const {
     return _paging_state;
-}
-
-const std::vector<::shared_ptr<column_specification>>& metadata::get_names() const {
-    return names;
 }
 
 prepared_metadata::prepared_metadata(const std::vector<::shared_ptr<column_specification>>& names,

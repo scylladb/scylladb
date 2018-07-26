@@ -34,23 +34,16 @@ namespace utils {
 
 UUID
 make_random_uuid() {
-    // FIXME: keep in userspace
-    static thread_local std::random_device urandom;
-    static thread_local std::uniform_int_distribution<uint8_t> dist(0, 255);
-    union {
-        uint8_t b[16];
-        struct {
-            uint64_t msb, lsb;
-        } w;
-    } v;
-    for (auto& b : v.b) {
-        b = dist(urandom);
-    }
-    v.b[6] &= 0x0f;
-    v.b[6] |= 0x40; // version 4
-    v.b[8] &= 0x3f;
-    v.b[8] |= 0x80; // IETF variant
-    return UUID(net::hton(v.w.msb), net::hton(v.w.lsb));
+    static thread_local std::mt19937_64 engine(std::random_device().operator()());
+    static thread_local std::uniform_int_distribution<uint64_t> dist;
+    uint64_t msb, lsb;
+    msb = dist(engine);
+    lsb = dist(engine);
+    msb &= ~uint64_t(0x0f << 12);
+    msb |= 0x4 << 12; // version 4
+    lsb &= ~(uint64_t(0x3) << 62);
+    lsb |= uint64_t(0x2) << 62; // IETF variant
+    return UUID(msb, lsb);
 }
 
 std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
