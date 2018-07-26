@@ -204,6 +204,14 @@ public:
         }), uint32_t(0));
         return std::make_tuple(ps.size(), rows);
     }
+
+    std::tuple<partition_key, stdx::optional<clustering_key>>
+    get_last_partition_and_clustering_key() const {
+        auto ps = _v.partitions();
+        auto& p = ps.back();
+        auto rs = p.rows();
+        return { p.key().value(), !rs.empty() ? rs.back().key() : stdx::optional<clustering_key>() };
+    }
 };
 
 }
