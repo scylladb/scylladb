@@ -442,7 +442,7 @@ class incremental_reader_selector : public reader_selector {
     lw_shared_ptr<sstables::sstable_set> _sstables;
     tracing::trace_state_ptr _trace_state;
     sstables::sstable_set::incremental_selector _selector;
-    std::unordered_set<sstables::shared_sstable> _read_sstables;
+    std::unordered_set<int64_t> _read_sstable_gens;
     sstable_reader_factory_type _fn;
 
     flat_mutation_reader create_reader(sstables::shared_sstable sst) {
@@ -488,7 +488,7 @@ public:
                     _selector_position);
 
             readers = boost::copy_range<std::vector<flat_mutation_reader>>(selection.sstables
-                    | boost::adaptors::filtered([this] (auto& sst) { return _read_sstables.emplace(sst).second; })
+                    | boost::adaptors::filtered([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
                     | boost::adaptors::transformed([this] (auto& sst) { return this->create_reader(sst); }));
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
