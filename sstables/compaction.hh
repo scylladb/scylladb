@@ -26,6 +26,7 @@
 #include "shared_sstable.hh"
 #include "gc_clock.hh"
 #include "compaction_weight_registration.hh"
+#include "utils/UUID.hh"
 #include <seastar/core/thread.hh>
 #include <functional>
 
@@ -99,6 +100,7 @@ namespace sstables {
         std::vector<shared_sstable> new_sstables;
         sstring stop_requested;
         bool tracking = true;
+        utils::UUID run_identifier;
 
         bool is_stop_requested() const {
             return stop_requested.size() > 0;

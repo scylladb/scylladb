@@ -533,6 +533,7 @@ public:
         , _weight_registration(std::move(descriptor.weight_registration))
         , _monitor_generator(_cf.get_compaction_manager(), _cf)
     {
+        _info->run_identifier = _run_identifier;
     }
 
     flat_mutation_reader make_sstable_reader() const override {

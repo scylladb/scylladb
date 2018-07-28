@@ -574,6 +574,10 @@ public:
     }
 };
 
+bool compaction_strategy::ignore_partial_runs() const {
+    return _compaction_strategy_impl->ignore_partial_runs();
+}
+
 
 struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
