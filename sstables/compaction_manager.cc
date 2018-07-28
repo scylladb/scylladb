@@ -66,6 +66,14 @@ public:
             _cm->deregister_compacting_sstables(_compacting);
         }
     }
+
+    // Explicitly release compacting sstables
+    void release_compacting(const std::vector<sstables::shared_sstable>& sstables) {
+        _cm->deregister_compacting_sstables(sstables);
+        for (auto& sst : sstables) {
+            _compacting.erase(boost::remove(_compacting, sst), _compacting.end());
+        }
+    }
 };
 
 compaction_weight_registration::compaction_weight_registration(compaction_manager* cm, int weight)
@@ -503,8 +511,11 @@ void compaction_manager::submit(column_family* cf) {
                 postpone_compaction_for_column_family(&cf);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            auto compacting = compacting_sstable_registration(this, descriptor.sstables);
+            auto compacting = make_lw_shared<compacting_sstable_registration>(this, descriptor.sstables);
             descriptor.weight_registration = compaction_weight_registration(this, weight);
+            descriptor.release_exhausted = [compacting] (const std::vector<sstables::shared_sstable>& exhausted_sstables) {
+                compacting->release_compacting(exhausted_sstables);
+            };
             cmlog.debug("Accepted compaction job ({} sstable(s)) of weight {} for {}.{}",
                 descriptor.sstables.size(), weight, cf.schema()->ks_name(), cf.schema()->cf_name());
 

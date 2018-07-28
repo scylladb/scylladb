@@ -1457,9 +1457,11 @@ table::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup
                 sst->set_unshared();
                 return sst;
         };
-        auto replace_sstables = [this] (std::vector<sstables::shared_sstable> old_ssts, std::vector<sstables::shared_sstable> new_ssts) {
+        auto replace_sstables = [this, release_exhausted = descriptor.release_exhausted] (std::vector<sstables::shared_sstable> old_ssts,
+                std::vector<sstables::shared_sstable> new_ssts) {
             _compaction_strategy.notify_completion(old_ssts, new_ssts);
             this->on_compaction_completion(new_ssts, old_ssts);
+            release_exhausted(old_ssts);
         };
 
         return sstables::compact_sstables(std::move(descriptor), *this, create_sstable, replace_sstables, cleanup);
