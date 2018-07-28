@@ -441,7 +441,7 @@ class incremental_reader_selector : public reader_selector {
     const dht::partition_range* _pr;
     lw_shared_ptr<sstables::sstable_set> _sstables;
     tracing::trace_state_ptr _trace_state;
-    sstables::sstable_set::incremental_selector _selector;
+    std::optional<sstables::sstable_set::incremental_selector> _selector;
     std::unordered_set<int64_t> _read_sstable_gens;
     sstable_reader_factory_type _fn;
 
@@ -481,7 +481,7 @@ public:
         auto readers = std::vector<flat_mutation_reader>();
 
         do {
-            auto selection = _selector.select(_selector_position);
+            auto selection = _selector->select(_selector_position);
             _selector_position = selection.next_position;
 
             dblog.trace("incremental_reader_selector {}: {} sstables to consider, advancing selector to {}", this, selection.sstables.size(),
@@ -493,6 +493,12 @@ public:
         } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         dblog.trace("incremental_reader_selector {}: created {} new readers", this, readers.size());
+
+        // prevents sstable_set::incremental_selector::_current_sstables from holding reference to
+        // sstables when done selecting.
+        if (_selector_position.is_max()) {
+            _selector.reset();
+        }
 
         return readers;
     }
