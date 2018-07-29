@@ -317,6 +317,7 @@ select_statement::make_partition_slice(const query_options& options)
     if (_is_reversed) {
         _opts.set(query::partition_slice::option::reversed);
         std::reverse(bounds.begin(), bounds.end());
+        ++_stats.reverse_queries;
     }
     return query::partition_slice(std::move(bounds),
         std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format());

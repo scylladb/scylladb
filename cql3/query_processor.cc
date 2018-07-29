@@ -243,7 +243,12 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
                     sm::make_gauge(
                             "user_prepared_auth_cache_footprint",
                             [this] { return _authorized_prepared_cache.memory_footprint(); },
-                            sm::description("Size (in bytes) of the authenticated prepared statements cache."))
+                            sm::description("Size (in bytes) of the authenticated prepared statements cache.")),
+
+                    sm::make_counter(
+                            "reverse_queries",
+                            _cql_stats.reverse_queries,
+                            sm::description("Counts number of CQL SELECT requests with ORDER BY DESC.")),
 
             });
 
