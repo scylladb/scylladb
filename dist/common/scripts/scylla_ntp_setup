@@ -90,6 +90,6 @@ if __name__ == '__main__':
         ntpd = systemd_unit('ntpd.service')
         ntpd.stop()
         # ignore error, ntpd may able to adjust clock later
-        run('ntpdate {}'.format(server), Exception=False)
+        run('ntpdate {}'.format(server), exception=False)
         ntpd.enable()
         ntpd.start()
