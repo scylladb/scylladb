@@ -2162,7 +2162,8 @@ region_group::execution_permitted() noexcept {
 }
 
 future<>
-region_group::start_releaser() {
+region_group::start_releaser(scheduling_group deferred_work_sg) {
+  return with_scheduling_group(deferred_work_sg, [this] {
     return later().then([this] {
         return repeat([this] () noexcept {
             if (_shutdown_requested) {
@@ -2184,12 +2185,14 @@ region_group::start_releaser() {
             }
         });
     });
+  });
 }
 
-region_group::region_group(region_group *parent, region_group_reclaimer& reclaimer)
+region_group::region_group(region_group *parent, region_group_reclaimer& reclaimer,
+        scheduling_group deferred_work_sg)
     : _parent(parent)
     , _reclaimer(reclaimer)
-    , _releaser(reclaimer_can_block() ? start_releaser() : make_ready_future<>())
+    , _releaser(reclaimer_can_block() ? start_releaser(deferred_work_sg) : make_ready_future<>())
 {
     if (_parent) {
         _parent->add(this);
