@@ -756,7 +756,7 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
 constexpr int parallelism = 100;
 static thread_local semaphore parallelism_semaphore(parallelism);
 
-static future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range) {
     return db.map_reduce0(
         [keyspace, cf, range] (auto& db) {

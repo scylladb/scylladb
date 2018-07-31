@@ -115,6 +115,9 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
         const ::dht::token_range& range, repair_checksum rt);
 
+future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
+        const sstring& cf, const dht::token_range& range);
+
 // Represent a position of a mutation_fragment read from a flat mutation
 // reader. Repair nodes negotiate a small range identified by two
 // repair_sync_boundary to work on in each round.
