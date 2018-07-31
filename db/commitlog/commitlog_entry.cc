@@ -51,9 +51,8 @@ void commitlog_entry_writer::compute_size() {
     _size = ms.size();
 }
 
-void commitlog_entry_writer::write(data_output& out) const {
-    seastar::simple_output_stream str(out.reserve(size()), size());
-    serialize(str);
+void commitlog_entry_writer::write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::const_iterator>::simple& out) const {
+    serialize(out);
 }
 
 commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)

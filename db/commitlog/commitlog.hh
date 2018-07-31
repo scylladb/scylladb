@@ -176,7 +176,7 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    using output = data_output;
+    using output = typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::const_iterator>::simple;
     using serializer_func = std::function<void(output&)>;
 
     /**
