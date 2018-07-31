@@ -34,6 +34,8 @@
 #include <zlib.h>
 #endif
 
+#include "utils/fragment_range.hh"
+
 namespace utils {
 
 class crc32 {
@@ -162,6 +164,16 @@ public:
         _r = ::crc32(_r, in, size);
     }
 #endif
+
+    template<typename FragmentedBuffer>
+    GCC6_CONCEPT(requires FragmentRange<FragmentedBuffer>)
+    void process_fragmented(const FragmentedBuffer& buffer) {
+        using boost::range::for_each;
+        for_each(buffer, [this] (bytes_view bv) {
+            process(reinterpret_cast<const uint8_t*>(bv.data()), bv.size());
+        });
+    }
+
     uint32_t get() const {
         return _r;
     }
