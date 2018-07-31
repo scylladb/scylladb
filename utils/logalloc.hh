@@ -243,7 +243,7 @@ class region_group {
     bool _shutdown_requested = false;
 
     bool reclaimer_can_block() const;
-    future<> start_releaser();
+    future<> start_releaser(scheduling_group deferered_work_sg);
     void notify_relief();
     friend void region_group_binomial_group_sanity_check(const region_group::region_heap& bh);
 public:
@@ -252,8 +252,15 @@ public:
     // method run_when_memory_available(), to make sure that a given function is only executed when
     // the total memory for the region group (and all of its parents) is lower or equal to the
     // region_group's throttle_treshold (and respectively for its parents).
-    region_group(region_group_reclaimer& reclaimer = no_reclaimer) : region_group(nullptr, reclaimer) {}
-    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer);
+    //
+    // The deferred_work_sg parameter specifies a scheduling group in which to run allocations
+    // (given to run_when_memory_available()) when they must be deferred due to lack of memory
+    // at the time the call to run_when_memory_available() was made.
+    region_group(region_group_reclaimer& reclaimer = no_reclaimer,
+            scheduling_group deferred_work_sg = default_scheduling_group())
+            : region_group(nullptr, reclaimer, deferred_work_sg) {}
+    region_group(region_group* parent, region_group_reclaimer& reclaimer = no_reclaimer,
+            scheduling_group deferred_work_sg = default_scheduling_group());
     region_group(region_group&& o) = delete;
     region_group(const region_group&) = delete;
     ~region_group() {
