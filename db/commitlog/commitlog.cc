@@ -316,7 +316,6 @@ public:
     using buffer_type = temporary_buffer<char>;
 
     buffer_type acquire_buffer(size_t s);
-    void release_buffer(buffer_type&&);
 
     future<std::vector<descriptor>> list_descriptors(sstring dir);
 
@@ -338,7 +337,6 @@ private:
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
-    std::vector<buffer_type> _temp_buffers;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
     flush_handler_id _flush_ids = 0;
     replay_position _flush_position;
@@ -717,7 +715,6 @@ public:
                         }
                     });
                 }).finally([this, buf = std::move(buf), size]() mutable {
-                    _segment_manager->release_buffer(std::move(buf));
                     _segment_manager->notify_memory_written(size);
                 });
         }, [me, flush_after, top, rp] { // lambda instead of bind, so we keep "me" alive.
@@ -1509,41 +1506,12 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
 
 
 db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
-    auto i = _temp_buffers.begin();
-    auto e = _temp_buffers.end();
-
-    while (i != e) {
-        if (i->size() >= s) {
-            auto r = std::move(*i);
-            _temp_buffers.erase(i);
-            totals.buffer_list_bytes -= r.size();
-            return r;
-        }
-        ++i;
-    }
     auto a = ::memalign(segment::alignment, s);
     if (a == nullptr) {
         throw std::bad_alloc();
     }
     clogger.trace("Allocated {} k buffer", s / 1024);
     return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
-}
-
-void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
-    _temp_buffers.emplace_back(std::move(b));
-    std::sort(_temp_buffers.begin(), _temp_buffers.end(), [](const buffer_type& b1, const buffer_type& b2) {
-        return b1.size() < b2.size();
-    });
-
-    constexpr const size_t max_temp_buffers = 4;
-
-    if (_temp_buffers.size() > max_temp_buffers) {
-        clogger.trace("Deleting {} buffers", _temp_buffers.size() - max_temp_buffers);
-        _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
-    }
-    totals.buffer_list_bytes = boost::accumulate(
-	    _temp_buffers | boost::adaptors::transformed(std::mem_fn(&buffer_type::size)),
-            size_t(0), std::plus<size_t>());
 }
 
 /**
