@@ -2129,9 +2129,9 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(std::make_unique<db::config>(cfg))
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
-    , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit())
-    , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit())
+    , _system_dirty_memory_manager(*this, 10 << 20, cfg.virtual_dirty_soft_limit(), default_scheduling_group())
+    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.45, cfg.virtual_dirty_soft_limit(), dbcfg.statement_scheduling_group)
+    , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit(), dbcfg.streaming_scheduling_group)
     , _dbcfg(dbcfg)
     , _memtable_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
         return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
