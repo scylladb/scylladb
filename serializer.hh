@@ -112,6 +112,15 @@ public:
         }
     }
 
+    explicit buffer_view(typename seastar::memory_input_stream<FragmentIterator>::simple stream)
+        : buffer_view(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()), stream.size()))
+    { }
+
+    explicit buffer_view(typename seastar::memory_input_stream<FragmentIterator>::fragmented stream)
+        : buffer_view(bytes_view(reinterpret_cast<const int8_t*>(stream.first_fragment_data()), stream.first_fragment_size()),
+                      stream.size(), stream.fragment_iterator())
+    { }
+
     iterator begin() const {
         return iterator(_first, _total_size, _next);
     }
