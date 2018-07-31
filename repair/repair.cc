@@ -44,7 +44,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 
-static logging::logger rlogger("repair");
+logging::logger rlogger("repair");
 
 template <typename T1, typename T2>
 inline
