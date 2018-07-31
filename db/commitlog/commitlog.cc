@@ -622,20 +622,7 @@ public:
         auto a = align_up(s + overhead, alignment);
         auto k = std::max(a, default_size);
 
-        for (;;) {
-            try {
-                _buffer = _segment_manager->acquire_buffer(k);
-                break;
-            } catch (std::bad_alloc&) {
-                clogger.warn("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
-                if (k > a) {
-                    k = std::max(a, k / 2);
-                    clogger.debug("Trying reduced size: {} k", k / 1024);
-                    continue;
-                }
-                throw;
-            }
-        }
+        _buffer = _segment_manager->acquire_buffer(k);
         _buffer_ostream = seastar::simple_memory_output_stream(_buffer.get_write(), _buffer.size());
         auto out = _buffer_ostream.write_substream(overhead);
         out.fill('\0', overhead);
