@@ -42,7 +42,6 @@
 
 #include <memory>
 
-#include "utils/data_output.hh"
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"

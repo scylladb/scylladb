@@ -25,7 +25,6 @@
 
 #include "frozen_mutation.hh"
 #include "schema.hh"
-#include "utils/data_output.hh"
 #include "stdx.hh"
 
 class commitlog_entry {
