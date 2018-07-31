@@ -30,7 +30,7 @@
 
 #include "database.hh"
 #include "utils/UUID.hh"
-
+#include "streaming/stream_plan.hh"
 
 class repair_exception : public std::exception {
 private:
@@ -114,6 +114,53 @@ public:
 future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
         const ::dht::token_range& range, repair_checksum rt);
+
+class repair_info {
+public:
+    seastar::sharded<database>& db;
+    sstring keyspace;
+    dht::token_range_vector ranges;
+    std::vector<sstring> cfs;
+    int id;
+    shard_id shard;
+    std::vector<sstring> data_centers;
+    std::vector<sstring> hosts;
+    size_t nr_failed_ranges = 0;
+    bool aborted = false;
+    // Map of peer -> <cf, ranges>
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_in;
+    std::unordered_map<gms::inet_address, std::unordered_map<sstring, dht::token_range_vector>> ranges_need_repair_out;
+    // FIXME: this "100" needs to be a parameter.
+    uint64_t target_partitions = 100;
+    // This affects how many ranges we put in a stream plan. The more the more
+    // memory we use to store the ranges in memory. However, it can reduce the
+    // total number of stream_plan we use for the repair.
+    size_t sub_ranges_to_stream = 10 * 1024;
+    size_t sp_index = 0;
+    size_t current_sub_ranges_nr_in = 0;
+    size_t current_sub_ranges_nr_out = 0;
+    int ranges_index = 0;
+    // Only allow one stream_plan in flight
+    semaphore sp_parallelism_semaphore{1};
+    lw_shared_ptr<streaming::stream_plan> _sp_in;
+    lw_shared_ptr<streaming::stream_plan> _sp_out;
+public:
+    repair_info(seastar::sharded<database>& db_,
+            const sstring& keyspace_,
+            const dht::token_range_vector& ranges_,
+            const std::vector<sstring>& cfs_,
+            int id_,
+            const std::vector<sstring>& data_centers_,
+            const std::vector<sstring>& hosts_);
+    future<> do_streaming();
+    void check_failed_ranges();
+    future<> request_transfer_ranges(const sstring& cf,
+        const ::dht::token_range& range,
+        const std::vector<gms::inet_address>& neighbors_in,
+        const std::vector<gms::inet_address>& neighbors_out);
+    void abort();
+    void check_in_abort();
+};
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
         const sstring& cf, const dht::token_range& range);
