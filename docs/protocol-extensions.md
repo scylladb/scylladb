@@ -32,7 +32,7 @@ The keys and values are:
   - `SCYLLA_NR_SHARDS` is an integer containing the number of shards on this
     node (for example, `12`). All shard numbers are smaller than this number.
   - `SCYLLA_PARTITIONER` is a the fully-qualified name of the partitioner in use (i.e.
-    `org.apache.cassandra.partitioners.Murmur3Partitioner`).
+    `org.apache.cassandra.dht.Murmur3Partitioner`).
   - `SCYLLA_SHARDING_ALGORITHM` is the name of an algorithm used to select how
     partitions are mapped into shards (described below)
   - `SCYLLA_SHARDING_IGNORE_MSB` is an integer parameter to the algorithm (also
