@@ -55,23 +55,14 @@ logging::logger logger("range_streamer");
 
 using inet_address = gms::inet_address;
 
-static std::unordered_map<dht::token_range, std::unordered_set<inet_address>>
-unordered_multimap_to_unordered_map(const std::unordered_multimap<dht::token_range, inet_address>& multimap) {
-    std::unordered_map<dht::token_range, std::unordered_set<inet_address>> ret;
-    for (auto x : multimap) {
-        ret[x.first].emplace(x.second);
-    }
-    return ret;
-}
-
-std::unordered_multimap<inet_address, dht::token_range>
-range_streamer::get_range_fetch_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_sources,
+std::unordered_map<inet_address, dht::token_range_vector>
+range_streamer::get_range_fetch_map(const std::unordered_map<dht::token_range, std::vector<inet_address>>& ranges_with_sources,
                                     const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                                     const sstring& keyspace) {
-    std::unordered_multimap<inet_address, dht::token_range> range_fetch_map_map;
-    for (auto x : unordered_multimap_to_unordered_map(ranges_with_sources)) {
+    std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map_map;
+    for (auto x : ranges_with_sources) {
         const dht::token_range& range_ = x.first;
-        const std::unordered_set<inet_address>& addresses = x.second;
+        const std::vector<inet_address>& addresses = x.second;
         bool found_source = false;
         for (auto address : addresses) {
             if (address == utils::fb_utilities::get_broadcast_address()) {
@@ -89,10 +80,11 @@ range_streamer::get_range_fetch_map(const std::unordered_multimap<dht::token_ran
             }
 
             if (filtered) {
+                logger.debug("In get_range_fetch_map, keyspace = {}, endpoint= {} is filtered", keyspace, address);
                 continue;
             }
 
-            range_fetch_map_map.emplace(address, range_);
+            range_fetch_map_map[address].push_back(range_);
             found_source = true;
             break; // ensure we only stream from one other node for each range
         }
@@ -105,7 +97,7 @@ range_streamer::get_range_fetch_map(const std::unordered_multimap<dht::token_ran
     return range_fetch_map_map;
 }
 
-std::unordered_multimap<dht::token_range, inet_address>
+std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
 
@@ -113,19 +105,21 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     auto& strat = ks.get_replication_strategy();
 
     auto tm = _metadata.clone_only_token_map();
-    auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(tm));
+    auto range_addresses = strat.get_range_addresses(tm);
 
-    std::unordered_multimap<dht::token_range, inet_address> range_sources;
+    logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
+
+    std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
-                std::unordered_set<inet_address>& addresses = x.second;
+                std::vector<inet_address>& addresses = x.second;
                 auto preferred = snitch->get_sorted_list_by_proximity(_address, addresses);
                 for (inet_address& p : preferred) {
-                    range_sources.emplace(desired_range, p);
+                    range_sources[desired_range].push_back(p);
                 }
                 found = true;
             }
@@ -139,7 +133,7 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     return range_sources;
 }
 
-std::unordered_multimap<dht::token_range, inet_address>
+std::unordered_map<dht::token_range, std::vector<inet_address>>
 range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, dht::token_range_vector desired_ranges) {
     logger.debug("{} ks={}", __func__, keyspace_name);
     assert (_tokens.empty() == false);
@@ -149,14 +143,16 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 
     //Active ranges
     auto metadata_clone = _metadata.clone_only_token_map();
-    auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(metadata_clone));
+    auto range_addresses = strat.get_range_addresses(metadata_clone);
 
     //Pending ranges
     metadata_clone.update_normal_tokens(_tokens, _address);
-    auto pending_range_addresses  = unordered_multimap_to_unordered_map(strat.get_range_addresses(metadata_clone));
+    auto pending_range_addresses  = strat.get_range_addresses(metadata_clone);
 
     //Collects the source that will have its range moved to the new node
-    std::unordered_multimap<dht::token_range, inet_address> range_sources;
+    std::unordered_map<dht::token_range, std::vector<inet_address>> range_sources;
+
+    logger.debug("keyspace={}, desired_ranges.size={}, range_addresses.size={}", keyspace_name, desired_ranges.size(), range_addresses.size());
 
     for (auto& desired_range : desired_ranges) {
         for (auto& x : range_addresses) {
@@ -167,8 +163,8 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                 if (it == pending_range_addresses.end()) {
                     throw std::runtime_error(sprint("Can not find desired_range = {} in pending_range_addresses", desired_range));
                 }
-                std::unordered_set<inet_address> new_endpoints = it->second;
 
+                std::unordered_set<inet_address> new_endpoints(it->second.begin(), it->second.end());
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
                 if (old_endpoints.size() == strat.get_replication_factor()) {
@@ -179,21 +175,22 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
                         throw std::runtime_error(sprint("Expected 1 endpoint but found %d", old_endpoints.size()));
                     }
                 }
-                range_sources.emplace(desired_range, old_endpoints.front());
+                range_sources[desired_range].push_back(old_endpoints.front());
             }
         }
 
         //Validate
-        auto nr = range_sources.count(desired_range);
-        if (nr < 1) {
+        auto it = range_sources.find(desired_range);
+        if (it == range_sources.end()) {
             throw std::runtime_error(sprint("No sources found for %s", desired_range));
         }
 
-        if (nr > 1) {
+        if (it->second.size() != 1) {
             throw std::runtime_error(sprint("Multiple endpoints found for %s", desired_range));
         }
 
-        inet_address source_ip = range_sources.find(desired_range)->second;
+        inet_address source_ip = it->second.front();
+
         auto& gossiper = gms::get_local_gossiper();
         if (gossiper.is_enabled() && !gossiper.is_alive(source_ip)) {
             throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with consistent_rangemovement=false", source_ip));
@@ -240,18 +237,15 @@ void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_v
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : ranges_for_keyspace) {
-            logger.debug("{} : range {} exists on {}", _description, x.first, x.second);
+            logger.debug("{} : keyspace {} range {} exists on {}", _description, keyspace_name, x.first, x.second);
         }
     }
 
-    std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map;
-    for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
-        range_fetch_map[x.first].emplace_back(x.second);
-    }
+    std::unordered_map<inet_address, dht::token_range_vector> range_fetch_map = get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name);
 
     if (logger.is_enabled(logging::log_level::debug)) {
         for (auto& x : range_fetch_map) {
-            logger.debug("{} : range {} from source {} for keyspace {}", _description, x.second, x.first, keyspace_name);
+            logger.debug("{} : keyspace={}, ranges={} from source={}, range_size={}", _description, keyspace_name, x.second, x.first, x.second.size());
         }
     }
     _to_stream.emplace(keyspace_name, std::move(range_fetch_map));

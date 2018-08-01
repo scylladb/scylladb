@@ -83,7 +83,7 @@ public:
      */
     virtual std::vector<inet_address> get_sorted_list_by_proximity(
         inet_address address,
-        std::unordered_set<inet_address>& unsorted_address) = 0;
+        std::vector<inet_address>& unsorted_address) = 0;
 
     /**
      * This method will sort the <tt>List</tt> by proximity to the given
@@ -407,7 +407,7 @@ public:
 
     virtual std::vector<inet_address> get_sorted_list_by_proximity(
         inet_address address,
-        std::unordered_set<inet_address>& unsorted_address) override;
+        std::vector<inet_address>& unsorted_address) override;
 
     virtual void sort_by_proximity(
         inet_address address, std::vector<inet_address>& addresses) override;

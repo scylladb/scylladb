@@ -42,7 +42,7 @@ namespace locator {
 
 std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
     inet_address address,
-    std::unordered_set<inet_address>& unsorted_address) {
+    std::vector<inet_address>& unsorted_address) {
 
     std::vector<inet_address>
         preferred(unsorted_address.begin(), unsorted_address.end());

@@ -204,15 +204,14 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
     return ret;
 }
 
-std::unordered_multimap<dht::token_range, inet_address>
+std::unordered_map<dht::token_range, std::vector<inet_address>>
 abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
-    std::unordered_multimap<dht::token_range, inet_address> ret;
+    std::unordered_map<dht::token_range, std::vector<inet_address>> ret;
     for (auto& t : tm.sorted_tokens()) {
-        dht::token_range_vector r = tm.get_primary_ranges_for(t);
+        dht::token_range_vector ranges = tm.get_primary_ranges_for(t);
         auto eps = calculate_natural_endpoints(t, tm);
-        for (auto ep : eps) {
-            for (auto&& rng : r)
-                ret.emplace(rng, ep);
+        for (auto& r : ranges) {
+            ret.emplace(r, eps);
         }
     }
     return ret;

@@ -2858,18 +2858,19 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const dht::
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
     auto tm = _token_metadata.clone_only_token_map();
-    std::unordered_multimap<dht::token_range, inet_address> range_addresses = strat.get_range_addresses(tm);
+    std::unordered_map<dht::token_range, std::vector<inet_address>> range_addresses = strat.get_range_addresses(tm);
     std::unordered_multimap<inet_address, dht::token_range> source_ranges;
 
     // find alive sources for our new ranges
     for (auto r : ranges) {
-        std::unordered_set<inet_address> possible_ranges;
-        auto rg = range_addresses.equal_range(r);
-        for (auto it = rg.first; it != rg.second; it++) {
-            possible_ranges.emplace(it->second);
+        std::vector<inet_address> possible_nodes;
+        auto it = range_addresses.find(r);
+        if (it != range_addresses.end()) {
+            possible_nodes = it->second;
         }
+
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
-        std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_ranges);
+        std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_nodes);
 
         if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
             auto err = sprint("get_new_source_ranges: sources=%s, my_address=%s", sources, my_address);
