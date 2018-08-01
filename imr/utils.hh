@@ -61,8 +61,12 @@ private:
 public:
     object_context(const uint8_t*, State... state) : _state { state... } { }
     template<typename Tag, typename... Args>
-    Context context_for(const uint8_t* ptr, Args&&... args) const noexcept {
-        return create(ptr, std::index_sequence_for<State...>());
+    auto context_for(const uint8_t* ptr, Args&&... args) const noexcept {
+        if constexpr (std::is_same_v<Tag, basic_object::tags::back_pointer>) {
+            return no_context_t();
+        } else {
+            return create(ptr, std::index_sequence_for<State...>());
+        }
     }
 };
 
