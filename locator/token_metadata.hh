@@ -148,7 +148,6 @@ private:
 
     std::unordered_map<token, inet_address> _bootstrap_tokens;
     std::unordered_set<inet_address> _leaving_endpoints;
-    std::unordered_map<token, inet_address> _moving_endpoints;
 
     std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
     std::unordered_map<sstring, std::unordered_map<range<token>, std::unordered_set<inet_address>>> _pending_ranges_map;
@@ -247,9 +246,6 @@ public:
         return _leaving_endpoints;
     }
 
-    const std::unordered_map<token, inet_address>& get_moving_endpoints() const {
-            return _moving_endpoints;
-    }
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const {
         return _bootstrap_tokens;
     }
@@ -486,21 +482,7 @@ public:
 
     void add_leaving_endpoint(inet_address endpoint);
 public:
-
-    /**
-     * Add a new moving endpoint
-     * @param token token which is node moving to
-     * @param endpoint address of the moving node
-     */
-    void add_moving_endpoint(token t, inet_address endpoint);
-public:
     void remove_endpoint(inet_address endpoint);
-
-    /**
-     * Remove pair of token/address from moving endpoints
-     * @param endpoint address of the moving node
-     */
-    void remove_from_moving(inet_address endpoint);
 #if 0
 
     public Collection<Token> getTokens(InetAddress endpoint)
@@ -531,14 +513,6 @@ public:
 
     bool is_leaving(inet_address endpoint);
 
-    bool is_moving(inet_address endpoint) {
-        for (auto x : _moving_endpoints) {
-            if (x.second == endpoint) {
-                return true;
-            }
-        }
-        return false;
-    }
 #if 0
     private final AtomicReference<TokenMetadata> cachedTokenMap = new AtomicReference<TokenMetadata>();
 #endif
@@ -661,10 +635,6 @@ public:
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata);
     void calculate_pending_ranges_for_bootstrap(
-        abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata);
-    void calculate_pending_ranges_for_moving(
         abstract_replication_strategy& strategy,
         lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
         lw_shared_ptr<token_metadata> all_left_metadata);
@@ -828,7 +798,6 @@ public:
             _bootstrap_tokens.clear();
             _leaving_endpoints.clear();
             _pending_ranges.clear();
-            _moving_endpoints.clear();
             sortedTokens.clear();
             topology.clear();
             invalidateCachedRings();

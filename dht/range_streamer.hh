@@ -148,10 +148,6 @@ private:
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                         const sstring& keyspace);
 
-public:
-    static std::unordered_multimap<inet_address, dht::token_range>
-    get_work_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_source_target,
-                 const sstring& keyspace);
 #if 0
 
     // For testing purposes

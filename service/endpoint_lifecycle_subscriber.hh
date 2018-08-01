@@ -86,13 +86,6 @@ public:
      * @param endpoint the endpoint marked DOWN.
      */
     virtual void on_down(const gms::inet_address& endpoint) = 0;
-
-    /**
-     * Called when a node has moved (to a new token).
-     *
-     * @param endpoint the endpoint that has moved.
-     */
-    virtual void on_move(const gms::inet_address& endpoint) = 0;
 };
 
 }

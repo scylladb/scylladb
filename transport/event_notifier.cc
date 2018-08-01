@@ -257,16 +257,6 @@ void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpo
     }
 }
 
-void cql_server::event_notifier::on_move(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _topology_change_listeners) {
-        using namespace cql_transport;
-        if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_topology_change_event(event::topology_change::moved_node(endpoint, conn->_server_addr.port)));
-        };
-    }
-}
-
 void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
 {
     bool was_up = _last_status_change.count(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::UP;

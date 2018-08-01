@@ -130,7 +130,6 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         _topology.add_endpoint(endpoint);
         remove_by_value(_bootstrap_tokens, endpoint);
         _leaving_endpoints.erase(endpoint);
-        remove_from_moving(endpoint); // also removing this endpoint from moving
         for (const token& t : tokens)
         {
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
@@ -328,11 +327,6 @@ void token_metadata::remove_endpoint(inet_address endpoint) {
     _leaving_endpoints.erase(endpoint);
     _endpoint_to_host_id_map.erase(endpoint);
     _sorted_tokens = sort_tokens();
-    invalidate_cached_rings();
-}
-
-void token_metadata::remove_from_moving(inet_address endpoint) {
-    remove_by_value(_moving_endpoints, endpoint);
     invalidate_cached_rings();
 }
 
@@ -534,35 +528,11 @@ void token_metadata::calculate_pending_ranges_for_bootstrap(
     }
 }
 
-void token_metadata::calculate_pending_ranges_for_moving(
-        abstract_replication_strategy& strategy,
-        lw_shared_ptr<std::unordered_multimap<range<token>, inet_address>> new_pending_ranges,
-        lw_shared_ptr<token_metadata> all_left_metadata) {
-    // For each of the moving nodes, we do the same thing we did for bootstrapping:
-    // simply add and remove them one by one to allLeftMetadata and check in between what their ranges would be.
-    for (auto& moving : _moving_endpoints) {
-        auto& t = moving.first;
-        auto& endpoint = moving.second; // address of the moving node
-
-        // moving.left is a new token of the endpoint
-        all_left_metadata->update_normal_token(t, endpoint);
-
-        for (auto& x : strategy.get_address_ranges(*all_left_metadata)) {
-            if (x.first == endpoint) {
-                new_pending_ranges->emplace(x.second, endpoint);
-            }
-        }
-
-        all_left_metadata->remove_endpoint(endpoint);
-    }
-}
-
-
 future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy& strategy, const sstring& keyspace_name) {
     auto new_pending_ranges = make_lw_shared<std::unordered_multimap<range<token>, inet_address>>();
 
-    if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _moving_endpoints.empty()) {
-        tlogger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspace_name);
+    if (_bootstrap_tokens.empty() && _leaving_endpoints.empty()) {
+        tlogger.debug("No bootstrapping, leaving nodes -> empty pending ranges for {}", keyspace_name);
         set_pending_ranges(keyspace_name, std::move(*new_pending_ranges));
         return make_ready_future<>();
     }
@@ -576,9 +546,6 @@ future<> token_metadata::calculate_pending_ranges(abstract_replication_strategy&
         calculate_pending_ranges_for_bootstrap(strategy, new_pending_ranges, all_left_metadata);
 
         // At this stage newPendingRanges has been updated according to leaving and bootstrapping nodes.
-        // We can now finish the calculation by checking moving nodes.
-        calculate_pending_ranges_for_moving(strategy, new_pending_ranges, all_left_metadata);
-
         set_pending_ranges(keyspace_name, std::move(*new_pending_ranges));
 
         if (tlogger.is_enabled(logging::log_level::debug)) {
@@ -615,16 +582,7 @@ token_metadata token_metadata::clone_after_all_settled() {
         metadata.remove_endpoint(endpoint);
     }
 
-
-    for (auto x : _moving_endpoints) {
-        metadata.update_normal_token(x.first, x.second);
-    }
-
     return metadata;
-}
-
-void token_metadata::add_moving_endpoint(token t, inet_address endpoint) {
-    _moving_endpoints[t] = endpoint;
 }
 
 std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {

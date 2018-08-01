@@ -365,15 +365,6 @@ size_t range_streamer::nr_ranges_to_stream() {
 }
 
 
-std::unordered_multimap<inet_address, dht::token_range>
-range_streamer::get_work_map(const std::unordered_multimap<dht::token_range, inet_address>& ranges_with_source_target,
-             const sstring& keyspace) {
-    auto filter = std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector());
-    std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;
-    source_filters.emplace(std::move(filter));
-    return get_range_fetch_map(ranges_with_source_target, source_filters, keyspace);
-}
-
 bool range_streamer::use_strict_consistency() {
     return service::get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }

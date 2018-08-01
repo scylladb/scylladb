@@ -107,11 +107,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_moving_nodes.set(r, [](const_req req) {
-        auto points = service::get_local_storage_service().get_token_metadata().get_moving_endpoints();
         std::unordered_set<sstring> addr;
-        for (auto i: points) {
-            addr.insert(boost::lexical_cast<std::string>(i.second));
-        }
         return container_to_vec(addr);
     });
 

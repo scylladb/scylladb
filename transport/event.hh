@@ -76,8 +76,6 @@ public:
     static topology_change new_node(const gms::inet_address& host, uint16_t port);
 
     static topology_change removed_node(const gms::inet_address& host, uint16_t port);
-
-    static topology_change moved_node(const gms::inet_address& host, uint16_t port);
 };
 
 class event::status_change : public event {

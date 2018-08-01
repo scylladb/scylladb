@@ -524,7 +524,6 @@ public:
     };
     virtual void on_up(const gms::inet_address& endpoint) override {}
     virtual void on_down(const gms::inet_address& endpoint) override {}
-    virtual void on_move(const gms::inet_address& endpoint) override {}
 
 private:
     future<> compute_hints_dir_device_id();

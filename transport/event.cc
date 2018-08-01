@@ -63,11 +63,6 @@ event::topology_change event::topology_change::removed_node(const gms::inet_addr
     return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
 }
 
-event::topology_change event::topology_change::moved_node(const gms::inet_address& host, uint16_t port)
-{
-    return topology_change{change_type::MOVED_NODE, ipv4_addr{host.raw_addr(), port}};
-}
-
 event::status_change::status_change(status_type status, const ipv4_addr& node)
     : event{event_type::STATUS_CHANGE}
     , status{status}
