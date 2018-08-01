@@ -162,10 +162,17 @@ public:
     }
 
     /// Create an IMR objects
-    template<typename Writer>
+    template<typename Writer, typename MigrateFn>
     GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
     static object make(Writer&& object_writer,
-                       allocation_strategy::migrate_fn migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
+                       MigrateFn* migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
+        static_assert(std::is_same_v<typename MigrateFn::structure, structure>);
+        return do_make(std::forward<Writer>(object_writer), migrate);
+    }
+private:
+    template<typename Writer>
+    GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
+    static object do_make(Writer&& object_writer, allocation_strategy::migrate_fn migrate) {
         struct alloc_deleter {
             size_t _size;
 
