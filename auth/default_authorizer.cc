@@ -228,7 +228,7 @@ default_authorizer::modify(
         return _qp.process(
                 query,
                 db::consistency_level::ONE,
-                infinite_timeout_config,
+                internal_distributed_timeout_config(),
                 {permissions::to_strings(set), sstring(role_name), resource.name()}).discard_result();
     });
 }
@@ -254,7 +254,7 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
     return _qp.process(
             query,
             db::consistency_level::ONE,
-            infinite_timeout_config,
+            internal_distributed_timeout_config(),
             {},
             true).then([](::shared_ptr<cql3::untyped_result_set> results) {
         std::vector<permission_details> all_details;
@@ -282,7 +282,7 @@ future<> default_authorizer::revoke_all(stdx::string_view role_name) const {
     return _qp.process(
             query,
             db::consistency_level::ONE,
-            infinite_timeout_config,
+            internal_distributed_timeout_config(),
             {sstring(role_name)}).discard_result().handle_exception([role_name](auto ep) {
         try {
             std::rethrow_exception(ep);

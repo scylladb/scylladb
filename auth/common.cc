@@ -28,6 +28,7 @@
 #include "database.hh"
 #include "schema_builder.hh"
 #include "service/migration_manager.hh"
+#include "timeout_config.hh"
 
 namespace auth {
 
@@ -92,6 +93,12 @@ future<> wait_for_schema_agreement(::service::migration_manager& mm, const datab
     return do_until([&db] { return db.get_version() != database::empty_version; }, pause).then([&mm] {
         return do_until([&mm] { return mm.have_schema_agreement(); }, pause);
     });
+}
+
+const timeout_config& internal_distributed_timeout_config() noexcept {
+    static const auto t = 5s;
+    static const timeout_config tc{t, t, t, t, t, t, t};
+    return tc;
 }
 
 }
