@@ -26,6 +26,7 @@
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
 #include "schema_builder.hh"
+#include "timeout_config.hh"
 #include "types.hh"
 
 #include <seastar/core/reactor.hh>
@@ -97,11 +98,17 @@ future<> system_distributed_keyspace::stop() {
     return make_ready_future<>();
 }
 
+static const timeout_config internal_distributed_timeout_config = [] {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    return timeout_config{ t, t, t, t, t, t, t };
+}();
+
 future<std::unordered_map<utils::UUID, sstring>> system_distributed_keyspace::view_status(sstring ks_name, sstring view_name) const {
     return _qp.process(
             sprint("SELECT host_id, status FROM %s.%s WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            infinite_timeout_config,
+            internal_distributed_timeout_config,
             { std::move(ks_name), std::move(view_name) },
             false).then([this] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return boost::copy_range<std::unordered_map<utils::UUID, sstring>>(*cql_result
@@ -118,7 +125,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
         return _qp.process(
                 sprint("INSERT INTO %s.%s (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                infinite_timeout_config,
+                internal_distributed_timeout_config,
                 { std::move(ks_name), std::move(view_name), std::move(host_id), "STARTED" },
                 false).discard_result();
     });
@@ -129,7 +136,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
         return _qp.process(
                 sprint("UPDATE %s.%s SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
                 db::consistency_level::ONE,
-                infinite_timeout_config,
+                internal_distributed_timeout_config,
                 { "SUCCESS", std::move(ks_name), std::move(view_name), std::move(host_id) },
                 false).discard_result();
     });
@@ -139,7 +146,7 @@ future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_
     return _qp.process(
             sprint("DELETE FROM %s.%s WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            infinite_timeout_config,
+            internal_distributed_timeout_config,
             { std::move(ks_name), std::move(view_name) },
             false).discard_result();
 }
