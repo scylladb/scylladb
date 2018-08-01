@@ -144,7 +144,11 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         return _db.invoke_on_all([this, rates = std::move(rates), cpuid = engine().cpu_id()] (database& db) {
             sstring gstate;
             for (auto& cf : db.get_column_families() | boost::adaptors::filtered(non_system_filter)) {
-                stat s = rates.at(cf.first);
+                auto it = rates.find(cf.first);
+                if (it == rates.end()) { // a table may be added before map/reduce compltes and this code runs
+                    continue;
+                }
+                stat s = it->second;
                 float rate = 0;
                 if (s.h) {
                     rate = s.h / (s.h + s.m);
