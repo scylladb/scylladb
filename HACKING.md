@@ -20,7 +20,7 @@ $ git submodule update --init --recursive
 
 Scylla depends on the system package manager for its development dependencies.
 
-Running `./install_dependencies.sh` (as root) installs the appropriate packages based on your Linux distribution.
+Running `./install-dependencies.sh` (as root) installs the appropriate packages based on your Linux distribution.
 
 ### Build system
 
