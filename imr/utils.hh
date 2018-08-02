@@ -61,8 +61,12 @@ private:
 public:
     object_context(const uint8_t*, State... state) : _state { state... } { }
     template<typename Tag, typename... Args>
-    Context context_for(const uint8_t* ptr, Args&&... args) const noexcept {
-        return create(ptr, std::index_sequence_for<State...>());
+    auto context_for(const uint8_t* ptr, Args&&... args) const noexcept {
+        if constexpr (std::is_same_v<Tag, basic_object::tags::back_pointer>) {
+            return no_context_t();
+        } else {
+            return create(ptr, std::index_sequence_for<State...>());
+        }
     }
 };
 
@@ -158,13 +162,22 @@ public:
     }
 
     /// Create an IMR objects
-    template<typename Writer>
+    template<typename Writer, typename MigrateFn>
     GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
     static object make(Writer&& object_writer,
-                       allocation_strategy::migrate_fn migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
+                       MigrateFn* migrate = &imr::alloc::default_lsa_migrate_fn<structure>::migrate_fn) {
+        static_assert(std::is_same_v<typename MigrateFn::structure, structure>);
+        return do_make(std::forward<Writer>(object_writer), migrate);
+    }
+private:
+    template<typename Writer>
+    GCC6_CONCEPT(requires WriterAllocator<Writer, Structure>)
+    static object do_make(Writer&& object_writer, allocation_strategy::migrate_fn migrate) {
         struct alloc_deleter {
+            size_t _size;
+
             void operator()(uint8_t* ptr) {
-                current_allocator().free(ptr);
+                current_allocator().free(ptr, _size);
             }
         };
         using alloc_unique_ptr = std::unique_ptr<uint8_t[], alloc_deleter>;
@@ -176,7 +189,7 @@ public:
         auto& alloc = current_allocator();
         alloc::object_allocator allocator(alloc);
         auto obj_size = structure::size_when_serialized(writer, allocator.get_sizer());
-        auto ptr = alloc_unique_ptr(static_cast<uint8_t*>(alloc.alloc(migrate, obj_size, 1)));
+        auto ptr = alloc_unique_ptr(static_cast<uint8_t*>(alloc.alloc(migrate, obj_size, 1)), alloc_deleter { obj_size });
         allocator.allocate_all();
         structure::serialize(ptr.get(), writer, allocator.get_serializer());
         return object(ptr.release());

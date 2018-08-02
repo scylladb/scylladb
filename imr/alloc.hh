@@ -84,6 +84,8 @@ template<typename Structure, typename CtxFactory>
 GCC6_CONCEPT(requires ContextFactory<CtxFactory>)
 class lsa_migrate_fn final : public migrate_fn_type, CtxFactory {
 public:
+    using structure = Structure;
+
     explicit lsa_migrate_fn(CtxFactory context_factory)
         : migrate_fn_type(1)
         , CtxFactory(std::move(context_factory))
@@ -201,8 +203,21 @@ public:
         /// arguments are passed to `T::size_when_serialized`.
         ///
         /// \return null pointer of type `uint8_t*`.
+        template<typename T, typename MigrateFn, typename... Args>
+        uint8_t* allocate(MigrateFn* migrate_fn, Args&&... args) noexcept {
+            static_assert(std::is_same_v<typename MigrateFn::structure, T>);
+            return do_allocate<T>(migrate_fn, std::forward<Args>(args)...);
+        }
+
+        template<typename T, typename MigrateFn, typename... Args>
+        auto allocate_nested(MigrateFn* migrate_fn, Args&&... args) noexcept {
+            static_assert(std::is_same_v<typename MigrateFn::structure, T>);
+            return do_allocate_nested<T>(migrate_fn, std::forward<Args>(args)...);
+        }
+
+    private:
         template<typename T, typename... Args>
-        uint8_t* allocate(migrate_fn_type* migrate_fn, Args&& ... args) noexcept {
+        uint8_t* do_allocate(migrate_fn_type* migrate_fn, Args&&... args) noexcept {
             auto size = T::size_when_serialized(std::forward<Args>(args)...);
             _parent.request(size, migrate_fn);
 
@@ -216,7 +231,7 @@ public:
         }
 
         template<typename T, typename... Args>
-        auto allocate_nested(migrate_fn_type* migrate_fn, Args&& ... args) noexcept {
+        auto do_allocate_nested(migrate_fn_type* migrate_fn, Args&& ... args) noexcept {
             auto n = _parent.request(0, migrate_fn);
             return T::get_sizer(continuation(_parent, n),
                                 std::forward<Args>(args)...);
@@ -244,15 +259,28 @@ public:
         /// to the buffer requested in the sizing phase. Arguments are passed
         /// to `T::serialize`.
         /// \return pointer to the IMR object
+        template<typename T, typename MigrateFn, typename... Args>
+        uint8_t* allocate(MigrateFn* migrate_fn, Args&&... args) noexcept {
+            static_assert(std::is_same_v<typename MigrateFn::structure, T>);
+            return do_allocate<T>(migrate_fn, std::forward<Args>(args)...);
+        }
+
+        template<typename T, typename MigrateFn, typename... Args>
+        auto allocate_nested(MigrateFn* migrate_fn, Args&&... args) noexcept {
+            static_assert(std::is_same_v<typename MigrateFn::structure, T>);
+            return do_allocate_nested<T>(migrate_fn, std::forward<Args>(args)...);
+        }
+
+    private:
         template<typename T, typename... Args>
-        uint8_t* allocate(migrate_fn_type* migrate_fn, Args&& ... args) noexcept {
+        uint8_t* do_allocate(migrate_fn_type* migrate_fn, Args&&... args) noexcept {
             auto ptr = _parent.next_object();
             T::serialize(ptr, std::forward<Args>(args)...);
             return ptr;
         }
 
         template<typename T, typename... Args>
-        auto allocate_nested(migrate_fn_type*, Args&& ... args) noexcept {
+        auto do_allocate_nested(migrate_fn_type*, Args&& ... args) noexcept {
             auto ptr = _parent.next_object();
             return T::get_serializer(ptr,
                                      continuation(ptr),
