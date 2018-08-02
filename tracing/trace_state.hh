@@ -492,6 +492,32 @@ private:
     friend void stop_foreground_prepared(const trace_state_ptr& state, const cql3::query_options* prepared_options_ptr) noexcept;
 };
 
+class trace_state_ptr final {
+private:
+    lw_shared_ptr<trace_state> _state_ptr;
+
+public:
+    trace_state_ptr() = default;
+    trace_state_ptr(lw_shared_ptr<trace_state> state_ptr)
+        : _state_ptr(std::move(state_ptr))
+    {}
+    trace_state_ptr(nullptr_t)
+        : _state_ptr(nullptr)
+    {}
+
+    explicit operator bool() const noexcept {
+        return __builtin_expect(bool(_state_ptr), false);
+    }
+
+    trace_state* operator->() const noexcept {
+        return _state_ptr.get();
+    }
+
+    trace_state& operator*() const noexcept {
+        return *_state_ptr;
+    }
+};
+
 inline void trace_state::trace_internal(sstring message) {
     if (is_in_state(state::inactive)) {
         throw std::logic_error("trying to use a trace() before begin() for \"" + message + "\" tracepoint");
@@ -666,7 +692,7 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
-    if (__builtin_expect(bool(p), false)) {
+    if (p) {
         p->trace(std::forward<A>(a)...);
     }
 }

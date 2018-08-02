@@ -59,7 +59,7 @@ using elapsed_clock = std::chrono::steady_clock;
 
 extern logging::logger tracing_logger;
 
-class trace_state;
+class trace_state_ptr;
 class tracing;
 
 enum class trace_type : uint8_t {
@@ -303,8 +303,6 @@ public:
 private:
     bool _is_pending_for_write = false;
 };
-
-using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing : public seastar::async_sharded_service<tracing> {
 public:
