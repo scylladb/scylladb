@@ -364,6 +364,8 @@ future<cql_server::connection::processing_result>
         }
     }
 
+    tracing::set_request_size(client_state.get_trace_state(), fbuf.bytes_left());
+
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
     return futurize_apply([this, cqlop, stream, &fbuf, client_state, linearization_buffer_ptr] () mutable {

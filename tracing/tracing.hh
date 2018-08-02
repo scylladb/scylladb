@@ -214,6 +214,7 @@ struct session_record {
     std::set<sstring> tables;
     sstring username;
     sstring request;
+    size_t request_size = 0;
     std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
     elapsed_clock::duration elapsed;
