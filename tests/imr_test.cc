@@ -33,6 +33,10 @@
 #include "imr/fundamental.hh"
 #include "imr/compound.hh"
 #include "imr/methods.hh"
+#include "imr/utils.hh"
+
+#include "failure_injecting_allocation_strategy.hh"
+#include "utils/logalloc.hh"
 
 #include "random-utils.hh"
 
@@ -717,3 +721,127 @@ BOOST_AUTO_TEST_CASE(test_variant_destructor) {
 }
 
 BOOST_AUTO_TEST_SUITE_END();
+
+namespace object_exception_safety {
+
+using nested_structure = imr::structure<
+    imr::member<A, imr::pod<size_t>>,
+    imr::member<B, imr::buffer<B>>
+>;
+
+using structure = imr::structure<
+    imr::member<A, imr::pod<size_t>>,
+    imr::member<C, imr::tagged_type<C, imr::pod<void*>>>,
+    imr::member<D, imr::tagged_type<C, imr::pod<void*>>>,
+    imr::member<B, imr::buffer<A>>
+>;
+
+struct structue_context {
+    size_t _size;
+
+    structue_context(const uint8_t* ptr)
+        : _size(imr::pod<size_t>::make_view(ptr).load())
+    {
+        BOOST_CHECK_EQUAL(_size, 4);
+    }
+    
+    template<typename Tag>
+    size_t size_of() const noexcept {
+        return _size;
+    }
+
+    template<typename Tag, typename... Args>
+    decltype(auto) context_for(Args&&...) const noexcept { return *this; }
+};
+
+struct nested_structue_context {
+    size_t _size;
+
+    nested_structue_context(const uint8_t* ptr)
+        : _size(imr::pod<size_t>::make_view(ptr).load())
+    {
+        BOOST_CHECK_NE(_size, 0);
+    }
+    
+    template<typename Tag>
+    size_t size_of() const noexcept {
+        return _size;
+    }
+
+    template<typename Tag, typename... Args>
+    decltype(auto) context_for(Args&&...) const noexcept { return *this; }
+};
+
+}
+
+namespace imr::methods {
+
+template<>
+struct destructor<imr::tagged_type<C, imr::pod<void*>>> {
+    static void run(uint8_t* ptr, ...) {
+        using namespace object_exception_safety;
+        auto obj_ptr = imr::pod<uint8_t*>::make_view(ptr).load();
+        imr::methods::destroy<nested_structure>(obj_ptr, nested_structue_context(obj_ptr));
+        current_allocator().free(obj_ptr);
+    }
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(test_object_exception_safety) {
+    using namespace object_exception_safety;
+
+    using context_factory_for_structure = imr::alloc::context_factory<imr::utils::object_context<structue_context>>;
+    using lsa_migrator_fn_for_structure = imr::alloc::lsa_migrate_fn<imr::utils::object<structure>::structure, context_factory_for_structure>;
+    auto migrator_for_structure = lsa_migrator_fn_for_structure(context_factory_for_structure());
+
+    using context_factory_for_nested_structure = imr::alloc::context_factory<nested_structue_context>;
+    using lsa_migrator_fn_for_nested_structure = imr::alloc::lsa_migrate_fn<nested_structure, context_factory_for_nested_structure>;
+    auto migrator_for_nested_structure = lsa_migrator_fn_for_nested_structure(context_factory_for_nested_structure());
+
+    auto writer_fn = [&] (auto serializer, auto& allocator) {
+        return serializer
+            .serialize(4)
+            .serialize(allocator.template allocate<nested_structure>(
+                &migrator_for_nested_structure,
+                [&] (auto nested_serializer) {
+                    return nested_serializer
+                        .serialize(128)
+                        .serialize(128, [] (auto&&...) { })
+                        .done();
+                }
+            ))
+            .serialize(allocator.template allocate<nested_structure>(
+                &migrator_for_nested_structure,
+                [&] (auto nested_serializer) {
+                    return nested_serializer
+                        .serialize(1024)
+                        .serialize(1024, [] (auto&&...) { })
+                        .done();
+                }
+            ))
+            .serialize(bytes(4, 'a'))
+            .done();
+    };
+
+    logalloc::region reg;
+
+    size_t fail_offset = 0;
+    auto allocator = failure_injecting_allocation_strategy(reg.allocator());
+    with_allocator(allocator, [&] {
+        while (true) {
+            allocator.fail_after(fail_offset++);
+            try {
+                imr::utils::object<structure>::make(writer_fn, &migrator_for_structure);
+            } catch (const std::bad_alloc&) {
+                BOOST_CHECK_EQUAL(reg.occupancy().used_space(), 0);
+                continue;
+            }
+            BOOST_CHECK_EQUAL(reg.occupancy().used_space(), 0);
+            break;
+        }
+    });
+
+    BOOST_CHECK_EQUAL(fail_offset, 4);
+}
+
