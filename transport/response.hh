@@ -98,6 +98,9 @@ public:
     cql_binary_opcode opcode() const {
         return _opcode;
     }
+    size_t size() const {
+        return _body.size();
+    }
 private:
     void compress(cql_compression compression);
     void compress_lz4();

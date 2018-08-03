@@ -82,6 +82,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "request text,"
                                   "started_at timestamp,"
                                   "request_size int,"
+                                  "response_size int,"
                                   "PRIMARY KEY ((session_id))) "
                                   "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS),
 
@@ -94,7 +95,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "parameters,"
                                   "request,"
                                   "started_at,"
-                                  "request_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                                  "request_size,"
+                                  "response_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                                   "USING TTL ?", KEYSPACE_NAME, SESSIONS))
 
             , _sessions_time_idx(KEYSPACE_NAME, SESSIONS_TIME_IDX,
@@ -251,6 +253,7 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
         cql3::raw_value::make_value(utf8_type->decompose(record.request)),
         cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.request_size))),
+        cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.response_size))),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
     };
 

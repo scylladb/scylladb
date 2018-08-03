@@ -98,6 +98,10 @@ void trace_state::set_request_size(size_t s) noexcept {
     _records->session_rec.request_size = s;
 }
 
+void trace_state::set_response_size(size_t s) noexcept {
+    _records->session_rec.response_size = s;
+}
+
 void trace_state::add_query(const sstring& val) {
     _params_ptr->queries.emplace_back(val);
 }

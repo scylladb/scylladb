@@ -359,6 +359,13 @@ private:
     void set_request_size(size_t s) noexcept;
 
     /**
+     * Set a size of the response of the query being traces.
+     *
+     * @param s a response size
+     */
+    void set_response_size(size_t s) noexcept;
+
+    /**
      * Store a query string.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -472,6 +479,7 @@ private:
 
     friend void set_page_size(const trace_state_ptr& p, int32_t val);
     friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
+    friend void set_response_size(const trace_state_ptr& p, size_t s) noexcept;
     friend void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val);
     friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>&val);
@@ -557,6 +565,12 @@ inline void set_page_size(const trace_state_ptr& p, int32_t val) {
 inline void set_request_size(const trace_state_ptr& p, size_t s) noexcept {
     if (p) {
         p->set_request_size(s);
+    }
+}
+
+inline void set_response_size(const trace_state_ptr& p, size_t s) noexcept {
+    if (p) {
+        p->set_response_size(s);
     }
 }
 

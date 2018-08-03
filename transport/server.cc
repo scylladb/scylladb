@@ -445,6 +445,7 @@ future<cql_server::connection::processing_result>
                 case auth_state::READY:
                     break;
             }
+            tracing::set_response_size(client_state.get_trace_state(), response.first->size());
             return processing_result(std::move(response));
         } catch (const exceptions::unavailable_exception& ex) {
             return processing_result(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, client_state.get_trace_state()), client_state));
