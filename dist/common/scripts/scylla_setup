@@ -61,7 +61,7 @@ def interactive_choose_nic():
             print(nics)
             n = input('> ')
             if is_valid_nic(n):
-                return nic
+                return n
 
 def do_verify_package(pkg):
     if is_debian_variant():
