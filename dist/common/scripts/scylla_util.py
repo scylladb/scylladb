@@ -350,8 +350,10 @@ def is_unused_disk(dev):
         return False
 
 CONCOLORS = {'green':'\033[1;32m', 'red':'\033[1;31m', 'nocolor':'\033[0m'}
-def colorprint(msg):
-    print(msg.format(**CONCOLORS))
+def colorprint(msg, **kwargs):
+    fmt = dict(CONCOLORS)
+    fmt.update(kwargs)
+    print(msg.format(**fmt))
 
 def get_mode_cpuset(nic, mode):
     try:

@@ -102,7 +102,7 @@ def run_setup_script(name, script):
     res = run(script, exception=False)
     if res != 0:
         if interactive:
-            colorprint('{red}{name} setup failed. Press any key to continue...{nocolor}'.format(name=name))
+            colorprint('{red}{name} setup failed. Press any key to continue...{nocolor}', name=name)
             input()
         else:
             print('{} setup failed.'.format(name))
