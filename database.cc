@@ -2389,6 +2389,18 @@ database::setup_metrics() {
         sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
                        sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
 
+        sm::make_derive("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
+                       sm::description("The total number of fragments that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+
+        sm::make_derive("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
+                       sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+
+        sm::make_derive("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
+                       sm::description("The number of times the stopping of a shard reader failed.")),
+
+        sm::make_derive("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
+                       sm::description("The number of times the saving of a shard reader failed.")),
+
         sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
                                  sm::description("The number of acquired counter cell locks.")),
 

@@ -286,11 +286,12 @@ void read_context::dismantle_reader(shard_id shard, future<stopped_foreign_reade
 }
 
 future<> read_context::cleanup_readers() {
-    auto cleanup = [] (shard_id shard, dismantling_state state) {
-        return state.reader_fut.then_wrapped([shard, params = std::move(state.params),
+    auto cleanup = [db = &_db.local()] (shard_id shard, dismantling_state state) {
+        return state.reader_fut.then_wrapped([db, shard, params = std::move(state.params),
                 read_operation = std::move(state.read_operation)] (future<stopped_foreign_reader>&& fut) mutable {
             if (fut.failed()) {
                 mmq_log.debug("Failed to stop reader on shard {}: {}", shard, fut.get_exception());
+                ++db->get_stats().multishard_query_failed_reader_stops;
             } else {
                 smp::submit_to(shard, [reader = fut.get0().remote_reader, params = std::move(params),
                         read_operation = std::move(read_operation)] () mutable {
@@ -374,6 +375,7 @@ read_context::ready_to_save_state* read_context::prepare_reader_for_saving(
 
     if (stopped_reader_fut.failed()) {
         mmq_log.debug("Failed to stop reader on shard {}: {}", shard, stopped_reader_fut.get_exception());
+        ++_db.local().get_stats().multishard_query_failed_reader_stops;
         return nullptr;
     }
 
@@ -404,6 +406,8 @@ future<> read_context::save_reader(ready_to_save_state& current_state, const dht
             auto read_operation = current_state.read_operation.release();
             auto reader = current_state.reader.release();
             auto& buffer = current_state.buffer;
+            const auto fragments = buffer.size();
+            const auto size_before = reader->buffer_size();
 
             auto rit = std::reverse_iterator(buffer.cend());
             auto rend = std::reverse_iterator(buffer.cbegin());
@@ -412,6 +416,8 @@ future<> read_context::save_reader(ready_to_save_state& current_state, const dht
                 // Copy the fragment, the buffer is on another shard.
                 reader->unpop_mutation_fragment(mutation_fragment(schema, *rit));
             }
+
+            const auto size_after = reader->buffer_size();
 
             auto querier = query::shard_mutation_querier(
                     std::move(query_ranges),
@@ -422,15 +428,22 @@ future<> read_context::save_reader(ready_to_save_state& current_state, const dht
                     last_ckey);
 
             db.get_querier_cache().insert(query_uuid, std::move(querier), gts.get());
+
+            db.get_stats().multishard_query_unpopped_fragments += fragments;
+            db.get_stats().multishard_query_unpopped_bytes += (size_after - size_before);
         } catch (...) {
             // We don't want to fail a read just because of a failure to
             // save any of the readers.
             mmq_log.debug("Failed to save reader: {}", std::current_exception());
+            ++db.get_stats().multishard_query_failed_reader_saves;
         }
-    }).handle_exception([shard] (std::exception_ptr e) {
+    }).handle_exception([this, shard] (std::exception_ptr e) {
         // We don't want to fail a read just because of a failure to
         // save any of the readers.
         mmq_log.debug("Failed to save reader on shard {}: {}", shard, e);
+        // This will account the failure on the local shard but we don't
+        // know where exactly the failure happened anyway.
+        ++_db.local().get_stats().multishard_query_failed_reader_saves;
     });
 }
 

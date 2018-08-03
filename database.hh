@@ -1167,6 +1167,11 @@ private:
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
+
+        uint64_t multishard_query_unpopped_fragments = 0;
+        uint64_t multishard_query_unpopped_bytes = 0;
+        uint64_t multishard_query_failed_reader_stops = 0;
+        uint64_t multishard_query_failed_reader_saves = 0;
     };
 
     lw_shared_ptr<db_stats> _stats;
