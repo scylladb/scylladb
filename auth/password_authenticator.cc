@@ -141,7 +141,9 @@ static sstring gensalt() {
     // blowfish 2011 fix, blowfish, sha512, sha256, md5
     for (sstring pfx : { "$2y$", "$2a$", "$6$", "$5$", "$1$" }) {
         salt = pfx + input;
-        if (crypt_r("fisk", salt.c_str(), &tlcrypt)) {
+        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
+
+        if (e && (e[0] != '*')) {
             prefix = pfx;
             return salt;
         }
