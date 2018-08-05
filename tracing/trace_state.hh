@@ -352,6 +352,20 @@ private:
     void set_page_size(int32_t val);
 
     /**
+     * Set a size of the request being traces.
+     *
+     * @param s a request size
+     */
+    void set_request_size(size_t s) noexcept;
+
+    /**
+     * Set a size of the response of the query being traces.
+     *
+     * @param s a response size
+     */
+    void set_response_size(size_t s) noexcept;
+
+    /**
      * Store a query string.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -464,6 +478,8 @@ private:
     friend void trace(const trace_state_ptr& p, A&&... a) noexcept;
 
     friend void set_page_size(const trace_state_ptr& p, int32_t val);
+    friend void set_request_size(const trace_state_ptr& p, size_t s) noexcept;
+    friend void set_response_size(const trace_state_ptr& p, size_t s) noexcept;
     friend void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val);
     friend void set_consistency_level(const trace_state_ptr& p, db::consistency_level val);
     friend void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>&val);
@@ -474,6 +490,32 @@ private:
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
     friend void stop_foreground_prepared(const trace_state_ptr& state, const cql3::query_options* prepared_options_ptr) noexcept;
+};
+
+class trace_state_ptr final {
+private:
+    lw_shared_ptr<trace_state> _state_ptr;
+
+public:
+    trace_state_ptr() = default;
+    trace_state_ptr(lw_shared_ptr<trace_state> state_ptr)
+        : _state_ptr(std::move(state_ptr))
+    {}
+    trace_state_ptr(nullptr_t)
+        : _state_ptr(nullptr)
+    {}
+
+    explicit operator bool() const noexcept {
+        return __builtin_expect(bool(_state_ptr), false);
+    }
+
+    trace_state* operator->() const noexcept {
+        return _state_ptr.get();
+    }
+
+    trace_state& operator*() const noexcept {
+        return *_state_ptr;
+    }
 };
 
 inline void trace_state::trace_internal(sstring message) {
@@ -543,6 +585,18 @@ inline elapsed_clock::duration trace_state::elapsed() {
 inline void set_page_size(const trace_state_ptr& p, int32_t val) {
     if (p) {
         p->set_page_size(val);
+    }
+}
+
+inline void set_request_size(const trace_state_ptr& p, size_t s) noexcept {
+    if (p) {
+        p->set_request_size(s);
+    }
+}
+
+inline void set_response_size(const trace_state_ptr& p, size_t s) noexcept {
+    if (p) {
+        p->set_response_size(s);
     }
 }
 
@@ -638,7 +692,7 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
-    if (__builtin_expect(bool(p), false)) {
+    if (p) {
         p->trace(std::forward<A>(a)...);
     }
 }

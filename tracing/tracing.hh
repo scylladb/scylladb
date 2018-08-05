@@ -59,7 +59,7 @@ using elapsed_clock = std::chrono::steady_clock;
 
 extern logging::logger tracing_logger;
 
-class trace_state;
+class trace_state_ptr;
 class tracing;
 
 enum class trace_type : uint8_t {
@@ -214,6 +214,8 @@ struct session_record {
     std::set<sstring> tables;
     sstring username;
     sstring request;
+    size_t request_size = 0;
+    size_t response_size = 0;
     std::chrono::system_clock::time_point started_at;
     trace_type command = trace_type::NONE;
     elapsed_clock::duration elapsed;
@@ -301,8 +303,6 @@ public:
 private:
     bool _is_pending_for_write = false;
 };
-
-using trace_state_ptr = lw_shared_ptr<trace_state>;
 
 class tracing : public seastar::async_sharded_service<tracing> {
 public:
