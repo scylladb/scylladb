@@ -199,11 +199,11 @@ private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
                                                                                      service::query_state& state, const query_options& options) override;
 
-    future<dht::partition_range_vector> find_index_partition_ranges(service::storage_proxy& proxy,
+    future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>> find_index_partition_ranges(service::storage_proxy& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
 
-    future<std::vector<primary_key>> find_index_clustering_rows(service::storage_proxy& proxy,
+    future<std::vector<primary_key>, ::shared_ptr<const service::pager::paging_state>> find_index_clustering_rows(service::storage_proxy& proxy,
                                                                 service::query_state& state,
                                                                 const query_options& options);
 

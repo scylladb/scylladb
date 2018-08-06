@@ -728,7 +728,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     if (whole_partitions || partition_slices) {
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
-        return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges) {
+        return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
             auto command = ::make_lw_shared<query::read_command>(
                 _schema->id(),
                 _schema->version(),
@@ -744,7 +744,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     } else {
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
-        return find_index_clustering_rows(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys) {
+        return find_index_clustering_rows(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
             auto command = ::make_lw_shared<query::read_command>(
                 _schema->id(),
                 _schema->version(),
@@ -880,7 +880,7 @@ read_posting_list(service::storage_proxy& proxy,
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<dht::partition_range_vector>
+future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_partition_ranges(service::storage_proxy& proxy,
                                              service::query_state& state,
                                              const query_options& options)
@@ -916,13 +916,14 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
             auto range = dht::partition_range::make_singular(dk);
             partition_ranges.emplace_back(range);
         }
-        return partition_ranges;
+        auto paging_state = rows->rs().get_metadata().paging_state();
+        return make_ready_future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>>(std::move(partition_ranges), std::move(paging_state));
     });
 }
 
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
-future<std::vector<indexed_table_select_statement::primary_key>>
+future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
 {
     schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
@@ -947,7 +948,8 @@ indexed_table_select_statement::find_index_clustering_rows(service::storage_prox
             auto ck = clustering_key::from_range(ck_columns);
             primary_keys.emplace_back(primary_key{std::move(dk), std::move(ck)});
         }
-        return primary_keys;
+        auto paging_state = rows->rs().get_metadata().paging_state();
+        return make_ready_future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>(std::move(primary_keys), std::move(paging_state));
     });
 }
 
