@@ -1252,7 +1252,8 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
-  {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+
     // We create a sequence of partitions such that first we have a partition with a very long key, then
     // series of partitions with small keys. This should result in large index page.
 
@@ -1332,12 +1333,4 @@ SEASTAR_THREAD_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) 
 
     assert_that(actual).is_equal_to(expected);
     BOOST_REQUIRE_EQUAL(large_allocs_after - large_allocs_before, 0);
-  }
-  // sstable is destroyed at this point.
-  
-  // FIXME: the sstable destructor issues some asynchronous operations in the background, which are
-  // detected as leaks if we don't wait for them. The sleep() below is a temporary replacement for a
-  // proper close(shared_sstable) that waits until all references are gone, closes the files, and deletes
-  // them if necessary.
-  sleep(300ms).get();
 }
