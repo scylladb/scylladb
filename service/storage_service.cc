@@ -74,6 +74,7 @@
 #include "supervisor.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
+#include <seastar/core/metrics.hh>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -128,10 +129,52 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks) {
+    register_metrics();
     sstable_read_error.connect([this] { isolate_on_error(); });
     sstable_write_error.connect([this] { isolate_on_error(); });
     general_disk_error.connect([this] { isolate_on_error(); });
     commit_error.connect([this] { isolate_on_commit_error(); });
+}
+
+enum class node_external_status {
+    UNKNOWN        = 0,
+    STARTING       = 1,
+    JOINING        = 2,
+    NORMAL         = 3,
+    LEAVING        = 4,
+    DECOMMISSIONED = 5,
+    DRAINING       = 6,
+    DRAINED        = 7,
+    MOVING         = 8 //deprecated
+};
+
+static node_external_status map_operation_mode(storage_service::mode m) {
+    switch (m) {
+    case storage_service::mode::STARTING: return node_external_status::STARTING;
+    case storage_service::mode::JOINING: return node_external_status::JOINING;
+    case storage_service::mode::NORMAL: return node_external_status::NORMAL;
+    case storage_service::mode::LEAVING: return node_external_status::LEAVING;
+    case storage_service::mode::DECOMMISSIONED: return node_external_status::DECOMMISSIONED;
+    case storage_service::mode::DRAINING: return node_external_status::DRAINING;
+    case storage_service::mode::DRAINED: return node_external_status::DRAINED;
+    case storage_service::mode::MOVING: return node_external_status::MOVING;
+    }
+    return node_external_status::UNKNOWN;
+}
+
+void storage_service::register_metrics() {
+    if (engine().cpu_id() != 0) {
+        // the relevant data is distributed between the shards,
+        // We only need to register it once.
+        return;
+    }
+    namespace sm = seastar::metrics;
+    _metrics.add_group("node", {
+            sm::make_gauge("operation_mode", sm::description("The operation mode of the current node. UNKNOWN = 0, STARTING = 1, JOINING = 2, NORMAL = 3, "
+                    "LEAVING = 4, DECOMMISSIONED = 5, DRAINING = 6, DRAINED = 7, MOVING = 8"), [this] {
+                return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
+            }),
+    });
 }
 
 void

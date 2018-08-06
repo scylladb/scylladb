@@ -60,6 +60,7 @@
 #include <seastar/core/distributed.hh>
 #include "disk-error-handler.hh"
 #include "gms/feature.hh"
+#include <seastar/core/metrics_registration.hh>
 
 namespace cql_transport {
     class cql_server;
@@ -136,6 +137,7 @@ private:
     bool _force_remove_completion = false;
     bool _ms_stopped = false;
     bool _stream_manager_stopped = false;
+    seastar::metrics::metric_groups _metrics;
 public:
     storage_service(distributed<database>& db, sharded<auth::service>&, sharded<db::system_distributed_keyspace>&);
     void isolate_on_error();
@@ -148,6 +150,7 @@ public:
 
 private:
     future<> do_update_pending_ranges();
+    void register_metrics();
 
 public:
     future<> keyspace_changed(const sstring& ks_name);
