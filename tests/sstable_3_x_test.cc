@@ -29,6 +29,8 @@
 #include <seastar/tests/test-utils.hh>
 
 #include "sstables/sstables.hh"
+#include "sstables/compaction_manager.hh"
+#include "cell_locking.hh"
 #include "compress.hh"
 #include "counters.hh"
 #include "schema_builder.hh"
@@ -1829,6 +1831,187 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_collections_read) {
             generate({7, 8, 9}, {"Text 7", "Text 8", "Text 9"}, {{7,"Text 7"}, {8,"Text 8"}, {9,"Text 9"}}))
     .produces_partition_end()
     .produces_end_of_stream();
+}
+
+static sstables::shared_sstable open_sstable(schema_ptr schema, sstring dir, unsigned long generation) {
+    auto sst = sstables::make_sstable(std::move(schema), dir, generation,
+            sstables::sstable::version_types::mc,
+            sstables::sstable::format_types::big);
+    sst->load().get();
+    return sst;
+}
+
+static std::vector<sstables::shared_sstable> open_sstables(schema_ptr s, sstring dir, std::vector<unsigned long> generations) {
+    std::vector<sstables::shared_sstable> result;
+    for(auto generation: generations) {
+        result.push_back(open_sstable(s, dir, generation));
+    }
+    return result;
+}
+
+static flat_mutation_reader compacted_sstable_reader(schema_ptr s,
+                     sstring table_name, std::vector<unsigned long> generations) {
+    auto column_family_test_config = [] {
+        static db::nop_large_partition_handler nop_lp_handler;
+        column_family::config cfg;
+        cfg.large_partition_handler = &nop_lp_handler;
+        return cfg;
+    };
+    storage_service_for_tests ssft;
+
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cl_stats = make_lw_shared<cell_locker_stats>();
+    auto tracker = make_lw_shared<cache_tracker>();
+    auto cf = make_lw_shared<column_family>(s, column_family_test_config(), column_family::no_commitlog(), *cm, *cl_stats, *tracker);
+    cf->mark_ready_for_writes();
+    lw_shared_ptr<memtable> mt = make_lw_shared<memtable>(s);
+
+    tmpdir tmp;
+    auto sstables = open_sstables(s, format("tests/sstables/3.x/uncompressed/{}", table_name), generations);
+    auto new_generation = generations.back() + 1;
+    auto new_sstable = [s, path = tmp.path, new_generation] {
+        return sstables::test::make_test_sstable(4096, s, path, new_generation,
+                         sstables::sstable_version_types::mc, sstable::format_types::big);
+    };
+
+    sstables::compact_sstables(sstables::compaction_descriptor(std::move(sstables)), *cf, new_sstable).get();
+
+    auto compacted_sst = open_sstable(s, tmp.path, new_generation);
+    return compacted_sst->as_mutation_source().make_reader(s, query::full_partition_range, s->full_slice());
+}
+
+SEASTAR_THREAD_TEST_CASE(compact_deleted_row) {
+    BOOST_REQUIRE(smp::count == 1);
+    sstring table_name = "compact_deleted_row";
+    // CREATE TABLE test_deleted_row (pk text, ck text, rc1 text, rc2 text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck", utf8_type, column_kind::clustering_key);
+    builder.with_column("rc1", utf8_type);
+    builder.with_column("rc2", utf8_type);
+    builder.set_compressor_params(compression_parameters());
+    builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    /*
+     * Two test SSTables are generated as follows:
+     *
+     * cqlsh:sst3> INSERT INTO test_deleted_row (pk, ck, rc1) VALUES ('key', 'ck', 'rc1');
+     * <flush>
+     * cqlsh:sst3> DELETE FROM test_deleted_row WHERE pk = 'key' AND ck = 'ck';
+     * cqlsh:sst3> INSERT INTO test_deleted_row (pk, ck, rc2) VALUES ('key', 'ck', 'rc2');
+     * <flush>
+     *
+     * cqlsh:sst3> SELECT * from test_deleted_row ;
+     *
+     *  pk  | ck | rc1  | rc2
+     *  -----+----+------+-----
+     *  key | ck | null | rc2
+     *  (1 rows)
+     *
+     * The resulting compacted SSTables look like this:
+     *
+     * [
+     *   {
+     *     "partition" : {
+     *       "key" : [ "key" ],
+     *       "position" : 0
+     *     },
+     *     "rows" : [
+     *       {
+     *         "type" : "row",
+     *         "position" : 40,
+     *         "clustering" : [ "ck" ],
+     *         "liveness_info" : { "tstamp" : "1533591593120115" },
+     *         "deletion_info" : { "marked_deleted" : "1533591535618022", "local_delete_time" : "1533591535" },
+     *         "cells" : [
+     *           { "name" : "rc2", "value" : "rc2" }
+     *         ]
+     *       }
+     *     ]
+     *   }
+     * ]
+     */
+    auto reader = compacted_sstable_reader(s, table_name, {1, 2});
+    mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get0();
+    BOOST_REQUIRE(m);
+    BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
+    BOOST_REQUIRE(!m->partition().partition_tombstone());
+    auto& rows = m->partition().clustered_rows();
+    BOOST_REQUIRE(rows.calculate_size() == 1);
+    auto& row = rows.begin()->row();
+    BOOST_REQUIRE(row.deleted_at());
+    auto& cells = row.cells();
+    auto& rc1 = *s->get_column_definition("rc1");
+    auto& rc2 = *s->get_column_definition("rc2");
+    BOOST_REQUIRE(cells.find_cell(rc1.id) == nullptr);
+    BOOST_REQUIRE(cells.find_cell(rc2.id) != nullptr);
+}
+
+SEASTAR_THREAD_TEST_CASE(compact_deleted_cell) {
+    BOOST_REQUIRE(smp::count == 1);
+    sstring table_name = "compact_deleted_cell";
+    //  CREATE TABLE compact_deleted_cell (pk text, ck text, rc text, PRIMARY KEY (pk, ck)) WITH compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", table_name);
+    builder.with_column("pk", utf8_type, column_kind::partition_key);
+    builder.with_column("ck", utf8_type, column_kind::clustering_key);
+    builder.with_column("rc", utf8_type);
+    builder.set_compressor_params(compression_parameters());
+    builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    /*
+     * Two test SSTables are generated as follows:
+     *
+     * cqlsh:sst3> INSERT INTO compact_deleted_cell (pk, ck, rc) VALUES ('key', 'ck', 'rc');
+     * <flush>
+     * cqlsh:sst3> DELETE rc FROM compact_deleted_cell WHERE pk = 'key' AND ck = 'ck';
+     * <flush>
+     *
+     * cqlsh:sst3> SELECT * from compact_deleted_cell7;
+     *
+     *    pk  | ck | rc
+     *  -----+----+------
+     *   key | ck | null
+     *
+     *  (1 rows)
+     *
+     * The resulting compacted SSTables look like this:
+     *
+     *[
+     *  {
+     *    "partition" : {
+     *      "key" : [ "key" ],
+     *      "position" : 0
+     *    },
+     *    "rows" : [
+     *      {
+     *        "type" : "row",
+     *        "position" : 31,
+     *        "clustering" : [ "ck" ],
+     *        "liveness_info" : { "tstamp" : "1533601542229143" },
+     *        "cells" : [
+     *          { "name" : "rc", "deletion_info" : { "local_delete_time" : "1533601605" },
+     *            "tstamp" : "1533601605680156"
+     *          }
+     *        ]
+     *      }
+     *    ]
+     *  }
+     *]
+     *
+     */
+    auto reader = compacted_sstable_reader(s, table_name, {1, 2});
+    mutation_opt m = read_mutation_from_flat_mutation_reader(reader).get0();
+    BOOST_REQUIRE(m);
+    BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, data_value(sstring("key")))));
+    BOOST_REQUIRE(!m->partition().partition_tombstone());
+    auto& rows = m->partition().clustered_rows();
+    BOOST_REQUIRE(rows.calculate_size() == 1);
+    auto& row = rows.begin()->row();
+    BOOST_REQUIRE(row.is_live(*s));
+    auto& cells = row.cells();
+    BOOST_REQUIRE(cells.size() == 1);
 }
 
 static void compare_files(sstring filename1, sstring filename2) {
