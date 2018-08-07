@@ -39,6 +39,27 @@ print_usage() {
     exit 1
 }
 
+interactive_choose_nic() {
+    NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
+    NR_NICS=`echo $NICS|wc -w`
+    if [ $NR_NICS -eq 0 ]; then
+        echo "NIC not found."
+        exit 1
+    elif [ $NR_NICS -eq 1 ]; then
+        NIC=$NICS
+    else
+        echo "Please select NIC from following list: "
+        while true; do
+            echo $NICS
+            echo -n "> "
+            read NIC
+            if is_valid_nic $NIC; then
+                break
+            fi
+        done
+    fi
+}
+
 interactive_ask_service() {
     echo $1
     echo $2
@@ -125,6 +146,7 @@ run_setup_script() {
     return 0
 }
 
+NIC="eth0"
 AMI=0
 SET_NIC=0
 DEV_MODE=0
@@ -265,7 +287,8 @@ if is_ec2; then
         EC2_CHECK=$?
     fi
     if [ $EC2_CHECK -eq 1 ]; then
-        /usr/lib/scylla/scylla_ec2_check
+        interactive_choose_nic
+        /usr/lib/scylla/scylla_ec2_check --nic $NIC
     fi
 fi
 
@@ -452,24 +475,6 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup sysconfig?" "Answer yes to do system wide configuration customized for Scylla. Answer no to do nothing." "yes" &&:
     SYSCONFIG_SETUP=$?
     if [ $SYSCONFIG_SETUP -eq 1 ]; then
-        NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
-        NR_NICS=`echo $NICS|wc -w`
-        if [ $NR_NICS -eq 0 ]; then
-            echo "NIC not found."
-            exit 1
-        elif [ $NR_NICS -eq 1 ]; then
-            NIC=$NICS
-        else
-            echo "Please select NIC from following list: "
-            while true; do
-                echo $NICS
-                echo -n "> "
-                read NIC
-                if [ -e /sys/class/net/$NIC ]; then
-                    break
-                fi
-            done
-        fi
         interactive_ask_service "Do you want to optimize NIC queue settings?" "Answer yes to enable network card optimization and improve performance. Answer no to skip this optimization." "yes" &&:
         SET_NIC=$?
     fi
@@ -479,6 +484,7 @@ if [ $SYSCONFIG_SETUP -eq 1 ]; then
     if [ $SET_NIC -eq 1 ]; then
         SETUP_ARGS="--setup-nic"
     fi
+    interactive_choose_nic
     run_setup_script "NIC queue" /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC $SETUP_ARGS
 fi
 

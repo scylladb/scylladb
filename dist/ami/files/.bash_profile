@@ -120,7 +120,7 @@ else
 	fi
 fi
 echo -n "    "
-/usr/lib/scylla/scylla_ec2_check
+/usr/lib/scylla/scylla_ec2_check --nic eth0
 if [ $? -eq 0 ]; then
     echo
 fi

@@ -91,6 +91,10 @@ create_perftune_conf() {
     /usr/lib/scylla/perftune.py --tune net --nic "$nic" $mode --dump-options-file > /etc/scylla.d/perftune.yaml
 }
 
+is_valid_nic() {
+    [ -d /sys/class/net/$1 ]
+}
+
 . /etc/os-release
 if is_debian_variant || is_gentoo_variant; then
     SYSCONFIG=/etc/default

@@ -2,6 +2,12 @@
 
 . /usr/lib/scylla/scylla_lib.sh
 
+print_usage() {
+    echo "scylla_ec2_check --nic eth0"
+    echo "  --nic   specify NIC"
+    exit 1
+}
+
 get_en_interface_type() {
     TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
     SUBTYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 2`
@@ -18,7 +24,7 @@ get_en_interface_type() {
 }
 
 is_vpc_enabled() {
-    MAC=`cat /sys/class/net/eth0/address`
+    MAC=`cat /sys/class/net/$1/address`
     VPC_AVAIL=`curl -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$MAC/|grep vpc-id`
     [ -n "$VPC_AVAIL" ]
 }
@@ -27,9 +33,27 @@ if ! is_ec2; then
     exit 0
 fi
 
+if [ $# -eq 0 ]; then
+    print_usage
+fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--nic")
+            verify_args $@
+            NIC="$2"
+            shift 2
+            ;;
+    esac
+done
+
+if ! is_valid_nic $NIC; then
+    echo "NIC $NIC doesn't exist."
+    exit 1
+fi
+
 TYPE=`curl -s http://169.254.169.254/latest/meta-data/instance-type`
 EN=`get_en_interface_type`
-DRIVER=`ethtool -i eth0|awk '/^driver:/ {print $2}'`
+DRIVER=`ethtool -i $NIC|awk '/^driver:/ {print $2}'`
 if [ "$EN" = "" ]; then
     tput setaf 1
     tput bold
@@ -39,7 +63,7 @@ if [ "$EN" = "" ]; then
     echo "More documentation available at: "
     echo "http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enabling_enhanced_networking"
     exit 1
-elif ! is_vpc_enabled; then
+elif ! is_vpc_enabled $NIC; then
     tput setaf 1
     tput bold
     echo "VPC is not enabled!"
