@@ -221,7 +221,7 @@ if __name__ == '__main__':
         elif is_gentoo_variant():
             run('rc-update add scylla-server default')
 
-    if interactive:
+    if interactive and not os.path.exists('/etc/scylla.d/housekeeping.cfg'):
         version_check = interactive_ask_service('Do you want to enable Scylla to check if there is a newer version of Scylla available?', 'Yes - start the Scylla-housekeeping service to check for a newer version. This check runs periodically. No - skips this step.', 'yes')
     if version_check:
         with open('/etc/scylla.d/housekeeping.cfg', 'w') as f:
