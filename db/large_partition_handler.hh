@@ -33,33 +33,47 @@ namespace db {
 
 class large_partition_handler {
 public:
+    struct stats {
+        int64_t partitions_bigger_than_threshold = 0; // number of large partition updates exceeding threshold_bytes
+    };
+
+private:
+    uint64_t _threshold_bytes;
+    mutable large_partition_handler::stats _stats;
+
+public:
+    explicit large_partition_handler(uint64_t threshold_bytes = std::numeric_limits<uint64_t>::max()) : _threshold_bytes(threshold_bytes) {}
     virtual ~large_partition_handler() {}
 
-    virtual future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const = 0;
-    virtual future<> maybe_delete_large_partitions_entry(const sstables::sstable& sst) const = 0;
+    future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const;
+    future<> maybe_delete_large_partitions_entry(const sstables::sstable& sst) const;
+
+    const large_partition_handler::stats& stats() const { return _stats; }
+
+protected:
+    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const = 0;
+    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const = 0;
 };
 
 class cql_table_large_partition_handler : public large_partition_handler {
 protected:
-    uint64_t _threshold_bytes;
     static logging::logger large_partition_logger;
+
 public:
-    explicit cql_table_large_partition_handler(uint64_t threshold_bytes) : _threshold_bytes(threshold_bytes) {}
+    explicit cql_table_large_partition_handler(uint64_t threshold_bytes) : large_partition_handler(threshold_bytes) {}
 
-    virtual future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override;
-    virtual future<> maybe_delete_large_partitions_entry(const sstables::sstable& sst) const override;
 protected:
-    future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const;
-    future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const;
-
+    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override;
+    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override;
 };
 
 class nop_large_partition_handler : public large_partition_handler {
 public:
-    virtual future<> maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& partition_key, uint64_t partition_size) const override {
+    virtual future<> update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& partition_key, uint64_t partition_size) const override {
         return make_ready_future<>();
     }
-    virtual future<> maybe_delete_large_partitions_entry(const sstables::sstable& sst) const override {
+
+    virtual future<> delete_large_partitions_entry(const schema& s, const sstring& sstable_name) const override {
         return make_ready_future<>();
     }
 };

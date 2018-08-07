@@ -2387,6 +2387,10 @@ database::setup_metrics() {
 
         sm::make_queue_length("counter_cell_lock_pending", _cl_stats->operations_waiting_for_lock,
                              sm::description("The number of counter updates waiting for a lock.")),
+
+        sm::make_counter("large_partition_exceeding_threshold", [this] { return _large_partition_handler->stats().partitions_bigger_than_threshold; },
+            sm::description("Number of large partitions exceeding compaction_large_partition_warning_threshold_mb. "
+                "Large partitions have performance impact and should be avoided, check the documentation for details.")),
     });
 }
 

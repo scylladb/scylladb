@@ -27,17 +27,17 @@
 
 namespace db {
 
-logging::logger cql_table_large_partition_handler::large_partition_logger("large_partition");
-
-future<> cql_table_large_partition_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
+future<> large_partition_handler::maybe_update_large_partitions(const sstables::sstable& sst, const sstables::key& key, uint64_t partition_size) const {
     if (partition_size > _threshold_bytes) {
+        ++_stats.partitions_bigger_than_threshold;
+
         const schema& s = *sst.get_schema();
         return update_large_partitions(s, sst.get_filename(), key, partition_size);
     }
     return make_ready_future<>();
 }
 
-future<> cql_table_large_partition_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
+future<> large_partition_handler::maybe_delete_large_partitions_entry(const sstables::sstable& sst) const {
     try {
         if (sst.data_size() > _threshold_bytes) {
             const schema& s = *sst.get_schema();
@@ -46,8 +46,11 @@ future<> cql_table_large_partition_handler::maybe_delete_large_partitions_entry(
     } catch (...) {
         // no-op
     }
+
     return make_ready_future<>();
 }
+
+logging::logger cql_table_large_partition_handler::large_partition_logger("large_partition");
 
 future<> cql_table_large_partition_handler::update_large_partitions(const schema& s, const sstring& sstable_name, const sstables::key& key, uint64_t partition_size) const {
     static const sstring req = sprint("INSERT INTO system.%s (keyspace_name, table_name, sstable_name, partition_size, partition_key, compaction_time) VALUES (?, ?, ?, ?, ?, ?) USING TTL 2592000",
