@@ -1143,14 +1143,18 @@ public:
     }
 
     void reset(indexable_element el) {
+        auto reset_to_state = [this, el] (state s) {
+            _state = s;
+            _consumer.reset(el);
+        };
         switch (el) {
             case indexable_element::partition:
-                _state = state::PARTITION_START;
-                break;
-            default:
-                assert(0);
+                return reset_to_state(state::PARTITION_START);
+            case indexable_element::cell:
+                return reset_to_state(state::FLAGS);
         }
-        _consumer.reset(el);
+        // We should not get here unless some enum member is not handled by the switch
+        throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
     }
 };
 
