@@ -57,3 +57,5 @@ http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html#enab
         print('''More documentation available at:
 http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/enhanced-networking.html''')
         sys.exit(1)
+
+    colorprint('{green}This EC2 instance is optimized for Scylla.{nocolor}')
