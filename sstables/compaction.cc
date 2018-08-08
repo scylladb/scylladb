@@ -304,6 +304,7 @@ class compaction {
 protected:
     column_family& _cf;
     std::vector<shared_sstable> _sstables;
+    lw_shared_ptr<sstable_set> _compacting;
     uint64_t _max_sstable_size;
     uint32_t _sstable_level;
     lw_shared_ptr<compaction_info> _info = make_lw_shared<compaction_info>();
@@ -358,7 +359,7 @@ public:
     }
 private:
     // Default range sstable reader that will only return mutation that belongs to current shard.
-    virtual flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const = 0;
+    virtual flat_mutation_reader make_sstable_reader() const = 0;
 
     flat_mutation_reader setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(_cf.get_compaction_strategy().make_sstable_set(_cf.schema()));
@@ -400,7 +401,8 @@ private:
         _info->cf = schema->cf_name();
         report_start(formatted_msg);
 
-        return make_sstable_reader(std::move(ssts));
+        _compacting = std::move(ssts);
+        return make_sstable_reader();
     }
 
     compaction_info finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
@@ -522,9 +524,9 @@ public:
     {
     }
 
-    flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
+    flat_mutation_reader make_sstable_reader() const override {
         return ::make_local_shard_sstable_reader(_cf.schema(),
-                std::move(ssts),
+                _compacting,
                 query::full_partition_range,
                 _cf.schema()->full_slice(),
                 service::get_local_compaction_priority(),
@@ -641,6 +643,7 @@ private:
                     _set.erase(sst);
                 }
                 _compacting_for_max_purgeable_func.erase(sst);
+                _compacting->erase(sst);
             });
             _replacer(std::vector<shared_sstable>(exhausted, _sstables.end()), std::move(_unreplaced_new_tables));
             _sstables.erase(exhausted, _sstables.end());
@@ -748,9 +751,9 @@ public:
     }
 
     // Use reader that makes sure no non-local mutation will not be filtered out.
-    flat_mutation_reader make_sstable_reader(lw_shared_ptr<sstables::sstable_set> ssts) const override {
+    flat_mutation_reader make_sstable_reader() const override {
         return ::make_range_sstable_reader(_cf.schema(),
-                std::move(ssts),
+                _compacting,
                 query::full_partition_range,
                 _cf.schema()->full_slice(),
                 service::get_local_compaction_priority(),
