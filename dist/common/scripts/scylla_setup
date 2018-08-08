@@ -196,7 +196,7 @@ if __name__ == '__main__':
 
     if is_ec2():
         if interactive:
-            ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylls. No - skips the configuration check.', 'yes')
+            ec2_check = interactive_ask_service('Do you want to run Amazon EC2 configuration check?', 'Yes - runs a script to verify that this instance is optimized for running Scylla. No - skips the configuration check.', 'yes')
             if ec2_check:
                 nic = interactive_choose_nic()
         if ec2_check:
