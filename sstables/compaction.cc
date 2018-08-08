@@ -177,7 +177,7 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         }
 
         void remove_sstable(bool is_tracking) {
-            if (is_tracking) {
+            if (is_tracking && _sst) {
                 _cf.get_compaction_strategy().get_backlog_tracker().remove_sstable(_sst);
             }
             _sst = {};
@@ -193,6 +193,8 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
                 _cf.get_compaction_strategy().get_backlog_tracker().revert_charges(_sst);
             }
         }
+
+        friend class compaction_read_monitor_generator;
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
@@ -207,7 +209,15 @@ struct compaction_read_monitor_generator final : public read_monitor_generator {
         for (auto& rm : _generated_monitors) {
             rm.remove_sstable(is_tracking);
         }
+    }
 
+    void remove_sstable(bool is_tracking, sstables::shared_sstable& sst) {
+        for (auto& rm : _generated_monitors) {
+            if (rm._sst == sst) {
+                rm.remove_sstable(is_tracking);
+                break;
+            }
+        }
     }
 private:
      compaction_manager& _compaction_manager;
@@ -644,6 +654,7 @@ private:
                 }
                 _compacting_for_max_purgeable_func.erase(sst);
                 _compacting->erase(sst);
+                _monitor_generator.remove_sstable(_info->tracking, sst);
             });
             _replacer(std::vector<shared_sstable>(exhausted, _sstables.end()), std::move(_unreplaced_new_tables));
             _sstables.erase(exhausted, _sstables.end());
