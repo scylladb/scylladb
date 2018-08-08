@@ -728,7 +728,7 @@ public:
     val(prometheus_address, sstring, "0.0.0.0", Used, "Prometheus listening address") \
     val(prometheus_prefix, sstring, "scylla", Used, "Set the prefix of the exported Prometheus metrics. Changing this will break Scylla's dashboard compatibility, do not change unless you know what you are doing.") \
     val(abort_on_lsa_bad_alloc, bool, false, Used, "Abort when allocation in LSA region fails") \
-    val(murmur3_partitioner_ignore_msb_bits, unsigned, 0, Used, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters") \
+    val(murmur3_partitioner_ignore_msb_bits, unsigned, 12, Used, "Number of most siginificant token bits to ignore in murmur3 partitioner; increase for very large clusters") \
     val(virtual_dirty_soft_limit, double, 0.6, Used, "Soft limit of virtual dirty memory expressed as a portion of the hard limit") \
     val(sstable_summary_ratio, double, 0.0005, Used, "Enforces that 1 byte of summary is written for every N (2000 by default) " \
         "bytes written to data file. Value must be between 0 and 1.") \
