@@ -213,7 +213,8 @@ void stream_session::init_messaging_service_handler() {
                             sst_cfg.large_partition_handler = cf.get_large_partition_handler();
                             sstables::shared_sstable sst = cf.make_streaming_sstable_for_write();
                             schema_ptr s = reader.schema();
-                            return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg).then([sst] {
+                            auto& pc = service::get_local_streaming_write_priority();
+                            return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg, {}, pc).then([sst] {
                                 return sst->open_data();
                             }).then([&cf, sst] {
                                 return cf.add_sstable_and_update_cache(sst);
