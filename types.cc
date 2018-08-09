@@ -1654,8 +1654,10 @@ public:
         return from_value(v).get().to_string();
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
-        if (!value.isNumeric()) {
-            throw marshal_exception(sprint("%s must be represented as numeric in JSON", value.toStyledString()));
+        if (value.isString()) {
+            return from_string(value.asString());
+        } else if (!value.isNumeric()) {
+            throw marshal_exception(sprint("%s must be represented as numeric or string in JSON", value.toStyledString()));
         }
 
         return from_string(json::to_sstring(value));
