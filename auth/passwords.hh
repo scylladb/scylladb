@@ -27,10 +27,40 @@
 
 namespace auth::passwords {
 
+///
+/// Generate a implementation-specific salt string for hashing passwords.
+///
+/// The \ref std::default_random_engine is used to generate the string, which is an implementation-specific length.
+///
+/// \note This function must be invoked once prior to invoking \ref hash or \ref check in order to initialize the
+/// implementation-specific state of the other functions. After being invoked once, the function is thread-safe.
+/// However, the function must be invoked initially only by a single thread.
+///
+/// \throws \ref std::runtime_error when the state cannot be initialized.
+///
 sstring gensalt();
 
+///
+/// Run a one-way hashing function on cleartext to produce encrypted text.
+///
+/// Prior to applying the hashing function, random salt is amended to the cleartext with \ref gensalt.
+///
+/// The result is the encrypted cyphertext, and also the salt used but in a implementation-specific format.
+///
+/// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
+///
 sstring hash(const sstring& pass);
 
+///
+/// Check that cleartext matches previously hashed cleartext with salt.
+///
+/// \ref salted_hash is the result of invoking \ref hash, which is the implementation-specific combination of the hashed
+/// password and the salt that was generated for it.
+///
+/// \returns `true` if the cleartext matches the salted hash.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
 bool check(const sstring& pass, const sstring& salted_hash);
 
 }
