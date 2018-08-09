@@ -370,11 +370,11 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
 
                 bool regular_restriction_matches;
                 if (cell) {
-                    regular_restriction_matches = cell->value().with_linearized([&restriction](bytes_view data) {
-                        return restriction.is_satisfied_by(data, cql3::query_options({ }));
+                    regular_restriction_matches = cell->value().with_linearized([&restriction, this](bytes_view data) {
+                        return restriction.is_satisfied_by(data, _options);
                     });
                 } else {
-                    regular_restriction_matches = restriction.is_satisfied_by(bytes(), cql3::query_options({ }));
+                    regular_restriction_matches = restriction.is_satisfied_by(bytes(), _options);
                 }
                 if (!regular_restriction_matches) {
                     _current_static_row_does_not_match = (cdef->kind == column_kind::static_column);
@@ -391,7 +391,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             const bytes& value_to_check = partition_key[cdef->id];
-            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, _options);
             if (!pk_restriction_matches) {
                 _current_pratition_key_does_not_match = true;
                 return false;
@@ -405,7 +405,7 @@ bool result_set_builder::restrictions_filter::operator()(const selection& select
             }
             restrictions::single_column_restriction& restriction = *restr_it->second;
             const bytes& value_to_check = clustering_key[cdef->id];
-            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, cql3::query_options({ }));
+            bool pk_restriction_matches = restriction.is_satisfied_by(value_to_check, _options);
             if (!pk_restriction_matches) {
                 return false;
             }
