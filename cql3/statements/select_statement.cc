@@ -581,7 +581,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         _stats.filtered_rows_read_total += *results->row_count();
         query::result_view::consume(*results, cmd->slice,
                 cql3::selection::result_set_builder::visitor(builder, *_schema,
-                        *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions)));
+                        *_selection, cql3::selection::result_set_builder::restrictions_filter(_restrictions, options)));
     } else {
         query::result_view::consume(*results, cmd->slice,
                 cql3::selection::result_set_builder::visitor(builder, *_schema,
