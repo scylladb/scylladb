@@ -37,6 +37,7 @@ struct cql_stats {
     uint64_t batches_unlogged_from_logged = 0;
     uint64_t rows_read = 0;
     uint64_t reverse_queries = 0;
+    uint64_t unpaged_select_queries = 0;
 
     int64_t secondary_index_creates = 0;
     int64_t secondary_index_drops = 0;

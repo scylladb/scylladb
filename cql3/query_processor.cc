@@ -250,6 +250,11 @@ query_processor::query_processor(service::storage_proxy& proxy, distributed<data
                             _cql_stats.reverse_queries,
                             sm::description("Counts number of CQL SELECT requests with ORDER BY DESC.")),
 
+                    sm::make_counter(
+                            "unpaged_select_queries",
+                            _cql_stats.unpaged_select_queries,
+                            sm::description("Counts number of unpaged CQL SELECT requests.")),
+
             });
 
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());

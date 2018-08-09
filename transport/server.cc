@@ -179,9 +179,6 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
         sm::make_gauge("requests_serving", _requests_serving,
                         sm::description("Holds a number of requests that are being processed right now.")),
 
-        sm::make_counter("unpaged_queries", _unpaged_queries,
-                        sm::description("The number of unpaged queries served.")),
-
         sm::make_gauge("requests_blocked_memory_current", [this] { return _memory_available.waiters(); },
                         sm::description(
                             seastar::format("Holds the number of requests that are currently blocked due to reaching the memory quota limit ({}B). "
@@ -774,11 +771,6 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, req
     q_state->options = in.read_options(_version, _cql_serialization_format, this->timeout_config());
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
-
-    // Count the number of unpaged queries
-    if (options.get_page_size() <= 0) {
-        _server._unpaged_queries += 1;
-    }
 
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());

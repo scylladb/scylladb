@@ -395,6 +395,8 @@ select_statement::do_execute(service::storage_proxy& proxy,
 
     int32_t page_size = options.get_page_size();
 
+    _stats.unpaged_select_queries += page_size <= 0;
+
     // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
     // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
@@ -692,6 +694,8 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
     ++_stats.secondary_index_reads;
 
     assert(_restrictions->uses_secondary_indexing());
+
+    _stats.unpaged_select_queries += options.get_page_size() <= 0;
 
     // Secondary index search has two steps: 1. use the index table to find a
     // list of primary keys matching the query. 2. read the rows matching
