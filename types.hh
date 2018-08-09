@@ -557,6 +557,9 @@ public:
     virtual sstring to_string(const bytes& b) const = 0;
     virtual bytes from_string(sstring_view text) const = 0;
     virtual sstring to_json_string(const bytes& b) const = 0;
+    sstring to_json_string(const bytes_opt& b) const {
+        return b ? to_json_string(*b) : "null";
+    }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const = 0;
     virtual bool is_counter() const { return false; }
     virtual bool is_collection() const { return false; }
