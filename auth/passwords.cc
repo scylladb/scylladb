@@ -53,7 +53,7 @@ static thread_local crypt_data tlcrypt = { 0, };
 
 static sstring hashpw(const sstring& pass, const sstring& salt) {
     auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
-    if (res == nullptr) {
+    if (!res || (res[0] == '*')) {
         throw std::system_error(errno, std::system_category());
     }
     return res;
