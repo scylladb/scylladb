@@ -96,12 +96,8 @@ public:
                 encoded_row.write("\\\"", 2);
             }
             encoded_row.write("\": ", 3);
-            if (parameters[i]) {
-                sstring row_sstring = _selector_types[i]->to_json_string(parameters[i].value());
-                encoded_row.write(row_sstring.c_str(), row_sstring.size());
-            } else {
-                encoded_row.write("null", 4);
-            }
+            sstring row_sstring = _selector_types[i]->to_json_string(parameters[i]);
+            encoded_row.write(row_sstring.c_str(), row_sstring.size());
         }
         encoded_row.write("}", 1);
         return encoded_row.linearize().to_string();

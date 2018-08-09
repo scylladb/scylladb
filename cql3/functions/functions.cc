@@ -177,7 +177,7 @@ shared_ptr<function>
 make_to_json_function(data_type t) {
     return make_native_scalar_function<true>("tojson", utf8_type, {t},
             [t](cql_serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
-        return utf8_type->decompose(t->to_json_string(parameters[0].value()));
+        return utf8_type->decompose(t->to_json_string(parameters[0]));
     });
 }
 
