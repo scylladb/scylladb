@@ -3329,6 +3329,36 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
             int32_type->decompose(1),
             int32_type->decompose(9)
         }});
+
+        cql3::prepared_cache_key_type prepared_id = e.prepare("SELECT a, b, c, d, e FROM t WHERE a = ? and d = ? ALLOW FILTERING").get0();
+        std::vector<cql3::raw_value> raw_values {
+                cql3::raw_value::make_value(int32_type->decompose(1)),
+                cql3::raw_value::make_value(int32_type->decompose(1))
+        };
+        msg = e.execute_prepared(prepared_id, raw_values).get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(3),
+                int32_type->decompose(5),
+                int32_type->decompose(1),
+                int32_type->decompose(9)
+           }
+        });
+
+        prepared_id = e.prepare("SELECT a, b, c, d, e FROM t WHERE a = ? and d = ? ALLOW FILTERING").get0();
+        raw_values[1] = cql3::raw_value::make_value(int32_type->decompose(9));
+        msg = e.execute_prepared(prepared_id, raw_values).get0();
+        assert_that(msg).is_rows().with_size(0);
+
+
     });
 }
 
