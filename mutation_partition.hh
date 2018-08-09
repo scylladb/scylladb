@@ -74,6 +74,15 @@ using cell_hash_opt = seastar::optimized_optional<cell_hash>;
 struct cell_and_hash {
     atomic_cell_or_collection cell;
     mutable cell_hash_opt hash;
+
+    cell_and_hash() = default;
+    cell_and_hash(cell_and_hash&&) noexcept = default;
+    cell_and_hash& operator=(cell_and_hash&&) noexcept = default;
+
+    cell_and_hash(atomic_cell_or_collection&& cell, cell_hash_opt hash)
+        : cell(std::move(cell))
+        , hash(hash)
+    { }
 };
 
 //
