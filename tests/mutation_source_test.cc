@@ -1511,7 +1511,8 @@ public:
                         if (unique_cells.emplace(uuid).second) {
                             m.cells.emplace_back(
                                 bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
-                                atomic_cell::make_live(*ctype->value_comparator(), timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)]));
+                                atomic_cell::make_live(*ctype->value_comparator(), timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)],
+                                    atomic_cell::collection_member::yes));
                         }
                     }
                     std::sort(m.cells.begin(), m.cells.end(), [] (auto&& c1, auto&& c2) {
