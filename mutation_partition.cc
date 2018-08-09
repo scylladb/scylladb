@@ -1089,7 +1089,7 @@ row::apply_monotonically(const column_definition& column, atomic_cell_or_collect
     if (_type == storage_type::vector && id < max_vector_size) {
         if (id >= _storage.vector.v.size()) {
             _storage.vector.v.resize(id);
-            _storage.vector.v.emplace_back(cell_and_hash{std::move(value), std::move(hash)});
+            _storage.vector.v.emplace_back(std::move(value), std::move(hash));
             _storage.vector.present.set(id);
             _size++;
         } else if (auto& cell_and_hash = _storage.vector.v[id]; !bool(cell_and_hash.cell)) {
