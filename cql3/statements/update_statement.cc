@@ -182,6 +182,7 @@ void
 insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const bytes_opt& value) {
     if (!value) {
         m.set_cell(prefix, column, std::move(operation::make_dead_cell(params)));
+        return;
     } else if (!column.type->is_collection()) {
         constants::setter::execute(m, prefix, params, column, raw_value_view::make_value(fragmented_temporary_buffer::view(*value)));
         return;
