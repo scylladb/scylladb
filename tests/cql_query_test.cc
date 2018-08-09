@@ -2613,6 +2613,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 "    r date,"
                 "    s time,"
                 "    u duration,"
+                "    w int,"
                 ");").get();
 
         e.require_table_exists("ks", "all_types").get();
@@ -2640,7 +2641,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 "    1y2mo3w4d5h6m7s8ms9us10ns"
                 ");").get();
 
-        auto msg = e.execute_cql("SELECT JSON a, b, c, d, e, f, \"G\", \"H\", \"I\", j, k, l, m, n, o, p, q, r, s, u, unixtimestampof(k) FROM all_types WHERE a = 'ascii'").get0();
+        auto msg = e.execute_cql("SELECT JSON a, b, c, d, e, f, \"G\", \"H\", \"I\", j, k, l, m, n, o, p, q, r, s, u, w, unixtimestampof(k) FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 utf8_type->decompose(
@@ -2664,6 +2665,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                     "\"r\": \"1970-01-02\", "
                     "\"s\": 00:00:00.000000001, "
                     "\"u\": \"1y2mo25d5h6m7s8ms9us10ns\", "
+                    "\"w\": null, "
                     "\"unixtimestampof(k)\": 1261009589805}"
                 )
             }
@@ -2671,7 +2673,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
 
         msg = e.execute_cql("SELECT toJson(a), toJson(b), toJson(c), toJson(d), toJson(e), toJson(f),"
                 "toJson(\"G\"), toJson(\"H\"), toJson(\"I\"), toJson(j), toJson(k), toJson(l), toJson(m), toJson(n),"
-                "toJson(o), toJson(p), toJson(q), toJson(r), toJson(s), toJson(u),"
+                "toJson(o), toJson(p), toJson(q), toJson(r), toJson(s), toJson(u), toJson(w),"
                 "toJson(unixtimestampof(k)), toJson(toJson(toJson(p))) FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
@@ -2695,6 +2697,7 @@ SEASTAR_TEST_CASE(test_select_json_types) {
                 utf8_type->decompose("\"1970-01-02\""),
                 utf8_type->decompose("00:00:00.000000001"),
                 utf8_type->decompose("\"1y2mo25d5h6m7s8ms9us10ns\""),
+                utf8_type->decompose("null"),
                 utf8_type->decompose("1261009589805"),
                 utf8_type->decompose("\"\\\"3\\\"\"")
             }
@@ -2838,13 +2841,15 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
 
         e.execute_cql("UPDATE all_types SET b = fromJson('42') WHERE a = fromJson('\"ascii\"');").get();
         e.execute_cql("UPDATE all_types SET \"I\" = fromJson('\"zażółć gęślą jaźń\"') WHERE a = fromJson('\"ascii\"');").get();
+        e.execute_cql("UPDATE all_types SET o = fromJson('\"3.45\"') WHERE a = fromJson('\"ascii\"');").get();
 
-        msg = e.execute_cql("SELECT a, b, \"I\" FROM all_types WHERE a = 'ascii'").get0();
+        msg = e.execute_cql("SELECT a, b, \"I\", o FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 ascii_type->decompose(sstring("ascii")),
                 long_type->decompose(42l),
                 utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(345) }),
             }
         });
     });
