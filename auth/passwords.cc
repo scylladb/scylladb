@@ -96,8 +96,7 @@ no_supported_schemes::no_supported_schemes()
 }
 
 bool check(const sstring& pass, const sstring& salted_hash) {
-    auto tmp = detail::hash_with_salt(pass, salted_hash);
-    return tmp == salted_hash;
+    return detail::hash_with_salt(pass, salted_hash) == salted_hash;
 }
 
 } // namespace auth::paswords
