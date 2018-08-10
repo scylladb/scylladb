@@ -294,7 +294,7 @@ if __name__ == '__main__':
                 print('Please select unmounted disks from the following list: {}'.format(devices))
             selected = []
             dsklist = []
-            while len(devices):
+            while True:
                 print('type \'cancel\' to cancel RAID/XFS setup.')
                 print('type \'done\' to finish selection. Selected: {}'.format(selected))
                 if len(dsklist) > 0:
