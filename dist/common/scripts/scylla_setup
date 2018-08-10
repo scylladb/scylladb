@@ -192,7 +192,8 @@ if __name__ == '__main__':
     fstrim_setup = not args.no_fstrim_setup
     selinux_reboot_required = False
 
-    colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
+    if interactive:
+        colorprint('{green}Skip any of the following steps by answering \'no\'{nocolor}')
 
     if is_ec2():
         if interactive:
