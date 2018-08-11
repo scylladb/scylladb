@@ -69,7 +69,7 @@ bool check(const sstring& pass, const sstring& salted_hash) {
     return tmp == salted_hash;
 }
 
-sstring gensalt() {
+sstring generate_salt() {
     static thread_local std::random_device rd{};
     static sstring prefix;
 
@@ -104,7 +104,7 @@ sstring gensalt() {
 }
 
 sstring hash(const sstring& pass) {
-    return hash(pass, gensalt());
+    return hash(pass, generate_salt());
 }
 
 }

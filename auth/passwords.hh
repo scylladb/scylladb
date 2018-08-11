@@ -45,12 +45,12 @@ public:
 ///
 /// \throws \ref no_supported_schemes when the state cannot be initialized with a supported hashing scheme.
 ///
-sstring gensalt();
+sstring generate_salt();
 
 ///
 /// Run a one-way hashing function on cleartext to produce encrypted text.
 ///
-/// Prior to applying the hashing function, random salt is amended to the cleartext with \ref gensalt.
+/// Prior to applying the hashing function, random salt is amended to the cleartext with \ref generate_salt.
 ///
 /// The result is the encrypted cyphertext, and also the salt used but in a implementation-specific format.
 ///
