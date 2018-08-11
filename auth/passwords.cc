@@ -102,11 +102,11 @@ static sstring generate_random_salt_bytes() {
     static const sstring valid_bytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
     static constexpr std::size_t num_bytes = 16;
     std::default_random_engine rng{rd()};
-    std::uniform_int_distribution<char> dist;
+    std::uniform_int_distribution<std::size_t> dist(0, valid_bytes.size() - 1);
     sstring result(num_bytes, 0);
 
     for (char& c : result) {
-        c = valid_bytes[dist(rng) % valid_bytes.size()];
+        c = valid_bytes[dist(rng)];
     }
 
     return result;
