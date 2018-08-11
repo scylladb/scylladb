@@ -46,12 +46,12 @@ extern "C" {
 // Until we decide this is needed, let's just use crypt_r,
 // and some old-fashioned random salt generation.
 
-namespace auth {
+namespace auth::passwords {
 
 static constexpr size_t rand_bytes = 16;
 static thread_local crypt_data tlcrypt = { 0, };
 
-static sstring hashpw(const sstring& pass, const sstring& salt) {
+static sstring hash(const sstring& pass, const sstring& salt) {
     auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
     if (!res || (res[0] == '*')) {
         throw std::system_error(errno, std::system_category());
@@ -59,8 +59,8 @@ static sstring hashpw(const sstring& pass, const sstring& salt) {
     return res;
 }
 
-bool checkpw(const sstring& pass, const sstring& salted_hash) {
-    auto tmp = hashpw(pass, salted_hash);
+bool check(const sstring& pass, const sstring& salted_hash) {
+    auto tmp = hash(pass, salted_hash);
     return tmp == salted_hash;
 }
 
@@ -98,8 +98,8 @@ sstring gensalt() {
     throw std::runtime_error("Could not initialize hashing algorithm");
 }
 
-sstring hashpw(const sstring& pass) {
-    return hashpw(pass, gensalt());
+sstring hash(const sstring& pass) {
+    return hash(pass, gensalt());
 }
 
 }

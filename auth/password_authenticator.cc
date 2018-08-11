@@ -136,7 +136,7 @@ future<> password_authenticator::create_default_if_missing() const {
                     update_row_query,
                     db::consistency_level::QUORUM,
                     internal_distributed_timeout_config(),
-                    {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
+                    {passwords::hash(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
                 plogger.info("Created default superuser authentication record.");
             });
         }
@@ -147,7 +147,7 @@ future<> password_authenticator::create_default_if_missing() const {
 
 future<> password_authenticator::start() {
      return once_among_shards([this] {
-         gensalt(); // do this once to determine usable hashing
+         passwords::gensalt(); // do this once to determine usable hashing
 
          auto f = create_metadata_table_if_missing(
                  meta::roles_table::name,
@@ -241,7 +241,7 @@ future<authenticated_user> password_authenticator::authenticate(
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
-            if (res->empty() || !checkpw(password, res->one().get_as<sstring>(SALTED_HASH))) {
+            if (res->empty() || !passwords::check(password, res->one().get_as<sstring>(SALTED_HASH))) {
                 throw exceptions::authentication_exception("Username and/or password are incorrect");
             }
             return make_ready_future<authenticated_user>(username);
@@ -264,7 +264,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
             update_row_query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {hashpw(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) const {
@@ -282,7 +282,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
             query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {hashpw(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::drop(stdx::string_view name) const {

@@ -25,12 +25,12 @@
 
 #include "seastarx.hh"
 
-namespace auth {
+namespace auth::passwords {
 
 sstring gensalt();
 
-sstring hashpw(const sstring& pass);
+sstring hash(const sstring& pass);
 
-bool checkpw(const sstring& pass, const sstring& salted_hash);
+bool check(const sstring& pass, const sstring& salted_hash);
 
 }
