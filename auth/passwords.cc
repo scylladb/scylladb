@@ -29,24 +29,6 @@ extern "C" {
 #include <unistd.h>
 }
 
-// TODO: blowfish
-// Origin uses Java bcrypt library, i.e. blowfish salt
-// generation and hashing, which is arguably a "better"
-// password hash than sha/md5 versions usually available in
-// crypt_r. Otoh, glibc 2.7+ uses a modified sha512 algo
-// which should be the same order of safe, so the only
-// real issue should be salted hash compatibility with
-// origin if importing system tables from there.
-//
-// Since bcrypt/blowfish is _not_ (afaict) not available
-// as a dev package/lib on most linux distros, we'd have to
-// copy and compile for example OWL  crypto
-// (http://cvsweb.openwall.com/cgi/cvsweb.cgi/Owl/packages/glibc/crypt_blowfish/)
-// to be fully bit-compatible.
-//
-// Until we decide this is needed, let's just use crypt_r,
-// and some old-fashioned random salt generation.
-
 namespace auth::passwords {
 
 static thread_local crypt_data tlcrypt = { 0, };

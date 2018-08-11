@@ -35,6 +35,10 @@ public:
     no_supported_schemes();
 };
 
+///
+/// Apache Cassandra uses a library to provide the bcrypt scheme. Many Linux implementations do not support bcrypt, so
+/// we support alternatives. The cost is loss of direct compatibility with Apache Cassandra system tables.
+///
 enum class scheme {
     bcrypt_y,
     bcrypt_a,
