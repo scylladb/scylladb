@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <random>
 #include <stdexcept>
 
 #include <seastar/core/sstring.hh>
@@ -42,16 +43,77 @@ enum class scheme {
     md5
 };
 
+namespace detail {
+
+template <typename RandomNumberEngine>
+sstring generate_random_salt_bytes(RandomNumberEngine& g) {
+    static const sstring valid_bytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
+    static constexpr std::size_t num_bytes = 16;
+    std::uniform_int_distribution<std::size_t> dist(0, valid_bytes.size() - 1);
+    sstring result(num_bytes, 0);
+
+    for (char& c : result) {
+        c = valid_bytes[dist(g)];
+    }
+
+    return result;
+}
+
+///
+/// Test each allowed hashing scheme and report the best supported one on the current system.
+///
+/// \throws \ref no_supported_schemes when none of the known schemes is supported.
+///
+scheme identify_best_supported_scheme();
+
+const char* prefix_for_scheme(scheme) noexcept;
+
+///
+/// Generate a implementation-specific salt string for hashing passwords.
+///
+/// The `RandomNumberEngine` is used to generate the string, which is an implementation-specific length.
+///
+/// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
+///
+template <typename RandomNumberEngine>
+sstring generate_salt(RandomNumberEngine& g) {
+    static const scheme scheme = identify_best_supported_scheme();
+    static const sstring prefix = sstring(prefix_for_scheme(scheme));
+    return prefix + generate_random_salt_bytes(g);
+}
+
+///
+/// Hash a password combined with an implementation-specific salt string.
+///
+/// \throws \ref std::system_error when an unexpected implementation-specific error occurs.
+///
+sstring hash_with_salt(const sstring& pass, const sstring& salt);
+
+} // namespace detail
+
+///
+/// Make and seed new random engine instance for generating random salt strings.
+///
+template <typename RandomNumberEngine = std::default_random_engine>
+RandomNumberEngine make_seeded_random_engine() {
+    static thread_local std::random_device rd{};
+    return RandomNumberEngine(rd());
+}
+
 ///
 /// Run a one-way hashing function on cleartext to produce encrypted text.
 ///
-/// Prior to applying the hashing function, random salt is amended to the cleartext.
+/// Prior to applying the hashing function, random salt is amended to the cleartext. The random salt bytes are generated
+/// according to the random number engine `g`.
 ///
 /// The result is the encrypted cyphertext, and also the salt used but in a implementation-specific format.
 ///
 /// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
 ///
-sstring hash(const sstring& pass);
+template <typename RandomNumberEngine>
+sstring hash(const sstring& pass, RandomNumberEngine& g) {
+    return detail::hash_with_salt(pass, detail::generate_salt(g));
+}
 
 ///
 /// Check that cleartext matches previously hashed cleartext with salt.
@@ -65,4 +127,4 @@ sstring hash(const sstring& pass);
 ///
 bool check(const sstring& pass, const sstring& salted_hash);
 
-}
+} // namespace auth::passwords

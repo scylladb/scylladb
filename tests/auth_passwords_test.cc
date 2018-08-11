@@ -31,6 +31,8 @@
 
 #include "seastarx.hh"
 
+static auto rng_for_salt = auth::passwords::make_seeded_random_engine();
+
 //
 // The same password hashed multiple times will result in different strings because the salt will be different.
 //
@@ -39,7 +41,7 @@ BOOST_AUTO_TEST_CASE(passwords_are_salted) {
     std::unordered_set<sstring> observed_passwords{};
 
     for (int i = 0; i < 10; ++i) {
-        const sstring e = auth::passwords::hash(cleartext);
+        const sstring e = auth::passwords::hash(cleartext, rng_for_salt);
         BOOST_REQUIRE_EQUAL(observed_passwords.count(e), 0);
         observed_passwords.insert(e);
     }
@@ -57,7 +59,7 @@ BOOST_AUTO_TEST_CASE(correct_passwords_authenticate) {
     };
 
     for (const char* p : passwords) {
-        BOOST_REQUIRE(auth::passwords::check(p, auth::passwords::hash(p)));
+        BOOST_REQUIRE(auth::passwords::check(p, auth::passwords::hash(p, rng_for_salt)));
     }
 }
 
@@ -65,6 +67,6 @@ BOOST_AUTO_TEST_CASE(correct_passwords_authenticate) {
 // A hashed password that does not match the password in cleartext does not authenticate.
 //
 BOOST_AUTO_TEST_CASE(incorrect_passwords_do_not_authenticate) {
-    const sstring hashed_password = auth::passwords::hash("actual_password");
+    const sstring hashed_password = auth::passwords::hash("actual_password", rng_for_salt);
     BOOST_REQUIRE(!auth::passwords::check("password_guess", hashed_password));
 }

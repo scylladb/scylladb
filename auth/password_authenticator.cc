@@ -78,6 +78,8 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
+static thread_local auto rng_for_salt = passwords::make_seeded_random_engine<std::default_random_engine>();
+
 password_authenticator::~password_authenticator() {
 }
 
@@ -136,7 +138,7 @@ future<> password_authenticator::create_default_if_missing() const {
                     update_row_query,
                     db::consistency_level::QUORUM,
                     internal_distributed_timeout_config(),
-                    {passwords::hash(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
+                    {passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt), DEFAULT_USER_NAME}).then([](auto&&) {
                 plogger.info("Created default superuser authentication record.");
             });
         }
@@ -262,7 +264,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
             update_row_query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {passwords::hash(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) const {
@@ -280,7 +282,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
             query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {passwords::hash(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::drop(stdx::string_view name) const {

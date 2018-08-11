@@ -23,7 +23,6 @@
 
 #include <cerrno>
 #include <optional>
-#include <random>
 
 extern "C" {
 #include <crypt.h>
@@ -52,35 +51,9 @@ namespace auth::passwords {
 
 static thread_local crypt_data tlcrypt = { 0, };
 
-no_supported_schemes::no_supported_schemes()
-        : std::runtime_error("No allowed hashing schemes are supported on this system") {
-}
+namespace detail {
 
-static sstring hash(const sstring& pass, const sstring& salt) {
-    auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
-    if (!res || (res[0] == '*')) {
-        throw std::system_error(errno, std::system_category());
-    }
-    return res;
-}
-
-static const char* prefix_for_scheme(scheme c) noexcept {
-    switch (c) {
-    case scheme::bcrypt_y: return "$2y$";
-    case scheme::bcrypt_a: return "$2a$";
-    case scheme::sha_512: return "$6$";
-    case scheme::sha_256: return "$5$";
-    case scheme::md5: return "$1$";
-    default: return nullptr;
-    }
-}
-
-///
-/// Test each allowed hashing scheme and report the best supported one on the current system.
-///
-/// \throws \ref no_supported_schemes when none of the known schemes is supported.
-///
-static scheme identify_best_supported_scheme() {
+scheme identify_best_supported_scheme() {
     const auto all_schemes = { scheme::bcrypt_y, scheme::bcrypt_a, scheme::sha_512, scheme::sha_256, scheme::md5 };
     // "Random", for testing schemes.
     const sstring random_part_of_salt = "aaaabbbbccccdddd";
@@ -97,41 +70,34 @@ static scheme identify_best_supported_scheme() {
     throw no_supported_schemes();
 }
 
-static sstring generate_random_salt_bytes() {
-    static thread_local std::random_device rd{};
-    static const sstring valid_bytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
-    static constexpr std::size_t num_bytes = 16;
-    std::default_random_engine rng{rd()};
-    std::uniform_int_distribution<std::size_t> dist(0, valid_bytes.size() - 1);
-    sstring result(num_bytes, 0);
-
-    for (char& c : result) {
-        c = valid_bytes[dist(rng)];
+sstring hash_with_salt(const sstring& pass, const sstring& salt) {
+    auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
+    if (!res || (res[0] == '*')) {
+        throw std::system_error(errno, std::system_category());
     }
+    return res;
+}
 
-    return result;
+const char* prefix_for_scheme(scheme c) noexcept {
+    switch (c) {
+    case scheme::bcrypt_y: return "$2y$";
+    case scheme::bcrypt_a: return "$2a$";
+    case scheme::sha_512: return "$6$";
+    case scheme::sha_256: return "$5$";
+    case scheme::md5: return "$1$";
+    default: return nullptr;
+    }
+}
+
+} // namespace detail
+
+no_supported_schemes::no_supported_schemes()
+        : std::runtime_error("No allowed hashing schemes are supported on this system") {
 }
 
 bool check(const sstring& pass, const sstring& salted_hash) {
-    auto tmp = hash(pass, salted_hash);
+    auto tmp = detail::hash_with_salt(pass, salted_hash);
     return tmp == salted_hash;
 }
 
-///
-/// Generate a implementation-specific salt string for hashing passwords.
-///
-/// The \ref std::default_random_engine is used to generate the string, which is an implementation-specific length.
-///
-/// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
-///
-static sstring generate_salt() {
-    static const scheme scheme = identify_best_supported_scheme();
-    static const sstring prefix = sstring(prefix_for_scheme(scheme));
-    return prefix + generate_random_salt_bytes();
-}
-
-sstring hash(const sstring& pass) {
-    return hash(pass, generate_salt());
-}
-
-}
+} // namespace auth::paswords
