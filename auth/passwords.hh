@@ -21,11 +21,18 @@
 
 #pragma once
 
+#include <stdexcept>
+
 #include <seastar/core/sstring.hh>
 
 #include "seastarx.hh"
 
 namespace auth::passwords {
+
+class no_supported_schemes : public std::runtime_error {
+public:
+    no_supported_schemes();
+};
 
 ///
 /// Generate a implementation-specific salt string for hashing passwords.
@@ -36,7 +43,7 @@ namespace auth::passwords {
 /// implementation-specific state of the other functions. After being invoked once, the function is thread-safe.
 /// However, the function must be invoked initially only by a single thread.
 ///
-/// \throws \ref std::runtime_error when the state cannot be initialized.
+/// \throws \ref no_supported_schemes when the state cannot be initialized with a supported hashing scheme.
 ///
 sstring gensalt();
 

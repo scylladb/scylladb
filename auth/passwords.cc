@@ -21,6 +21,7 @@
 
 #include "auth/passwords.hh"
 
+#include <cerrno>
 #include <random>
 
 extern "C" {
@@ -50,6 +51,10 @@ namespace auth::passwords {
 
 static constexpr size_t rand_bytes = 16;
 static thread_local crypt_data tlcrypt = { 0, };
+
+no_supported_schemes::no_supported_schemes()
+        : std::runtime_error("No allowed hashing schemes are supported on this system") {
+}
 
 static sstring hash(const sstring& pass, const sstring& salt) {
     auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
@@ -95,7 +100,7 @@ sstring gensalt() {
             return salt;
         }
     }
-    throw std::runtime_error("Could not initialize hashing algorithm");
+    throw no_supported_schemes();
 }
 
 sstring hash(const sstring& pass) {
