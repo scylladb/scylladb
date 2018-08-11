@@ -947,6 +947,7 @@ if args.alloc_failure_injector:
     seastar_flags += ['--enable-alloc-failure-injector']
 
 seastar_cflags = args.user_cflags
+seastar_cflags += ' -gz'
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
