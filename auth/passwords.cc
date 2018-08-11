@@ -50,7 +50,6 @@ extern "C" {
 
 namespace auth::passwords {
 
-static constexpr size_t rand_bytes = 16;
 static thread_local crypt_data tlcrypt = { 0, };
 
 no_supported_schemes::no_supported_schemes()
@@ -98,6 +97,21 @@ static scheme identify_best_supported_scheme() {
     throw no_supported_schemes();
 }
 
+static sstring generate_random_salt_bytes() {
+    static thread_local std::random_device rd{};
+    static const sstring valid_bytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
+    static constexpr std::size_t num_bytes = 16;
+    std::default_random_engine rng{rd()};
+    std::uniform_int_distribution<char> dist;
+    sstring result(num_bytes, 0);
+
+    for (char& c : result) {
+        c = valid_bytes[dist(rng) % valid_bytes.size()];
+    }
+
+    return result;
+}
+
 bool check(const sstring& pass, const sstring& salted_hash) {
     auto tmp = hash(pass, salted_hash);
     return tmp == salted_hash;
@@ -111,21 +125,9 @@ bool check(const sstring& pass, const sstring& salted_hash) {
 /// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
 ///
 static sstring generate_salt() {
-    static thread_local std::random_device rd{};
     static const scheme scheme = identify_best_supported_scheme();
     static const sstring prefix = sstring(prefix_for_scheme(scheme));
-
-    std::default_random_engine e1{rd()};
-    std::uniform_int_distribution<char> dist;
-
-    sstring valid_salt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
-    sstring input(rand_bytes, 0);
-
-    for (char&c : input) {
-        c = valid_salt[dist(e1) % valid_salt.size()];
-    }
-
-    return prefix + input;
+    return prefix + generate_random_salt_bytes();
 }
 
 sstring hash(const sstring& pass) {
