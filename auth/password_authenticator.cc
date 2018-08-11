@@ -147,8 +147,6 @@ future<> password_authenticator::create_default_if_missing() const {
 
 future<> password_authenticator::start() {
      return once_among_shards([this] {
-         passwords::generate_salt(); // do this once to determine usable hashing
-
          auto f = create_metadata_table_if_missing(
                  meta::roles_table::name,
                  _qp,

@@ -34,23 +34,18 @@ public:
     no_supported_schemes();
 };
 
-///
-/// Generate a implementation-specific salt string for hashing passwords.
-///
-/// The \ref std::default_random_engine is used to generate the string, which is an implementation-specific length.
-///
-/// \note This function must be invoked once prior to invoking \ref hash or \ref check in order to initialize the
-/// implementation-specific state of the other functions. After being invoked once, the function is thread-safe.
-/// However, the function must be invoked initially only by a single thread.
-///
-/// \throws \ref no_supported_schemes when the state cannot be initialized with a supported hashing scheme.
-///
-sstring generate_salt();
+enum class scheme {
+    bcrypt_y,
+    bcrypt_a,
+    sha_512,
+    sha_256,
+    md5
+};
 
 ///
 /// Run a one-way hashing function on cleartext to produce encrypted text.
 ///
-/// Prior to applying the hashing function, random salt is amended to the cleartext with \ref generate_salt.
+/// Prior to applying the hashing function, random salt is amended to the cleartext.
 ///
 /// The result is the encrypted cyphertext, and also the salt used but in a implementation-specific format.
 ///

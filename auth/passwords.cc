@@ -22,6 +22,7 @@
 #include "auth/passwords.hh"
 
 #include <cerrno>
+#include <optional>
 #include <random>
 
 extern "C" {
@@ -64,14 +65,55 @@ static sstring hash(const sstring& pass, const sstring& salt) {
     return res;
 }
 
+static const char* prefix_for_scheme(scheme c) noexcept {
+    switch (c) {
+    case scheme::bcrypt_y: return "$2y$";
+    case scheme::bcrypt_a: return "$2a$";
+    case scheme::sha_512: return "$6$";
+    case scheme::sha_256: return "$5$";
+    case scheme::md5: return "$1$";
+    default: return nullptr;
+    }
+}
+
+///
+/// Test each allowed hashing scheme and report the best supported one on the current system.
+///
+/// \throws \ref no_supported_schemes when none of the known schemes is supported.
+///
+static scheme identify_best_supported_scheme() {
+    const auto all_schemes = { scheme::bcrypt_y, scheme::bcrypt_a, scheme::sha_512, scheme::sha_256, scheme::md5 };
+    // "Random", for testing schemes.
+    const sstring random_part_of_salt = "aaaabbbbccccdddd";
+
+    for (scheme c : all_schemes) {
+        const sstring salt = sstring(prefix_for_scheme(c)) + random_part_of_salt;
+        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
+
+        if (e && (e[0] != '*')) {
+            return c;
+        }
+    }
+
+    throw no_supported_schemes();
+}
+
 bool check(const sstring& pass, const sstring& salted_hash) {
     auto tmp = hash(pass, salted_hash);
     return tmp == salted_hash;
 }
 
-sstring generate_salt() {
+///
+/// Generate a implementation-specific salt string for hashing passwords.
+///
+/// The \ref std::default_random_engine is used to generate the string, which is an implementation-specific length.
+///
+/// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
+///
+static sstring generate_salt() {
     static thread_local std::random_device rd{};
-    static sstring prefix;
+    static const scheme scheme = identify_best_supported_scheme();
+    static const sstring prefix = sstring(prefix_for_scheme(scheme));
 
     std::default_random_engine e1{rd()};
     std::uniform_int_distribution<char> dist;
@@ -83,24 +125,7 @@ sstring generate_salt() {
         c = valid_salt[dist(e1) % valid_salt.size()];
     }
 
-    sstring salt;
-
-    if (!prefix.empty()) {
-        return prefix + input;
-    }
-
-    // Try in order:
-    // blowfish 2011 fix, blowfish, sha512, sha256, md5
-    for (sstring pfx : { "$2y$", "$2a$", "$6$", "$5$", "$1$" }) {
-        salt = pfx + input;
-        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
-
-        if (e && (e[0] != '*')) {
-            prefix = pfx;
-            return salt;
-        }
-    }
-    throw no_supported_schemes();
+    return prefix + input;
 }
 
 sstring hash(const sstring& pass) {
