@@ -322,6 +322,8 @@ private:
             throw malformed_sstable_exception("consumer not at partition boundary", _sst->get_filename());
         }
 
+        _sst->get_stats().on_partition_read();
+
         // It's better to obtain partition information from the index if we already have it.
         // We can save on IO if the user will skip past the front of partition immediately.
         //

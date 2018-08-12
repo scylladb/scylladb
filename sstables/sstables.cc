@@ -4298,6 +4298,8 @@ future<> init_metrics() {
             sm::description("Number of partition range flat mutation reads")),
         sm::make_derive("sstable_partition_reads", [] { return sstables_stats::get_shard_stats().sstable_partition_reads; },
             sm::description("Number of whole sstable flat mutation reads")),
+        sm::make_derive("partition_reads", [] { return sstables_stats::get_shard_stats().partition_reads; },
+            sm::description("Number of partitions read")),
     });
   });
 }
