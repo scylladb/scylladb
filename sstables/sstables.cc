@@ -3495,22 +3495,29 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
 }
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+    _impl->_sst.get_stats().on_partition_write();
     return _impl->consume_new_partition(dk);
 }
 
 void sstable_writer::consume(tombstone t) {
+    _impl->_sst.get_stats().on_tombstone_write();
     return _impl->consume(t);
 }
 
 stop_iteration sstable_writer::consume(static_row&& sr) {
+    if (!sr.empty()) {
+        _impl->_sst.get_stats().on_static_row_write();
+    }
     return _impl->consume(std::move(sr));
 }
 
 stop_iteration sstable_writer::consume(clustering_row&& cr) {
+    _impl->_sst.get_stats().on_row_write();
     return _impl->consume(std::move(cr));
 }
 
 stop_iteration sstable_writer::consume(range_tombstone&& rt) {
+    _impl->_sst.get_stats().on_range_tombstone_write();
     return _impl->consume(std::move(rt));
 }
 
@@ -4246,6 +4253,7 @@ delete_atomically(std::vector<shared_sstable> ssts, const db::large_partition_ha
     return delete_sstables(std::move(sstables_to_delete_atomically));
 }
 
+thread_local sstables_stats::stats sstables_stats::_shard_stats;
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
 static thread_local seastar::metrics::metric_groups metrics;
 
@@ -4259,6 +4267,17 @@ future<> init_metrics() {
             sm::description("Index page requests which initiated a read from disk")),
         sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+
+        sm::make_derive("partition_writes", [] { return sstables_stats::get_shard_stats().partition_writes; },
+            sm::description("Number of partitions written")),
+        sm::make_derive("static_row_writes", [] { return sstables_stats::get_shard_stats().static_row_writes; },
+            sm::description("Number of static rows written")),
+        sm::make_derive("row_writes", [] { return sstables_stats::get_shard_stats().row_writes; },
+            sm::description("Number of clustering rows written")),
+        sm::make_derive("tombstone_writes", [] { return sstables_stats::get_shard_stats().tombstone_writes; },
+            sm::description("Number of tombstones written")),
+        sm::make_derive("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
+            sm::description("Number of range tombstones written")),
     });
   });
 }
