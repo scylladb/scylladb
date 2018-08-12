@@ -775,7 +775,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, req
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
-    tracing::add_query(query_state.get_trace_state(), query.to_string());
+    tracing::add_query(query_state.get_trace_state(), query);
     tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
 
     tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
@@ -909,7 +909,7 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 
         switch (kind) {
         case 0: {
-            auto query = in.read_long_string_view().to_string();
+            auto query = in.read_long_string_view();
             stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
             ps = stmt_ptr->checked_weak_from_this();
             tracing::add_query(client_state.get_trace_state(), query);
