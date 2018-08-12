@@ -36,6 +36,7 @@ class sstables_stats {
         uint64_t range_partition_reads = 0;
         uint64_t sstable_partition_reads = 0;
         uint64_t partition_reads = 0;
+        uint64_t partition_seeks = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -87,6 +88,10 @@ public:
 
     inline void on_partition_read() {
         ++_stats.partition_reads;
+    }
+
+    inline void on_partition_seek() {
+        ++_stats.partition_seeks;
     }
 };
 

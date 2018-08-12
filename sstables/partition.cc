@@ -269,7 +269,9 @@ private:
                 return make_ready_future<>();
             }
             assert(_index_reader->element_kind() == indexable_element::partition);
-            return _context->skip_to(_index_reader->element_kind(), start);
+            return _context->skip_to(_index_reader->element_kind(), start).then([this] {
+                _sst->get_stats().on_partition_seek();
+            });
         });
     }
     future<> read_from_index() {
@@ -381,6 +383,7 @@ private:
                     return make_ready_future<>();
                 }
                 return _context->skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                    _sst->get_stats().on_partition_seek();
                     set_range_tombstone_start_from_end_open_marker(_consumer, *_schema, idx);
                 });
             });
