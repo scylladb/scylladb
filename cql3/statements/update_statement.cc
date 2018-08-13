@@ -218,18 +218,17 @@ insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_
 dht::partition_range_vector
 insert_prepared_json_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) {
     dht::partition_range_vector ranges;
+    std::vector<bytes_opt> exploded;
     for (const auto& def : s->partition_key_columns()) {
         auto json_value = json_cache->at(def.name_as_text());
         if (!json_value) {
             throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
         }
-        auto k = query::range<partition_key>::make_singular(partition_key::from_single_value(*s, *json_value));
-        ranges.emplace_back(std::move(k).transform(
-                    [this] (partition_key&& k) -> query::ring_position {
-                        auto token = dht::global_partitioner().get_token(*s, k);
-                        return { std::move(token), std::move(k) };
-                    }));
+        exploded.emplace_back(*json_value);
     }
+    auto pkey = partition_key::from_optional_exploded(*s, std::move(exploded));
+    auto k = query::range<query::ring_position>::make_singular(dht::global_partitioner().decorate_key(*s, std::move(pkey)));
+    ranges.emplace_back(std::move(k));
     return ranges;
 }
 
