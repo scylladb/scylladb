@@ -2889,6 +2889,30 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
                 decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(345) }),
             }
         });
+
+        e.execute_cql("CREATE TABLE multi_column_pk_table (p1 int, p2 int, p3 int, c1 int, c2 int, v int, PRIMARY KEY((p1, p2, p3), c1, c2));").get();
+        e.require_table_exists("ks", "multi_column_pk_table").get();
+
+        e.execute_cql("INSERT INTO multi_column_pk_table JSON '"
+                "{\"p1\": 1, "
+                "\"p2\": 2, "
+                "\"p3\": 3, "
+                "\"c1\": 4, "
+                "\"c2\": 5, "
+                "\"v\": 6 "
+                "}'").get();
+
+        msg = e.execute_cql("SELECT * FROM multi_column_pk_table").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(3),
+                int32_type->decompose(4),
+                int32_type->decompose(5),
+                int32_type->decompose(6)
+            }
+        });
     });
 }
 
