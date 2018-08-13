@@ -82,10 +82,10 @@ concept bool RowConsumer() {
         { t.io_priority() } -> const io_priority_class&;
         { t.is_mutation_end() } -> bool;
         { t.setup_for_partition(pk) } -> void;
-        { t.get_mutation() } -> stdx::optional<new_mutation>;
+        { t.get_mutation() } -> std::optional<new_mutation>;
         { t.push_ready_fragments() } -> row_consumer::proceed;
-        { t.maybe_skip() } -> stdx::optional<position_in_partition_view>;
-        { t.fast_forward_to(std::move(cr), timeout) } -> stdx::optional<position_in_partition_view>;
+        { t.maybe_skip() } -> std::optional<position_in_partition_view>;
+        { t.fast_forward_to(std::move(cr), timeout) } -> std::optional<position_in_partition_view>;
     };
 }
 )
@@ -107,7 +107,7 @@ class sstable_mutation_reader : public mp_row_consumer_reader {
     std::function<future<> ()> _initialize;
     streamed_mutation::forwarding _fwd;
     read_monitor& _monitor;
-    stdx::optional<dht::decorated_key> _current_partition_key;
+    std::optional<dht::decorated_key> _current_partition_key;
     bool _partition_finished = true;
 public:
     sstable_mutation_reader(shared_sstable sst, schema_ptr schema,
@@ -326,7 +326,7 @@ private:
             return read_partition();
         });
     }
-    future<> advance_context(stdx::optional<position_in_partition_view> pos) {
+    future<> advance_context(std::optional<position_in_partition_view> pos) {
         if (!pos) {
             return make_ready_future<>();
         }

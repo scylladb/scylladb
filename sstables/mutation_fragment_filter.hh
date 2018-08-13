@@ -99,7 +99,7 @@ public:
         return _out_of_range;
     }
 
-    stdx::optional<position_in_partition_view> maybe_skip() {
+    std::optional<position_in_partition_view> maybe_skip() {
         if (!is_current_range_changed()) {
             return {};
         }
@@ -113,7 +113,7 @@ public:
      * Returned optional is engaged iff the input range overlaps with any of the
      * query ranges tracked by _walker.
      */
-    stdx::optional<position_in_partition_view> fast_forward_to(position_range r) {
+    std::optional<position_in_partition_view> fast_forward_to(position_range r) {
         assert(_fwd);
         _walker.trim_front(r.start());
         _fwd_end = std::move(r).end();
