@@ -209,7 +209,10 @@ insert_prepared_json_statement::build_partition_keys(const query_options& option
     dht::partition_range_vector ranges;
     for (const auto& def : s->partition_key_columns()) {
         auto json_value = json_cache->at(def.name_as_text());
-        auto k = query::range<partition_key>::make_singular(partition_key::from_single_value(*s, json_value.value()));
+        if (!json_value) {
+            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
+        }
+        auto k = query::range<partition_key>::make_singular(partition_key::from_single_value(*s, *json_value));
         ranges.emplace_back(std::move(k).transform(
                     [this] (partition_key&& k) -> query::ring_position {
                         auto token = dht::global_partitioner().get_token(*s, k);
@@ -224,7 +227,10 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
     std::vector<bytes_opt> exploded;
     for (const auto& def : s->clustering_key_columns()) {
         auto json_value = json_cache->at(def.name_as_text());
-        exploded.emplace_back(json_value.value());
+        if (!json_value) {
+            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
+        }
+        exploded.emplace_back(*json_value);
     }
     auto k = query::range<clustering_key_prefix>::make_singular(clustering_key_prefix::from_optional_exploded(*s, std::move(exploded)));
     ranges.emplace_back(query::clustering_range(std::move(k)));
