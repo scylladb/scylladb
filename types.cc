@@ -239,6 +239,9 @@ struct integer_type_impl : simple_type_impl<T> {
         return to_sstring(compose_value(b));
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
+        if (value.isString()) {
+            return from_string(value.asString());
+        }
         return this->decompose(T(json::to_int64_t(value)));
     }
 };
@@ -1416,8 +1419,11 @@ struct floating_type_impl : public simple_type_impl<T> {
         return to_sstring(this->from_value(v));
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
+        if (value.isString()) {
+            return from_string(value.asString());
+        }
         if (!value.isDouble()) {
-            throw marshal_exception("JSON value must be represented as double");
+            throw marshal_exception("JSON value must be represented as double or string");
         }
         if constexpr (std::is_same<T, float>::value) {
             return this->decompose(value.asFloat());
