@@ -360,7 +360,7 @@ public:
 
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_mutations_locally(
-        schema_ptr, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges&,
+        schema_ptr, lw_shared_ptr<query::read_command> cmd, const ::compat::one_or_two_partition_ranges&,
         clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr,
         uint64_t max_size = query::result_memory_limiter::maximum_result_size);

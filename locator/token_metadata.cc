@@ -351,7 +351,7 @@ dht::token_range_vector token_metadata::get_primary_ranges_for(std::unordered_se
     ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
         auto left = get_predecessor(right);
-        compat::unwrap_into(
+        ::compat::unwrap_into(
                 wrapping_range<token>(range_bound<token>(left, false), range_bound<token>(right)),
                 dht::token_comparator(),
                 [&] (auto&& rng) { ranges.push_back(std::move(rng)); });

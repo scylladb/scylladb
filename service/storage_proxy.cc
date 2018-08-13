@@ -3989,7 +3989,7 @@ void storage_proxy::init_messaging_service() {
             return netw::messaging_service::no_wait();
         });
     });
-    ms.register_read_data([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ms.register_read_data([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -3999,11 +3999,11 @@ void storage_proxy::init_messaging_service() {
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size, t] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size, t] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->_stats.replica_data_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, da, &pr, &p, &trace_state_ptr, max_size, t] (schema_ptr s) {
-                auto pr2 = compat::unwrap(std::move(pr), *s);
+                auto pr2 = ::compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DATA called with wrapping range");
@@ -4018,7 +4018,7 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_read_mutation_data([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, compat::wrapping_partition_range pr) {
+    ms.register_read_mutation_data([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -4030,16 +4030,16 @@ void storage_proxy::init_messaging_service() {
         return do_with(std::move(pr),
                        get_local_shared_storage_proxy(),
                        std::move(trace_state_ptr),
-                       compat::one_or_two_partition_ranges({}),
+                       ::compat::one_or_two_partition_ranges({}),
                        [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), max_size, t] (
-                               compat::wrapping_partition_range& pr,
+                               ::compat::wrapping_partition_range& pr,
                                shared_ptr<storage_proxy>& p,
                                tracing::trace_state_ptr& trace_state_ptr,
-                               compat::one_or_two_partition_ranges& unwrapped) mutable {
+                               ::compat::one_or_two_partition_ranges& unwrapped) mutable {
             p->_stats.replica_mutation_data_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size, &unwrapped, t] (schema_ptr s) mutable {
-                unwrapped = compat::unwrap(std::move(pr), *s);
+                unwrapped = ::compat::unwrap(std::move(pr), *s);
                 auto timeout = t ? *t : db::no_timeout;
                 return p->query_mutations_locally(std::move(s), std::move(cmd), unwrapped, timeout, trace_state_ptr, max_size);
             }).finally([&trace_state_ptr, src_ip] () mutable {
@@ -4047,7 +4047,7 @@ void storage_proxy::init_messaging_service() {
             });
         });
     });
-    ms.register_read_digest([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
+    ms.register_read_digest([] (const rpc::client_info& cinfo, rpc::opt_time_point t, query::read_command cmd, ::compat::wrapping_partition_range pr, rpc::optional<query::digest_algorithm> oda) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = netw::messaging_service::get_source(cinfo);
         if (cmd.trace_info) {
@@ -4057,11 +4057,11 @@ void storage_proxy::init_messaging_service() {
         }
         auto da = oda.value_or(query::digest_algorithm::MD5);
         auto max_size = cinfo.retrieve_auxiliary<uint64_t>("max_result_size");
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size, t] (compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), std::move(trace_state_ptr), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd)), src_addr = std::move(src_addr), da, max_size, t] (::compat::wrapping_partition_range& pr, shared_ptr<storage_proxy>& p, tracing::trace_state_ptr& trace_state_ptr) mutable {
             p->_stats.replica_digest_reads++;
             auto src_ip = src_addr.addr;
             return get_schema_for_read(cmd->schema_version, std::move(src_addr)).then([cmd, &pr, &p, &trace_state_ptr, max_size, t, da] (schema_ptr s) {
-                auto pr2 = compat::unwrap(std::move(pr), *s);
+                auto pr2 = ::compat::unwrap(std::move(pr), *s);
                 if (pr2.second) {
                     // this function assumes singular queries but doesn't validate
                     throw std::runtime_error("READ_DIGEST called with wrapping range");
@@ -4294,7 +4294,7 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
-storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const compat::one_or_two_partition_ranges& pr,
+storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const ::compat::one_or_two_partition_ranges& pr,
                                        storage_proxy::clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state, uint64_t max_size) {
     if (!pr.second) {

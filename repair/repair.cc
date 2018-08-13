@@ -1174,7 +1174,7 @@ private:
             auto rng = wrapping_range<dht::token>(
                     ::range<dht::token>::bound(tok_start, false),
                     ::range<dht::token>::bound(tok_end, true));
-            compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (dht::token_range&& x) {
+            ::compat::unwrap_into(std::move(rng), dht::token_comparator(), [&] (dht::token_range&& x) {
                 var.push_back(std::move(x));
             });
         }
