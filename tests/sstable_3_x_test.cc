@@ -498,7 +498,7 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
 
         r.produces_partition_end()
             .produces_end_of_stream();
-        BOOST_REQUIRE_EQUAL(aio_reads_tracker(), max_reads);
+        BOOST_REQUIRE(aio_reads_tracker() < max_reads);
     }
     // forwarding read
     {

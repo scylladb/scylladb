@@ -824,17 +824,22 @@ class mp_row_consumer_m : public consumer_m {
         sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_row={})", this, *_in_progress_row);
         auto action = _mf_filter->apply(*_in_progress_row);
         switch (action) {
-            case mutation_fragment_filter::result::emit:
-                _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
-                break;
-            case mutation_fragment_filter::result::ignore:
+        case mutation_fragment_filter::result::emit:
+            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
+            break;
+        case mutation_fragment_filter::result::ignore:
+            {
                 _in_progress_row.reset();
-                break;
-            case mutation_fragment_filter::result::store_and_finish:
-                return proceed::no;
+                if (_mf_filter->is_current_range_changed()) {
+                    return proceed::no;
+                }
+            }
+            break;
+        case mutation_fragment_filter::result::store_and_finish:
+            return proceed::no;
         }
 
-        return proceed::yes;
+        return proceed(!_reader->is_buffer_full());
     }
 
 public:
@@ -879,8 +884,10 @@ public:
     }
 
     stdx::optional<position_in_partition_view> maybe_skip() {
-        // FIXME: skipping using index is not implemented yet
-        return {};
+        if (!_mf_filter) {
+            return {};
+        }
+        return _mf_filter->maybe_skip();
     }
 
     bool is_mutation_end() const {
@@ -1039,10 +1046,7 @@ public:
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
 
-            auto should_proceed = maybe_push_row();
-            if (should_proceed == proceed::no) {
-                return proceed::no;
-            }
+            return maybe_push_row();
         }
 
         return proceed(!_reader->is_buffer_full());
