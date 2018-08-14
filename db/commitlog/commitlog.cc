@@ -313,7 +313,7 @@ public:
     uint64_t get_num_dirty_segments() const;
     uint64_t get_num_active_segments() const;
 
-    using buffer_type = temporary_buffer<char>;
+    using buffer_type = fragmented_temporary_buffer;
 
     buffer_type acquire_buffer(size_t s);
 
@@ -347,8 +347,8 @@ private:
     uint64_t _new_counter = 0;
 };
 
-template<typename T>
-static void write(seastar::simple_memory_output_stream& out, T value) {
+template<typename T, typename Output>
+static void write(Output& out, T value) {
     auto v = net::hton(value);
     out.write(reinterpret_cast<const char*>(&v), sizeof(v));
 }
@@ -415,7 +415,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     using time_point = segment_manager::time_point;
 
     buffer_type _buffer;
-    simple_memory_output_stream _buffer_ostream;
+    fragmented_temporary_buffer::ostream _buffer_ostream;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     time_point _sync_time;
     seastar::gate _gate;
@@ -430,7 +430,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     friend class segment_manager;
 
     size_t buffer_position() const {
-        return _buffer.size() - _buffer_ostream.size();
+        return _buffer.size_bytes() - _buffer_ostream.size();
     }
 
     future<> begin_flush() {
@@ -479,7 +479,7 @@ public:
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
-            _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
+            _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size_bytes());
             _segment_manager->add_file_to_delete(_file_name, _desc);
         } else {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
@@ -621,7 +621,7 @@ public:
         auto k = std::max(a, default_size);
 
         _buffer = _segment_manager->acquire_buffer(k);
-        _buffer_ostream = seastar::simple_memory_output_stream(_buffer.get_write(), _buffer.size());
+        _buffer_ostream = _buffer.get_ostream();
         auto out = _buffer_ostream.write_substream(overhead);
         out.fill('\0', overhead);
         _segment_manager->totals.total_size += k;
@@ -641,7 +641,7 @@ public:
         }
 
         auto size = clear_buffer_slack();
-        auto buf = std::move(_buffer);
+        auto buf = std::exchange(_buffer, { });
         auto off = _file_pos;
         auto top = off + size;
         auto num = _num_allocs;
@@ -653,7 +653,7 @@ public:
         auto me = shared_from_this();
         assert(me.use_count() > 1);
 
-        auto out = seastar::simple_memory_output_stream(buf.get_write(), buf.size());
+        auto out = buf.get_ostream();
 
         auto header_size = 0;
 
@@ -688,24 +688,29 @@ public:
         // The write will be allowed to start now, but flush (below) must wait for not only this,
         // but all previous write/flush pairs.
         return _pending_ops.run_with_ordered_post_op(rp, [this, size, off, buf = std::move(buf)]() mutable { ///////////////////////////////////////////////////
-                auto written = make_lw_shared<size_t>(0);
-                auto p = buf.get();
-                return repeat([this, size, off, written, p]() mutable {
+            auto view = fragmented_temporary_buffer::view(buf);
+            return do_with(off, view, [&] (uint64_t& off, fragmented_temporary_buffer::view& view) {
+                if (view.empty()) {
+                    return make_ready_future<>();
+                }
+                return repeat([this, size, &off, &view] {
                     auto&& priority_class = service::get_local_commitlog_priority();
-                    return _file.dma_write(off + *written, p + *written, size - *written, priority_class).then_wrapped([this, size, written](future<size_t>&& f) {
+                    auto current = *view.begin();
+                    return _file.dma_write(off, current.data(), current.size(), priority_class).then_wrapped([this, size, &off, &view](future<size_t>&& f) {
                         try {
                             auto bytes = std::get<0>(f.get());
-                            *written += bytes;
                             _segment_manager->totals.bytes_written += bytes;
                             _segment_manager->totals.total_size_on_disk += bytes;
                             ++_segment_manager->totals.cycle_count;
-                            if (*written == size) {
+                            if (bytes == view.size_bytes()) {
                                 return make_ready_future<stop_iteration>(stop_iteration::yes);
                             }
                             // gah, partial write. should always get here with dma chunk sized
                             // "bytes", but lets make sure...
-                            clogger.debug("Partial write {}: {}/{} bytes", *this, *written, size);
-                            *written = align_down(*written, alignment);
+                            bytes = align_down(bytes, alignment);
+                            off += bytes;
+                            view.remove_prefix(bytes);
+                            clogger.debug("Partial write {}: {}/{} bytes", *this, size - view.size_bytes(), size);
                             return make_ready_future<stop_iteration>(stop_iteration::no);
                             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                             // we fast-fail the whole commit.
@@ -714,9 +719,10 @@ public:
                             throw;
                         }
                     });
-                }).finally([this, buf = std::move(buf), size]() mutable {
-                    _segment_manager->notify_memory_written(size);
                 });
+            }).finally([this, buf = std::move(buf), size] {
+                    _segment_manager->notify_memory_written(size);
+            });
         }, [me, flush_after, top, rp] { // lambda instead of bind, so we keep "me" alive.
             assert(me->_pending_ops.has_operation(rp));
             return flush_after ? me->do_flush(top) : make_ready_future<sseg_ptr>(me);
@@ -824,7 +830,9 @@ public:
         auto entry_out = out.write_substream(size);
         auto entry_data = entry_out.to_input_stream();
         writer->write(*this, entry_out);
-        crc.process_fragmented(ser::buffer_view<std::vector<temporary_buffer<char>>::iterator>(entry_data));
+        entry_data.with_stream([&] (auto data_str) {
+            crc.process_fragmented(ser::buffer_view<typename std::vector<temporary_buffer<char>>::iterator>(data_str));
+        });
 
         write<uint32_t>(out, crc.checksum());
 
@@ -1506,12 +1514,20 @@ uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
 
 
 db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
-    auto a = ::memalign(segment::alignment, s);
-    if (a == nullptr) {
-        throw std::bad_alloc();
+    s = align_up(s, segment::default_size);
+    auto fragment_count = s / segment::default_size;
+
+    std::vector<temporary_buffer<char>> buffers;
+    buffers.reserve(fragment_count);
+    while (buffers.size() < fragment_count) {
+        auto a = ::memalign(segment::alignment, segment::default_size);
+        if (a == nullptr) {
+            throw std::bad_alloc();
+        }
+        buffers.emplace_back(static_cast<char*>(a), segment::default_size, make_free_deleter(a));
     }
     clogger.trace("Allocated {} k buffer", s / 1024);
-    return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
+    return fragmented_temporary_buffer(std::move(buffers), s);
 }
 
 /**

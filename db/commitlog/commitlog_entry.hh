@@ -71,7 +71,7 @@ public:
         return _mutation.representation().size();
     }
 
-    void write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::const_iterator>::simple& out) const;
+    void write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::iterator>& out) const;
 };
 
 class commitlog_entry_reader {
