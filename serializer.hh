@@ -79,7 +79,8 @@ public:
         iterator& operator++() {
             _left -= _current.size();
             if (_left) {
-                auto next_view = *_next;
+                auto next_view = bytes_view(reinterpret_cast<const bytes::value_type*>((*_next).begin()),
+                                            (*_next).size());
                 auto next_size = std::min(_left, next_view.size());
                 _current = bytes_view(next_view.data(), next_size);
                 ++_next;
