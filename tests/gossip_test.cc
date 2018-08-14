@@ -42,7 +42,7 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
         service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks)).get();
         db.start().get();
-        netw::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false /* don't bind */).get();
         gms::get_failure_detector().start().get();
 
         gms::get_gossiper().start().get();
