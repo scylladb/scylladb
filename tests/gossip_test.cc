@@ -23,6 +23,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <seastar/util/defer.hh>
+
 #include "tests/test-utils.hh"
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
@@ -39,18 +41,23 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         sharded<auth::service> auth_service;
         sharded<db::system_distributed_keyspace> sys_dist_ks;
         utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
+
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
-        service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks)).get();
-        db.start().get();
+        auto stop_snitch = defer([&] { gms::get_failure_detector().stop().get(); });
+
         netw::get_messaging_service().start(gms::inet_address("127.0.0.1"), 7000, false /* don't bind */).get();
+        auto stop_messaging_service = defer([&] { netw::get_messaging_service().stop().get(); });
+
+        service::get_storage_service().start(std::ref(db), std::ref(auth_service), std::ref(sys_dist_ks)).get();
+        auto stop_ss = defer([&] { service::get_storage_service().stop().get(); });
+
+        db.start().get();
+        auto stop_db = defer([&] { db.stop().get(); });
+
         gms::get_failure_detector().start().get();
+        auto stop_failure_detector = defer([&] { gms::get_failure_detector().stop().get(); });
 
         gms::get_gossiper().start().get();
-        gms::get_gossiper().stop().get();
-        gms::get_failure_detector().stop().get();
-        db.stop().get();
-        service::get_storage_service().stop().get();
-        netw::get_messaging_service().stop().get();
-        locator::i_endpoint_snitch::stop_snitch().get();
+        auto stop_gossiper = defer([&] { gms::get_gossiper().stop().get(); });
     });
 }
