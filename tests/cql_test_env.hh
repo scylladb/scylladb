@@ -109,7 +109,7 @@ future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func);
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config&);
 
 template<typename EventuallySucceedingFunction>
-static void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 10) {
+static void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 12) {
     size_t attempts = 0;
     while (true) {
         try {
