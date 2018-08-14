@@ -209,19 +209,18 @@ void query_options::prepare(const std::vector<::shared_ptr<column_specification>
     }
 
     auto& names = *_names;
-    std::vector<cql3::raw_value> ordered_values;
+    std::vector<cql3::raw_value_view> ordered_values;
     ordered_values.reserve(specs.size());
     for (auto&& spec : specs) {
         auto& spec_name = spec->name->text();
         for (size_t j = 0; j < names.size(); j++) {
             if (names[j] == spec_name) {
-                ordered_values.emplace_back(_values[j]);
+                ordered_values.emplace_back(_value_views[j]);
                 break;
             }
         }
     }
-    _values = std::move(ordered_values);
-    fill_value_views();
+    _value_views = std::move(ordered_values);
 }
 
 void query_options::fill_value_views()
