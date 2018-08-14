@@ -153,4 +153,44 @@ inline frame<seastar::simple_output_stream> start_frame(seastar::simple_output_s
     return frame<seastar::simple_output_stream>(substream, start);
 }
 
+template<typename Iterator>
+class place_holder<seastar::memory_output_stream<Iterator>> {
+    seastar::memory_output_stream<Iterator> _substream;
+public:
+    place_holder(seastar::memory_output_stream<Iterator> substream)
+        : _substream(substream) { }
+
+    void set(seastar::memory_output_stream<Iterator>& out, size_type v) {
+        serialize(_substream, v);
+    }
+};
+
+template<typename Iterator>
+class frame<seastar::memory_output_stream<Iterator>> : public place_holder<seastar::memory_output_stream<Iterator>> {
+    size_t _start_left;
+public:
+    frame(seastar::memory_output_stream<Iterator> ph, size_t start_left)
+        : place_holder<seastar::memory_output_stream<Iterator>>(ph), _start_left(start_left) { }
+
+    void end(seastar::memory_output_stream<Iterator>& out) {
+        this->set(out, _start_left - out.size());
+    }
+};
+
+template<typename Iterator>
+inline place_holder<seastar::memory_output_stream<Iterator>> start_place_holder(seastar::memory_output_stream<Iterator>& out) {
+    return { out.write_substream(sizeof(size_type)) };
+}
+
+template<typename Iterator>
+inline frame<seastar::memory_output_stream<Iterator>> start_frame(seastar::memory_output_stream<Iterator>& out) {
+    auto start_left = out.size();
+    auto substream = out.write_substream(sizeof(size_type));
+    {
+        auto sstr = substream;
+        serialize(sstr, size_type(0));
+    }
+    return frame<seastar::memory_output_stream<Iterator>>(substream, start_left);
+}
+
 }
