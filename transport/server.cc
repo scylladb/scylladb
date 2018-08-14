@@ -847,7 +847,6 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     }
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
-    options.prepare(prepared->bound_names);
 
     tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
@@ -864,6 +863,9 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         tracing::trace(query_state.get_trace_state(), "Invalid amount of bind variables: expected {:d} received {:d}", stmt->get_bound_terms(), options.get_values_count());
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
+
+    options.prepare(prepared->bound_names);
+
     tracing::trace(query_state.get_trace_state(), "Processing a statement");
     return _server._query_processor.local().process_statement_prepared(std::move(prepared), std::move(cache_key), query_state, options, needs_authorization).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
