@@ -162,6 +162,25 @@ public:
     bool empty() const noexcept { return !size_bytes(); }
     size_t size_bytes() const noexcept { return _total_size; }
 
+    void remove_prefix(size_t n) noexcept {
+        if (!_total_size) {
+            return;
+        }
+        _total_size -= n;
+        while (n > _current_size) {
+            n -= _current_size;
+            ++_current;
+            _current_size = _current->size();
+        }
+        _current_size -= n;
+        _current_position = _current->get() + n;
+        if (!_current_size && _total_size) {
+            ++_current;
+            _current_size = _current->size();
+            _current_position = _current->get();
+        }
+    }
+
     bool operator==(const fragmented_temporary_buffer::view& other) const noexcept {
         auto this_it = begin();
         auto other_it = other.begin();
