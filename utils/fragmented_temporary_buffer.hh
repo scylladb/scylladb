@@ -63,6 +63,9 @@ public:
         return ostream::simple(reinterpret_cast<char*>(current.get_write()), current.size());
     }
 
+    size_t size_bytes() const { return _size_bytes; }
+    bool empty() const { return !_size_bytes; }
+
     // Linear complexity, invalidates views and istreams
     void remove_prefix(size_t n) noexcept {
         _size_bytes -= n;
