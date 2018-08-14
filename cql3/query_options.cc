@@ -188,11 +188,7 @@ void query_options::prepare(const std::vector<::shared_ptr<column_specification>
 void query_options::fill_value_views()
 {
     for (auto&& value : _values) {
-        if (value) {
-            _value_views.emplace_back(cql3::raw_value_view::make_value(fragmented_temporary_buffer::view(bytes_view{*value})));
-        } else {
-            _value_views.emplace_back(cql3::raw_value_view::make_null());
-        }
+        _value_views.emplace_back(value.to_view());
     }
 }
 
