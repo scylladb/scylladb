@@ -26,6 +26,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/print.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/core/simple-stream.hh>
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
@@ -42,6 +43,7 @@ public:
     class view;
     class istream;
     class reader;
+    using ostream = seastar::memory_output_stream<vector_type::iterator>;
 
     fragmented_temporary_buffer() = default;
 
@@ -52,6 +54,14 @@ public:
     explicit operator view() const noexcept;
 
     istream get_istream() const noexcept;
+
+    ostream get_ostream() noexcept {
+        if (_fragments.size() != 1) {
+            return ostream::fragmented(_fragments.begin(), _size_bytes);
+        }
+        auto& current = *_fragments.begin();
+        return ostream::simple(reinterpret_cast<char*>(current.get_write()), current.size());
+    }
 
     // Linear complexity, invalidates views and istreams
     void remove_prefix(size_t n) noexcept {
