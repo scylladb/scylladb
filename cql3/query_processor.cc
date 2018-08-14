@@ -273,11 +273,11 @@ query_processor::process(const sstring_view& query_string, service::query_state&
     log.trace("process: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
     auto p = get_statement(query_string, query_state.get_client_state());
-    options.prepare(p->bound_names);
     auto cql_statement = p->statement;
     if (cql_statement->get_bound_terms() != options.get_values_count()) {
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
+    options.prepare(p->bound_names);
 
     warn(unimplemented::cause::METRICS);
 #if 0
