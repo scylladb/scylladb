@@ -800,6 +800,23 @@ public:
         return from_exploded(s, prefix.components());
     }
 
+    /* This function makes the passed clustering key full by filling its
+     * missing trailing components with empty values.
+     * This is used to represesent clustering keys of rows in compact tables that may be non-full.
+     * Returns whether a key wasn't full before the call.
+     */
+    static bool make_full(const schema& s, clustering_key_prefix& ck) {
+        if (!ck.is_full(s)) {
+            // TODO: avoid unnecessary copy here
+            auto full_ck_size = s.clustering_key_columns().size();
+            auto exploded = ck.explode(s);
+            exploded.resize(full_ck_size);
+            ck = clustering_key_prefix::from_exploded(std::move(exploded));
+            return true;
+        }
+        return false;
+    }
+
     friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
 
