@@ -2047,10 +2047,9 @@ SEASTAR_TEST_CASE(test_in_restriction) {
             assert_that(msg).is_rows().with_size(0);
             return e.execute_cql("select r1 from tir where p1 in (2, 0, 2, 1);");
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
+            assert_that(msg).is_rows().with_rows_ignore_order({
                 {int32_type->decompose(4)},
                 {int32_type->decompose(0)},
-                {int32_type->decompose(4)},
                 {int32_type->decompose(1)},
                 {int32_type->decompose(2)},
                 {int32_type->decompose(3)},
@@ -2071,6 +2070,22 @@ SEASTAR_TEST_CASE(test_in_restriction) {
                 {int32_type->decompose(3)},
                 {int32_type->decompose(2)},
                 {int32_type->decompose(1)},
+            });
+            return e.prepare("select r1 from tir where p1 in ?");
+        }).then([&e] (cql3::prepared_cache_key_type prepared_id){
+            auto my_list_type = list_type_impl::get_instance(int32_type, true);
+            std::vector<cql3::raw_value> raw_values;
+            auto in_values_list = my_list_type->decompose(make_list_value(my_list_type,
+                    list_type_impl::native_type{{int(2), int(0), int(2), int(1)}}));
+            raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
+            return e.execute_prepared(prepared_id,raw_values);
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows_ignore_order({
+                {int32_type->decompose(4)},
+                {int32_type->decompose(0)},
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
+                {int32_type->decompose(3)},
             });
         });
     });
