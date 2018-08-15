@@ -73,6 +73,18 @@ public:
             replicas_per_token_range last_replicas,
             std::experimental::optional<db::read_repair_decision> query_read_repair_decision);
 
+    void set_partition_key(partition_key pk) {
+        _partition_key = std::move(pk);
+    }
+
+    void set_clustering_key(clustering_key ck) {
+        _clustering_key = std::move(ck);
+    }
+
+    void set_remaining(uint32_t remaining) {
+        _remaining = remaining;
+    }
+
     /**
      * Last processed key, i.e. where to start from in next paging round
      */
