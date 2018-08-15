@@ -213,6 +213,14 @@ public:
         throw std::logic_error("IN superclass should never be cloned directly");
     }
 
+    virtual std::vector<bytes_opt> values_raw(const query_options& options) const = 0;
+
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
+        std::vector<bytes_opt> ret = values_raw(options);
+        std::sort(ret.begin(),ret.end());
+        ret.erase(std::unique(ret.begin(),ret.end()),ret.end());
+        return ret;
+    }
 #if 0
     @Override
     protected final boolean isSupportedBy(SecondaryIndex index)
@@ -235,7 +243,7 @@ public:
         return abstract_restriction::term_uses_function(_values, ks_name, function_name);
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) const override {
+    virtual std::vector<bytes_opt> values_raw(const query_options& options) const override {
         std::vector<bytes_opt> ret;
         for (auto&& v : _values) {
             ret.emplace_back(to_bytes_opt(v->bind_and_get(options)));
@@ -264,7 +272,7 @@ public:
         return false;
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) const override {
+    virtual std::vector<bytes_opt> values_raw(const query_options& options) const override {
         auto&& lval = dynamic_pointer_cast<multi_item_terminal>(_marker->bind(options));
         if (!lval) {
             throw exceptions::invalid_request_exception("Invalid null value for IN restriction");
