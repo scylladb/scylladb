@@ -288,50 +288,6 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
-    if (_view_info.include_all_columns()) {
-        return marker;
-    }
-
-    auto timestamp = marker.timestamp();
-    bool has_non_expiring_live_cell = false;
-    expiry_opt biggest_expiry;
-    gc_clock::duration ttl = gc_clock::duration::min();
-    if (marker.is_expiring()) {
-        biggest_expiry = marker.expiry();
-        ttl = marker.ttl();
-    }
-    auto maybe_update_expiry_and_ttl = [&] (atomic_cell_view&& cell) {
-        timestamp = std::max(timestamp, cell.timestamp());
-        if (cell.is_live_and_has_ttl()) {
-            if (cell.expiry() >= biggest_expiry.value_or(cell.expiry())) {
-                biggest_expiry = cell.expiry();
-                ttl = cell.ttl();
-            }
-        } else if (cell.is_live()) {
-            has_non_expiring_live_cell = true;
-        }
-    };
-
-    // Iterate over regular cells not in the view, as we already have the timestamps of the included columns.
-    base_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-        auto& def = _base->regular_column_at(id);
-        if (_view_info.view_column(def)) {
-            return;
-        }
-        if (def.is_atomic()) {
-            maybe_update_expiry_and_ttl(c.as_atomic_cell(def));
-        } else {
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            ctype->for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
-        }
-    });
-
-    if ((marker.is_live() && !marker.is_expiring()) || has_non_expiring_live_cell) {
-        return row_marker(timestamp);
-    }
-    if (biggest_expiry) {
-        return row_marker(timestamp, ttl, *biggest_expiry);
-    }
     return marker;
 }
 
