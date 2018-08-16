@@ -1216,3 +1216,345 @@ SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_updatewith_f
         });
     }, cfg);
 }
+
+// A reproducer for issue #3362, not involving TTLs.
+// The test involves a view that selects no column except the base's primary
+// key, so view rows contain no cells besides a row marker, so as a base
+// row appears and disappears as we update and delete individual cells in
+// that row, we need to insert and delete the row marker with varying
+// timestamps to make sure the view row appears and disappears as needed.
+// But as we shall see, after enough trickery, we run out of timestamps
+// to use to revive the row marker, and fail to revive it. So to fix
+// issue #3362, we needed to remember all cells separately ("virtual
+// cells").
+SEASTAR_TEST_CASE(test_3362_no_ttls) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+
+        // In row p=1 c=1, insert two cells - b=1 at timestamp 10, a=1 at timestamp 20:
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 10 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 20 set a = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+
+
+        // Delete just a=1 (with timestamp 21). The base row will still exist (with b=1),
+        // and accordingly the view row too:
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("delete a from cf using timestamp 21 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+
+        // At this point, we still have the base row with b=1 at timestamp 10
+        // (and a=1 was deleted at timestamp 21). If we delete the b=1 at
+        // timestamp 11, nothing will remain in the base row, and the view
+        // row should disappear as well:
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("delete b from cf using timestamp 11 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+
+        // Now we finally reproduce #3362: We now add b=1 again, at timestamp
+        // 12 (it was earlier deleted in timestamp 11). The base row is live
+        // again, and so should the view row.
+        // With issue #3362, the view row failed to become alive. The reason
+        // is that to make the above is_empty() succeed, the implementation
+        // deletes the row marker with timestamp 21 (the maximal timestamp
+        // seen in the row). But now, we add a row marker again with the same
+        // timestamp 21, but the deletion wins so the row marker is still
+        // missing. (note that had data won over deletions, the is_empty()
+        // test above would have failed instead).
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 12 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+    });
+}
+
+// This is another reproducer for issue #3362, using TTLs instead of
+// numerous back-and-forth additions and deletions.
+SEASTAR_TEST_CASE(test_3362_with_ttls) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+
+        // In row p=1 c=1, insert two cells - a=1 with ttl, and b=1 without
+        // ttl. The ttl'ed cell is inserted first, with a newer timestamp.
+        // The problem is that the view row's marker gets, with a new
+        // timestamp, a ttl. Then, when we go to add another column with an
+        // older timestamp, and try to set the row marker without a
+        // ttl - the older timestamp of this update looses, and we wrongly
+        // remain with a ttl on the view row marker.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 2 and ttl 5 set a = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 1 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        // Pass the time 6 seconds forward. Cell 'a' will have expired, but
+        // cell 'b' will still exist, so the base row still exists and the
+        // corresponding view row should also exist too.
+        forward_jump_clocks(6s);
+        BOOST_TEST_PASSPOINT();
+        // verify that the base row still exists (cell b didn't expire)
+        eventually([&] {
+            auto msg = e.execute_cql("select * from cf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {}, {{int32_type->decompose(1)}} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        // verify that the view row still exists too.
+        // This check failing is issue #3362.
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+    });
+}
+
+// ‎‎‎The following are more test for issue #3362, same as test_3362_not_ttls
+// and test_3362_with_ttls, just with a collection with items "1" and "2"
+// instead of separate columns a and b. For brevity, comments were removed,
+// so refer to the comments in the original code above.
+enum class collection_kind { set, list, map };
+void do_test_3362_no_ttls_with_collections(cql_test_env& e, collection_kind t) {
+    sstring type, pref, suf;
+    switch(t) {
+    case collection_kind::set:
+        type = "set<int>";
+        pref = "{";
+        suf = "}";
+        break;
+    case collection_kind::list:
+        type = "list<int>";
+        pref = "[";
+        suf = "]";
+        break;
+    case collection_kind::map:
+        type = "map<int, int>";
+        pref = "{";
+        suf = " : 17}";
+        break;
+    }
+    e.execute_cql(sprint("create table cf (p int, c int, a %s, primary key (p, c))", type)).get();
+    e.execute_cql("create materialized view vcf as select p, c from cf "
+            "where p is not null and c is not null "
+            "primary key (p, c)").get();
+    e.execute_cql(sprint("update cf using timestamp 10 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+    e.execute_cql(sprint("update cf using timestamp 20 set a = a + %s1%s where p = 1 and c = 1", pref, suf)).get();
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+    if (t == collection_kind::map) {
+        e.execute_cql("delete a[1] from cf using timestamp 21 where p = 1 and c = 1").get();
+    } else {
+        e.execute_cql(sprint("update cf using timestamp 21 set a = a - %s1%s where p = 1 and c = 1", pref, suf)).get();
+    }
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+    if (t == collection_kind::map) {
+        e.execute_cql("delete a[2] from cf using timestamp 11 where p = 1 and c = 1").get();
+    } else {
+        e.execute_cql(sprint("update cf using timestamp 11 set a = a - %s2%s where p = 1 and c = 1", pref, suf)).get();
+    }
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().is_empty();
+    });
+    e.execute_cql(sprint("update cf using timestamp 12 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+}
+SEASTAR_TEST_CASE(test_3362_no_ttls_with_set) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_no_ttls_with_collections(e, collection_kind::set);
+    });
+}
+SEASTAR_TEST_CASE(test_3362_no_ttls_with_list) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_no_ttls_with_collections(e, collection_kind::list);
+    });
+}
+SEASTAR_TEST_CASE(test_3362_no_ttls_with_map) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_no_ttls_with_collections(e, collection_kind::map);
+    });
+}
+
+void do_test_3362_with_ttls_with_collections(cql_test_env& e, collection_kind t) {
+    sstring type, pref, suf;
+    switch(t) {
+    case collection_kind::set:
+        type = "set<int>";
+        pref = "{";
+        suf = "}";
+        break;
+    case collection_kind::list:
+        type = "list<int>";
+        pref = "[";
+        suf = "]";
+        break;
+    case collection_kind::map:
+        type = "map<int, int>";
+        pref = "{";
+        suf = " : 17}";
+        break;
+    }
+    e.execute_cql(sprint("create table cf (p int, c int, a %s, primary key (p, c))", type)).get();
+    e.execute_cql("create materialized view vcf as select p, c from cf "
+            "where p is not null and c is not null "
+            "primary key (p, c)").get();
+    e.execute_cql(sprint("update cf using timestamp 2 and ttl 5 set a = a + %s1%s where p = 1 and c = 1", pref, suf)).get();
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+    e.execute_cql(sprint("update cf using timestamp 1 set a = a + %s2%s where p = 1 and c = 1", pref, suf)).get();
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+    forward_jump_clocks(6s);
+    eventually([&] {
+        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+}
+SEASTAR_TEST_CASE(test_3362_with_ttls_with_set) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_with_ttls_with_collections(e, collection_kind::set);
+    });
+}
+SEASTAR_TEST_CASE(test_3362_with_ttls_with_list) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_with_ttls_with_collections(e, collection_kind::list);
+    });
+}
+SEASTAR_TEST_CASE(test_3362_with_ttls_with_map) {
+    return do_with_cql_env_thread([] (auto& e) {
+        do_test_3362_with_ttls_with_collections(e, collection_kind::map);
+    });
+}
+
+// This is a version of test_3362_with_ttls with frozen collection fields
+// instead of integer fields in test_3362_with_ttls. The intention is to
+// verify that we properly fixed #3362 in this case - by replacing the
+// frozen collection by a single virtual cell, not a collection.
+SEASTAR_TEST_CASE(test_3362_with_ttls_frozen) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, a frozen<set<int>>, b frozen<set<int>>, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 2 and ttl 5 set a = {1,2} where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 1 set b = {3,4} where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        forward_jump_clocks(6s);
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+    });
+}
+
+// This is a version of test_3362_with_ttls with the added twist that the
+// unselected column involved did not exist when the base table and view
+// were originally created, but only added later with an "alter table".
+// For this test to work, "alter table" will need to add the virtual
+// columns in the view table for the newly created unselected column in
+// the base table.
+SEASTAR_TEST_CASE(test_3362_with_ttls_alter_add) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+        // Add with "alter table" two additional columns to the base table -
+        // a and b. These are not selected in the materialized view, and we
+        // want to check that they are treated like unselected columns
+        // (namely, virtual columns are added to the view).
+        e.execute_cql("alter table cf add a int").get();
+        e.execute_cql("alter table cf add b int").get();
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 2 and ttl 5 set a = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 1 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        forward_jump_clocks(6s);
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from cf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {}, {{int32_type->decompose(1)}} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+    });
+}
+
+// test_3362_with_ttls_alter_add() above is about handling changes to virtual
+// columns as the base table columns change, but only for the "add" case.
+// Theoretically we could have had problems in the "drop" and "rename" cases
+// as well, but today, those are not supported:
+// 1. Today we do not allow "alter table drop" to drop any column from a base
+//    table with views - even unselected columns.
+//    If we every do allow this, we need to also check that we drop the
+//    virtual column from the view.
+// 2. Today we do not allow "alter table rename" to rename any non-pk
+//    column, so unselected columns also cannot be renamed. If this
+//    limitation is ever lifted, we will need to check that if we
+//    rename an unselected base column, the virtual column in the view is
+//    also renamed.
