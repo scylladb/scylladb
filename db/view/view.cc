@@ -464,6 +464,41 @@ static void maybe_make_virtual(atomic_cell_or_collection& c, const column_defini
     }
 }
 
+void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type) {
+    if (type->is_atomic()) {
+        builder.with_column(name, empty_type, column_kind::regular_column, column_view_virtual::yes);
+        return;
+    }
+    // A multi-cell collection (a frozen collection is a single
+    // cell and handled handled in the is_atomic() case above).
+    // The virtual version can't be just one cell, it has to be
+    // itself a collection of cells.
+    auto ctype = dynamic_pointer_cast<const collection_type_impl>(type);
+    if (!ctype) {
+        // TODO: When #2201 is done, we also need to handle here
+        // unfrozen UDTs.
+        throw exceptions::invalid_request_exception(sprint("Unsupported unselected multi-cell non-collection column %s for Materialized View", name));
+    }
+    if (ctype->is_list()) {
+        // A list has ints as keys, and values (the list's items).
+        // We just need these intss, i.e., a list of empty items.
+        builder.with_column(name, list_type_impl::get_instance(empty_type, true), column_kind::regular_column, column_view_virtual::yes);
+    } else if (ctype->is_map()) {
+        // A map has keys and values. We don't need these values,
+        // and can use empty values instead.
+        auto mtype = dynamic_pointer_cast<const map_type_impl>(type);
+        builder.with_column(name, map_type_impl::get_instance(mtype->get_values_type(), empty_type, true), column_kind::regular_column, column_view_virtual::yes);
+    } else if (ctype->is_set()) {
+        // A set's cell has nothing beyond the keys, so the
+        // virtual version of a set is, unfortunately, a complete
+        // copy of the set.
+        builder.with_column(name, type, column_kind::regular_column, column_view_virtual::yes);
+    } else {
+        // A collection can't be anything but a list, map or set...
+        abort();
+    }
+}
+
 static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
     base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
         auto* view_col = view_column(base, view, id);
