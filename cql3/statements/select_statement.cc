@@ -320,7 +320,7 @@ select_statement::make_partition_slice(const query_options& options)
 }
 
 int32_t select_statement::get_limit(const query_options& options) const {
-    if (!_limit) {
+    if (!_limit || _selection->is_aggregate()) {
         return std::numeric_limits<int32_t>::max();
     }
 

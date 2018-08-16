@@ -213,5 +213,12 @@ SEASTAR_TEST_CASE(test_aggregate_count) {
                                                               {long_type->decompose(int64_t(2))},
                                                               {long_type->decompose(int64_t(3))}});
         }
+        {
+            auto msg = e.execute_cql("SELECT count(a), count(b), count(c), count(*) FROM test LIMIT 1").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({{long_type->decompose(int64_t(3))},
+                                                              {long_type->decompose(int64_t(1))},
+                                                              {long_type->decompose(int64_t(2))},
+                                                              {long_type->decompose(int64_t(3))}});
+        }
     });
 }
