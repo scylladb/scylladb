@@ -101,13 +101,6 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
     }
 
     if (is_IN()) {
-        // For partition keys we only support IN for the last name so far
-        if (column_def.is_partition_key() && !schema->is_last_partition_key(column_def)) {
-            throw exceptions::invalid_request_exception(sprint(
-                "Partition KEY part %s cannot be restricted by IN relation (only the last part of the partition key can)",
-                column_def.name_as_text()));
-        }
-
         // We only allow IN on the row key and the clustering key so far, never on non-PK columns, and this even if
         // there's an index
         // Note: for backward compatibility reason, we conside a IN of 1 value the same as a EQ, so we let that

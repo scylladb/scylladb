@@ -3540,3 +3540,69 @@ SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_in_restriction_on_not_last_partition_key) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int,b int,c int,d int,PRIMARY KEY ((a, b), c));").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,1,1,100); ").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,1,2,200); ").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,1,3,300); ").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,2,1,300); ").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,3,1,1300);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (1,3,2,1400);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (2,3,2,1400);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (2,1,2,1400);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (2,1,3,1300);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (2,2,3,1300);").get();
+        e.execute_cql("INSERT INTO t (a,b,c,d) VALUES (3,1,3,1300);").get();
+
+        {
+            auto msg = e.execute_cql("SELECT * FROM t WHERE a IN (1,2) AND b IN (2,3) AND c>=2 AND c<=3;").get0();
+            assert_that(msg).is_rows().with_rows_ignore_order({
+               {
+                   int32_type->decompose(1),
+                   int32_type->decompose(3),
+                   int32_type->decompose(2),
+                   int32_type->decompose(1400),
+               },
+               {
+                   int32_type->decompose(2),
+                   int32_type->decompose(2),
+                   int32_type->decompose(3),
+                   int32_type->decompose(1300),
+               },
+               {
+                   int32_type->decompose(2),
+                   int32_type->decompose(3),
+                   int32_type->decompose(2),
+                   int32_type->decompose(1400),
+               }
+            });
+        }
+        {
+           auto msg = e.execute_cql("SELECT * FROM t WHERE a IN (1,3) AND b=1 AND c>=2 AND c<=3;").get0();
+           assert_that(msg).is_rows().with_rows_ignore_order({
+              {
+                  int32_type->decompose(1),
+                  int32_type->decompose(1),
+                  int32_type->decompose(2),
+                  int32_type->decompose(200),
+              },
+              {
+                  int32_type->decompose(1),
+                  int32_type->decompose(1),
+                  int32_type->decompose(3),
+                  int32_type->decompose(300),
+              },
+              {
+                  int32_type->decompose(3),
+                  int32_type->decompose(1),
+                  int32_type->decompose(3),
+                  int32_type->decompose(1300),
+              }
+           });
+       }
+    });
+}
