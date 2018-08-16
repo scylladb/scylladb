@@ -49,7 +49,10 @@
 #include "types.hh"
 
 static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
-    return cql3::util::do_with_parser(str,  std::mem_fn(&cql3_parser::CqlParser::comparatorType));
+    return cql3::util::do_with_parser(str,
+        [] (cql3_parser::CqlParser& parser) {
+            return parser.comparator_type(true);
+        });
 }
 
 data_type db::cql_type_parser::parse(const sstring& keyspace, const sstring& str, lw_shared_ptr<user_types_metadata> user_types) {
