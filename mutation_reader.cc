@@ -981,7 +981,7 @@ flat_mutation_reader make_foreign_reader(schema_ptr schema,
     return make_flat_mutation_reader<foreign_reader>(std::move(schema), std::move(reader), fwd_sm);
 }
 
-// See make_foreign_reader() for description.
+// See make_multishard_combining_reader() for description.
 class multishard_combining_reader : public flat_mutation_reader::impl {
     const dht::i_partitioner& _partitioner;
     const dht::partition_range* _pr;
