@@ -2448,6 +2448,18 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
 }
 
 struct sstable_writer::writer_impl {
+    sstable& _sst;
+    const schema& _schema;
+    const io_priority_class& _pc;
+    const sstable_writer_config _cfg;
+
+    writer_impl(sstable& sst, const schema& schema, const io_priority_class& pc, const sstable_writer_config& cfg)
+        : _sst(sst)
+        , _schema(schema)
+        , _pc(pc)
+        , _cfg(cfg)
+    {}
+
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
     virtual void consume(tombstone t) = 0;
     virtual stop_iteration consume(static_row&& sr) = 0;
@@ -2459,9 +2471,6 @@ struct sstable_writer::writer_impl {
 };
 
 class sstable_writer_k_l : public sstable_writer::writer_impl {
-    sstable& _sst;
-    const schema& _schema;
-    const io_priority_class& _pc;
     bool _backup;
     bool _leave_unsealed;
     bool _compression_enabled;
@@ -2477,7 +2486,7 @@ public:
     sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
     ~sstable_writer_k_l();
-    sstable_writer_k_l(sstable_writer_k_l&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
+    sstable_writer_k_l(sstable_writer_k_l&& o) : writer_impl(o._sst, o._schema, o._pc, o._cfg), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
             _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
             _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
@@ -2531,9 +2540,7 @@ sstable_writer_k_l::~sstable_writer_k_l() {
 
 sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
                                const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
-    : _sst(sst)
-    , _schema(s)
-    , _pc(pc)
+    : writer_impl(sst, s, pc, cfg)
     , _backup(cfg.backup)
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
@@ -2547,7 +2554,7 @@ sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t e
     prepare_file_writer();
 
     _monitor->on_write_started(_writer->offset_tracker());
-    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
+    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, _cfg, _pc);
     _sst._shards = { shard };
 }
 
@@ -2683,10 +2690,6 @@ GCC6_CONCEPT(
 // Used for writing SSTables in 'mc' format.
 class sstable_writer_m : public sstable_writer::writer_impl {
 private:
-    sstable& _sst;
-    const schema& _schema;
-    const io_priority_class& _pc;
-    sstable_writer_config _cfg;
     encoding_stats _enc_stats;
     shard_id _shard; // Specifies which shard the new SStable will belong to.
     bool _compression_enabled = false;
@@ -2821,10 +2824,7 @@ public:
     sstable_writer_m(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config& cfg, encoding_stats enc_stats,
                       const io_priority_class& pc, shard_id shard = engine().cpu_id())
-        : _sst(sst)
-        , _schema(s)
-        , _pc(pc)
-        , _cfg(cfg)
+        : writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
