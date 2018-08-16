@@ -30,6 +30,7 @@ class schema_mutations {
     std::experimental::optional<canonical_mutation> indices_canonical_mutation()[[version 2.0]];
     std::experimental::optional<canonical_mutation> dropped_columns_canonical_mutation()[[version 2.0]];
     std::experimental::optional<canonical_mutation> scylla_tables_canonical_mutation()[[version 2.0]];
+    std::experimental::optional<canonical_mutation> view_virtual_columns_canonical_mutation()[[version 2.4]];
 };
 
 class schema stub [[writable]] {

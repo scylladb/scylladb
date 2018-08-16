@@ -29,9 +29,11 @@ schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    bool is_view,
                                    stdx::optional<canonical_mutation> indices,
                                    stdx::optional<canonical_mutation> dropped_columns,
-                                   stdx::optional<canonical_mutation> scylla_tables)
+                                   stdx::optional<canonical_mutation> scylla_tables,
+                                   stdx::optional<canonical_mutation> view_virtual_columns)
     : _columnfamilies(columnfamilies.to_mutation(is_view ? db::schema_tables::views() : db::schema_tables::tables()))
     , _columns(columns.to_mutation(db::schema_tables::columns()))
+    , _view_virtual_columns(view_virtual_columns ? mutation_opt{view_virtual_columns.value().to_mutation(db::schema_tables::view_virtual_columns())} : stdx::nullopt)
     , _indices(indices ? mutation_opt{indices.value().to_mutation(db::schema_tables::indexes())} : stdx::nullopt)
     , _dropped_columns(dropped_columns ? mutation_opt{dropped_columns.value().to_mutation(db::schema_tables::dropped_columns())} : stdx::nullopt)
     , _scylla_tables(scylla_tables ? mutation_opt{scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : stdx::nullopt)
@@ -40,6 +42,9 @@ schema_mutations::schema_mutations(canonical_mutation columnfamilies,
 void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     dst.push_back(_columnfamilies);
     dst.push_back(_columns);
+    if (_view_virtual_columns) {
+        dst.push_back(*_view_virtual_columns);
+    }
     if (_indices) {
         dst.push_back(*_indices);
     }
@@ -68,6 +73,9 @@ table_schema_version schema_mutations::digest() const {
     md5_hasher h;
     db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
     db::schema_tables::feed_hash_for_schema_digest(h, _columns);
+    if (_view_virtual_columns && !_view_virtual_columns->partition().empty()) {
+        db::schema_tables::feed_hash_for_schema_digest(h, *_view_virtual_columns);
+    }
     if (_indices && !_indices->partition().empty()) {
         db::schema_tables::feed_hash_for_schema_digest(h, *_indices);
     }
@@ -94,6 +102,7 @@ static mutation_opt compact(const mutation& m) {
 bool schema_mutations::operator==(const schema_mutations& other) const {
     return compact(_columnfamilies) == compact(other._columnfamilies)
            && compact(_columns) == compact(other._columns)
+           && compact(_view_virtual_columns) == compact(other._view_virtual_columns)
            && compact(_indices) == compact(other._indices)
            && compact(_dropped_columns) == compact(other._dropped_columns)
            && compact(_scylla_tables) == compact(other._scylla_tables)
@@ -105,7 +114,8 @@ bool schema_mutations::operator!=(const schema_mutations& other) const {
 }
 
 bool schema_mutations::live() const {
-    return _columnfamilies.live_row_count() > 0 || _columns.live_row_count() > 0;
+    return _columnfamilies.live_row_count() > 0 || _columns.live_row_count() > 0 ||
+            (_view_virtual_columns && _view_virtual_columns->live_row_count() > 0);
 }
 
 bool schema_mutations::is_view() const {
