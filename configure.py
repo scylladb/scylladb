@@ -126,6 +126,12 @@ def debug_flag(compiler):
         print('Note: debug information disabled; upgrade your compiler')
         return ''
 
+def debug_compress_flag(compiler):
+    if try_compile(compiler=compiler, flags=['-gz']):
+        return '-gz'
+    else:
+        return ''
+
 def gold_supported(compiler):
     src_main = 'int main(int argc, char **argv) { return 0; }'
     if try_compile_and_link(source = src_main, flags = ['-fuse-ld=gold'], compiler = compiler):
@@ -947,7 +953,7 @@ if args.alloc_failure_injector:
     seastar_flags += ['--enable-alloc-failure-injector']
 
 seastar_cflags = args.user_cflags
-seastar_cflags += ' -gz'
+seastar_cflags += ' ' + debug_compress_flag(compiler=args.cxx)
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
