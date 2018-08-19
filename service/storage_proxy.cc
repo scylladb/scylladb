@@ -1980,16 +1980,18 @@ public:
         _timeout.arm(timeout);
     }
     virtual ~abstract_read_resolver() {};
-    virtual void on_error(gms::inet_address ep) = 0;
+    virtual void on_error(gms::inet_address ep, bool disconnect) = 0;
     future<> done() {
         return _done_promise.get_future();
     }
     void error(gms::inet_address ep, std::exception_ptr eptr) {
         sstring why;
+        bool disconnect = false;
         try {
             std::rethrow_exception(eptr);
         } catch (rpc::closed_error&) {
             // do not report connection closed exception, gossiper does that
+            disconnect = true;
         } catch (rpc::timeout_error&) {
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
@@ -2000,7 +2002,7 @@ public:
         }
 
         if (!_request_failed) { // request may fail only once.
-            on_error(ep);
+            on_error(ep, disconnect);
         }
 
         if (why.length()) {
@@ -2080,9 +2082,15 @@ public:
             _done_promise.set_value();
         }
     }
-    void on_error(gms::inet_address ep) override {
+    void on_error(gms::inet_address ep, bool disconnect) override {
         if (waiting_for(ep)) {
             _failed++;
+        }
+        if (disconnect && _block_for == _target_count_for_cl) {
+            // if the error is because of a connection disconnect and there is no targets to speculate
+            // wait for timeout in hope that the client will issue speculative read
+            // FIXME: resolver should have access to all replicas and try another one in this case
+            return;
         }
         if (_block_for + _failed > _target_count_for_cl) {
             fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result)));
@@ -2409,7 +2417,7 @@ public:
             }
         }
     }
-    void on_error(gms::inet_address ep) override {
+    void on_error(gms::inet_address ep, bool disconnect) override {
         fail_request(std::make_exception_ptr(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), 1, _targets_count, response_count() != 0)));
     }
     uint32_t max_live_count() const {
