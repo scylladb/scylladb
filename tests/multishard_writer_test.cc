@@ -37,7 +37,7 @@ using generate_error = bool_class<generate_error_tag>;
 constexpr unsigned many_partitions() {
     return
 #ifndef SEASTAR_DEBUG
-	1000
+	300
 #else
 	10
 #endif
