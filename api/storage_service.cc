@@ -78,15 +78,17 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_tokens.set(r, [] (const_req req) {
-        auto tokens = service::get_local_storage_service().get_token_metadata().sorted_tokens();
-        return container_to_vec(tokens);
+    ss::get_tokens.set(r, [] (std::unique_ptr<request> req) {
+        return make_ready_future<json::json_return_type>(stream_range_as_array(service::get_local_storage_service().get_token_metadata().sorted_tokens(), [](const dht::token& i) {
+           return boost::lexical_cast<std::string>(i);
+        }));
     });
 
-    ss::get_node_tokens.set(r, [] (const_req req) {
-        gms::inet_address addr(req.param["endpoint"]);
-        auto tokens = service::get_local_storage_service().get_token_metadata().get_tokens(addr);
-        return container_to_vec(tokens);
+    ss::get_node_tokens.set(r, [] (std::unique_ptr<request> req) {
+        gms::inet_address addr(req->param["endpoint"]);
+        return make_ready_future<json::json_return_type>(stream_range_as_array(service::get_local_storage_service().get_token_metadata().get_tokens(addr), [](const dht::token& i) {
+           return boost::lexical_cast<std::string>(i);
+       }));
     });
 
     ss::get_commitlog.set(r, [&ctx](const_req req) {
