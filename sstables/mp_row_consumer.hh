@@ -77,8 +77,8 @@ private:
     schema_ptr _schema;
     const query::partition_slice& _slice;
     bool _out_of_range = false;
-    stdx::optional<query::clustering_key_filter_ranges> _ck_ranges;
-    stdx::optional<clustering_ranges_walker> _ck_ranges_walker;
+    std::optional<query::clustering_key_filter_ranges> _ck_ranges;
+    std::optional<clustering_ranges_walker> _ck_ranges_walker;
 
     // When set, the fragment pending in _in_progress should not be emitted.
     bool _skip_in_progress = false;
@@ -103,7 +103,7 @@ private:
     mutation_fragment_opt _in_progress;
     mutation_fragment_opt _ready;
 
-    stdx::optional<new_mutation> _mutation;
+    std::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     position_in_partition _fwd_end = position_in_partition::after_all_clustered_rows(); // Restricts the stream on top of _ck_ranges_walker.
     streamed_mutation::forwarding _fwd;
@@ -688,7 +688,7 @@ public:
         return _out_of_range;
     }
 
-    stdx::optional<new_mutation> get_mutation() {
+    std::optional<new_mutation> get_mutation() {
         return std::exchange(_mutation, { });
     }
 
@@ -731,7 +731,7 @@ public:
     // The new range must not overlap with the previous range and
     // must be after it.
     //
-    stdx::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
+    std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point timeout) {
         sstlog.trace("mp_row_consumer_k_l {}: fast_forward_to({})", this, r);
         _out_of_range = _is_mutation_end;
         _fwd_end = std::move(r).end();
@@ -784,7 +784,7 @@ public:
 
     // Tries to fast forward the consuming context to the next position.
     // Must be called outside consuming context.
-    stdx::optional<position_in_partition_view> maybe_skip() {
+    std::optional<position_in_partition_view> maybe_skip() {
         if (!needs_skip()) {
             return { };
         }
@@ -800,7 +800,7 @@ class mp_row_consumer_m : public consumer_m {
     const query::partition_slice& _slice;
     std::optional<mutation_fragment_filter> _mf_filter;
 
-    stdx::optional<new_mutation> _mutation;
+    std::optional<new_mutation> _mutation;
     bool _is_mutation_end = true;
     streamed_mutation::forwarding _fwd;
 
@@ -815,7 +815,7 @@ class mp_row_consumer_m : public consumer_m {
     std::vector<cell> _cells;
     collection_type_impl::mutation _cm;
 
-    const column_definition& get_column_definition(stdx::optional<column_id> column_id) {
+    const column_definition& get_column_definition(std::optional<column_id> column_id) {
         auto column_type = _inside_static_row ? column_kind::static_column : column_kind::regular_column;
         return _schema->column_at(column_type, *column_id);
     }
@@ -824,17 +824,22 @@ class mp_row_consumer_m : public consumer_m {
         sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_row={})", this, *_in_progress_row);
         auto action = _mf_filter->apply(*_in_progress_row);
         switch (action) {
-            case mutation_fragment_filter::result::emit:
-                _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
-                break;
-            case mutation_fragment_filter::result::ignore:
+        case mutation_fragment_filter::result::emit:
+            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
+            break;
+        case mutation_fragment_filter::result::ignore:
+            {
                 _in_progress_row.reset();
-                break;
-            case mutation_fragment_filter::result::store_and_finish:
-                return proceed::no;
+                if (_mf_filter->is_current_range_changed()) {
+                    return proceed::no;
+                }
+            }
+            break;
+        case mutation_fragment_filter::result::store_and_finish:
+            return proceed::no;
         }
 
-        return proceed::yes;
+        return proceed(!_reader->is_buffer_full());
     }
 
 public:
@@ -878,9 +883,11 @@ public:
         return proceed::yes;
     }
 
-    stdx::optional<position_in_partition_view> maybe_skip() {
-        // FIXME: skipping using index is not implemented yet
-        return {};
+    std::optional<position_in_partition_view> maybe_skip() {
+        if (!_mf_filter) {
+            return {};
+        }
+        return _mf_filter->maybe_skip();
     }
 
     bool is_mutation_end() const {
@@ -893,11 +900,11 @@ public:
         _mf_filter.emplace(*_schema, _slice, pk, _fwd);
     }
 
-    stdx::optional<new_mutation> get_mutation() {
+    std::optional<new_mutation> get_mutation() {
         return std::exchange(_mutation, { });
     }
 
-    stdx::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
+    std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
         return _mf_filter->fast_forward_to(std::move(r));
     }
 
@@ -936,7 +943,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_column(stdx::optional<column_id> column_id,
+    virtual proceed consume_column(std::optional<column_id> column_id,
                                    bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
@@ -971,7 +978,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
+    virtual proceed consume_complex_column_start(std::optional<column_id> column_id,
                                                  tombstone tomb) override {
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_start({}, {})", this, column_id, tomb);
         _cm.tomb = tomb;
@@ -979,7 +986,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) override {
+    virtual proceed consume_complex_column_end(std::optional<column_id> column_id) override {
         sstlog.trace("mp_row_consumer_m {}: consume_complex_column_end({})", this, column_id);
         if (column_id) {
             const column_definition& column_def = get_column_definition(column_id);
@@ -992,7 +999,7 @@ public:
         return proceed::yes;
     }
 
-    virtual proceed consume_counter_column(stdx::optional<column_id> column_id,
+    virtual proceed consume_counter_column(std::optional<column_id> column_id,
                                            bytes_view value,
                                            api::timestamp_type timestamp) override {
         sstlog.trace("mp_row_consumer_m {}: consume_counter_column({}, {}, {})", this, column_id, value, timestamp);
@@ -1039,10 +1046,7 @@ public:
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
 
-            auto should_proceed = maybe_push_row();
-            if (should_proceed == proceed::no) {
-                return proceed::no;
-            }
+            return maybe_push_row();
         }
 
         return proceed(!_reader->is_buffer_full());

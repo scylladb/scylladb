@@ -331,6 +331,264 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
     }
 }
 
+/*
+ * The test covering support for skipping through wide partitions using index.
+ * Test files are generated using the following script <excerpt>:
+ *
+     session.execute("""
+        CREATE TABLE IF NOT EXISTS skip_index_test (
+            pk int,
+            ck int,
+            st int static,
+            rc text,
+            PRIMARY KEY (pk, ck)
+        )
+        WITH compression = { 'sstable_compression' : '' }
+        AND caching = {'keys': 'NONE', 'rows_per_partition': 'NONE'}
+        """)
+
+    query_static = SimpleStatement("""
+        INSERT INTO skip_index_test (pk, st)
+        VALUES (%s, %s) USING TIMESTAMP 1525385507816568
+	""", consistency_level=ConsistencyLevel.ONE)
+
+    query = SimpleStatement("""
+        INSERT INTO skip_index_test (pk, ck, rc)
+        VALUES (%s, %s, %s) USING TIMESTAMP 1525385507816568
+        """, consistency_level=ConsistencyLevel.ONE)
+
+    session.execute(query_static, [1, 777])
+
+    for i in range(1024):
+        log.info("inserting row %d" % i)
+        session.execute(query, [1, i, "%s%d" %('b' * 1024, i)])
+
+    query_static2 = SimpleStatement("""
+        INSERT INTO skip_index_test (pk, st)
+        VALUES (%s, %s) USING TIMESTAMP 1525385507816578
+	""", consistency_level=ConsistencyLevel.ONE)
+
+    query2 = SimpleStatement("""
+        INSERT INTO skip_index_test (pk, ck, rc)
+        VALUES (%s, %s, %s) USING TIMESTAMP 1525385507816578
+        """, consistency_level=ConsistencyLevel.ONE)
+
+    session.execute(query_static2, [2, 999])
+
+    for i in range(1024):
+        log.info("inserting row %d" % i)
+        session.execute(query2, [2, i, "%s%d" %('b' * 1024, i)])
+
+    The index file contains promoted indices for two partitions, each consisting
+    of 17 blocks with the following clustering key bounds:
+    0 - 63
+    64 - 126
+    127 - 189
+    190 - 252
+    253 - 315
+    316 - 378
+    379 - 441
+    442 - 504
+    505 - 567
+    568 - 630
+    631 - 693
+    694 - 756
+    757 - 819
+    820 - 882
+    883 - 945
+    946 - 1008
+    1009 - 1023
+ *
+ */
+
+static thread_local const sstring UNCOMPRESSED_SKIP_USING_INDEX_ROWS_PATH =
+    "tests/sstables/3.x/uncompressed/skip_using_index_rows";
+static thread_local const schema_ptr UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("st", int32_type, column_kind::static_column)
+        .with_column("rc", utf8_type)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_skip_using_index_rows) {
+    sstable_assertions sst(UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA,
+                           UNCOMPRESSED_SKIP_USING_INDEX_ROWS_PATH);
+    sst.load();
+    auto to_key = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA, pk);
+    };
+
+    auto to_ck = [] (int ck) {
+        return clustering_key::from_single_value(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA,
+                                                 int32_type->decompose(ck));
+    };
+
+    auto st_cdef = UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA->get_column_definition(to_bytes("st"));
+    BOOST_REQUIRE(st_cdef);
+    auto rc_cdef = UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA->get_column_definition(to_bytes("rc"));
+    BOOST_REQUIRE(rc_cdef);
+
+    auto to_expected = [rc_cdef] (sstring val) {
+        return std::vector<flat_reader_assertions::expected_column>{{rc_cdef, utf8_type->decompose(val)}};
+    };
+    sstring rc_base(1024, 'b');
+
+    auto make_reads_tracker = [] {
+        reactor& r = *local_engine;
+        return [&r, io_snapshot = r.get_io_stats()] {
+            return r.get_io_stats().aio_reads - io_snapshot.aio_reads;
+        };
+    };
+    uint64_t max_reads = 0;
+    // Sequential read
+    {
+        auto aio_reads_tracker = make_reads_tracker();
+        auto rd = sst.read_rows_flat();
+        rd.set_max_buffer_size(1);
+        auto r = assert_that(std::move(rd));
+        r.produces_partition_start(to_key(1))
+            .produces_static_row({{st_cdef, int32_type->decompose(int32_t(777))}});
+
+        for (auto idx: boost::irange(0, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_partition_end();
+
+        r.produces_partition_start(to_key(2))
+            .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}});
+        for (auto idx: boost::irange(0, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_partition_end()
+            .produces_end_of_stream();
+        max_reads = aio_reads_tracker();
+    }
+    // filtering read
+    {
+        auto aio_reads_tracker = make_reads_tracker();
+        auto slice = partition_slice_builder(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA)
+            .with_range(query::clustering_range::make({to_ck(70), true}, {to_ck(80), false}))
+            .with_range(query::clustering_range::make({to_ck(1000), false}, {to_ck(1023), true}))
+            .build();
+
+        auto rd = sst.read_range_rows_flat(query::full_partition_range, slice);
+        rd.set_max_buffer_size(1);
+        auto r = assert_that(std::move(rd));
+        r.produces_partition_start(to_key(1))
+            .produces_static_row({{st_cdef, int32_type->decompose(int32_t(777))}});
+        for (auto idx: boost::irange(70, 80)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        for (auto idx: boost::irange(1001, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_partition_end();
+
+        r.produces_partition_start(to_key(2))
+            .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}});
+        for (auto idx: boost::irange(70, 80)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        for (auto idx: boost::irange(1001, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+
+        r.produces_partition_end()
+            .produces_end_of_stream();
+        BOOST_REQUIRE(aio_reads_tracker() < max_reads);
+    }
+    // forwarding read
+    {
+        auto rd = sst.read_range_rows_flat(query::full_partition_range,
+                                           UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA->full_slice(),
+                                           default_priority_class(),
+                                           no_resource_tracking(),
+                                           streamed_mutation::forwarding::yes);
+        rd.set_max_buffer_size(1);
+        auto r = assert_that(std::move(rd));
+        r.produces_partition_start(to_key(1));
+
+        r.fast_forward_to(to_ck(316), to_ck(379));
+        for (auto idx: boost::irange(316, 379)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+
+        r.next_partition();
+
+        r.produces_partition_start(to_key(2))
+                .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}})
+                .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(442), to_ck(450));
+        for (auto idx: boost::irange(442, 450)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(1009), to_ck(1024));
+        for (auto idx: boost::irange(1009, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+    }
+    // filtering and forwarding read
+    {
+        auto aio_reads_tracker = make_reads_tracker();
+        auto slice =  partition_slice_builder(*UNCOMPRESSED_SKIP_USING_INDEX_ROWS_SCHEMA)
+            .with_range(query::clustering_range::make({to_ck(210), true}, {to_ck(240), true}))
+            .with_range(query::clustering_range::make({to_ck(1000), true}, {to_ck(1023), true}))
+            .build();
+        auto rd = sst.read_range_rows_flat(query::full_partition_range,
+                                                      slice,
+                                                      default_priority_class(),
+                                                      no_resource_tracking(),
+                                                      streamed_mutation::forwarding::yes);
+        rd.set_max_buffer_size(1);
+        auto r = assert_that(std::move(rd));
+
+        r.produces_partition_start(to_key(1));
+        r.fast_forward_to(to_ck(200), to_ck(250));
+
+        for (auto idx: boost::irange(210, 241)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(900), to_ck(1001));
+        r.produces_row(to_ck(1000), to_expected(format("{}{}", rc_base, 1000)))
+            .produces_end_of_stream();
+
+        r.next_partition();
+
+        r.produces_partition_start(to_key(2))
+            .produces_static_row({{st_cdef, int32_type->decompose(int32_t(999))}})
+            .produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(200), to_ck(250));
+        for (auto idx: boost::irange(210, 241)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(900), to_ck(1010));
+        for (auto idx: boost::irange(1000, 1010)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+
+        r.fast_forward_to(to_ck(1010), to_ck(1024));
+        for (auto idx: boost::irange(1010, 1024)) {
+            r.produces_row(to_ck(idx), to_expected(format("{}{}", rc_base, idx)));
+        }
+        r.produces_end_of_stream();
+        BOOST_REQUIRE(aio_reads_tracker() < max_reads);
+    }
+}
+
 
 // Following tests run on files in tests/sstables/3.x/uncompressed/static_row
 // They were created using following CQL statements:

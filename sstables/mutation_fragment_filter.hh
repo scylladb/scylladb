@@ -40,6 +40,7 @@ class mutation_fragment_filter {
      * Otherwise it is initially set to static row.
      */
     position_in_partition _fwd_end;
+    size_t _last_lower_bound_counter = 0;
 
     bool is_after_fwd_window(position_in_partition_view pos) const {
         return _fwd && !position_in_partition::less_compare(_schema)(pos, _fwd_end);
@@ -98,12 +99,21 @@ public:
         return _out_of_range;
     }
 
+    std::optional<position_in_partition_view> maybe_skip() {
+        if (!is_current_range_changed()) {
+            return {};
+        }
+
+        _last_lower_bound_counter = _walker.lower_bound_change_counter();
+        return _walker.lower_bound();
+    }
+
     /*
      * The method fast-forwards the current range to the passed position range.
      * Returned optional is engaged iff the input range overlaps with any of the
      * query ranges tracked by _walker.
      */
-    stdx::optional<position_in_partition_view> fast_forward_to(position_range r) {
+    std::optional<position_in_partition_view> fast_forward_to(position_range r) {
         assert(_fwd);
         _walker.trim_front(r.start());
         _fwd_end = std::move(r).end();
@@ -113,8 +123,17 @@ public:
             return {};
         }
 
+        _last_lower_bound_counter = _walker.lower_bound_change_counter();
         return _walker.lower_bound();
     }
+
+    /*
+     * Tells if current range has changed since last reader fast-forwarding or skip
+     */
+    inline bool is_current_range_changed() const {
+        return (_last_lower_bound_counter != _walker.lower_bound_change_counter());
+    }
+
 };
 
 };   // namespace sstables

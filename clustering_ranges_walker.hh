@@ -36,7 +36,7 @@ class clustering_ranges_walker {
     bool _with_static_row;
     position_in_partition_view _current_start;
     position_in_partition_view _current_end;
-    stdx::optional<position_in_partition> _trim;
+    std::optional<position_in_partition> _trim;
     size_t _change_counter = 1;
 private:
     bool advance_to_next_range() {

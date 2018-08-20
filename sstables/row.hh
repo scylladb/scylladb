@@ -159,7 +159,7 @@ public:
 
     virtual proceed consume_static_row_start() = 0;
 
-    virtual proceed consume_column(stdx::optional<column_id> column_id,
+    virtual proceed consume_column(std::optional<column_id> column_id,
                                    bytes_view cell_path,
                                    bytes_view value,
                                    api::timestamp_type timestamp,
@@ -167,12 +167,12 @@ public:
                                    gc_clock::time_point local_deletion_time,
                                    bool is_deleted) = 0;
 
-    virtual proceed consume_complex_column_start(stdx::optional<column_id> column_id,
+    virtual proceed consume_complex_column_start(std::optional<column_id> column_id,
                                                  tombstone tomb) = 0;
 
-    virtual proceed consume_complex_column_end(stdx::optional<column_id> column_id) = 0;
+    virtual proceed consume_complex_column_end(std::optional<column_id> column_id) = 0;
 
-    virtual proceed consume_counter_column(stdx::optional<column_id> column_id, bytes_view value,
+    virtual proceed consume_counter_column(std::optional<column_id> column_id, bytes_view value,
                                            api::timestamp_type timestamp) = 0;
 
     virtual proceed consume_row_end() = 0;
@@ -594,7 +594,7 @@ private:
 
     std::vector<temporary_buffer<char>> _row_key;
 
-    boost::iterator_range<std::vector<stdx::optional<column_id>>::const_iterator> _column_ids;
+    boost::iterator_range<std::vector<std::optional<column_id>>::const_iterator> _column_ids;
     boost::iterator_range<std::vector<std::optional<uint32_t>>::const_iterator> _column_value_fix_lengths;
     boost::iterator_range<std::vector<bool>::const_iterator> _column_is_collection;
     boost::iterator_range<std::vector<bool>::const_iterator> _column_is_counter;
@@ -618,7 +618,7 @@ private:
     api::timestamp_type _complex_column_marked_for_delete;
     tombstone _complex_column_tombstone;
 
-    void setup_columns(const std::vector<stdx::optional<column_id>>& column_ids,
+    void setup_columns(const std::vector<std::optional<column_id>>& column_ids,
                        const std::vector<std::optional<uint32_t>>& column_value_fix_lengths,
                        const std::vector<bool>& column_is_collection,
                        const std::vector<bool>& column_is_counter) {
@@ -653,7 +653,7 @@ private:
     }
     bool is_column_simple() { return !_column_is_collection.front(); }
     bool is_column_counter() { return _column_is_counter.front(); }
-    stdx::optional<column_id> get_column_id() {
+    std::optional<column_id> get_column_id() {
         return _column_ids.front();
     }
     std::optional<uint32_t> get_column_value_length() {
@@ -1143,14 +1143,18 @@ public:
     }
 
     void reset(indexable_element el) {
+        auto reset_to_state = [this, el] (state s) {
+            _state = s;
+            _consumer.reset(el);
+        };
         switch (el) {
             case indexable_element::partition:
-                _state = state::PARTITION_START;
-                break;
-            default:
-                assert(0);
+                return reset_to_state(state::PARTITION_START);
+            case indexable_element::cell:
+                return reset_to_state(state::FLAGS);
         }
-        _consumer.reset(el);
+        // We should not get here unless some enum member is not handled by the switch
+        throw std::logic_error(format("Unable to reset - unknown indexable element: {}", el));
     }
 };
 

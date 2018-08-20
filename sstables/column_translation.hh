@@ -55,14 +55,14 @@ class column_translation {
 
     struct state {
 
-        static std::tuple<std::vector<stdx::optional<column_id>>,
+        static std::tuple<std::vector<std::optional<column_id>>,
                           std::vector<std::optional<uint32_t>>,
                           std::vector<bool>,
                           std::vector<bool>> build(
                 const schema& s,
                 const utils::chunked_vector<serialization_header::column_desc>& src,
                 bool is_static) {
-            std::vector<stdx::optional<column_id>> ids;
+            std::vector<std::optional<column_id>> ids;
             std::vector<std::optional<column_id>> lens;
             std::vector<bool> is_collection;
             std::vector<bool> is_counter;
@@ -89,7 +89,7 @@ class column_translation {
                         is_collection.push_back(def->is_multi_cell());
                         is_counter.push_back(def->is_counter());
                     } else {
-                        ids.push_back(stdx::nullopt);
+                        ids.push_back(std::nullopt);
                         lens.push_back(std::nullopt);
                         is_collection.push_back(false);
                         is_counter.push_back(false);
@@ -100,8 +100,8 @@ class column_translation {
         }
 
         utils::UUID schema_uuid;
-        std::vector<stdx::optional<column_id>> regular_schema_column_id_from_sstable;
-        std::vector<stdx::optional<column_id>> static_schema_column_id_from_sstable;
+        std::vector<std::optional<column_id>> regular_schema_column_id_from_sstable;
+        std::vector<std::optional<column_id>> static_schema_column_id_from_sstable;
         column_values_fixed_lengths regular_column_value_fix_lengths;
         column_values_fixed_lengths static_column_value_fix_lengths;
         column_values_fixed_lengths clustering_column_value_fix_lengths;
@@ -142,10 +142,10 @@ public:
         return *this;
     }
 
-    const std::vector<stdx::optional<column_id>>& regular_columns() const {
+    const std::vector<std::optional<column_id>>& regular_columns() const {
         return _state->regular_schema_column_id_from_sstable;
     }
-    const std::vector<stdx::optional<column_id>>& static_columns() const {
+    const std::vector<std::optional<column_id>>& static_columns() const {
         return _state->static_schema_column_id_from_sstable;
     }
     const std::vector<std::optional<uint32_t>>& regular_column_value_fix_legths() const {

@@ -129,6 +129,16 @@ std::ostream& operator<<(std::ostream& os, const std::list<T>& items) {
     return os;
 }
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::optional<T>& opt) {
+    if (opt) {
+        os << "{" << *opt << "}";
+    } else {
+        os << "{}";
+    }
+    return os;
+}
+
 namespace experimental {
 
 template <typename T>
