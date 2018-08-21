@@ -69,7 +69,7 @@
       "inline": [
          "sudo yum install -y epel-release",
          "sudo yum install -y python34",
-         "sudo /home/{{user `ssh_username`}}/scylla-ami/scylla_install_ami {{ user `install_args` }}"
+         "sudo /home/{{user `ssh_username`}}/scylla_install_ami {{ user `install_args` }}"
        ]
     }
   ],

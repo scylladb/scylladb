@@ -93,6 +93,14 @@ if [ $LOCALRPM -eq 1 ]; then
         cp build/scylla-tools-java/build/rpms/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
         cp build/scylla-tools-java/build/rpms/scylla-tools-core-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools-core.noarch.rpm
     fi
+    if [ ! -f dist/ami/files/scylla-ami.noarch.rpm ]; then
+        cd build
+        git clone --depth 1 https://github.com/scylladb/scylla-ami.git
+        cd scylla-ami
+        dist/redhat/build_rpm.sh --target epel-7-x86_64
+        cd ../..
+        cp build/scylla-ami/build/rpms/scylla-ami-`cat build/scylla-ami/build/SCYLLA-VERSION-FILE`-`cat build/scylla-ami/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-ami.noarch.rpm
+    fi
 fi
 
 cd dist/ami
