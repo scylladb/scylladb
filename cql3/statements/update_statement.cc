@@ -181,6 +181,19 @@ modification_statement::json_cache_opt insert_prepared_json_statement::maybe_pre
 void
 insert_prepared_json_statement::execute_set_value(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, const bytes_opt& value) {
     if (!value) {
+        if (column.type->is_collection()) {
+            auto& k = static_pointer_cast<const collection_type_impl>(column.type)->_kind;
+            if (&k == &collection_type_impl::kind::list) {
+                lists::setter::execute(m, prefix, params, column, make_shared<lists::value>(lists::value(std::vector<bytes_opt>())));
+            } else if (&k == &collection_type_impl::kind::set) {
+                sets::setter::execute(m, prefix, params, column, make_shared<sets::value>(sets::value(std::set<bytes, serialized_compare>(serialized_compare(empty_type)))));
+            } else if (&k == &collection_type_impl::kind::map) {
+                maps::setter::execute(m, prefix, params, column, make_shared<maps::value>(maps::value(std::map<bytes, bytes, serialized_compare>(serialized_compare(empty_type)))));
+            } else {
+                throw exceptions::invalid_request_exception("Incorrect value kind in JSON INSERT statement");
+            }
+            return;
+        }
         m.set_cell(prefix, column, std::move(operation::make_dead_cell(params)));
         return;
     } else if (!column.type->is_collection()) {
