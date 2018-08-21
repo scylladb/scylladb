@@ -2876,14 +2876,16 @@ SEASTAR_TEST_CASE(test_insert_json_types) {
 
         e.execute_cql("UPDATE all_types SET b = fromJson('42') WHERE a = fromJson('\"ascii\"');").get();
         e.execute_cql("UPDATE all_types SET \"I\" = fromJson('\"zażółć gęślą jaźń\"') WHERE a = fromJson('\"ascii\"');").get();
+        e.execute_cql("UPDATE all_types SET n = fromJson('\"2147483648\"') WHERE a = fromJson('\"ascii\"');").get();
         e.execute_cql("UPDATE all_types SET o = fromJson('\"3.45\"') WHERE a = fromJson('\"ascii\"');").get();
 
-        msg = e.execute_cql("SELECT a, b, \"I\", o FROM all_types WHERE a = 'ascii'").get0();
+        msg = e.execute_cql("SELECT a, b, \"I\", n, o FROM all_types WHERE a = 'ascii'").get0();
         assert_that(msg).is_rows().with_rows({
             {
                 ascii_type->decompose(sstring("ascii")),
                 long_type->decompose(42l),
                 utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                varint_type->decompose(boost::multiprecision::cpp_int(2147483648)),
                 decimal_type->decompose(big_decimal { 2, boost::multiprecision::cpp_int(345) }),
             }
         });
