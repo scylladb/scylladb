@@ -53,6 +53,9 @@ update_parameters::get_prefetched_list(
         return {};
     }
 
+    if (column.is_static()) {
+        ckey = clustering_key_view::make_empty();
+    }
     auto i = _prefetched->rows.find(std::make_pair(std::move(pkey), std::move(ckey)));
     if (i == _prefetched->rows.end()) {
         return {};

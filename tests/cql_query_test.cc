@@ -3013,3 +3013,66 @@ SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
         assert_that(res).is_rows().is_empty();
     });
 }
+
+SEASTAR_TEST_CASE(test_static_multi_cell_static_lists_with_ckey) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (p int, c int, slist list<int> static, v int, PRIMARY KEY (p, c));").get();
+        e.execute_cql("INSERT INTO t (p, c, slist, v) VALUES (1, 1, [1], 1); ").get();
+
+        {
+            e.execute_cql("UPDATE t SET slist[0] = 3, v = 3 WHERE p = 1 AND c = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({{3}}))) },
+                { int32_type->decompose(3) }
+            });
+        }
+        {
+            e.execute_cql("UPDATE t SET slist = [4], v = 4 WHERE p = 1 AND c = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({{4}}))) },
+                { int32_type->decompose(4) }
+            });
+        }
+        {
+            e.execute_cql("UPDATE t SET slist = [3] + slist , v = 5 WHERE p = 1 AND c = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({3, 4}))) },
+                { int32_type->decompose(5) }
+            });
+        }
+        {
+            e.execute_cql("UPDATE t SET slist = slist + [5] , v = 6 WHERE p = 1 AND c = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({3, 4, 5}))) },
+                { int32_type->decompose(6) }
+            });
+        }
+        {
+            e.execute_cql("DELETE slist[2] from t WHERE p = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({3, 4}))) },
+                { int32_type->decompose(6) }
+            });
+        }
+        {
+            e.execute_cql("UPDATE t SET slist = slist - [4] , v = 7 WHERE p = 1 AND c = 1;").get();
+            auto msg = e.execute_cql("SELECT slist, v FROM t WHERE p = 1 AND c = 1;").get0();
+            auto slist_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows().with_row({
+                { slist_type->decompose(make_list_value(slist_type, list_type_impl::native_type({3}))) },
+                { int32_type->decompose(7) }
+            });
+        }
+    });
+}
+
