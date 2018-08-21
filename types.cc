@@ -1547,6 +1547,9 @@ public:
         return to_string(b);
     }
     virtual bytes from_json_object(const Json::Value& value, cql_serialization_format sf) const override {
+        if (value.isString()) {
+            return from_string(value.asString());
+        }
         return from_string(json::to_sstring(value));
     }
     virtual bytes from_string(sstring_view text) const override {
