@@ -2923,6 +2923,19 @@ SEASTAR_TEST_CASE(test_insert_json_collections) {
                 )
             }
          });
+
+        e.execute_cql("INSERT INTO collections JSON '{\"a\": \"key2\"}'").get();
+        msg = e.execute_cql("SELECT JSON * FROM collections WHERE a = 'key2'").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                utf8_type->decompose(
+                    "{\"a\": \"key2\", "
+                    "\"b\": null, "
+                    "\"c\": null, "
+                    "\"d\": null}"
+                )
+            }
+         });
     });
 }
 
