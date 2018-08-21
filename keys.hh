@@ -733,6 +733,10 @@ public:
     static const compound& get_compound_type(const schema& s) {
         return s.clustering_key_prefix_type();
     }
+
+    static clustering_key_prefix_view make_empty() {
+        return { bytes_view() };
+    }
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
