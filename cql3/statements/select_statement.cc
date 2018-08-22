@@ -680,6 +680,62 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
     , _view_schema(view_schema)
 {}
 
+template<typename KeyType>
+GCC6_CONCEPT(
+    requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
+)
+static void append_base_key_to_index_ck(std::vector<bytes_view>& exploded_index_ck, const KeyType& base_key, const column_definition& index_cdef) {
+    auto key_view = base_key.view();
+    auto begin = key_view.begin();
+    if ((std::is_same_v<KeyType, partition_key> && index_cdef.is_partition_key())
+            || (std::is_same_v<KeyType, clustering_key_prefix> && index_cdef.is_clustering_key())) {
+        auto key_position = std::next(begin, index_cdef.id);
+        std::move(begin, key_position, std::back_inserter(exploded_index_ck));
+        begin = std::next(key_position);
+    }
+    std::move(begin, key_view.end(), std::back_inserter(exploded_index_ck));
+}
+
+::shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(::shared_ptr<const service::pager::paging_state> paging_state,
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const {
+    const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
+    if (!cdef) {
+        throw exceptions::invalid_request_exception("Indexed column not found in schema");
+    }
+
+    //NOTICE(sarna): Executing indexed_table branch implies there was at least 1 index restriction present
+    bytes_opt index_pk_value = _restrictions->index_restrictions().front()->value_for(*cdef, options);
+    auto index_pk = partition_key::from_single_value(*_view_schema, *index_pk_value);
+    auto result_view = query::result_view(*results);
+    if (!results->row_count() || *results->row_count() == 0) {
+        return std::move(paging_state);
+    }
+    auto [last_base_pk, last_base_ck] = result_view.get_last_partition_and_clustering_key();
+
+    std::vector<bytes_view> exploded_index_ck;
+    exploded_index_ck.reserve(_view_schema->clustering_key_size());
+
+    dht::i_partitioner& partitioner = dht::global_partitioner();
+    bytes token_bytes = partitioner.token_to_bytes(partitioner.get_token(*_schema, last_base_pk));
+    exploded_index_ck.push_back(bytes_view(token_bytes));
+    append_base_key_to_index_ck<partition_key>(exploded_index_ck, last_base_pk, *cdef);
+    if (last_base_ck) {
+        append_base_key_to_index_ck<clustering_key>(exploded_index_ck, *last_base_ck, *cdef);
+    }
+
+    auto index_ck = clustering_key::from_range(std::move(exploded_index_ck));
+    if (partition_key::tri_compare(*_view_schema)(paging_state->get_partition_key(), index_pk) == 0
+            && (!paging_state->get_clustering_key() || clustering_key::prefix_equal_tri_compare(*_view_schema)(*paging_state->get_clustering_key(), index_ck) == 0)) {
+        return std::move(paging_state);
+    }
+
+    auto paging_state_copy = ::make_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
+    paging_state_copy->set_partition_key(std::move(index_pk));
+    paging_state_copy->set_clustering_key(std::move(index_ck));
+    paging_state_copy->set_remaining(query::max_rows);
+    return std::move(paging_state_copy);
+}
+
 future<shared_ptr<cql_transport::messages::result_message>>
 indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                              service::query_state& state,

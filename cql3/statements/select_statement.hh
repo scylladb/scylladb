@@ -201,6 +201,9 @@ private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
                                                                                      service::query_state& state, const query_options& options) override;
 
+    ::shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(::shared_ptr<const service::pager::paging_state> paging_state,
+            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const;
+
     future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>> find_index_partition_ranges(service::storage_proxy& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
