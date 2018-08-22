@@ -329,6 +329,13 @@ class index_reader {
         { }
     };
 
+    // Stores information about open end RT marker
+    // of the lower index bound
+    struct open_rt_marker {
+        position_in_partition pos;
+        tombstone tomb;
+    };
+
     // Contains information about index_reader position in the index file
     struct index_bound {
         shared_index_lists::list_ptr current_list;
@@ -338,7 +345,7 @@ class index_reader {
         uint64_t current_pi_idx = 0; // Points to upper bound of the cursor.
         uint64_t data_file_position = 0;
         indexable_element element = indexable_element::partition;
-        std::optional<deletion_time> end_open_marker;
+        std::optional<open_rt_marker> end_open_marker;
     };
 
     index_bound _lower_bound;
@@ -601,6 +608,23 @@ private:
         return _sstable->data_size();
     }
 
+    void get_info_from_promoted_block(const promoted_index_block& pi_block) {
+        const index_entry& e = current_partition_entry();
+        _lower_bound.data_file_position = e.position() + pi_block.offset();
+        _lower_bound.element = indexable_element::cell;
+        if (pi_block.end_open_marker()) {
+            // Can only be engaged in SSTables 3.x ('mc' format) and never in ka/la
+            auto start_pos = pi_block.start(*_sstable->get_schema());
+            position_in_partition_view* open_rt_pos = std::get_if<position_in_partition_view>(&start_pos);
+            assert(open_rt_pos);
+            _lower_bound.end_open_marker = open_rt_marker{
+                    position_in_partition{*open_rt_pos},
+                    tombstone(*pi_block.end_open_marker())};
+        } else {
+            _lower_bound.end_open_marker.reset();
+        }
+    }
+
 public:
     index_reader(shared_sstable sst, const io_priority_class& pc)
         : _sstable(std::move(sst))
@@ -697,7 +721,6 @@ public:
             return pos_cmp(pos, info.start(s));
         };
 
-
         if (!pi_blocks->empty() && cmp_with_start(pos, (*pi_blocks)[_lower_bound.current_pi_idx])) {
             sstlog.trace("index {}: position in current block (exact match)", this);
             return make_ready_future<>();
@@ -710,26 +733,21 @@ public:
                 --i;
             }
 
-            _lower_bound.data_file_position = e.position() + i->offset();
-            _lower_bound.element = indexable_element::cell;
-            _lower_bound.end_open_marker = i->end_open_marker();
+            get_info_from_promoted_block(*i);
             sstlog.trace("index {}: lower bound skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
             return make_ready_future<>();
         }
 
-        return e.get_pi_blocks_until(pos).then([this, &e, pi_blocks] (size_t current_pi_idx) {
+        return e.get_pi_blocks_until(pos).then([this, &s, &e, pi_blocks] (size_t current_pi_idx) {
             _lower_bound.current_pi_idx = current_pi_idx;
             auto i = std::begin(*pi_blocks);
             if (_lower_bound.current_pi_idx > 0) {
                 std::advance(i, _lower_bound.current_pi_idx - 1);
             }
-            _lower_bound.data_file_position = e.position() + i->offset();
-            _lower_bound.element = indexable_element::cell;
-            _lower_bound.end_open_marker = i->end_open_marker();
+            get_info_from_promoted_block(*i);
             sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
-            return make_ready_future<>();
         });
     }
 
@@ -788,7 +806,7 @@ public:
         return _lower_bound.element;
     }
 
-    std::optional<deletion_time> end_open_marker() const {
+    std::optional<open_rt_marker> end_open_marker() const {
         return _lower_bound.end_open_marker;
     }
 
