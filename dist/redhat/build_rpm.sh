@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+PRODUCT=scylla
+
 . /etc/os-release
 print_usage() {
     echo "build_rpm.sh --rebuild-dep --jobs 2 --target epel-7-$(uname -m)"
@@ -93,10 +95,10 @@ VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION >version
-./scripts/git-archive-all --extra version --force-submodules --prefix scylla-$SCYLLA_VERSION build/scylla-$VERSION.tar
+./scripts/git-archive-all --extra version --force-submodules --prefix $PRODUCT-$SCYLLA_VERSION build/$PRODUCT-$VERSION.tar
 rm -f version
 
-pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST }" > build/scylla.spec
+pystache dist/redhat/scylla.spec.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"housekeeping\": $DIST, \"product\": \"$PRODUCT\", \"$PRODUCT\": true }" > build/scylla.spec
 
 # mock generates files owned by root, fix this up
 fix_ownership() {
@@ -106,11 +108,11 @@ fix_ownership() {
 if [ $JOBS -gt 0 ]; then
     RPM_JOBS_OPTS=(--define="_smp_mflags -j$JOBS")
 fi
-sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
+sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/$PRODUCT-$VERSION.tar $SRPM_OPTS "${RPM_JOBS_OPTS[@]}"
 fix_ownership build/srpms
 if [[ "$TARGET" =~ ^epel-7- ]]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
-sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/scylla-$VERSION*.src.rpm
+sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS "${RPM_JOBS_OPTS[@]}" build/srpms/$PRODUCT-$VERSION*.src.rpm
 fix_ownership build/rpms
