@@ -212,6 +212,16 @@ private:
                                                                 service::query_state& state,
                                                                 const query_options& options);
 
+    shared_ptr<cql_transport::messages::result_message>
+    process_base_query_results(
+            foreign_ptr<lw_shared_ptr<query::result>> results,
+            lw_shared_ptr<query::read_command> cmd,
+            service::storage_proxy& proxy,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
+
     virtual void update_stats_rows_read(int64_t rows_read) override {
         _stats.rows_read += rows_read;
         _stats.secondary_index_rows_read += rows_read;

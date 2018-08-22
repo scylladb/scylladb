@@ -580,6 +580,23 @@ select_statement::execute(service::storage_proxy& proxy,
 }
 
 shared_ptr<cql_transport::messages::result_message>
+indexed_table_select_statement::process_base_query_results(
+        foreign_ptr<lw_shared_ptr<query::result>> results,
+        lw_shared_ptr<query::read_command> cmd,
+        service::storage_proxy& proxy,
+        service::query_state& state,
+        const query_options& options,
+        gc_clock::time_point now,
+        ::shared_ptr<const service::pager::paging_state> paging_state)
+{
+    if (paging_state) {
+        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, proxy, state, options);
+        _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
+    }
+    return process_results(std::move(results), std::move(cmd), options, now);
+}
+
+shared_ptr<cql_transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
                                   lw_shared_ptr<query::read_command> cmd,
                                   const query_options& options,
