@@ -358,7 +358,7 @@ public:
             _max = _max - row_count;
             _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 
-            if (!_exhausted) {
+            if (!_exhausted || row_count > 0) {
                 if (_last_pkey) {
                     update_slice(*_last_pkey);
                 }
@@ -378,9 +378,8 @@ public:
         }
     }
 
-    shared_ptr<const service::pager::paging_state> query_pager::state() const {
-        return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
-                _last_ckey, _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
+    ::shared_ptr<const paging_state> query_pager::state() const {
+        return ::make_shared<paging_state>(*_last_pkey, _last_ckey, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
     }
 
 }

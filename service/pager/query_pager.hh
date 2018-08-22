@@ -134,8 +134,8 @@ public:
      * Get the current state (snapshot) of the pager. The state can allow to restart the
      * paging on another host from where we are at this point.
      *
-     * @return the current paging state. Will return null if paging is at the
-     * beginning. If the pager is exhausted, the result is undefined.
+     * @return the current paging state. If the pager is exhausted, the result is a valid pointer
+     * to a paging_state instance which will return 0 on calling get_remaining() on it.
      */
     ::shared_ptr<const paging_state> state() const;
 
