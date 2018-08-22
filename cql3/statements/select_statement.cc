@@ -628,6 +628,11 @@ indexed_table_select_statement::prepare(database& db,
     if (!index_opt) {
         throw std::runtime_error("No index found.");
     }
+
+    const auto& im = index_opt->metadata();
+    sstring index_table_name = im.name() + "_index";
+    schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
+
     return ::make_shared<cql3::statements::indexed_table_select_statement>(
             schema,
             bound_terms,
@@ -638,7 +643,8 @@ indexed_table_select_statement::prepare(database& db,
             std::move(ordering_comparator),
             limit,
             stats,
-            *index_opt);
+            *index_opt,
+            view_schema);
 
 }
 
@@ -667,9 +673,11 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
                                                            ::shared_ptr<term> limit, cql_stats &stats,
-                                                           const secondary_index::index& index)
+                                                           const secondary_index::index& index,
+                                                           schema_ptr view_schema)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, stats}
     , _index{index}
+    , _view_schema(view_schema)
 {}
 
 future<shared_ptr<cql_transport::messages::result_message>>
@@ -677,6 +685,7 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
                              service::query_state& state,
                              const query_options& options)
 {
+    tracing::add_table_name(state.get_trace_state(), _view_schema->ks_name(), _view_schema->cf_name());
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     auto cl = options.get_consistency();
@@ -760,20 +769,6 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
             return this->execute(proxy, command, std::move(primary_keys), state, options, now);
         });
     }
-}
-
-// Utility function for getting the schema of the materialized view used for
-// the secondary index implementation.
-static schema_ptr
-get_index_schema(service::storage_proxy& proxy,
-                const secondary_index::index& index,
-                const schema_ptr& schema,
-                tracing::trace_state_ptr& trace_state)
-{
-    const auto& im = index.metadata();
-    sstring index_table_name = im.name() + "_index";
-    tracing::add_table_name(trace_state, schema->ks_name(), index_table_name);
-    return proxy.get_db().local().find_schema(schema->ks_name(), index_table_name);
 }
 
 // Utility function for reading from the index view (get_index_view()))
@@ -895,11 +890,10 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                                              service::query_state& state,
                                              const query_options& options)
 {
-    schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list<partition_key>(proxy, view, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout, _stats).then(
-            [this, now, &options, view] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+    return read_posting_list<partition_key>(proxy, _view_schema, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout, _stats).then(
+            [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
         auto rs = cql3::untyped_result_set(rows);
         dht::partition_range_vector partition_ranges;
         partition_ranges.reserve(rs.size());
@@ -936,11 +930,10 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
 future<std::vector<indexed_table_select_statement::primary_key>, ::shared_ptr<const service::pager::paging_state>>
 indexed_table_select_statement::find_index_clustering_rows(service::storage_proxy& proxy, service::query_state& state, const query_options& options)
 {
-    schema_ptr view = get_index_schema(proxy, _index, _schema, state.get_trace_state());
     auto now = gc_clock::now();
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
-    return read_posting_list<clustering_key>(proxy, view, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout, _stats).then(
-            [this, now, &options, view] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
+    return read_posting_list<clustering_key>(proxy, _view_schema, _schema, _index, _restrictions, options, get_limit(options), state, now, timeout, _stats).then(
+            [this, now, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
 
         auto rs = cql3::untyped_result_set(rows);
         std::vector<primary_key> primary_keys;

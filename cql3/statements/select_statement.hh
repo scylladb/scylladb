@@ -168,6 +168,7 @@ public:
 
 class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
+    schema_ptr _view_schema;
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
                                                                     schema_ptr schema,
@@ -189,7 +190,8 @@ public:
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
                                    cql_stats &stats,
-                                   const secondary_index::index& index);
+                                   const secondary_index::index& index,
+                                   schema_ptr view_schema);
 
 private:
     static stdx::optional<secondary_index::index> find_idx(database& db,
