@@ -24,9 +24,9 @@
 #include <boost/intrusive/unordered_set.hpp>
 
 #include "utils/small_vector.hh"
-#include "fnv1a_hasher.hh"
 #include "mutation_fragment.hh"
 #include "mutation_partition.hh"
+#include "xx_hasher.hh"
 
 #include "db/timeout_clock.hh"
 
@@ -194,10 +194,10 @@ private:
             explicit hasher(const schema& s) : _schema(&s) { }
 
             size_t operator()(const cell_address& ca) const {
-                fnv1a_hasher hasher;
+                xx_hasher hasher;
                 ca.position.feed_hash(hasher, *_schema);
                 ::feed_hash(hasher, ca.id);
-                return hasher.finalize();
+                return static_cast<size_t>(hasher.finalize_uint64());
             }
             size_t operator()(const cell_entry& ce) const {
                 return operator()(ce._address);
