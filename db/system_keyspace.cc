@@ -1635,6 +1635,9 @@ void make(database& db, bool durable, bool volatile_testing_only) {
         auto cfg = ks.make_column_family_config(*table, db.get_config(), db.get_large_partition_handler());
         if (maybe_write_in_user_memory(table, db)) {
             cfg.dirty_memory_manager = &db._dirty_memory_manager;
+        } else {
+            cfg.memtable_scheduling_group = default_scheduling_group();
+            cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
         }
         db.add_column_family(ks, table, std::move(cfg));
         maybe_add_virtual_reader(table, db);
