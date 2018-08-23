@@ -32,7 +32,7 @@
 
 
 #include "seastarx.hh"
-
+#include "tests/eventually.hh"
 #include "tests/test-utils.hh"
 #include "tmpdir.hh"
 #include "log.hh"
@@ -297,14 +297,8 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_expiry_eviction) {
 
         BOOST_REQUIRE(loading_cache.find(0) != loading_cache.end());
 
-        // timers get delayed sometimes (especially in a debug mode)
-        constexpr int max_retry = 10;
-        int i = 0;
-        do_until(
-            [&] { return i++ > max_retry || loading_cache.find(0) == loading_cache.end(); },
-            [] { return sleep(40ms); }
-        ).get();
-        BOOST_REQUIRE(loading_cache.find(0) == loading_cache.end());
+        sleep(20ms).get();
+        REQUIRE_EVENTUALLY_EQUAL(loading_cache.find(0), loading_cache.end());
     });
 }
 
