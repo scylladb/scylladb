@@ -35,6 +35,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "bytes.hh"
 #include "schema.hh"
+#include "tests/eventually.hh"
 
 class database;
 
@@ -107,20 +108,3 @@ future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func);
 future<> do_with_cql_env_thread(std::function<void(cql_test_env&)> func, const db::config&);
-
-template<typename EventuallySucceedingFunction>
-static void eventually(EventuallySucceedingFunction&& f, size_t max_attempts = 12) {
-    size_t attempts = 0;
-    while (true) {
-        try {
-            f();
-            break;
-        } catch (...) {
-            if (++attempts < max_attempts) {
-                sleep(std::chrono::milliseconds(1 << attempts)).get0();
-            } else {
-                throw;
-            }
-        }
-    }
-}
