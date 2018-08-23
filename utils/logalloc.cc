@@ -1349,7 +1349,7 @@ public:
     }
 
     occupancy_stats evictable_occupancy() const {
-        return occupancy_stats(_evictable_space, _evictable_space);
+        return occupancy_stats(0, _evictable_space);
     }
     //
     // Returns true if this region can be compacted and compact() will make forward progress,
