@@ -288,8 +288,12 @@ public:
         update(delta);
     }
 
-    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+    void decrease_evictable_usage(region_heap::handle_type& r_handle) {
         _regions.decrease(r_handle);
+    }
+
+    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+        decrease_evictable_usage(r_handle);
         update(delta);
     }
 
@@ -613,6 +617,9 @@ public:
     uint64_t reclaim_counter() const {
         return allocator().invalidate_counter();
     }
+
+    // Will cause subsequent calls to evictable_occupancy() to report empty occupancy.
+    void ground_evictable_occupancy();
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.

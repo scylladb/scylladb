@@ -1139,6 +1139,9 @@ private:
     // occupancy. We could actually just present this as a scalar as well and never use occupancies,
     // but consistency is good.
     size_t _evictable_space = 0;
+    // This is a mask applied to _evictable_space with bitwise-and before it's returned from evictable_space().
+    // Used for forcing the result to zero without using conditionals.
+    size_t _evictable_space_mask = std::numeric_limits<size_t>::max();
     bool _evictable = false;
     region_sanitizer _sanitizer;
     uint64_t _id;
@@ -1348,8 +1351,16 @@ public:
     }
 
     occupancy_stats evictable_occupancy() const {
-        return occupancy_stats(0, _evictable_space);
+        return occupancy_stats(0, _evictable_space & _evictable_space_mask);
     }
+
+    void ground_evictable_occupancy() {
+        _evictable_space_mask = 0;
+        if (_group) {
+            _group->decrease_evictable_usage(_heap_handle);
+        }
+    }
+
     //
     // Returns true if this region can be compacted and compact() will make forward progress,
     // so that this will eventually stop:
@@ -1736,6 +1747,10 @@ memory::reclaiming_result region::evict_some() {
 
 void region::make_evictable(eviction_fn fn) {
     get_impl().make_evictable(std::move(fn));
+}
+
+void region::ground_evictable_occupancy() {
+    get_impl().ground_evictable_occupancy();
 }
 
 const eviction_fn& region::evictor() const {
