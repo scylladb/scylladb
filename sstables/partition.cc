@@ -235,6 +235,7 @@ private:
                 _read_enabled = false;
                 return make_ready_future<>();
             }
+            assert(_index_reader->element_kind() == indexable_element::partition);
             return _context->skip_to(_index_reader->element_kind(), start);
         });
     }
