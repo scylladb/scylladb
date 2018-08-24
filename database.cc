@@ -3442,6 +3442,13 @@ future<> dirty_memory_manager::flush_when_needed() {
                 // release the biggest amount of memory and is less likely to be generating tiny
                 // SSTables.
                 memtable& candidate_memtable = memtable::from_region(*(this->_virtual_region_group.get_largest_region()));
+
+                if (candidate_memtable.empty()) {
+                    // Soft pressure, but nothing to flush. It could be due to fsync or memtable_to_cache lagging.
+                    // Back off to avoid OOMing with flush continuations.
+                    return sleep(1ms);
+                }
+
                 // Do not wait. The semaphore will protect us against a concurrent flush. But we
                 // want to start a new one as soon as the permits are destroyed and the semaphore is
                 // made ready again, not when we are done with the current one.
