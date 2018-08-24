@@ -2150,7 +2150,7 @@ database::database(const db::config& cfg, database_config dbcfg)
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(max_count_streaming_concurrent_reads, max_memory_streaming_concurrent_reads())
     , _system_read_concurrency_sem(max_count_system_concurrent_reads, max_memory_system_concurrent_reads())
-    , _data_query_stage("data_query", _dbcfg.statement_scheduling_group, &column_family::query)
+    , _data_query_stage("data_query", &column_family::query)
     , _mutation_query_stage(_dbcfg.statement_scheduling_group)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))

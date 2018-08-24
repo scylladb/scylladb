@@ -1191,7 +1191,7 @@ private:
 
     cache_tracker _row_cache_tracker;
 
-    concrete_execution_stage<future<lw_shared_ptr<query::result>>,
+    inheriting_concrete_execution_stage<future<lw_shared_ptr<query::result>>,
         column_family*,
         schema_ptr,
         const query::read_command&,
