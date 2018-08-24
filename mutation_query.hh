@@ -149,7 +149,7 @@ future<> data_query(
 
 
 class mutation_query_stage {
-    concrete_execution_stage<future<reconcilable_result>,
+    inheriting_concrete_execution_stage<future<reconcilable_result>,
         schema_ptr,
         mutation_source,
         const dht::partition_range&,
@@ -162,7 +162,7 @@ class mutation_query_stage {
         db::timeout_clock::time_point,
         querier_cache_context> _execution_stage;
 public:
-    explicit mutation_query_stage(seastar::scheduling_group sg);
+    explicit mutation_query_stage();
     template <typename... Args>
     future<reconcilable_result> operator()(Args&&... args) { return _execution_stage(std::forward<Args>(args)...); }
 };
