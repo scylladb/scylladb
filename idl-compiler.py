@@ -818,13 +818,13 @@ def add_view(hout, info):
 
         fprintln(hout, Template(reindent(4, """
             auto $name() const {
-              return seastar::with_serialized_stream(v, [this] (auto& v) {
+              return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype($func(std::declval<utils::input_stream&>(), boost::type<$type>())) {
                auto in = v;
                $skip
                return $deser;
               });
             }
-        """)).substitute({'name' : name, 'type' : full_type, 'skip' : skip, 'deser' : deser}))
+        """)).substitute({'name' : name, 'type' : full_type, 'skip' : skip, 'deser' : deser, 'func' : DESERIALIZER}))
 
         skip = skip + Template("\n       ser::skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
