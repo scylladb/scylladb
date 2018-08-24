@@ -1205,6 +1205,13 @@ private:
 
     mutation_query_stage _mutation_query_stage;
 
+    inheriting_concrete_execution_stage<
+            future<>,
+            database*,
+            schema_ptr,
+            const frozen_mutation&,
+            db::timeout_clock::time_point> _apply_stage;
+
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
