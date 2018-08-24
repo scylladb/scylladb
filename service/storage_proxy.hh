@@ -163,6 +163,14 @@ private:
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     seastar::metrics::metric_groups _metrics;
     uint64_t _background_write_throttle_threahsold;
+    inheriting_concrete_execution_stage<
+            future<>,
+            storage_proxy*,
+            std::vector<mutation>,
+            db::consistency_level,
+            clock_type::time_point,
+            tracing::trace_state_ptr,
+            bool> _mutate_stage;
 private:
     void uninit_messaging_service();
     future<coordinator_query_result> query_singular(lw_shared_ptr<query::read_command> cmd,
@@ -252,7 +260,6 @@ private:
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
     future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool);
-    friend class mutate_executor;
 public:
     storage_proxy(distributed<database>& db, config cfg);
     ~storage_proxy();
