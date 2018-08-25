@@ -421,7 +421,7 @@ private:
                                         *std::exchange(ctx.end_pos, {}),
                                         ctx.offset,
                                         ctx.width,
-                                        *std::exchange(ctx.end_open_marker, {}));
+                                        std::exchange(ctx.end_open_marker, {}));
                 ctx.state = state_m::CLUSTERING_START;
                 --_num_blocks_left;
                 if (_num_blocks_left == 0) {
