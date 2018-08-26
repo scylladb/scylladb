@@ -41,11 +41,6 @@
 
 #include "auth/password_authenticator.hh"
 
-extern "C" {
-#include <crypt.h>
-#include <unistd.h>
-}
-
 #include <algorithm>
 #include <chrono>
 #include <random>
@@ -55,6 +50,7 @@ extern "C" {
 
 #include "auth/authenticated_user.hh"
 #include "auth/common.hh"
+#include "auth/passwords.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/untyped_result_set.hh"
 #include "log.hh"
@@ -82,6 +78,8 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
+static thread_local auto rng_for_salt = passwords::make_seeded_random_engine<std::default_random_engine>();
+
 password_authenticator::~password_authenticator() {
 }
 
@@ -89,77 +87,6 @@ password_authenticator::password_authenticator(cql3::query_processor& qp, ::serv
     : _qp(qp)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>()) {
-}
-
-// TODO: blowfish
-// Origin uses Java bcrypt library, i.e. blowfish salt
-// generation and hashing, which is arguably a "better"
-// password hash than sha/md5 versions usually available in
-// crypt_r. Otoh, glibc 2.7+ uses a modified sha512 algo
-// which should be the same order of safe, so the only
-// real issue should be salted hash compatibility with
-// origin if importing system tables from there.
-//
-// Since bcrypt/blowfish is _not_ (afaict) not available
-// as a dev package/lib on most linux distros, we'd have to
-// copy and compile for example OWL  crypto
-// (http://cvsweb.openwall.com/cgi/cvsweb.cgi/Owl/packages/glibc/crypt_blowfish/)
-// to be fully bit-compatible.
-//
-// Until we decide this is needed, let's just use crypt_r,
-// and some old-fashioned random salt generation.
-
-static constexpr size_t rand_bytes = 16;
-static thread_local crypt_data tlcrypt = { 0, };
-
-static sstring hashpw(const sstring& pass, const sstring& salt) {
-    auto res = crypt_r(pass.c_str(), salt.c_str(), &tlcrypt);
-    if (res == nullptr) {
-        throw std::system_error(errno, std::system_category());
-    }
-    return res;
-}
-
-static bool checkpw(const sstring& pass, const sstring& salted_hash) {
-    auto tmp = hashpw(pass, salted_hash);
-    return tmp == salted_hash;
-}
-
-static sstring gensalt() {
-    static sstring prefix;
-
-    std::default_random_engine e1{std::random_device{}()};
-    std::uniform_int_distribution<char> dist;
-
-    sstring valid_salt = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
-    sstring input(rand_bytes, 0);
-
-    for (char&c : input) {
-        c = valid_salt[dist(e1) % valid_salt.size()];
-    }
-
-    sstring salt;
-
-    if (!prefix.empty()) {
-        return prefix + input;
-    }
-
-    // Try in order:
-    // blowfish 2011 fix, blowfish, sha512, sha256, md5
-    for (sstring pfx : { "$2y$", "$2a$", "$6$", "$5$", "$1$" }) {
-        salt = pfx + input;
-        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
-
-        if (e && (e[0] != '*')) {
-            prefix = pfx;
-            return salt;
-        }
-    }
-    throw std::runtime_error("Could not initialize hashing algorithm");
-}
-
-static sstring hashpw(const sstring& pass) {
-    return hashpw(pass, gensalt());
 }
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
@@ -211,7 +138,7 @@ future<> password_authenticator::create_default_if_missing() const {
                     update_row_query,
                     db::consistency_level::QUORUM,
                     internal_distributed_timeout_config(),
-                    {hashpw(DEFAULT_USER_PASSWORD), DEFAULT_USER_NAME}).then([](auto&&) {
+                    {passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt), DEFAULT_USER_NAME}).then([](auto&&) {
                 plogger.info("Created default superuser authentication record.");
             });
         }
@@ -222,8 +149,6 @@ future<> password_authenticator::create_default_if_missing() const {
 
 future<> password_authenticator::start() {
      return once_among_shards([this] {
-         gensalt(); // do this once to determine usable hashing
-
          auto f = create_metadata_table_if_missing(
                  meta::roles_table::name,
                  _qp,
@@ -316,7 +241,7 @@ future<authenticated_user> password_authenticator::authenticate(
     }).then_wrapped([=](future<::shared_ptr<cql3::untyped_result_set>> f) {
         try {
             auto res = f.get0();
-            if (res->empty() || !checkpw(password, res->one().get_as<sstring>(SALTED_HASH))) {
+            if (res->empty() || !passwords::check(password, res->one().get_as<sstring>(SALTED_HASH))) {
                 throw exceptions::authentication_exception("Username and/or password are incorrect");
             }
             return make_ready_future<authenticated_user>(username);
@@ -339,7 +264,7 @@ future<> password_authenticator::create(stdx::string_view role_name, const authe
             update_row_query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {hashpw(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::alter(stdx::string_view role_name, const authentication_options& options) const {
@@ -357,7 +282,7 @@ future<> password_authenticator::alter(stdx::string_view role_name, const authen
             query,
             consistency_for_user(role_name),
             internal_distributed_timeout_config(),
-            {hashpw(*options.password), sstring(role_name)}).discard_result();
+            {passwords::hash(*options.password, rng_for_salt), sstring(role_name)}).discard_result();
 }
 
 future<> password_authenticator::drop(stdx::string_view name) const {
