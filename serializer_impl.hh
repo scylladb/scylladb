@@ -342,26 +342,38 @@ struct serializer<bool_class<Tag>> {
     }
 };
 
-template<typename Iterator>
+template<typename Stream>
 class deserialized_bytes_proxy {
-    seastar::memory_input_stream<Iterator> _stream;
+    Stream _stream;
+
+    template<typename OtherStream>
+    friend class deserialized_bytes_proxy;
 public:
-    explicit deserialized_bytes_proxy(seastar::memory_input_stream<Iterator> stream)
+    explicit deserialized_bytes_proxy(Stream stream)
         : _stream(std::move(stream)) { }
 
-    buffer_view<Iterator> view() const {
-        GCC6_CONCEPT(static_assert(FragmentRange<buffer_view<Iterator>>));
+    template<typename OtherStream, typename = std::enable_if_t<std::is_convertible_v<OtherStream, Stream>>>
+    deserialized_bytes_proxy(deserialized_bytes_proxy<OtherStream> proxy)
+        : _stream(std::move(proxy._stream)) { }
+
+    auto view() const {
+      if constexpr (std::is_same_v<Stream, simple_input_stream>) {
+        return bytes_view(reinterpret_cast<const int8_t*>(_stream.begin()), _stream.size());
+      } else {
+        using iterator_type = typename Stream::iterator_type ;
+        GCC6_CONCEPT(static_assert(FragmentRange<buffer_view<iterator_type>>));
         return seastar::with_serialized_stream(_stream, seastar::make_visitor(
-            [&] (typename seastar::memory_input_stream<Iterator>::simple stream) {
-                return buffer_view<Iterator>(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()),
+            [&] (typename seastar::memory_input_stream<iterator_type >::simple stream) {
+                return buffer_view<iterator_type>(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()),
                                                         stream.size()));
             },
-            [&] (typename seastar::memory_input_stream<Iterator>::fragmented stream) {
-                return buffer_view<Iterator>(bytes_view(reinterpret_cast<const int8_t*>(stream.first_fragment_data()),
+            [&] (typename seastar::memory_input_stream<iterator_type >::fragmented stream) {
+                return buffer_view<iterator_type>(bytes_view(reinterpret_cast<const int8_t*>(stream.first_fragment_data()),
                                                         stream.first_fragment_size()),
                                              stream.size(), stream.fragment_iterator());
             }
         ));
+      }
     }
 
     [[gnu::always_inline]]
@@ -389,9 +401,9 @@ public:
 template<>
 struct serializer<bytes> {
     template<typename Input>
-    static deserialized_bytes_proxy<typename Input::iterator_type> read(Input& in) {
+    static deserialized_bytes_proxy<Input> read(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
-        return deserialized_bytes_proxy<typename Input::iterator_type>(in.read_substream(sz));
+        return deserialized_bytes_proxy<Input>(in.read_substream(sz));
     }
     template<typename Output>
     static void write(Output& out, bytes_view v) {
