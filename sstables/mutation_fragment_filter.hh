@@ -134,6 +134,10 @@ public:
         return (_last_lower_bound_counter != _walker.lower_bound_change_counter());
     }
 
+
+    position_in_partition_view lower_bound() const {
+        return _walker.lower_bound();
+    }
 };
 
 };   // namespace sstables

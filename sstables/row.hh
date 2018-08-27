@@ -42,6 +42,7 @@
 
 #include "sstables.hh"
 #include "tombstone.hh"
+#include "m_format_read_helpers.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
 // row_consumer object:
@@ -174,6 +175,15 @@ public:
 
     virtual proceed consume_counter_column(std::optional<column_id> column_id, bytes_view value,
                                            api::timestamp_type timestamp) = 0;
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            bound_kind kind,
+                                            tombstone tomb) = 0;
+
+    virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
+                                            sstables::bound_kind_m,
+                                            tombstone end_tombstone,
+                                            tombstone start_tombstone) = 0;
 
     virtual proceed consume_row_end() = 0;
 
@@ -579,6 +589,16 @@ private:
         COLUMN_VALUE,
         COLUMN_END,
         RANGE_TOMBSTONE_MARKER,
+        RANGE_TOMBSTONE_KIND,
+        RANGE_TOMBSTONE_SIZE,
+        RANGE_TOMBSTONE_CONSUME_CK,
+        RANGE_TOMBSTONE_BODY,
+        RANGE_TOMBSTONE_BODY_SIZE,
+        RANGE_TOMBSTONE_BODY_PREV_SIZE,
+        RANGE_TOMBSTONE_BODY_TIMESTAMP,
+        RANGE_TOMBSTONE_BODY_TIMESTAMP2,
+        RANGE_TOMBSTONE_BODY_LOCAL_DELTIME,
+        RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2,
     } _state = state::PARTITION_START;
 
     consumer_m& _consumer;
@@ -614,10 +634,22 @@ private:
     temporary_buffer<char> _cell_path;
     uint64_t _ck_blocks_header;
     uint32_t _ck_blocks_header_offset;
+    bool _null_component_occured;
     uint64_t _subcolumns_to_read = 0;
     api::timestamp_type _complex_column_marked_for_delete;
     tombstone _complex_column_tombstone;
-
+    bool _reading_range_tombstone_ck = false;
+    bound_kind_m _range_tombstone_kind;
+    uint16_t _ck_size;
+    /*
+     * We need two range tombstones because range tombstone marker can be either a single bound
+     * or a double bound that represents end of one range tombstone and start of another at the same time.
+     * If range tombstone marker is a single bound then only _left_range_tombstone is used.
+     * Otherwise, _left_range_tombstone represents tombstone for a range tombstone that's being closed
+     * and _right_range_tombstone represents a tombstone for a range tombstone that's being opened.
+     */
+    tombstone _left_range_tombstone;
+    tombstone _right_range_tombstone;
     void setup_columns(const std::vector<std::optional<column_id>>& column_ids,
                        const std::vector<std::optional<uint32_t>>& column_value_fix_lengths,
                        const std::vector<bool>& column_is_collection,
@@ -662,7 +694,12 @@ private:
     void setup_ck(const std::vector<std::optional<uint32_t>>& column_value_fix_lengths) {
         _row_key.clear();
         _row_key.reserve(column_value_fix_lengths.size());
-        _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        if (column_value_fix_lengths.empty()) {
+            _ck_column_value_fix_lengths = boost::make_iterator_range(column_value_fix_lengths);
+        } else {
+            _ck_column_value_fix_lengths = boost::make_iterator_range(std::begin(column_value_fix_lengths),
+                                                                      std::begin(column_value_fix_lengths) + _ck_size);
+        }
         _ck_blocks_header_offset = 0u;
     }
     bool no_more_ck_blocks() { return _ck_column_value_fix_lengths.empty(); }
@@ -678,6 +715,9 @@ private:
     }
     bool is_block_empty() {
         return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset))) != 0;
+    }
+    bool is_block_null() {
+        return (_ck_blocks_header & (1u << (2 * _ck_blocks_header_offset + 1))) != 0;
     }
     bool should_read_block_header() {
         return _ck_blocks_header_offset == 0u;
@@ -762,6 +802,7 @@ public:
                               _column_translation.regular_column_value_fix_legths(),
                               _column_translation.regular_column_is_collection(),
                               _column_translation.regular_column_is_counter());
+                _ck_size = _column_translation.clustering_column_value_fix_legths().size();
                 goto clustering_row_label;
             }
             if (read_8(data) != read_status::ready) {
@@ -787,14 +828,20 @@ public:
                           _column_translation.regular_column_value_fix_legths(),
                           _column_translation.regular_column_is_collection(),
                           _column_translation.regular_column_is_counter());
+            _ck_size = _column_translation.clustering_column_value_fix_legths().size();
         case state::CLUSTERING_ROW:
         clustering_row_label:
             _is_first_unfiltered = false;
+            _null_component_occured = false;
             setup_ck(_column_translation.clustering_column_value_fix_legths());
         case state::CK_BLOCK:
         ck_block_label:
             if (no_more_ck_blocks()) {
-                goto clustering_row_consume_label;
+                if (_reading_range_tombstone_ck) {
+                    goto range_tombstone_consume_ck_label;
+                } else {
+                    goto clustering_row_consume_label;
+                }
             }
             if (!should_read_block_header()) {
                 _state = state::CK_BLOCK2;
@@ -808,6 +855,14 @@ public:
             _ck_blocks_header = _u64;
         case state::CK_BLOCK2:
         ck_block2_label: {
+            if (is_block_null()) {
+                _null_component_occured = true;
+                move_to_next_ck_block();
+                goto ck_block_label;
+            }
+            if (_null_component_occured) {
+                throw malformed_sstable_exception("non-null component after null component");
+            }
             if (is_block_empty()) {
                 _row_key.push_back({});
                 move_to_next_ck_block();
@@ -1115,7 +1170,91 @@ public:
             goto column_label;
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
-            throw malformed_sstable_exception("unimplemented state");
+            _is_first_unfiltered = false;
+            if (read_8(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_KIND;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_KIND:
+            _range_tombstone_kind = bound_kind_m(_u8);
+            if (read_16(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_SIZE;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_SIZE:
+            _ck_size = _u16;
+            if (_ck_size == 0) {
+                _row_key.clear();
+                _range_tombstone_kind = is_start(_range_tombstone_kind)
+                        ? bound_kind_m::incl_start : bound_kind_m::incl_end;
+                goto range_tombstone_body_label;
+            } else {
+                _reading_range_tombstone_ck = true;
+                goto clustering_row_label;
+            }
+            assert(0);
+        case state::RANGE_TOMBSTONE_CONSUME_CK:
+        range_tombstone_consume_ck_label:
+            _reading_range_tombstone_ck = false;
+        case state::RANGE_TOMBSTONE_BODY:
+        range_tombstone_body_label:
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_SIZE;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_SIZE:
+            // Ignore result
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_PREV_SIZE;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_PREV_SIZE:
+            // Ignore result
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_TIMESTAMP:
+            _left_range_tombstone.timestamp = parse_timestamp(_header, _u64);
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME:
+            _left_range_tombstone.deletion_time = parse_expiry(_header, _u64);
+            if (!is_boundary(_range_tombstone_kind)) {
+                if (_consumer.consume_range_tombstone(_row_key,
+                                                      to_bound_kind(_range_tombstone_kind),
+                                                      _left_range_tombstone) == consumer_m::proceed::no) {
+                    _row_key.clear();
+                    _state = state::FLAGS;
+                    return consumer_m::proceed::no;
+                }
+                _row_key.clear();
+                goto flags_label;
+            }
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_TIMESTAMP2;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_TIMESTAMP2:
+            _right_range_tombstone.timestamp = parse_timestamp(_header, _u64);
+            if (read_unsigned_vint(data) != read_status::ready) {
+                _state = state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2;
+                break;
+            }
+        case state::RANGE_TOMBSTONE_BODY_LOCAL_DELTIME2:
+            _right_range_tombstone.deletion_time = parse_expiry(_header, _u64);
+            if (_consumer.consume_range_tombstone(_row_key,
+                                                  _range_tombstone_kind,
+                                                  _left_range_tombstone,
+                                                  _right_range_tombstone) == consumer_m::proceed::no) {
+                _row_key.clear();
+                _state = state::FLAGS;
+                return consumer_m::proceed::no;
+            }
+            _row_key.clear();
+            goto flags_label;
         default:
             throw malformed_sstable_exception("unknown state");
         }
