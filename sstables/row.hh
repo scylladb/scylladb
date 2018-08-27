@@ -68,6 +68,12 @@ class row_consumer {
 public:
     using proceed = data_consumer::proceed;
 
+    /*
+     * In k/l formats, RTs are represented as cohesive entries so
+     * setting/resetting RT start is not supported.
+     */
+    constexpr static bool is_setting_range_tombstone_start_supported = false;
+
     row_consumer(reader_resource_tracker resource_tracker, const io_priority_class& pc)
         : _resource_tracker(resource_tracker)
         , _pc(pc) {

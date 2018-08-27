@@ -90,6 +90,34 @@ concept bool RowConsumer() {
 }
 )
 
+/*
+ * Helper method to set or reset the range tombstone start bound according to the
+ * end open marker of a promoted index block.
+ *
+ * Only applies to consumers that have the following methods:
+ *      void reset_range_tombstone_start();
+ *      void set_range_tombstone_start(clustering_key_prefix, bound_kind, tombstone);
+ *
+ * For other consumers, it is a no-op.
+ */
+template <typename Consumer>
+void set_range_tombstone_start_from_end_open_marker(Consumer& c, const index_reader& idx) {
+    if constexpr (Consumer::is_setting_range_tombstone_start_supported) {
+        auto open_end_marker = idx.end_open_marker();
+        if (open_end_marker) {
+            auto[pos, tomb] = *open_end_marker;
+            if (pos.is_clustering_row()) {
+                c.set_range_tombstone_start(pos.key(), bound_kind::excl_start, tomb);
+            } else {
+                auto view = position_in_partition_view(pos).as_start_bound_view();
+                c.set_range_tombstone_start(view.prefix(), view.kind(), tomb);
+            }
+        } else {
+            c.reset_range_tombstone_start();
+        }
+    }
+}
+
 template <typename DataConsumeRowsContext = data_consume_rows_context, typename Consumer = mp_row_consumer_k_l>
 GCC6_CONCEPT(
     requires RowConsumer<Consumer>()
@@ -342,7 +370,12 @@ private:
             return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                return _context->skip_to(idx.element_kind(), index_position.start);
+                if (!_context->need_skip(index_position.start)) {
+                    return make_ready_future<>();
+                }
+                return _context->skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
+                    set_range_tombstone_start_from_end_open_marker(_consumer, idx);
+                });
             });
         });
     }

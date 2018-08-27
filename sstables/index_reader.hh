@@ -608,20 +608,22 @@ private:
         return _sstable->data_size();
     }
 
-    void get_info_from_promoted_block(const promoted_index_block& pi_block) {
+    void get_info_from_promoted_block(const promoted_index_blocks::const_iterator iter,
+            const promoted_index_blocks& pi_blocks) {
         const index_entry& e = current_partition_entry();
-        _lower_bound.data_file_position = e.position() + pi_block.offset();
+        _lower_bound.data_file_position = e.position() + iter->offset();
         _lower_bound.element = indexable_element::cell;
-        if (pi_block.end_open_marker()) {
-            // Can only be engaged in SSTables 3.x ('mc' format) and never in ka/la
-            auto start_pos = pi_block.start(*_sstable->get_schema());
-            position_in_partition_view* open_rt_pos = std::get_if<position_in_partition_view>(&start_pos);
+        if (iter == pi_blocks.cbegin() || !std::prev(iter)->end_open_marker()) {
+            _lower_bound.end_open_marker.reset();
+        } else {
+            auto prev = std::prev(iter);
+            // End open marker can be only engaged in SSTables 3.x ('mc' format) and never in ka/la
+            auto end_pos = prev->end(*_sstable->get_schema());
+            position_in_partition_view* open_rt_pos = std::get_if<position_in_partition_view>(&end_pos);
             assert(open_rt_pos);
             _lower_bound.end_open_marker = open_rt_marker{
                     position_in_partition{*open_rt_pos},
-                    tombstone(*pi_block.end_open_marker())};
-        } else {
-            _lower_bound.end_open_marker.reset();
+                    tombstone(*prev->end_open_marker())};
         }
     }
 
@@ -707,7 +709,7 @@ public:
             return make_ready_future<>();
         }
 
-        promoted_index_blocks* pi_blocks = e.get_pi_blocks();
+        const promoted_index_blocks* pi_blocks = e.get_pi_blocks();
         assert(pi_blocks);
 
         if ((e.get_total_pi_blocks_count() == e.get_read_pi_blocks_count())
@@ -726,14 +728,14 @@ public:
             return make_ready_future<>();
         }
 
-        auto i = std::upper_bound(pi_blocks->begin() + _lower_bound.current_pi_idx, pi_blocks->end(), pos, cmp_with_start);
-        _lower_bound.current_pi_idx = std::distance(pi_blocks->begin(), i);
-        if ((i != pi_blocks->end()) || (e.get_read_pi_blocks_count() == e.get_total_pi_blocks_count())) {
+        auto i = std::upper_bound(pi_blocks->cbegin() + _lower_bound.current_pi_idx, pi_blocks->cend(), pos, cmp_with_start);
+        _lower_bound.current_pi_idx = std::distance(pi_blocks->cbegin(), i);
+        if ((i != pi_blocks->cend()) || (e.get_read_pi_blocks_count() == e.get_total_pi_blocks_count())) {
             if (i != pi_blocks->begin()) {
                 --i;
             }
 
-            get_info_from_promoted_block(*i);
+            get_info_from_promoted_block(i, *pi_blocks);
             sstlog.trace("index {}: lower bound skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
             return make_ready_future<>();
@@ -741,11 +743,11 @@ public:
 
         return e.get_pi_blocks_until(pos).then([this, &s, &e, pi_blocks] (size_t current_pi_idx) {
             _lower_bound.current_pi_idx = current_pi_idx;
-            auto i = std::begin(*pi_blocks);
+            auto i = std::cbegin(*pi_blocks);
             if (_lower_bound.current_pi_idx > 0) {
                 std::advance(i, _lower_bound.current_pi_idx - 1);
             }
-            get_info_from_promoted_block(*i);
+            get_info_from_promoted_block(i, *pi_blocks);
             sstlog.trace("index {}: skipped to cell, _current_pi_idx={}, _data_file_position={}",
                                 this, _lower_bound.current_pi_idx, _lower_bound.data_file_position);
         });

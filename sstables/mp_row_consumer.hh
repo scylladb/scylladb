@@ -902,6 +902,17 @@ class mp_row_consumer_m : public consumer_m {
     }
 
 public:
+
+    /*
+     * In m format, RTs are represented as separate start and end bounds,
+     * so setting/resetting RT start is needed so that we could skip using index.
+     * For this, the following methods need to be defined:
+     *
+     * void set_range_tombstone_start(clustering_key_prefix, bound_kind, tombstone);
+     * void reset_range_tombstone_start();
+     */
+    constexpr static bool is_setting_range_tombstone_start_supported = true;
+
     mp_row_consumer_m(mp_row_consumer_reader* reader,
                         const schema_ptr schema,
                         const query::partition_slice& slice,
@@ -965,6 +976,22 @@ public:
 
     std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
         return _mf_filter->fast_forward_to(std::move(r));
+    }
+
+    /*
+     * Sets the range tombstone start. Overwrites the currently set RT start if any.
+     * Used for skipping through wide partitions using index when the data block
+     * skipped to starts in the middle of an opened range tombstone.
+     */
+    void set_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
+        _opened_range_tombstone = {std::move(ck), k, std::move(t)};
+    }
+
+    /*
+     * Resets the previously set range tombstone start if any.
+     */
+    void reset_range_tombstone_start() {
+        _opened_range_tombstone.reset();
     }
 
     virtual proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) override {

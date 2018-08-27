@@ -115,8 +115,8 @@ public:
 
 using promoted_index_blocks = seastar::circular_buffer<promoted_index_block>;
 
-inline void erase_all_but_last(promoted_index_blocks& pi_blocks) {
-    while (pi_blocks.size() > 1) {
+inline void erase_all_but_last_two(promoted_index_blocks& pi_blocks) {
+    while (pi_blocks.size() > 2) {
         pi_blocks.pop_front();
     }
 }
@@ -475,10 +475,10 @@ public:
             if ((i != std::end(_pi_blocks)) || (_num_blocks_left == 0)) {
                 return proceed::no;
             } else {
-                // we need to preserve the last block as if the next one we read
+                // we need to preserve last two blocks as if the next one we read
                 // appears to be the upper bound, we will take the data file position
-                // from the previous block
-                erase_all_but_last(_pi_blocks);
+                // from the previous block and the end open marker, if set, from the one before it
+                erase_all_but_last_two(_pi_blocks);
             }
         }
 
@@ -604,9 +604,7 @@ public:
         auto& reader = _index->get_reader();
         reader.switch_to_consume_until_mode(pos);
         promoted_index_blocks& blocks = reader.get_pi_blocks();
-        if (!blocks.empty()) {
-            erase_all_but_last(blocks);
-        }
+        erase_all_but_last_two(blocks);
         return reader.consume_input().then([this, &reader] {
             return reader.get_current_pi_index();
         });
