@@ -16,11 +16,21 @@ override_dh_auto_clean:
 
 override_dh_installinit:
 {{#trusty}}
+{{#scylla}}
 	dh_installinit --no-start --upstart-only
+{{/scylla}}
+{{^scylla}}
+	dh_installinit --no-start --name scylla-server --upstart-only
+{{/scylla}}
 	dh_installinit --no-start --name scylla-housekeeping --upstart-only
 {{/trusty}}
 {{^trusty}}
+{{#scylla}}
 	dh_installinit --no-start
+{{/scylla}}
+{{^scylla}}
+	dh_installinit --no-start --name scylla-server
+{{/scylla}}
 	dh_installinit --no-start --name scylla-housekeeping-daily
 	dh_installinit --no-start --name scylla-housekeeping-restart
 	dh_installinit --no-start --name scylla-fstrim
@@ -32,6 +42,6 @@ override_dh_installcron:
 {{/trusty}}
 
 override_dh_strip:
-	dh_strip --dbg-package=scylla-server-dbg
+	dh_strip --dbg-package={{product}}-server-dbg
 %:
 	dh $@ --with-python3 --buildsystem=pybuild

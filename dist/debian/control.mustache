@@ -1,4 +1,4 @@
-Source: scylla-server
+Source: {{product}}-server
 Maintainer: Takuya ASADA <syuu@scylladb.com>
 Homepage: http://scylladb.com
 Section: database
@@ -22,17 +22,17 @@ Build-Depends: python3-setuptools, python3-all, python3-all-dev, debhelper (>= 9
  libsystemd-dev, antlr3, libyaml-cpp-dev
 {{/bionic}}
 
-Package: scylla-conf
+Package: {{product}}-conf
 Architecture: any
 Description: Scylla database main configuration file
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
-Replaces: scylla-server (<< 1.1)
-Conflicts: scylla-server (<< 1.1)
+Replaces: {{product}}-server (<< 1.1)
+Conflicts: {{product}}-server (<< 1.1)
 
-Package: scylla-server
+Package: {{product}}-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, scylla-conf, python-yaml, python-urwid, python-requests, curl, util-linux, python3-yaml, python3, uuid-runtime, pciutils, python3-pyudev, gzip,
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, {{product}}-conf, python-yaml, python-urwid, python-requests, curl, util-linux, python3-yaml, python3, uuid-runtime, pciutils, python3-pyudev, gzip,
 {{#jessie}}
  realpath
 {{/jessie}}
@@ -52,26 +52,26 @@ Description: Scylla database server binaries
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
-Package: scylla-server-dbg
+Package: {{product}}-server-dbg
 Section: debug
 Priority: extra
 Architecture: amd64
-Depends: scylla-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
-Description: debugging symbols for scylla-server
+Depends: {{product}}-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: debugging symbols for {{product}}-server
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
- This package contains the debugging symbols for scylla-server.
+ This package contains the debugging symbols for {{product}}-server.
 
-Package: scylla-kernel-conf
+Package: {{product}}-kernel-conf
 Architecture: any
 Description: Scylla kernel tuning configuration
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
 
-Package: scylla
+Package: {{product}}
 Section: metapackages
 Architecture: any
-Depends: scylla-server, scylla-jmx, scylla-tools, scylla-tools-core, scylla-kernel-conf
+Depends: {{product}}-server, {{product}}-jmx, {{product}}-tools, {{product}}-tools-core, {{product}}-kernel-conf
 Description: Scylla database metapackage
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

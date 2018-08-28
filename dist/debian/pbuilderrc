@@ -1,9 +1,9 @@
 USENETWORK=yes
 BUILD_HOME=/tmp
-BASETGZ="/var/cache/pbuilder/scylla-server-$DIST.tgz"
+BASETGZ="/var/cache/pbuilder/$PRODUCT-server-$DIST.tgz"
 DISTRIBUTION="$DIST"
-BUILDRESULT="/var/cache/pbuilder/scylla-server-$DIST/result/"
-APTCACHE="/var/cache/pbuilder/scylla-server-$DIST/aptcache/"
+BUILDRESULT="/var/cache/pbuilder/$PRODUCT-server-$DIST/result/"
+APTCACHE="/var/cache/pbuilder/$PRODUCT-server-$DIST/aptcache/"
 EXTRAPACKAGES="sudo"
 
 if [ "$DIST" = "trusty" ] || [ "$DIST" = "xenial" ] || [ "$DIST" = "yakkety" ] || [ "$DIST" = "zesty" ] || [ "$DIST" = "artful" ] || [ "$DIST" = "bionic" ]; then

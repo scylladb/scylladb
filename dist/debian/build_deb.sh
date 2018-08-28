@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+PRODUCT=scylla
+
 . /etc/os-release
 print_usage() {
     echo "build_deb.sh -target <codename> --dist --rebuild-dep --jobs 2"
@@ -136,10 +138,15 @@ VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/')
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION > version
-./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
+./scripts/git-archive-all --extra version --force-submodules --prefix $PRODUCT-server ../$PRODUCT-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz
 
 cp -a dist/debian/debian debian
-cp dist/common/sysconfig/scylla-server debian/scylla-server.default
+if [ "$PRODUCT" != "scylla" ]; then
+    for i in debian/scylla-*;do
+        mv $i ${i/scylla-/$PRODUCT-}
+    done
+fi
+cp dist/common/sysconfig/scylla-server debian/$PRODUCT-server.default
 if [ "$TARGET" = "trusty" ]; then
     cp dist/debian/scylla-server.cron.d debian/
 fi
@@ -150,35 +157,38 @@ elif is_ubuntu $TARGET; then
 else
    echo "Unknown distribution: $TARGET"
 fi
-MUSTACHE_DIST="\"debian\": true, \"$TARGET\": true"
+MUSTACHE_DIST="\"debian\": true, \"$TARGET\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
 pystache dist/debian/changelog.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
 pystache dist/debian/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
 pystache dist/debian/control.mustache "{ $MUSTACHE_DIST }" > debian/control
-pystache dist/debian/scylla-server.install.mustache "{ $MUSTACHE_DIST, \"dist\": $DIST }" > debian/scylla-server.install
-pystache dist/debian/scylla-conf.preinst.mustache "{ \"version\": \"$SCYLLA_VERSION\" }" > debian/scylla-conf.preinst
+pystache dist/debian/scylla-server.install.mustache "{ $MUSTACHE_DIST, \"dist\": $DIST }" > debian/$PRODUCT-server.install
+pystache dist/debian/scylla-conf.preinst.mustache "{ \"version\": \"$SCYLLA_VERSION\" }" > debian/$PRODUCT-conf.preinst
 chmod a+rx debian/rules
 
 if [ "$TARGET" != "trusty" ]; then
-    pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > debian/scylla-server.service
-    pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > debian/scylla-server.scylla-housekeeping-daily.service
-    pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > debian/scylla-server.scylla-housekeeping-restart.service
-    cp dist/common/systemd/scylla-fstrim.service debian/scylla-server.scylla-fstrim.service
-    cp dist/common/systemd/node-exporter.service debian/scylla-server.node-exporter.service
+    if [ "$PRODUCT" != "scylla" ]; then
+        SERVER_SERVICE_PREFIX="$PRODUCT-server."
+    fi
+    pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > debian/${SERVER_SERVICE_PREFIX}scylla-server.service
+    pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > debian/$PRODUCT-server.scylla-housekeeping-daily.service
+    pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > debian/$PRODUCT-server.scylla-housekeeping-restart.service
+    cp dist/common/systemd/scylla-fstrim.service debian/$PRODUCT-server.scylla-fstrim.service
+    cp dist/common/systemd/node-exporter.service debian/$PRODUCT-server.node-exporter.service
 fi
 
 if [ $NO_CLEAN -eq 0 ]; then
-    sudo rm -fv /var/cache/pbuilder/scylla-server-$TARGET.tgz
-    sudo DIST=$TARGET /usr/sbin/pbuilder clean --configfile ./dist/debian/pbuilderrc
-    sudo DIST=$TARGET /usr/sbin/pbuilder create --configfile ./dist/debian/pbuilderrc --allow-untrusted
+    sudo rm -fv /var/cache/pbuilder/$PRODUCT-server-$TARGET.tgz
+    sudo PRODUCT=$PRODUCT DIST=$TARGET /usr/sbin/pbuilder clean --configfile ./dist/debian/pbuilderrc
+    sudo PRODUCT=$PRODUCT DIST=$TARGET /usr/sbin/pbuilder create --configfile ./dist/debian/pbuilderrc --allow-untrusted
 fi
 if [ $JOBS -ne 0 ]; then
     DEB_BUILD_OPTIONS="parallel=$JOBS"
 fi
-sudo DIST=$TARGET /usr/sbin/pbuilder update --configfile ./dist/debian/pbuilderrc --allow-untrusted
+sudo PRODUCT=$PRODUCT DIST=$TARGET /usr/sbin/pbuilder update --configfile ./dist/debian/pbuilderrc --allow-untrusted
 if [ "$TARGET" = "trusty" ] || [ "$TARGET" = "xenial" ] || [ "$TARGET" = "yakkety" ] || [ "$TARGET" = "zesty" ] || [ "$TARGET" = "artful" ] || [ "$TARGET" = "bionic" ]; then
-    sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/ubuntu_enable_ppa.sh
+    sudo PRODUCT=$PRODUCT DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/ubuntu_enable_ppa.sh
 elif [ "$TARGET" = "jessie" ] || [ "$TARGET" = "stretch" ]; then
-    sudo DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/debian_install_gpgkey.sh
+    sudo PRODUCT=$PRODUCT DIST=$TARGET /usr/sbin/pbuilder execute --configfile ./dist/debian/pbuilderrc --save-after-exec dist/debian/debian_install_gpgkey.sh
 fi
-sudo -E DIST=$TARGET DEB_BUILD_OPTIONS=$DEB_BUILD_OPTIONS pdebuild --configfile ./dist/debian/pbuilderrc --buildresult build/debs
+sudo -E PRODUCT=$PRODUCT DIST=$TARGET DEB_BUILD_OPTIONS=$DEB_BUILD_OPTIONS pdebuild --configfile ./dist/debian/pbuilderrc --buildresult build/debs
 sudo chown -Rv $(id -u -n):$(id -g -n) build/debs
