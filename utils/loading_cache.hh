@@ -36,6 +36,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "utils/loading_shared_values.hh"
+#include "utils/chunked_vector.hh"
 #include "log.hh"
 
 namespace bi = boost::intrusive;
@@ -470,12 +471,19 @@ private:
         Alloc().deallocate(val, 1);
     }
 
-    future<> reload(ts_value_lru_entry& lru_entry) {
-        Key key = lru_entry.key();
-        return _load(lru_entry.key()).then_wrapped([this, key = std::move(key)] (auto&& f) mutable {
+    future<> reload(timestamped_val_ptr ts_value_ptr) {
+        const Key& key = loading_values_type::to_key(ts_value_ptr);
+
+        // Do nothing if the entry has been dropped before we got here (e.g. by the _load() call on another key that is
+        // also being reloaded).
+        if (!ts_value_ptr->lru_entry_ptr()) {
+            _logger.trace("{}: entry was dropped before the reload", key);
+            return make_ready_future<>();
+        }
+
+        return _load(key).then_wrapped([this, ts_value_ptr = std::move(ts_value_ptr), &key] (auto&& f) mutable {
             // if the entry has been evicted by now - simply end here
-            set_iterator it = this->set_find(key);
-            if (it == this->set_end()) {
+            if (!ts_value_ptr->lru_entry_ptr()) {
                 _logger.trace("{}: entry was dropped during the reload", key);
                 return make_ready_future<>();
             }
@@ -487,7 +495,7 @@ private:
             // will be propagated up to the user and will fail the
             // corresponding query.
             try {
-                *it = f.get0();
+                *ts_value_ptr = f.get0();
             } catch (std::exception& e) {
                 _logger.debug("{}: reload failed: {}", key, e.what());
             } catch (...) {
@@ -552,17 +560,17 @@ private:
 
         // Reload all those which value needs to be reloaded.
         with_gate(_timer_reads_gate, [this] {
-            auto to_reload = boost::copy_range<std::vector<ts_value_lru_entry*>>(_lru_list
+            auto to_reload = boost::copy_range<utils::chunked_vector<timestamped_val_ptr>>(_lru_list
                     | boost::adaptors::filtered([this] (ts_value_lru_entry& lru_entry) {
                         return lru_entry.timestamped_value().loaded() + _refresh < loading_cache_clock_type::now();
                     })
-                    | boost::adaptors::transformed([this] (ts_value_lru_entry& lru_entry) {
-                        return &lru_entry;
+                    | boost::adaptors::transformed([] (ts_value_lru_entry& lru_entry) {
+                        return lru_entry.timestamped_value_ptr();
                     }));
 
-            return parallel_for_each(std::move(to_reload), [this] (ts_value_lru_entry* lru_entry) {
-                _logger.trace("on_timer(): {}: reloading the value", lru_entry->key());
-                return this->reload(*lru_entry);
+            return parallel_for_each(std::move(to_reload), [this] (timestamped_val_ptr ts_value_ptr) {
+                _logger.trace("on_timer(): {}: reloading the value", loading_values_type::to_key(ts_value_ptr));
+                return this->reload(std::move(ts_value_ptr));
             }).finally([this] {
                 _logger.trace("on_timer(): rearming");
                 _timer.arm(loading_cache_clock_type::now() + _timer_period);
