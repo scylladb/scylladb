@@ -643,7 +643,8 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
     , _next_response_id(std::chrono::system_clock::now().time_since_epoch()/1ms)
     , _hints_resource_manager(cfg.available_memory / 10)
     , _hints_for_views_manager(_db.local().get_config().data_file_directories()[0] + "/view_pending_updates", {}, _db.local().get_config().max_hint_window_in_ms(), _hints_resource_manager, _db)
-    , _background_write_throttle_threahsold(cfg.available_memory / 10) {
+    , _background_write_throttle_threahsold(cfg.available_memory / 10)
+    , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate} {
     namespace sm = seastar::metrics;
     _metrics.add_group(COORDINATOR_STATS_CATEGORY, {
         sm::make_histogram("read_latency", sm::description("The general read latency histogram"), [this]{ return _stats.estimated_read.get_histogram(16, 20);}),
@@ -1445,11 +1446,6 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
     });
 }
 
-struct mutate_executor {
-    static auto get() { return &storage_proxy::do_mutate; }
-};
-static thread_local auto mutate_stage = seastar::make_execution_stage("storage_proxy_mutate", mutate_executor::get());
-
 /**
  * Use this method to have these Mutations applied
  * across all replicas. This method will take care
@@ -1461,7 +1457,7 @@ static thread_local auto mutate_stage = seastar::make_execution_stage("storage_p
  * @param tr_state trace state handle
  */
 future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters) {
-    return mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
+    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), raw_counters);
 }
 
 future<> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool raw_counters) {

@@ -2143,8 +2143,8 @@ static do_mutation_query(schema_ptr s,
     });
 }
 
-mutation_query_stage::mutation_query_stage(seastar::scheduling_group sg)
-    : _execution_stage("mutation_query", sg, do_mutation_query)
+mutation_query_stage::mutation_query_stage()
+    : _execution_stage("mutation_query", do_mutation_query)
 {}
 
 future<reconcilable_result>

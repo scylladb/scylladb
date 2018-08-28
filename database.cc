@@ -2155,8 +2155,9 @@ database::database(const db::config& cfg, database_config dbcfg)
     // Trust the caller to limit concurrency.
     , _streaming_concurrency_sem(max_count_streaming_concurrent_reads, max_memory_streaming_concurrent_reads())
     , _system_read_concurrency_sem(max_count_system_concurrent_reads, max_memory_system_concurrent_reads())
-    , _data_query_stage("data_query", _dbcfg.statement_scheduling_group, &column_family::query)
-    , _mutation_query_stage(_dbcfg.statement_scheduling_group)
+    , _data_query_stage("data_query", &column_family::query)
+    , _mutation_query_stage()
+    , _apply_stage("db_apply", &database::do_apply)
     , _version(empty_version)
     , _compaction_manager(make_compaction_manager(*_cfg, dbcfg))
     , _enable_incremental_backups(cfg.incremental_backups())
@@ -3575,7 +3576,6 @@ future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::
 }
 
 future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout) {
-  return with_scheduling_group(_dbcfg.statement_scheduling_group, [this, s = std::move(s), &m, timeout] () mutable {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
@@ -3599,13 +3599,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, db::timeout_
                 // taken before the read, until the update is done.
                 [lock = std::move(lock), op = std::move(op)] { });
     });
-  });
 }
-
-struct db_apply_executor {
-    static auto get() { return &database::do_apply; }
-};
-static thread_local auto apply_stage = seastar::make_execution_stage("db_apply", db_apply_executor::get());
 
 template<typename Future>
 Future database::update_write_metrics(Future&& f) {
@@ -3629,7 +3623,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, db::timeout_clo
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return update_write_metrics(apply_stage(this, std::move(s), seastar::cref(m), timeout));
+    return update_write_metrics(_apply_stage(this, std::move(s), seastar::cref(m), timeout));
 }
 
 future<> database::apply_streaming_mutation(schema_ptr s, utils::UUID plan_id, const frozen_mutation& m, bool fragmented) {

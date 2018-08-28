@@ -1191,7 +1191,7 @@ private:
 
     cache_tracker _row_cache_tracker;
 
-    concrete_execution_stage<future<lw_shared_ptr<query::result>>,
+    inheriting_concrete_execution_stage<future<lw_shared_ptr<query::result>>,
         column_family*,
         schema_ptr,
         const query::read_command&,
@@ -1204,6 +1204,13 @@ private:
         querier_cache_context> _data_query_stage;
 
     mutation_query_stage _mutation_query_stage;
+
+    inheriting_concrete_execution_stage<
+            future<>,
+            database*,
+            schema_ptr,
+            const frozen_mutation&,
+            db::timeout_clock::time_point> _apply_stage;
 
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
