@@ -23,6 +23,7 @@
 #pragma once
 
 
+#include <variant>
 #include "flat_mutation_reader.hh"
 #include "timestamp.hh"
 #include "gc_clock.hh"
@@ -31,6 +32,7 @@
 #include "row.hh"
 #include "clustering_ranges_walker.hh"
 #include "utils/data_input.hh"
+#include "utils/overloaded_functor.hh"
 #include "liveness_info.hh"
 #include "mutation_fragment_filter.hh"
 #include "types.hh"
@@ -808,6 +810,7 @@ class mp_row_consumer_m : public consumer_m {
     streamed_mutation::forwarding _fwd;
 
     std::optional<clustering_row> _in_progress_row;
+    std::variant<std::monostate, clustering_row, range_tombstone> _stored;
     static_row _in_progress_static_row;
     bool _inside_static_row = false;
 
@@ -834,10 +837,6 @@ class mp_row_consumer_m : public consumer_m {
     std::optional<range_tombstone_start> _opened_range_tombstone;
 
     void consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
-        if (_fwd) {
-            // TODO: support fast-forwarding and filtering for range tombstones
-            assert(0 && "Fast forwarding of range tombstones not supported.");
-        }
         if (_opened_range_tombstone) {
             throw sstables::malformed_sstable_exception(
                     format("Range tombstones have to be disjoint: current opened range tombstone {}, new tombstone {}",
@@ -846,7 +845,7 @@ class mp_row_consumer_m : public consumer_m {
         _opened_range_tombstone = {std::move(ck), k, std::move(t)};
     }
 
-    void consume_range_tombstone_end(clustering_key_prefix ck, bound_kind k, tombstone t) {
+    proceed consume_range_tombstone_end(clustering_key_prefix ck, bound_kind k, tombstone t) {
         if (!_opened_range_tombstone) {
             throw sstables::malformed_sstable_exception(
                     format("Closing range tombstone that wasn't opened: clustering {}, kind {}, tombstone {}",
@@ -857,12 +856,15 @@ class mp_row_consumer_m : public consumer_m {
                     format("Range tombstone with ck {} and two different tombstones at ends: {}, {}",
                            ck, _opened_range_tombstone->tomb, t));
         }
-        _reader->push_mutation_fragment(range_tombstone(std::move(_opened_range_tombstone->ck),
-                                                        _opened_range_tombstone->kind,
-                                                        std::move(ck),
-                                                        k,
-                                                        std::move(t)));
-        _opened_range_tombstone = {};
+
+
+        auto rt = range_tombstone {std::move(_opened_range_tombstone->ck),
+                            _opened_range_tombstone->kind,
+                            std::move(ck),
+                            k,
+                            std::move(t)};
+        _opened_range_tombstone.reset();
+        return maybe_push_range_tombstone(std::move(rt));
     }
 
     const column_definition& get_column_definition(std::optional<column_id> column_id) {
@@ -870,13 +872,17 @@ class mp_row_consumer_m : public consumer_m {
         return _schema->column_at(column_type, *column_id);
     }
 
-    inline proceed maybe_push_row() {
-        sstlog.trace("mp_row_consumer_m {}: consume_row_end(_in_progress_row={})", this, *_in_progress_row);
-        auto action = _mf_filter->apply(*_in_progress_row);
+    inline proceed maybe_push_row(clustering_row&& cr) {
+        sstlog.trace("mp_row_consumer_m {}: maybe_push_row({})", this, cr);
+        auto action = _mf_filter->apply(cr);
         switch (action) {
         case mutation_fragment_filter::result::emit:
             if (_opened_range_tombstone) {
-                auto ck = _in_progress_row->key();
+                /* We have an opened range tombstone which means that the current row is spanned by that RT.
+                 * Since the row is to be emitted, so is the range tombstone that we form from the opened start
+                 * and the end built from the row position because it also overlaps with query ranges.
+                 */
+                auto ck = cr.key();
                 auto end_kind = clustering_key::make_full(*_schema, ck) ? bound_kind::excl_end : bound_kind::incl_end;
                 _reader->push_mutation_fragment(range_tombstone(std::move(_opened_range_tombstone->ck),
                                                                 _opened_range_tombstone->kind,
@@ -886,15 +892,41 @@ class mp_row_consumer_m : public consumer_m {
                 _opened_range_tombstone->ck = std::move(ck);
                 _opened_range_tombstone->kind = bound_kind::incl_start;
             }
-            _reader->push_mutation_fragment(*std::exchange(_in_progress_row, {}));
+            _reader->push_mutation_fragment(std::move(cr));
             break;
         case mutation_fragment_filter::result::ignore:
-            _in_progress_row.reset();
+            if (_opened_range_tombstone) {
+                // Trim the opened range up to the clustering key of the current row
+                auto& ck = cr.key();
+                clustering_key::make_full(*_schema, ck);
+                _opened_range_tombstone->ck = std::move(ck);
+                _opened_range_tombstone->kind = bound_kind::incl_start;
+            }
             if (_mf_filter->is_current_range_changed()) {
                 return proceed::no;
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
+            _stored.emplace<clustering_row>(std::move(cr));
+            return proceed::no;
+        }
+
+        return proceed(!_reader->is_buffer_full());
+    }
+
+    inline proceed maybe_push_range_tombstone(range_tombstone&& rt) {
+        const auto action = _mf_filter->apply(rt);
+        switch (action) {
+        case mutation_fragment_filter::result::emit:
+            _reader->push_mutation_fragment(std::move(rt));
+            break;
+        case mutation_fragment_filter::result::ignore:
+            if (_mf_filter->is_current_range_changed()) {
+                return proceed::no;
+            }
+            break;
+        case mutation_fragment_filter::result::store_and_finish:
+            _stored.emplace<range_tombstone>(std::move(rt));
             return proceed::no;
         }
 
@@ -946,9 +978,16 @@ public:
             return proceed::no;
         }
 
-        if (_in_progress_row) {
-            return maybe_push_row();
-        }
+        std::visit(overloaded_functor{
+            [this] (clustering_row&& cr) {
+                maybe_push_row(std::move(cr));
+            },
+            [this] (range_tombstone&& rt) {
+                maybe_push_range_tombstone(std::move(rt));
+            },
+            [] (std::monostate) {
+            }
+        }, std::exchange(_stored, std::monostate{}));
 
         return proceed::yes;
     }
@@ -1108,25 +1147,26 @@ public:
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
+            return proceed(!_reader->is_buffer_full());
         } else { // *_end kind
-            consume_range_tombstone_end(std::move(ck), kind, std::move(tomb));
+            return consume_range_tombstone_end(std::move(ck), kind, std::move(tomb));
         }
-        return proceed(!_reader->is_buffer_full());
     }
 
     virtual proceed consume_range_tombstone(const std::vector<temporary_buffer<char>>& ecp,
                                             sstables::bound_kind_m kind,
                                             tombstone end_tombstone,
                                             tombstone start_tombstone) override {
+        auto result = proceed::yes;
         auto ck = clustering_key_prefix::from_range(ecp | boost::adaptors::transformed(
             [] (const temporary_buffer<char>& b) { return to_bytes_view(b); }));
         switch (kind) {
         case bound_kind_m::incl_end_excl_start:
-            consume_range_tombstone_end(ck, bound_kind::incl_end, std::move(end_tombstone));
+            result = consume_range_tombstone_end(ck, bound_kind::incl_end, std::move(end_tombstone));
             consume_range_tombstone_start(std::move(ck), bound_kind::excl_start, std::move(start_tombstone));
             break;
         case bound_kind_m::excl_end_incl_start:
-            consume_range_tombstone_end(ck, bound_kind::excl_end, std::move(end_tombstone));
+            result = consume_range_tombstone_end(ck, bound_kind::excl_end, std::move(end_tombstone));
             consume_range_tombstone_start(std::move(ck), bound_kind::incl_start, std::move(start_tombstone));
             break;
         default:
@@ -1134,7 +1174,7 @@ public:
                     format("Corrupted range tombstone: invalid boundary type {}", kind));
         }
 
-        return proceed(!_reader->is_buffer_full());
+        return result;
     }
 
     virtual proceed consume_row_end() override {
@@ -1167,8 +1207,7 @@ public:
             if (!_cells.empty()) {
                 fill_cells(column_kind::regular_column, _in_progress_row->cells());
             }
-
-            return maybe_push_row();
+            return maybe_push_row(*std::exchange(_in_progress_row, {}));
         }
 
         return proceed(!_reader->is_buffer_full());
@@ -1181,6 +1220,7 @@ public:
         }
         _is_mutation_end = true;
         _in_progress_row.reset();
+        _stored.emplace<std::monostate>();
         _mf_filter.reset();
         return proceed::no;
     }
@@ -1190,6 +1230,7 @@ public:
         if (el == indexable_element::partition) {
             _is_mutation_end = true;
             _in_progress_row.reset();
+            _stored.emplace<std::monostate>();
             _mf_filter.reset();
         } else {
             _is_mutation_end = false;

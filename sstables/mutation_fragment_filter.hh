@@ -95,6 +95,21 @@ public:
         }
     }
 
+    result apply(const range_tombstone& rt) {
+        bool inside_requested_ranges = _walker.advance_to(rt.position(), rt.end_position());
+        _out_of_range |= _walker.out_of_range();
+        if (!inside_requested_ranges) {
+            return result::ignore;
+        }
+        if (is_after_fwd_window(rt.position())) {
+            // This happens only when fwd is set
+            _out_of_range = true;
+            return result::store_and_finish;
+        } else {
+            return result::emit;
+        }
+    }
+
     bool out_of_range() const {
         return _out_of_range;
     }
