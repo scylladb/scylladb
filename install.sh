@@ -91,7 +91,7 @@ SYSCONFDIR="/etc/sysconfig"
 REPOFILES="'/etc/yum.repos.d/scylla*.repo'"
 
 
-install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin"
+install -d -m755 "$retc"/scylla "$rprefix/lib/systemd/system" "$rprefix/lib/scylla" "$rprefix/bin" "$root/opt/scylladb/bin" "$root/opt/scylladb/libexec" "$root/opt/scylladb/lib"
 install -m644 conf/scylla.yaml -Dt "$retc"/scylla
 install -m644 conf/cassandra-rackdc.properties -Dt "$retc"/scylla
 install -m644 build/*.service -Dt "$rprefix"/lib/systemd/system
@@ -101,8 +101,19 @@ install -m755 dist/common/scripts/* -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh "$rprefix"/lib/scylla/
 install -m755 seastar/scripts/perftune.py -Dt "$rprefix"/lib/scylla/
 install -m755 seastar/dpdk/usertools/dpdk-devbind.py -Dt "$rprefix"/lib/scylla/
-install -m755 build/release/scylla -Dt "$rprefix/bin"
-install -m755 build/release/iotune -Dt "$rprefix/bin"
+install -m755 bin/* -Dt "$root/opt/scylladb/bin"
+# some files in libexec are symlinks, which "install" dereferences
+# use cp -P for the symlinks instead.
+install -m755 libexec/*.bin -Dt "$root/opt/scylladb/libexec"
+for f in libexec/*; do
+    if [[ "$f" != *.bin ]]; then
+        cp -P "$f" "$root/opt/scylladb/libexec"
+    fi
+done
+install -m755 lib/* -Dt "$root/opt/scylladb/lib"
+# use relative paths instead?
+ln -sf /opt/scylladb/bin/scylla "$rprefix/bin/scylla"
+ln -sf /opt/scylladb/bin/iotune "$rprefix/bin/iotune"
 install -m755 dist/common/bin/scyllatop -Dt "$rprefix/bin"
 install -m644 dist/common/scripts/scylla_blocktune.py -Dt "$rprefix"/lib/scylla/
 install -m755 dist/common/scripts/scylla-blocktune -Dt "$rprefix"/lib/scylla/
@@ -131,9 +142,6 @@ cp -r tools/scyllatop "$rprefix"/lib/scylla/scyllatop
 cp -r scylla-housekeeping "$rprefix"/lib/scylla/scylla-housekeeping
 install -d "$rprefix"/sbin
 cp -P dist/common/sbin/* "$rprefix"/sbin
-
-if [[ "$target" = "fedora" ]]; then
-    install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
-fi
+install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
 
 

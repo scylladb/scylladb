@@ -6,13 +6,13 @@ Group:          Applications/Databases
 
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-Source0:        %{name}-{{version}}-{{release}}.tar
-Requires:       {{product}}-server = {{version}} {{product}}-jmx = {{version}} {{product}}-tools = {{version}} {{product}}-tools-core = {{version}} {{product}}-kernel-conf = {{version}} scylla-libgcc73 scylla-libstdc++73
+Source0:        {{reloc_pkg}}
+Requires:       {{product}}-server = {{version}} {{product}}-jmx = {{version}} {{product}}-tools = {{version}} {{product}}-tools-core = {{version}} {{product}}-kernel-conf = {{version}}
 Obsoletes:	scylla-server < 1.1
-Obsoletes:      scylla-libgcc72
-Obsoletes:      scylla-libstdc++72
-Provides:       scylla-libgcc72
-Provides:      scylla-libstdc++72
+
+%global _debugsource_template %{nil}
+%global _debuginfo_subpackages %{nil}
+%global __brp_python_bytecompile %{nil}
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
@@ -31,82 +31,43 @@ This package installs all required packages for ScyllaDB,  including
     /usr/lib/rpm/redhat/brp-strip-static-archive %{__strip} \
     %{!?__jar_repack:/usr/lib/rpm/redhat/brp-java-repack-jars} \
 %{nil}
-%else
-%global __os_install_post    \
-    /usr/lib/rpm/brp-compress \
-    %{!?__debug_package:\
-    /usr/lib/rpm/brp-strip %{__strip} \
-    /usr/lib/rpm/brp-strip-comment-note %{__strip} %{__objdump} \
-    } \
-    /usr/lib/rpm/brp-strip-static-archive %{__strip} \
-    /usr/lib/rpm/brp-python-hardlink \
-%{nil}
 %endif
 
 %files
 %defattr(-,root,root)
 
 %prep
-%setup -q
+%setup -c
 
 %package        server
 Group:          Applications/Databases
 Summary:        The Scylla database server
 License:        AGPLv3
 URL:            http://www.scylladb.com/
-BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel lksctp-tools-devel protobuf-devel protobuf-compiler systemtap-sdt-devel ninja-build cmake python ragel grep kernel-headers
-%{?fedora:BuildRequires: boost-devel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum python2-pystache}
-%{?rhel:BuildRequires: scylla-libstdc++73-static scylla-boost163-devel scylla-boost163-static scylla-antlr35-tool scylla-antlr35-C++-devel python34 scylla-gcc73-c++, scylla-python34-pyparsing20 yaml-cpp-static pystache python-setuptools}
+BuildRequires: python2-pystache
+{{#fedora}}
+Requires: python3 python3-PyYAML
+{{/fedora}}
+{{#centos7}}
+Requires: python34 python34-PyYAML kernel >= 3.10.0-514
+{{/centos7}}
 Requires:       {{product}}-conf systemd-libs hwloc PyYAML python-urwid pciutils pyparsing python-requests curl util-linux python-setuptools pciutils python3-pyudev mdadm xfsprogs
-%{?rhel:Requires: python34 python34-PyYAML kernel >= 3.10.0-514}
-%{?fedora:Requires: python3 python3-PyYAML}
 Conflicts:      abrt
-%ifarch x86_64
-%define configure_opt --enable-dpdk
-%endif
+AutoReqProv:    no
 
 %description server
 This package contains ScyllaDB server.
-
-%if 0%{?fedora} >= 27
-# Does not able to build with redifning __debug_install_post, disable it
-%else
-%define __debug_install_post   \
-    %{_rpmconfigdir}/find-debuginfo.sh %{?_missing_build_ids_terminate_build:--strict-build-id} %{?_find_debuginfo_opts} "%{_builddir}/%{?buildsubdir}";\
-    cp scylla-gdb.py ${RPM_BUILD_ROOT}/usr/src/debug/%{name}-%{version}/;\
-    %{nil}
-%endif
 
 %build
 
 defines=()
 
-# We want a package compiled with old kernel headers to
-# support nowait aio if the user upgrades their kernel
-if ! grep -qwr RWF_NOWAIT /usr/include/linux; then
-    defines+=("-DRWF_NOWAIT=8")
-fi
-if ! grep -qwr aio_rw_flags /usr/include/linux; then
-    defines+=("-Daio_rw_flags=aio_reserved1")
-fi
-
-cflags="--cflags=${defines[*]}"
-
-%if 0%{?fedora}
-./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags"
-%endif
-%if 0%{?rhel}
-. /etc/profile.d/scylla.sh
-python3.4 ./configure.py %{?configure_opt} --with=scylla --with=iotune --mode=release "$cflags" --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7.3 --python python3.4 --ldflag=-Wl,-rpath=/opt/scylladb/lib64
-%endif
-ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
-
 %install
 {{#housekeeping}}
-./install.sh --root "$RPM_BUILD_ROOT" --housekeeping
+./install.sh --root "$RPM_BUILD_ROOT" --housekeeping --target {{target}}
 {{/housekeeping}}
 {{^housekeeping}}
-./install.sh --root "$RPM_BUILD_ROOT"
+./install.sh --root "$RPM_BUILD_ROOT" --target {{target}}
 {{/housekeeping}}
 
 %pre server
@@ -202,9 +163,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scyllatop/*
 %{_prefix}/lib/scylla/scylla_config_get.py
 %{_prefix}/lib/scylla/scylla_util.py
-%if 0%{?fedora} >= 27
 %{_prefix}/lib/scylla/scylla-gdb.py
-%endif
+/opt/scylladb/bin/*
+/opt/scylladb/lib/*
+/opt/scylladb/libexec/*
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
