@@ -1558,3 +1558,120 @@ SEASTAR_TEST_CASE(test_3362_with_ttls_alter_add) {
 //    limitation is ever lifted, we will need to check that if we
 //    rename an unselected base column, the virtual column in the view is
 //    also renamed.
+
+
+// Tests that after the fixes for issue #3362, various miscellaneous
+// combinations of appearance and disappearance of unselected base cells
+// and row markers which happen to cause view_updates::do_delete_old_entry()
+// (i.e., deletion of the view row), work as expected.
+SEASTAR_TEST_CASE(test_3362_row_deletion_1) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+        // In row p=1 c=1:
+        //  1. Insert a cell a=1, at timestamp 2
+        //  2. Delete the cell a=1, at timestamp 10. The base row is now gone
+        //     and so should the view row, and do_delete_old_entry() is called.
+        //  3. Insert a full row for p=1 c=1 at timestamp 1. This is an
+        //     "insert" so it also inserts a row marker. We already have
+        //     a newer (ts=10) deletion of the cell a, but cell b is still
+        //     alive and so is the row marker.
+        //  4. Delete cell b at timestamp 3. Now both cells are dead, but
+        //     the row should still alive and the view row should still exist.
+        BOOST_TEST_PASSPOINT();
+        // step 1:
+        e.execute_cql("update cf using timestamp 2 set a = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        // step 2:
+        e.execute_cql("delete a from cf using timestamp 10 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+        // step 3:
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("insert into cf (p, c) values (1, 1) using timestamp 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        // step 4:
+        e.execute_cql("delete b from cf using timestamp 3 where p = 1 and c = 1").get();
+        // the base row should now be empty but still exist (there's still the row marker)
+        auto msg = e.execute_cql("select * from cf where p = 1 and c = 1").get0();
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {}, {} }});
+        // FIXME: Testing this is hard - we want to check that the already
+        // existing view row does NOT disappear, so "eventually()" doesn't
+        // help. We don't know how much we need wait before we can safely
+        // conclude that the view updates will never cause this row to disappear.
+        // I think we need a testing-only feature to be able to wait until the
+        // backlog of view updates is fully consumed.
+        seastar::sleep(std::chrono::seconds(1)).get();
+        msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+        // The row should still exists, because the row marker is still
+        // alive. It was a bug that the row marker was deleted too,
+        // because of a wrong row marker deletion set for timestamp 10.
+        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+    });
+}
+
+SEASTAR_TEST_CASE(test_3362_row_deletion_2) {
+    // Verify that do_delete_old_entry()'s r.apply(update.tomb()) works as expected
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (p, c)").get();
+        // In row p=1 c=1, insert two cells - b=1 at timestamp 1, a=1 at timestamp 2.
+        // We use "update", not "insert", so there will not be a row marker.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 1 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 2 set a = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+        // Delete the entire base row, with timestamp 10. The view row should
+        // also disappear.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("delete from cf using timestamp 10 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+        // Reinsert an (unselected) cell in row p=1 c=1 at timestamp 3.
+        // This is *before* the timestamp of the row's deletion (which was 10)
+        // so the row should NOT reappear. For this to work, it is important
+        // that view_updates::do_delete_old_entry() call r.apply(update.tomb()).
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf using timestamp 3 set b = 1 where p = 1 and c = 1").get();
+        // FIXME: Testing this is tough - since we expect no new row to appear
+        // "eventually()" doesn't help. So can we know how much to wait before
+        // deciding that as expected, no row was added???
+        seastar::sleep(std::chrono::seconds(2)).get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().is_empty();
+        });
+        BOOST_TEST_PASSPOINT();
+        // If we reinsert the cell at timestamp 11, after the deletion, the base
+        // row will re-emerge, and so should the view row
+        e.execute_cql("update cf using timestamp 11 set b = 1 where p = 1 and c = 1").get();
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
+            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
+        });
+    });
+}
