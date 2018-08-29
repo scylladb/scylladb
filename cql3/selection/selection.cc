@@ -40,6 +40,7 @@
  */
 
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
@@ -208,9 +209,17 @@ protected:
 
 ::shared_ptr<selection> selection::wildcard(schema_ptr schema) {
     auto columns = schema->all_columns_in_select_order();
-    auto cds = boost::copy_range<std::vector<const column_definition*>>(columns | boost::adaptors::transformed([](const column_definition& c) {
-        return &c;
-    }));
+    // filter out hidden columns, which should not be seen by the
+    // user when doing "SELECT *". We also disallow selecting them
+    // individually (see column_identifier::new_selector_factory()).
+    auto cds = boost::copy_range<std::vector<const column_definition*>>(
+        columns |
+        boost::adaptors::filtered([](const column_definition& c) {
+            return !c.is_view_virtual();
+        }) |
+        boost::adaptors::transformed([](const column_definition& c) {
+            return &c;
+        }));
     return simple_selection::make(schema, std::move(cds), true);
 }
 

@@ -288,50 +288,6 @@ row_marker view_updates::compute_row_marker(const clustering_row& base_row) cons
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     }
 
-    if (_view_info.include_all_columns()) {
-        return marker;
-    }
-
-    auto timestamp = marker.timestamp();
-    bool has_non_expiring_live_cell = false;
-    expiry_opt biggest_expiry;
-    gc_clock::duration ttl = gc_clock::duration::min();
-    if (marker.is_expiring()) {
-        biggest_expiry = marker.expiry();
-        ttl = marker.ttl();
-    }
-    auto maybe_update_expiry_and_ttl = [&] (atomic_cell_view&& cell) {
-        timestamp = std::max(timestamp, cell.timestamp());
-        if (cell.is_live_and_has_ttl()) {
-            if (cell.expiry() >= biggest_expiry.value_or(cell.expiry())) {
-                biggest_expiry = cell.expiry();
-                ttl = cell.ttl();
-            }
-        } else if (cell.is_live()) {
-            has_non_expiring_live_cell = true;
-        }
-    };
-
-    // Iterate over regular cells not in the view, as we already have the timestamps of the included columns.
-    base_row.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-        auto& def = _base->regular_column_at(id);
-        if (_view_info.view_column(def)) {
-            return;
-        }
-        if (def.is_atomic()) {
-            maybe_update_expiry_and_ttl(c.as_atomic_cell(def));
-        } else {
-            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            ctype->for_each_cell(c.as_collection_mutation(), maybe_update_expiry_and_ttl);
-        }
-    });
-
-    if ((marker.is_live() && !marker.is_expiring()) || has_non_expiring_live_cell) {
-        return row_marker(timestamp);
-    }
-    if (biggest_expiry) {
-        return row_marker(timestamp, ttl, *biggest_expiry);
-    }
     return marker;
 }
 
@@ -376,10 +332,134 @@ static const column_definition* view_column(const schema& base, const schema& vi
     return view.get_column_definition(base.regular_column_at(base_id).name());
 }
 
+// Utility function for taking an existing cell, and creating a copy with an
+// empty value instead of the original value, but with the original liveness
+// information (expiration and deletion time) unchanged.
+static atomic_cell make_empty(const atomic_cell_view& ac) {
+    if (ac.is_live_and_has_ttl()) {
+        return atomic_cell::make_live(*empty_type, ac.timestamp(), bytes_view{}, ac.expiry(), ac.ttl());
+    } else if (ac.is_live()) {
+        return atomic_cell::make_live(*empty_type, ac.timestamp(), bytes_view{});
+    } else {
+        return atomic_cell::make_dead(ac.timestamp(), ac.deletion_time());
+    }
+}
+
+// Utility function for taking an existing collection which has both keys and
+// values (i.e., either a list or map, but not a set), and creating a copy of
+// this collection with all the values replaced by empty values.
+// The make_empty() function above is used to ensure that liveness information
+// is copied unchanged.
+static collection_mutation make_empty(
+        const collection_mutation_view& cm,
+        const collection_type_impl& ctype) {
+    collection_type_impl::mutation n;
+    cm.data.with_linearized([&] (bytes_view bv) {
+        auto m_view = ctype.deserialize_mutation_form(bv);
+        n.tomb = m_view.tomb;
+        for (auto&& c : m_view.cells) {
+            n.cells.emplace_back(c.first, make_empty(c.second));
+        }
+    });
+    return ctype.serialize_mutation_form(n);
+}
+
+// In some cases, we need to copy to a view table even columns which have not
+// been SELECTed. For these columns we only need to save liveness information
+// (timestamp, deletion, ttl), but not the value. We call these columns
+// "virtual columns", and the reason why we need them is explained in
+// issue #3362. The following function, maybe_make_virtual() takes a full
+// value c (taken from the base table) for the given column col, and if that
+// column is a virtual column it modifies c to remove the unwanted value.
+// The function create_virtual_column(), below, creates the virtual column in
+// the view schema, that maybe_make_virtual() will fill.
+static void maybe_make_virtual(atomic_cell_or_collection& c, const column_definition* col) {
+    if (!col->is_view_virtual()) {
+        // This is a regular selected column. Leave c untouched.
+        return;
+    }
+    if (col->type->is_atomic()) {
+        // A virtual cell for an atomic value or frozen collection. Its
+        // value is empty (of type empty_type).
+        if (col->type != empty_type) {
+            throw std::logic_error("Virtual cell has wrong type");
+        }
+        c = make_empty(c.as_atomic_cell(*col));
+    } else {
+        if (!col->type->is_collection()) {
+            // TODO: when we support unfrozen UDT (#2201), we will need to
+            // supported it here too.
+            throw std::logic_error("Virtual cell is neither atomic nor collection");
+        }
+        auto ctype = static_pointer_cast<const collection_type_impl>(col->type);
+        if (ctype->is_list()) {
+            // A list has integers as keys, and values (the list's items).
+            // We just need to build a list with the same keys (and liveness
+            // information), but empty values.
+            auto ltype = static_cast<const list_type_impl*>(col->type.get());
+            if (ltype->get_elements_type() != empty_type) {
+                throw std::logic_error("Virtual cell has wrong list type");
+            }
+            c = make_empty(c.as_collection_mutation(), *ctype);
+        } else if (ctype->is_map()) {
+            // A map has keys and values. We just need to build a map with
+            // the same keys (and liveness information), but empty values.
+            auto mtype = static_cast<const map_type_impl*>(col->type.get());
+            if (mtype->get_values_type() != empty_type) {
+                throw std::logic_error("Virtual cell has wrong map type");
+            }
+            c = make_empty(c.as_collection_mutation(), *ctype);
+        } else if (ctype->is_set()) {
+            // A set has just keys (and liveness information). We need
+            // all of it as a virtual column, unfortunately, so we
+            // leave c unmodified.
+        } else {
+            // A collection can't be anything but a list, map or set...
+            throw std::logic_error("Virtual cell has unexpected collection type");
+        }
+    }
+}
+
+void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type) {
+    if (type->is_atomic()) {
+        builder.with_column(name, empty_type, column_kind::regular_column, column_view_virtual::yes);
+        return;
+    }
+    // A multi-cell collection (a frozen collection is a single
+    // cell and handled handled in the is_atomic() case above).
+    // The virtual version can't be just one cell, it has to be
+    // itself a collection of cells.
+    auto ctype = dynamic_pointer_cast<const collection_type_impl>(type);
+    if (!ctype) {
+        // TODO: When #2201 is done, we also need to handle here
+        // unfrozen UDTs.
+        throw exceptions::invalid_request_exception(sprint("Unsupported unselected multi-cell non-collection column %s for Materialized View", name));
+    }
+    if (ctype->is_list()) {
+        // A list has ints as keys, and values (the list's items).
+        // We just need these intss, i.e., a list of empty items.
+        builder.with_column(name, list_type_impl::get_instance(empty_type, true), column_kind::regular_column, column_view_virtual::yes);
+    } else if (ctype->is_map()) {
+        // A map has keys and values. We don't need these values,
+        // and can use empty values instead.
+        auto mtype = dynamic_pointer_cast<const map_type_impl>(type);
+        builder.with_column(name, map_type_impl::get_instance(mtype->get_values_type(), empty_type, true), column_kind::regular_column, column_view_virtual::yes);
+    } else if (ctype->is_set()) {
+        // A set's cell has nothing beyond the keys, so the
+        // virtual version of a set is, unfortunately, a complete
+        // copy of the set.
+        builder.with_column(name, type, column_kind::regular_column, column_view_virtual::yes);
+    } else {
+        // A collection can't be anything but a list, map or set...
+        abort();
+    }
+}
+
 static void add_cells_to_view(const schema& base, const schema& view, row base_cells, row& view_cells) {
     base_cells.for_each_cell([&] (column_id id, atomic_cell_or_collection& c) {
         auto* view_col = view_column(base, view, id);
         if (view_col && !view_col->is_primary_key()) {
+            maybe_make_virtual(c, view_col);
             view_cells.append_cell(view_col->id, std::move(c));
         }
     });

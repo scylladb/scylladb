@@ -246,18 +246,22 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
 
         cfm.with_column(column_name->name(), type, _is_static ? column_kind::static_column : column_kind::regular_column);
 
-        // Adding a column to a table which has an include all view requires the column to be added to the view
-        // as well. If the view has a regular base column in its PK, then the column ID needs to be updated in
-        // view_info; for that, rebuild the schema.
+        // Adding a column to a base table always requires updating the view
+        // schemas: If the view includes all columns it should include the new
+        // column, but if it doesn't, it may need to include the new
+        // unselected column as a virtual column. The case when it we
+        // shouldn't add a virtual column is when the view has in its PK one
+        // of the base's regular columns - but even in this case we need to
+        // rebuild the view schema, to update the column ID.
         if (!_is_static) {
             for (auto&& view : cf.views()) {
-                if (view->view_info()->include_all_columns() || view->view_info()->base_non_pk_column_in_view_pk()) {
-                    schema_builder builder(view);
-                    if (view->view_info()->include_all_columns()) {
-                        builder.with_column(column_name->name(), type);
-                    }
-                    view_updates.push_back(view_ptr(builder.build()));
+                schema_builder builder(view);
+                if (view->view_info()->include_all_columns()) {
+                    builder.with_column(column_name->name(), type);
+                } else if (!view->view_info()->base_non_pk_column_in_view_pk()) {
+                    db::view::create_virtual_column(builder, column_name->name(), type);
                 }
+                view_updates.push_back(view_ptr(builder.build()));
             }
         }
 
@@ -347,7 +351,8 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
             validate_column_rename(db, *schema, *from, *to);
             cfm.with_column_rename(from->name(), to->name());
 
-            // If the view includes a renamed column, it must be renamed in the view table and the definition.
+            // If the view includes a renamed column, it must be renamed in
+            // the view table and the definition.
             for (auto&& view : cf.views()) {
                 if (view->get_column_definition(from->name())) {
                     schema_builder builder(view);

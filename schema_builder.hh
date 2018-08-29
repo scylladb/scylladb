@@ -238,8 +238,8 @@ public:
 
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
-    schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
-    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column, column_view_virtual view_virtual = column_view_virtual::no);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual view_virtual = column_view_virtual::no);
     schema_builder& without_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& without_column(sstring name, data_type, api::timestamp_type timestamp);

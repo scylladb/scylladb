@@ -104,6 +104,21 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(
 
 future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats);
 
+/**
+ * create_virtual_column() adds a "virtual column" to a schema builder.
+ * The definition of a "virtual column" is based on the given definition
+ * of a regular column, except that any value types are replaced by the
+ * empty type - and only the information needed to track column liveness
+ * is kept: timestamp, deletion, ttl, and keys in maps.
+ * In some cases we add such virtual columns for unselected columns in
+ * materialized views, for reasons explained in issue #3362.
+ * @param builder the schema_builder where we want to add the virtual column.
+ * @param name the name of the virtual column to be created.
+ * @param type of the base column for which we want to build a virtual column.
+ *        When type is a multi-cell collection, so will be the virtual column.
+ */
+ void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type);
+
 }
 
 }

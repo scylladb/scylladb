@@ -3298,3 +3298,52 @@ SEASTAR_TEST_CASE(test_alter_table_with_updates) {
         });
     });
 }
+
+// Test that a regular column which we did not add to the view is really
+// not in the view. Even if to fix issue #3362 we add "virtual cells"
+// for the unselected columns, those should not be visible to the end-user
+// of the view table.
+SEASTAR_TEST_CASE(test_unselected_column) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("create table cf (p int, c int, x int, y list<int>, z set<int>, w map<int,int>, primary key (p, c))").get();
+        e.execute_cql("create materialized view vcf as select p, c from cf "
+                      "where p is not null and c is not null "
+                      "primary key (c, p)").get();
+        e.execute_cql("insert into cf (p, c, x) values (1, 2, 3)").get();
+        BOOST_TEST_PASSPOINT();
+        auto msg = e.execute_cql("select * from cf").get0();
+        assert_that(msg).is_rows().with_size(1)
+                .with_row({{int32_type->decompose(1)}, {int32_type->decompose(2)}, {}, {int32_type->decompose(3)}, {}, {}});
+        BOOST_TEST_PASSPOINT();
+        // Check that when we ask for all of vcf's columns, we only get the
+        // ones we actually selected - c and p, not x, y, z, or w:
+        eventually([&] {
+            auto msg = e.execute_cql("select * from vcf").get0();
+            assert_that(msg).is_rows().with_size(1)
+                    .with_row({{int32_type->decompose(2)}, {int32_type->decompose(1)}});
+        });
+        // Check that we cannot explicitly select the x, y, z or w columns in
+        // vcf as they are not one of the columns we selected for the view.
+        try {
+            e.execute_cql("select x from vcf").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) {
+            // we expect: exceptions::invalid_request_exception: Undefined name x in selection clause
+        }
+        try {
+            e.execute_cql("select y from vcf").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) {
+        }
+        try {
+            e.execute_cql("select z from vcf").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) {
+        }
+        try {
+            e.execute_cql("select w from vcf").get();
+            BOOST_ASSERT(false);
+        } catch (exceptions::invalid_request_exception&) {
+        }
+    });
+}

@@ -275,6 +275,7 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
 
     std::vector<const column_definition*> missing_pk_columns;
     std::vector<const column_definition*> target_non_pk_columns;
+    std::vector<const column_definition*> unselected_columns;
 
     // We need to include all of the primary key columns from the base table in order to make sure that we do not
     // overwrite values in the view. We cannot support "collapsing" the base table into a smaller number of rows in
@@ -291,6 +292,9 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
         bool def_in_target_pk = std::find(target_primary_keys.begin(), target_primary_keys.end(), &def) != target_primary_keys.end();
         if (included_def && !def_in_target_pk) {
             target_non_pk_columns.push_back(&def);
+        }
+        if (!included_def && !def_in_target_pk && !def.is_static()) {
+            unselected_columns.push_back(&def);
         }
         if (def.is_primary_key() && !def_in_target_pk) {
             missing_pk_columns.push_back(&def);
@@ -321,6 +325,19 @@ future<shared_ptr<cql_transport::event::schema_change>> create_view_statement::a
     add_columns(target_partition_keys, column_kind::partition_key);
     add_columns(target_clustering_keys, column_kind::clustering_key);
     add_columns(target_non_pk_columns, column_kind::regular_column);
+    // Add all unselected columns (base-table columns which are not selected
+    // in the view) as "virtual columns" - columns which have timestamp and
+    // ttl information, but an empty value. These are needed to keep view
+    // rows alive when the base row is alive, even if the view row has no
+    // data, just a key (see issue #3362). The virtual columns are not needed
+    // when the view pk adds a regular base column (i.e., has_non_pk_column)
+    // because in that case, the liveness of that base column is what
+    // determines the liveness of the view row.
+    if (!has_non_pk_column) {
+        for (auto* def : unselected_columns) {
+            db::view::create_virtual_column(builder, def->name(), def->type);
+        }
+    }
     _properties.properties()->apply_to_builder(builder, proxy.get_db().local().get_config().extensions());
 
     if (builder.default_time_to_live().count() > 0) {

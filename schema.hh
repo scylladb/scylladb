@@ -75,6 +75,8 @@ class extensions;
 // make sure these match the order we like columns back from schema
 enum class column_kind { partition_key, clustering_key, static_column, regular_column };
 
+enum class column_view_virtual { no, yes };
+
 sstring to_sstring(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
@@ -207,6 +209,7 @@ private:
     api::timestamp_type _dropped_at;
     bool _is_atomic;
     bool _is_counter;
+    column_view_virtual _is_view_virtual;
 
     struct thrift_bits {
         thrift_bits()
@@ -221,6 +224,7 @@ private:
 public:
     column_definition(bytes name, data_type type, column_kind kind,
         column_id component_index = 0,
+        column_view_virtual view_virtual = column_view_virtual::no,
         api::timestamp_type dropped_at = api::missing_timestamp);
 
     data_type type;
@@ -241,6 +245,12 @@ public:
     bool is_atomic() const { return _is_atomic; }
     bool is_multi_cell() const { return !_is_atomic; }
     bool is_counter() const { return _is_counter; }
+    // "virtual columns" appear in a materialized view as placeholders for
+    // unselected columns, with liveness information but without data, and
+    // allow view rows to remain alive despite having no data (issue #3362).
+    // These columns should be hidden from the user's SELECT queries.
+    bool is_view_virtual() const { return _is_view_virtual == column_view_virtual::yes; }
+    column_view_virtual view_virtual() const { return _is_view_virtual; }
     const sstring& name_as_text() const;
     const bytes& name() const;
     sstring name_as_cql_string() const;

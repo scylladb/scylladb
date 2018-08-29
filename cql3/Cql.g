@@ -1531,12 +1531,22 @@ inMarkerForTuple returns [shared_ptr<cql3::tuples::in_raw> marker]
     | ':' name=ident { $marker = new_tuple_in_bind_variables(name); }
     ;
 
-comparatorType returns [shared_ptr<cql3_type::raw> t]
-    : n=native_type     { $t = cql3_type::raw::from(n); }
-    | c=collection_type { $t = c; }
-    | tt=tuple_type     { $t = tt; }
+// The comparator_type rule is used for users' queries (internal=false)
+// and for internal calls from db::cql_type_parser::parse() (internal=true).
+// The latter is used for reading schemas stored in the system tables, and
+// may support additional column types that cannot be created through CQL,
+// but only internally through code. Today the only such type is "empty":
+// Scylla code internally creates columns with type "empty" or collections
+// "empty" to represent unselected columns in materialized views.
+// If a user (internal=false) tries to use "empty" as a type, it is treated -
+// as do all unknown types - as an attempt to use a user-defined type, and
+// we report this name is reserved (as for _reserved_type_names()).
+comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
+    : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
+    | c=collection_type[internal]   { $t = c; }
+    | tt=tuple_type[internal]       { $t = tt; }
     | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
-    | K_FROZEN '<' f=comparatorType '>'
+    | K_FROZEN '<' f=comparator_type[internal] '>'
       {
         try {
             $t = cql3::cql3_type::raw::frozen(f);
@@ -1556,6 +1566,22 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
         }
       }
 #endif
+    ;
+
+native_or_internal_type [bool internal] returns [shared_ptr<cql3_type> t]
+    : n=native_type     { $t = n; }
+    // The "internal" types, only supported when internal==true:
+    | K_EMPTY   {
+        if (internal) {
+            $t = cql3_type::empty;
+        } else {
+            add_recognition_error("Invalid (reserved) user type name empty");
+        }
+      }
+    ;
+
+comparatorType returns [shared_ptr<cql3_type::raw> t]
+    : tt=comparator_type[false]    { $t = tt; }
     ;
 
 native_type returns [shared_ptr<cql3_type> t]
@@ -1582,24 +1608,24 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_TIME      { $t = cql3_type::time; }
     ;
 
-collection_type returns [shared_ptr<cql3::cql3_type::raw> pt]
-    : K_MAP  '<' t1=comparatorType ',' t2=comparatorType '>'
+collection_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> pt]
+    : K_MAP  '<' t1=comparator_type[internal] ',' t2=comparator_type[internal] '>'
         {
             // if we can't parse either t1 or t2, antlr will "recover" and we may have t1 or t2 null.
             if (t1 && t2) {
                 $pt = cql3::cql3_type::raw::map(t1, t2);
             }
         }
-    | K_LIST '<' t=comparatorType '>'
+    | K_LIST '<' t=comparator_type[internal] '>'
         { if (t) { $pt = cql3::cql3_type::raw::list(t); } }
-    | K_SET  '<' t=comparatorType '>'
+    | K_SET  '<' t=comparator_type[internal] '>'
         { if (t) { $pt = cql3::cql3_type::raw::set(t); } }
     ;
 
-tuple_type returns [shared_ptr<cql3::cql3_type::raw> t]
+tuple_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> t]
         @init{ std::vector<shared_ptr<cql3::cql3_type::raw>> types; }
     : K_TUPLE '<'
-         t1=comparatorType { types.push_back(t1); } (',' tn=comparatorType { types.push_back(tn); })*
+         t1=comparator_type[internal] { types.push_back(t1); } (',' tn=comparator_type[internal] { types.push_back(tn); })*
       '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
@@ -1625,7 +1651,7 @@ unreserved_keyword returns [sstring str]
 
 unreserved_function_keyword returns [sstring str]
     : u=basic_unreserved_keyword { $str = u; }
-    | t=native_type              { $str = t->to_string(); }
+    | t=native_or_internal_type[true]   { $str = t->to_string(); }
     ;
 
 basic_unreserved_keyword returns [sstring str]
@@ -1809,6 +1835,8 @@ K_OR:          O R;
 K_REPLACE:     R E P L A C E;
 K_DETERMINISTIC: D E T E R M I N I S T I C;
 K_JSON:        J S O N;
+
+K_EMPTY:       E M P T Y;
 
 K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 K_SCYLLA_COUNTER_SHARD_LIST: S C Y L L A '_' C O U N T E R '_' S H A R D '_' L I S T; 

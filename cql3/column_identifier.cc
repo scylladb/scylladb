@@ -127,7 +127,11 @@ column_identifier::new_selector_factory(database& db, schema_ptr schema, std::ve
     if (!def) {
         throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));
     }
-
+    // Do not allow explicitly selecting hidden columns. We also skip them on
+    // "SELECT *" (see selection::wildcard()).
+    if (def->is_view_virtual()) {
+        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));
+    }
     return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
 }
 
