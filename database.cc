@@ -1128,7 +1128,7 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
 
             return do_for_each(work.descriptors, [&db, ks_name, cf_name, &work] (auto& pair) {
                 return db.invoke_on(column_family::calculate_shard_from_sstable_generation(pair.first),
-                        [ks_name, cf_name, comps = pair.second] (database& db) {
+                        [ks_name, cf_name, &work, comps = pair.second] (database& db) {
                     auto& cf = db.find_column_family(ks_name, cf_name);
 
                     auto sst = sstables::make_sstable(cf.schema(), cf._config.datadir + "/upload", comps.generation,
@@ -1146,11 +1146,12 @@ distributed_loader::flush_upload_dir(distributed<database>& db, sstring ks_name,
                         return sst->create_links(cf._config.datadir, gen);
                     }).then([sst] {
                         return sstables::remove_by_toc_name(sst->toc_filename(), error_handler_for_upload_dir());
-                    }).then([sst, gen] {
-                        return make_ready_future<int64_t>(gen);
+                    }).then([sst, &cf, gen, comps = comps, &work] () mutable {
+                        comps.generation = gen;
+                        comps.sstdir = cf._config.datadir;
+                        return make_ready_future<sstables::entry_descriptor>(std::move(comps));
                     });
-                }).then([&work, comps = pair.second] (auto gen) mutable {
-                    comps.generation = gen;
+                }).then([&work] (sstables::entry_descriptor comps) mutable {
                     work.flushed.push_back(std::move(comps));
                     return make_ready_future<>();
                 });
