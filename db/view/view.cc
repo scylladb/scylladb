@@ -505,28 +505,10 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             r.apply(shadowable_tombstone(cell.timestamp(), now));
         }
     } else {
-        auto ts = existing.marker().timestamp();
-        auto set_max_ts = [&ts] (atomic_cell_view&& cell) {
-            ts = std::max(ts, cell.timestamp());
-        };
-        if (!_view_info.include_all_columns()) {
-            existing.cells().for_each_cell([&, this] (column_id id, const atomic_cell_or_collection& cell) {
-                auto& def = _base->regular_column_at(id);
-                if (_view_info.view_column(def)) {
-                    return;
-                }
-                // Unselected columns are used regardless of being live or dead, since we don't know if
-                // they were used to compute the view entry's row marker.
-                if (def.is_atomic()) {
-                    set_max_ts(cell.as_atomic_cell(def));
-                } else {
-                    auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                    ctype->for_each_cell(cell.as_collection_mutation(), set_max_ts);
-                }
-            });
-        }
-        auto marker = row_marker(tombstone(ts, now));
-        r.apply(marker);
+        // "update" caused the base row to have been deleted, and !col_id
+        // means view row is the same - so it needs to be deleted as well
+        // using the same deletion timestamps for the individual cells.
+        r.apply(update.marker());
         auto diff = update.cells().difference(*_base, column_kind::regular_column, existing.cells());
         add_cells_to_view(*_base, *_view, std::move(diff), r.cells());
     }
