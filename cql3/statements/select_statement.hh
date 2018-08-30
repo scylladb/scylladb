@@ -222,6 +222,24 @@ private:
             gc_clock::time_point now,
             ::shared_ptr<const service::pager::paging_state> paging_state);
 
+    future<shared_ptr<cql_transport::messages::result_message>>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            dht::partition_range_vector&& partition_ranges,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
+
+    future<shared_ptr<cql_transport::messages::result_message>>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
+
     virtual void update_stats_rows_read(int64_t rows_read) override {
         _stats.rows_read += rows_read;
         _stats.secondary_index_rows_read += rows_read;

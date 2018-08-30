@@ -493,6 +493,157 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
+indexed_table_select_statement::execute_base_query(
+        service::storage_proxy& proxy,
+        dht::partition_range_vector&& partition_ranges,
+        service::query_state& state,
+        const query_options& options,
+        gc_clock::time_point now,
+        ::shared_ptr<const service::pager::paging_state> paging_state) {
+    auto cmd = ::make_lw_shared<query::read_command>(
+            _schema->id(),
+            _schema->version(),
+            make_partition_slice(options),
+            get_limit(options),
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            query::max_partitions,
+            utils::UUID(),
+            options.get_timestamp(state));
+    if (options.get_page_size() > 0) {
+        cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
+    }
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+    dht::partition_range_vector per_vnode_ranges;
+    per_vnode_ranges.reserve(partition_ranges.size());
+    for (auto& pr : partition_ranges) {
+        auto restricted_ranges = proxy.get_restricted_ranges(*_schema, pr);
+        std::move(restricted_ranges.begin(), restricted_ranges.end(), std::back_inserter(per_vnode_ranges));
+    }
+
+    struct base_query_state {
+        query::result_merger merger;
+        dht::partition_range_vector per_vnode_ranges;
+        dht::partition_range_vector::iterator current_partition_range;
+        base_query_state(uint32_t row_limit, dht::partition_range_vector&& ranges)
+                : merger(row_limit * ranges.size(), query::max_partitions)
+                , per_vnode_ranges(std::move(ranges))
+                , current_partition_range(per_vnode_ranges.begin())
+                {}
+        base_query_state(base_query_state&&) = default;
+        base_query_state(const base_query_state&) = delete;
+    };
+
+    base_query_state query_state{cmd->row_limit, std::move(per_vnode_ranges)};
+    return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
+        auto &merger = query_state.merger;
+        auto &ranges = query_state.per_vnode_ranges;
+        auto &range_it = query_state.current_partition_range;
+        return repeat([this, &ranges, &range_it, &merger, &proxy, &state, &options, cmd, timeout]() {
+            // Starting with 1 range, we check if the result was a short read, and if not,
+            // we continue exponentially, asking for 2x more ranges than before
+            auto range_it_end = std::min(range_it + std::distance(ranges.begin(), range_it) + 1, ranges.end());
+            dht::partition_range_vector prange(range_it, range_it_end);
+            auto command = ::make_lw_shared<query::read_command>(*cmd);
+            auto old_paging_state = options.get_paging_state();
+            if (old_paging_state && range_it == ranges.begin()) {
+                auto base_pk = generate_base_key_from_index_pk<partition_key>(old_paging_state->get_partition_key(),
+                        *old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                auto base_ck = generate_base_key_from_index_pk<clustering_key>(old_paging_state->get_partition_key(),
+                        *old_paging_state->get_clustering_key(), *_schema, *_view_schema);
+                command->slice.set_range(*_schema, base_pk,
+                        std::vector<query::clustering_range>{query::clustering_range::make_starting_with(range_bound<clustering_key>(base_ck, false))});
+            }
+            return proxy.query(_schema, command, std::move(prange), options.get_consistency(), {timeout, state.get_trace_state()})
+            .then([&range_it, range_it_end = std::move(range_it_end), &ranges, &merger] (service::storage_proxy::coordinator_query_result qr) {
+                bool is_short_read = qr.query_result->is_short_read();
+                merger(std::move(qr.query_result));
+                range_it = range_it_end;
+                return stop_iteration(is_short_read || range_it == ranges.end());
+            });
+        }).then([&merger]() {
+            return merger.get();
+        });
+    }).then([this, &proxy, &state, &options, now, cmd, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result) mutable {
+        return this->process_base_query_results(std::move(result), cmd, proxy, state, options, now, std::move(paging_state));
+    });
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
+indexed_table_select_statement::execute_base_query(
+        service::storage_proxy& proxy,
+        std::vector<primary_key>&& primary_keys,
+        service::query_state& state,
+        const query_options& options,
+        gc_clock::time_point now,
+        ::shared_ptr<const service::pager::paging_state> paging_state) {
+    auto cmd = make_lw_shared<query::read_command>(
+            _schema->id(),
+            _schema->version(),
+            make_partition_slice(options),
+            get_limit(options),
+            now,
+            tracing::make_trace_info(state.get_trace_state()),
+            query::max_partitions,
+            utils::UUID(),
+            options.get_timestamp(state));
+    if (options.get_page_size() > 0) {
+        cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
+    }
+    auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
+
+    struct base_query_state {
+        query::result_merger merger;
+        std::vector<primary_key> primary_keys;
+        std::vector<primary_key>::iterator current_primary_key;
+        base_query_state(uint32_t row_limit, std::vector<primary_key>&& keys)
+                : merger(row_limit, query::max_partitions)
+                , primary_keys(std::move(keys))
+                , current_primary_key(primary_keys.begin())
+                {}
+        base_query_state(base_query_state&&) = default;
+        base_query_state(const base_query_state&) = delete;
+    };
+
+    base_query_state query_state{cmd->row_limit, std::move(primary_keys)};
+    return do_with(std::move(query_state), [this, &proxy, &state, &options, cmd, timeout] (auto&& query_state) {
+        auto &merger = query_state.merger;
+        auto &keys = query_state.primary_keys;
+        auto &key_it = query_state.current_primary_key;
+        return repeat([this, &keys, &key_it, &merger, &proxy, &state, &options, cmd, timeout]() {
+            // Starting with 1 key, we check if the result was a short read, and if not,
+            // we continue exponentially, asking for 2x more key than before
+            auto key_it_end = std::min(key_it + std::distance(keys.begin(), key_it) + 1, keys.end());
+            auto command = ::make_lw_shared<query::read_command>(*cmd);
+
+            query::result_merger oneshot_merger(cmd->row_limit, query::max_partitions);
+            return map_reduce(key_it, key_it_end, [this, &proxy, &state, &options, cmd, timeout] (auto& key) {
+                auto command = ::make_lw_shared<query::read_command>(*cmd);
+                // for each partition, read just one clustering row (TODO: can
+                // get all needed rows of one partition at once.)
+                command->slice._row_ranges.clear();
+                if (key.clustering) {
+                    command->slice._row_ranges.push_back(query::clustering_range::make_singular(key.clustering));
+                }
+                return proxy.query(_schema, command, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(), {timeout, state.get_trace_state()})
+                .then([] (service::storage_proxy::coordinator_query_result qr) {
+                    return std::move(qr.query_result);
+                });
+            }, std::move(oneshot_merger)).then([&key_it, key_it_end = std::move(key_it_end), &keys, &merger] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+                bool is_short_read = result->is_short_read();
+                merger(std::move(result));
+                key_it = key_it_end;
+                return stop_iteration(is_short_read || key_it == keys.end());
+            });
+        }).then([&merger] () {
+            return merger.get();
+        });
+    }).then([this, &proxy, &state, &options, now, cmd, paging_state = std::move(paging_state)] (foreign_ptr<lw_shared_ptr<query::result>> result) mutable {
+        return this->process_base_query_results(std::move(result), cmd, proxy, state, options, now, std::move(paging_state));
+    });
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy,
                           lw_shared_ptr<query::read_command> cmd,
                           dht::partition_range_vector&& partition_ranges,
@@ -832,35 +983,13 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
         // In this case, can use our normal query machinery, which retrieves
         // entire partitions or the same slice for many partitions.
         return find_index_partition_ranges(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (dht::partition_range_vector partition_ranges, ::shared_ptr<const service::pager::paging_state> paging_state) {
-            auto command = ::make_lw_shared<query::read_command>(
-                _schema->id(),
-                _schema->version(),
-                make_partition_slice(options),
-                limit,
-                now,
-                tracing::make_trace_info(state.get_trace_state()),
-                query::max_partitions,
-                utils::UUID(),
-                options.get_timestamp(state));
-            return this->execute(proxy, command, std::move(partition_ranges), state, options, now);
+            return this->execute_base_query(proxy, std::move(partition_ranges), state, options, now, std::move(paging_state));
         });
     } else {
         // In this case, we need to retrieve a list of rows (not entire
         // partitions) and then retrieve those specific rows.
         return find_index_clustering_rows(proxy, state, options).then([limit, now, &state, &options, &proxy, this] (std::vector<primary_key> primary_keys, ::shared_ptr<const service::pager::paging_state> paging_state) {
-            auto command = ::make_lw_shared<query::read_command>(
-                _schema->id(),
-                _schema->version(),
-                // Note: the "clustering bounds" set in make_partition_slice()
-                // here is garbage, and will be overridden by execute() anyway
-                make_partition_slice(options),
-                limit,
-                now,
-                tracing::make_trace_info(state.get_trace_state()),
-                query::max_partitions,
-                utils::UUID(),
-                options.get_timestamp(state));
-            return this->execute(proxy, command, std::move(primary_keys), state, options, now);
+            return this->execute_base_query(proxy, std::move(primary_keys), state, options, now, std::move(paging_state));
         });
     }
 }
