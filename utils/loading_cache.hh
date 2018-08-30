@@ -44,7 +44,7 @@ namespace bi = boost::intrusive;
 namespace utils {
 
 using loading_cache_clock_type = seastar::lowres_clock;
-using auto_unlink_list_hook = bi::list_base_hook<bi::link_mode<bi::auto_unlink>>;
+using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
 
 template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val {
@@ -149,13 +149,13 @@ public:
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
 template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public auto_unlink_list_hook {
+class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public safe_link_list_hook {
 private:
     using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using loading_values_type = typename ts_value_type::loading_values_type;
 
 public:
-    using lru_list_type = bi::list<lru_entry, bi::constant_time_size<false>>;
+    using lru_list_type = bi::list<lru_entry>;
     using timestamped_val_ptr = typename loading_values_type::entry_ptr;
 
 private:
@@ -174,6 +174,9 @@ public:
     }
 
     ~lru_entry() {
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
         _cache_size -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
     }
@@ -185,7 +188,9 @@ public:
     /// Set this item as the most recently used item.
     /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
     void touch() noexcept {
-        auto_unlink_list_hook::unlink();
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
         _lru_list.push_front(*this);
     }
 
@@ -426,7 +431,7 @@ public:
     }
 
     size_t size() const {
-        return _loading_values.size();
+        return _lru_list.size();
     }
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
