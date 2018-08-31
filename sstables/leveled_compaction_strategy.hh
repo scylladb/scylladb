@@ -39,6 +39,8 @@ public:
     leveled_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
+    virtual compaction_descriptor get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) override;
+
     virtual std::vector<resharding_descriptor> get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) override;
 
     virtual void notify_completion(const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
@@ -101,6 +103,17 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
         return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
     }
     return {};
+}
+
+compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(column_family& cf, std::vector<sstables::shared_sstable> candidates) {
+    if (candidates.empty()) {
+        return compaction_descriptor();
+    }
+
+    auto& sst = *std::max_element(candidates.begin(), candidates.end(), [&] (sstables::shared_sstable& sst1, sstables::shared_sstable& sst2) {
+        return sst1->get_sstable_level() < sst2->get_sstable_level();
+    });
+    return compaction_descriptor(std::move(candidates), sst->get_sstable_level(), _max_sstable_size_in_mb*1024*1024);
 }
 
 std::vector<resharding_descriptor> leveled_compaction_strategy::get_resharding_jobs(column_family& cf, std::vector<shared_sstable> candidates) {
