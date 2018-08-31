@@ -254,9 +254,10 @@ private:
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
     using set_iterator = typename loading_values_type::iterator;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
+    using list_iterator = typename lru_list_type::iterator;
     struct value_extractor_fn {
-        Tp& operator()(ts_value_type& tv) const {
-            return tv.value();
+        Tp& operator()(ts_value_lru_entry& le) const {
+            return le.timestamped_value().value();
         }
     };
 
@@ -266,7 +267,7 @@ public:
     using value_ptr = typename ts_value_type::value_ptr;
 
     class entry_is_too_big : public std::exception {};
-    using iterator = boost::transform_iterator<value_extractor_fn, set_iterator>;
+    using iterator = boost::transform_iterator<value_extractor_fn, list_iterator>;
 
 private:
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
@@ -380,19 +381,19 @@ public:
 
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
     iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
-        return boost::make_transform_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)), _value_extractor_fn);
+        return boost::make_transform_iterator(to_list_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func))), _value_extractor_fn);
     };
 
     iterator find(const Key& k) noexcept {
-        return boost::make_transform_iterator(set_find(k), _value_extractor_fn);
+        return boost::make_transform_iterator(to_list_iterator(set_find(k)), _value_extractor_fn);
     }
 
     iterator end() {
-        return boost::make_transform_iterator(_loading_values.end(), _value_extractor_fn);
+        return boost::make_transform_iterator(list_end(), _value_extractor_fn);
     }
 
     iterator begin() {
-        return boost::make_transform_iterator(_loading_values.begin(), _value_extractor_fn);
+        return boost::make_transform_iterator(list_begin(), _value_extractor_fn);
     }
 
     template <typename Pred>
@@ -434,6 +435,15 @@ public:
     }
 
 private:
+    /// Should only be called on values for which the following holds: set_it == set_end() || set_it->ready()
+    /// For instance this always holds for iterators returned by set_find(...).
+    list_iterator to_list_iterator(set_iterator set_it) {
+        if (set_it != set_end()) {
+            return _lru_list.iterator_to(*set_it->lru_entry_ptr());
+        }
+        return list_end();
+    }
+
     set_iterator ready_entry_iterator(set_iterator it) {
         set_iterator end_it = set_end();
 
@@ -460,6 +470,14 @@ private:
 
     set_iterator set_begin() noexcept {
         return _loading_values.begin();
+    }
+
+    list_iterator list_end() noexcept {
+        return _lru_list.end();
+    }
+
+    list_iterator list_begin() noexcept {
+        return _lru_list.begin();
     }
 
     bool caching_enabled() const {
