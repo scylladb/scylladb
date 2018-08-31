@@ -921,6 +921,235 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombst
     }
 }
 
+/*
+ * Test file are generated using the following script (Python):
+    session.execute("""
+        CREATE TABLE IF NOT EXISTS slicing_interleaved_rows_and_rts (
+            pk int,
+            ck1 int,
+            ck2 int,
+            st int static,
+            rc int,
+            PRIMARY KEY (pk, ck1, ck2)
+        )
+        WITH compression = { 'sstable_compression' : '' }
+        AND caching = {'keys': 'NONE', 'rows_per_partition': 'NONE'}
+        """)
+
+    query_static = SimpleStatement("""
+        INSERT INTO slicing_interleaved_rows_and_rts (pk, st)
+        VALUES (%s, %s) USING TIMESTAMP 1525385507816578
+	""", consistency_level=ConsistencyLevel.ONE)
+
+    query = SimpleStatement("""
+        INSERT INTO slicing_interleaved_rows_and_rts (pk, ck1, ck2, rc)
+        VALUES (%s, %s, %s, %s) USING TIMESTAMP 1525385507816578
+        """, consistency_level=ConsistencyLevel.ONE)
+
+    query_del = SimpleStatement("""
+	DELETE FROM slicing_interleaved_rows_and_rts USING TIMESTAMP 1525385507816568
+	WHERE pk = %s AND ck1 >= %s AND ck1 <= %s
+        """, consistency_level=ConsistencyLevel.ONE)
+
+    session.execute(query_static, [1, 555])
+
+    for i in range(1, 1024 * 128, 5):
+	session.execute(query_del, [1, i, i + 4])
+
+    for i in range(1, 1024 * 128, 5):
+        session.execute(query, [1, i + 3, i + 3, i + 3])
+ *
+ * Bounds of promoted index blocks:
+ * (1) <incl_start> - (7449, 7449), end_open_marker set
+ * (7450) <incl_end> - (14896) <incl_start>, end_open_marker set
+ * (14899, 14899) - (22345) <incl_end>, end_open_marker empty
+ * (22346) <incl_start> - (29794, 29794), end_open_marker set
+ * (29795) <incl_end> - (37241) <incl_start>, end_open_marker set
+ * ...
+ */
+static thread_local const sstring UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_PATH =
+    "tests/sstables/3.x/uncompressed/slicing_interleaved_rows_and_rts";
+static thread_local const schema_ptr UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA =
+    schema_builder("test_ks", "test_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck1", int32_type, column_kind::clustering_key)
+        .with_column("ck2", int32_type, column_kind::clustering_key)
+        .with_column("st", int32_type, column_kind::static_column)
+        .with_column("rc", int32_type)
+        .build();
+
+SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
+    sstable_assertions sst(UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA,
+                           UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_PATH);
+    sst.load();
+
+    auto to_pkey = [] (int key) {
+        auto bytes = int32_type->decompose(int32_t(key));
+        auto pk = partition_key::from_single_value(*UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA, bytes);
+        return dht::global_partitioner().decorate_key(*UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA, pk);
+    };
+    auto to_non_full_ck = [] (int ck) {
+        return clustering_key_prefix::from_single_value(
+                *UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA,
+                int32_type->decompose(ck));
+    };
+    auto to_full_ck = [] (int ck1, int ck2) {
+        return clustering_key::from_deeply_exploded(
+                *UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA,
+                { data_value{ck1}, data_value{ck2} });
+    };
+    auto make_tombstone = [] (int64_t ts, int32_t tp) {
+        return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
+    };
+    auto make_range_tombstone = [] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
+        return range_tombstone {
+            std::move(start),
+            bound_kind::incl_start,
+            std::move(end),
+            bound_kind::incl_end,
+            t};
+    };
+
+    auto make_clustering_range = [] (clustering_key_prefix&& start, clustering_key_prefix&& end) {
+        return query::clustering_range::make(
+            query::clustering_range::bound(std::move(start), true),
+            query::clustering_range::bound(std::move(end), false));
+    };
+
+    auto make_assertions = [] (flat_mutation_reader rd) {
+        rd.set_max_buffer_size(1);
+        return assert_that(std::move(rd));
+    };
+
+    auto st_cdef = UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->get_column_definition(to_bytes("st"));
+    BOOST_REQUIRE(st_cdef);
+    auto rc_cdef = UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->get_column_definition(to_bytes("rc"));
+    BOOST_REQUIRE(rc_cdef);
+
+    auto to_expected = [rc_cdef] (int val) {
+        return std::vector<flat_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+    };
+
+    // Sequential read
+    {
+        auto r = make_assertions(sst.read_rows_flat());
+        tombstone tomb = make_tombstone(1525385507816568, 1534898526);
+        r.produces_partition_start(to_pkey(1))
+        .produces_static_row({{st_cdef, int32_type->decompose(int32_t(555))}});
+
+        for (auto idx : boost::irange(1, 1024 * 128, 5)) {
+            range_tombstone rt1 =
+                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+            range_tombstone rt2 =
+                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+
+            r.produces_range_tombstone(rt1)
+            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
+            .produces_range_tombstone(rt2);
+        }
+        r.produces_partition_end()
+        .produces_end_of_stream();
+    }
+
+    // forwarding read
+    {
+        auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
+                                           UNCOMPRESSED_SLICING_INTERLEAVED_ROWS_AND_RTS_SCHEMA->full_slice(),
+                                           default_priority_class(),
+                                           no_resource_tracking(),
+                                           streamed_mutation::forwarding::yes));
+
+        const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
+        r.produces_partition_start(to_pkey(1));
+        r.fast_forward_to(to_full_ck(7460, 7461), to_full_ck(7500, 7501));
+        {
+            auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
+
+            range_tombstone rt =
+                    make_range_tombstone(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
+            r.produces_range_tombstone(rt, {clustering_range});
+
+            for (auto idx : boost::irange(7461, 7501, 5)) {
+                range_tombstone rt1 =
+                        make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+                range_tombstone rt2 =
+                        make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+
+                r.produces_range_tombstone(rt1, {clustering_range})
+                .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
+                .produces_range_tombstone(rt2, {clustering_range});
+            }
+            r.produces_end_of_stream();
+        }
+    }
+
+    // filtering read
+    {
+        auto slice = partition_slice_builder(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA)
+            .with_range(make_clustering_range(to_full_ck(7460, 7461), to_full_ck(7500, 7501)))
+            .build();
+
+        auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range, slice));
+        const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
+
+        r.produces_partition_start(to_pkey(1))
+        .produces_static_row({{st_cdef, int32_type->decompose(int32_t(555))}});
+
+        auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
+        range_tombstone rt =
+                make_range_tombstone(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
+
+        r.produces_range_tombstone(rt, {clustering_range});
+
+        for (auto idx : boost::irange(7461, 7501, 5)) {
+            range_tombstone rt1 =
+                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+            range_tombstone rt2 =
+                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+
+            r.produces_range_tombstone(rt1, {clustering_range})
+            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
+            .produces_range_tombstone(rt2, {clustering_range});
+        }
+        r.produces_partition_end()
+        .produces_end_of_stream();
+    }
+
+    // filtering and forwarding read
+    {
+        auto slice = partition_slice_builder(*UNCOMPRESSED_FILTERING_AND_FORWARDING_SCHEMA)
+            .with_range(make_clustering_range(to_full_ck(7470, 7471), to_full_ck(7500, 7501)))
+            .build();
+
+        auto r = make_assertions(sst.read_range_rows_flat(query::full_partition_range,
+                                                      slice,
+                                                      default_priority_class(),
+                                                      no_resource_tracking(),
+                                                      streamed_mutation::forwarding::yes));
+        const tombstone tomb = make_tombstone(1525385507816568, 1535592075);
+        r.produces_partition_start(to_pkey(1));
+        r.fast_forward_to(to_full_ck(7460, 7461), to_full_ck(7600, 7601));
+
+        auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
+        range_tombstone rt =
+                make_range_tombstone(to_full_ck(7469, 7469), to_non_full_ck(7470), tomb);
+
+        r.produces_range_tombstone(rt, {clustering_range});
+
+        for (auto idx : boost::irange(7471, 7501, 5)) {
+            range_tombstone rt1 =
+                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+            range_tombstone rt2 =
+                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+
+            r.produces_range_tombstone(rt1, {clustering_range})
+            .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
+            .produces_range_tombstone(rt2, {clustering_range});
+        }
+        r.produces_end_of_stream();
+    }
+}
+
 // Following tests run on files in tests/sstables/3.x/uncompressed/static_row
 // They were created using following CQL statements:
 //
