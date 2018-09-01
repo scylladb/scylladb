@@ -44,7 +44,7 @@ namespace bi = boost::intrusive;
 namespace utils {
 
 using loading_cache_clock_type = seastar::lowres_clock;
-using auto_unlink_list_hook = bi::list_base_hook<bi::link_mode<bi::auto_unlink>>;
+using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
 
 template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val {
@@ -149,13 +149,13 @@ public:
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
 template<typename Tp, typename Key, typename EntrySize , typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public auto_unlink_list_hook {
+class timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>::lru_entry : public safe_link_list_hook {
 private:
     using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using loading_values_type = typename ts_value_type::loading_values_type;
 
 public:
-    using lru_list_type = bi::list<lru_entry, bi::constant_time_size<false>>;
+    using lru_list_type = bi::list<lru_entry>;
     using timestamped_val_ptr = typename loading_values_type::entry_ptr;
 
 private:
@@ -174,6 +174,9 @@ public:
     }
 
     ~lru_entry() {
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
         _cache_size -= _ts_val_ptr->size();
         _ts_val_ptr->set_anchor_back_reference(nullptr);
     }
@@ -185,7 +188,9 @@ public:
     /// Set this item as the most recently used item.
     /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
     void touch() noexcept {
-        auto_unlink_list_hook::unlink();
+        if (safe_link_list_hook::is_linked()) {
+            _lru_list.erase(_lru_list.iterator_to(*this));
+        }
         _lru_list.push_front(*this);
     }
 
@@ -254,9 +259,10 @@ private:
     using ts_value_lru_entry = typename ts_value_type::lru_entry;
     using set_iterator = typename loading_values_type::iterator;
     using lru_list_type = typename ts_value_lru_entry::lru_list_type;
+    using list_iterator = typename lru_list_type::iterator;
     struct value_extractor_fn {
-        Tp& operator()(ts_value_type& tv) const {
-            return tv.value();
+        Tp& operator()(ts_value_lru_entry& le) const {
+            return le.timestamped_value().value();
         }
     };
 
@@ -266,7 +272,7 @@ public:
     using value_ptr = typename ts_value_type::value_ptr;
 
     class entry_is_too_big : public std::exception {};
-    using iterator = boost::transform_iterator<value_extractor_fn, set_iterator>;
+    using iterator = boost::transform_iterator<value_extractor_fn, list_iterator>;
 
 private:
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
@@ -378,19 +384,19 @@ public:
 
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
     iterator find(const KeyType& key, KeyHasher key_hasher_func, KeyEqual key_equal_func) noexcept {
-        return boost::make_transform_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func)), _value_extractor_fn);
+        return boost::make_transform_iterator(to_list_iterator(set_find(key, std::move(key_hasher_func), std::move(key_equal_func))), _value_extractor_fn);
     };
 
     iterator find(const Key& k) noexcept {
-        return boost::make_transform_iterator(set_find(k), _value_extractor_fn);
+        return boost::make_transform_iterator(to_list_iterator(set_find(k)), _value_extractor_fn);
     }
 
     iterator end() {
-        return boost::make_transform_iterator(_loading_values.end(), _value_extractor_fn);
+        return boost::make_transform_iterator(list_end(), _value_extractor_fn);
     }
 
     iterator begin() {
-        return boost::make_transform_iterator(_loading_values.begin(), _value_extractor_fn);
+        return boost::make_transform_iterator(list_begin(), _value_extractor_fn);
     }
 
     template <typename Pred>
@@ -423,7 +429,7 @@ public:
     }
 
     size_t size() const {
-        return _loading_values.size();
+        return _lru_list.size();
     }
 
     /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
@@ -432,6 +438,15 @@ public:
     }
 
 private:
+    /// Should only be called on values for which the following holds: set_it == set_end() || set_it->ready()
+    /// For instance this always holds for iterators returned by set_find(...).
+    list_iterator to_list_iterator(set_iterator set_it) {
+        if (set_it != set_end()) {
+            return _lru_list.iterator_to(*set_it->lru_entry_ptr());
+        }
+        return list_end();
+    }
+
     set_iterator ready_entry_iterator(set_iterator it) {
         set_iterator end_it = set_end();
 
@@ -458,6 +473,14 @@ private:
 
     set_iterator set_begin() noexcept {
         return _loading_values.begin();
+    }
+
+    list_iterator list_end() noexcept {
+        return _lru_list.end();
+    }
+
+    list_iterator list_begin() noexcept {
+        return _lru_list.begin();
     }
 
     bool caching_enabled() const {
