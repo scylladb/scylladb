@@ -26,6 +26,7 @@ import io
 import os
 import subprocess
 import tarfile
+import pathlib
 
 
 def ldd(executable):
@@ -70,6 +71,8 @@ for exe in executables:
 ld_so = libs['ld.so']
 
 ar = tarfile.open(output, mode='w|gz')
+pathlib.Path('build/SCYLLA-RELOCATABLE-FILE').touch()
+ar.add('build/SCYLLA-RELOCATABLE-FILE', arcname='SCYLLA-RELOCATABLE-FILE')
 
 # This thunk is a shell script that arranges for the executable to be invoked,
 # under the following conditions:
