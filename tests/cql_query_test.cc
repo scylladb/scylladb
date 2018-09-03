@@ -3441,6 +3441,57 @@ SEASTAR_TEST_CASE(test_allow_filtering_multiple_regular) {
     });
 }
 
+SEASTAR_TEST_CASE(test_allow_filtering_desc) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY((a, b), c, d)) WITH CLUSTERING ORDER BY (c DESC);").get();
+        e.require_table_exists("ks", "t").get();
+
+        e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 1, 1, 1)").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 3, 4, 5)").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 5, 1, 9)").get();
+        e.execute_cql("INSERT INTO t (a, b, c, d, e) VALUES (1, 2, 6, 7, 5)").get();
+
+        auto msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c > 3 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(6),
+                int32_type->decompose(7),
+                int32_type->decompose(5)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(5),
+                int32_type->decompose(1),
+                int32_type->decompose(9)
+            }
+        });
+
+        msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c < 4 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_rows({
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(3),
+                int32_type->decompose(4),
+                int32_type->decompose(5)
+            },
+            {
+                int32_type->decompose(1),
+                int32_type->decompose(2),
+                int32_type->decompose(1),
+                int32_type->decompose(1),
+                int32_type->decompose(1)
+            }
+        });
+
+        msg = e.execute_cql("SELECT a, b, c, d, e FROM t WHERE c = 4 ALLOW FILTERING").get0();
+        assert_that(msg).is_rows().with_size(0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_allow_filtering_with_secondary_index) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (a int, b int, c int, d int, e int, PRIMARY KEY(a, b));").get();
