@@ -1162,7 +1162,7 @@ row::find_cell(column_id id) const {
 size_t row::external_memory_usage(const schema& s, column_kind kind) const {
     size_t mem = 0;
     if (_type == storage_type::vector) {
-        mem += _storage.vector.v.external_memory_usage();
+        mem += _storage.vector.v.used_space_external_memory_usage();
         column_id id = 0;
         for (auto&& c_a_h : _storage.vector.v) {
             auto& cdef = s.column_at(kind, id++);

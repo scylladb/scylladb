@@ -1716,3 +1716,45 @@ SEASTAR_THREAD_TEST_CASE(test_cell_external_memory_usage) {
     test_collection(bytes(64 * 1024 + 1, 'a'));
     test_collection(bytes(1024 * 1024, 'a'));
 }
+
+// external_memory_usage() must be invariant to the merging order,
+// so that accounting of a clustering_row produced by partition_snapshot_flat_reader
+// doesn't give a greater result than what is used by the memtable region, possibly
+// after all MVCC versions are merged.
+// Overaccounting leads to assertion failure in ~flush_memory_accounter.
+SEASTAR_THREAD_TEST_CASE(test_row_size_is_immune_to_application_order) {
+    auto s = schema_builder("ks", "cf")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v1", utf8_type)
+            .with_column("v2", utf8_type)
+            .with_column("v3", utf8_type)
+            .with_column("v4", utf8_type)
+            .with_column("v5", utf8_type)
+            .with_column("v6", utf8_type)
+            .with_column("v7", utf8_type)
+            .with_column("v8", utf8_type)
+            .with_column("v9", utf8_type)
+            .build();
+
+    auto value = utf8_type->decompose(data_value("value"));
+
+    row r1;
+    r1.append_cell(7, make_atomic_cell(value));
+
+    row r2;
+    r2.append_cell(8, make_atomic_cell(value));
+
+    auto size1 = [&] {
+        auto r3 = row(*s, column_kind::regular_column, r1);
+        r3.apply(*s, column_kind::regular_column, r2);
+        return r3.external_memory_usage(*s, column_kind::regular_column);
+    }();
+
+    auto size2 = [&] {
+        auto r3 = row(*s, column_kind::regular_column, r2);
+        r3.apply(*s, column_kind::regular_column, r1);
+        return r3.external_memory_usage(*s, column_kind::regular_column);
+    }();
+
+    BOOST_REQUIRE_EQUAL(size1, size2);
+}
