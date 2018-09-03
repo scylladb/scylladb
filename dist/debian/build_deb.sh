@@ -158,7 +158,7 @@ else
    echo "Unknown distribution: $TARGET"
 fi
 MUSTACHE_DIST="\"debian\": true, \"$TARGET\": true, \"product\": \"$PRODUCT\", \"$PRODUCT\": true"
-pystache dist/debian/changelog.mustache "{ \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
+pystache dist/debian/changelog.mustache "{ $MUSTACHE_DIST, \"version\": \"$SCYLLA_VERSION\", \"release\": \"$SCYLLA_RELEASE\", \"revision\": \"$REVISION\", \"codename\": \"$TARGET\" }" > debian/changelog
 pystache dist/debian/rules.mustache "{ $MUSTACHE_DIST }" > debian/rules
 pystache dist/debian/control.mustache "{ $MUSTACHE_DIST }" > debian/control
 pystache dist/debian/scylla-server.install.mustache "{ $MUSTACHE_DIST, \"dist\": $DIST }" > debian/$PRODUCT-server.install
