@@ -2389,6 +2389,18 @@ database::setup_metrics() {
         sm::make_derive("short_mutation_queries", _stats->short_mutation_queries,
                        sm::description("The rate of mutation queries that returned less rows than requested due to result size limiting.")),
 
+        sm::make_derive("multishard_query_unpopped_fragments", _stats->multishard_query_unpopped_fragments,
+                       sm::description("The total number of fragments that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+
+        sm::make_derive("multishard_query_unpopped_bytes", _stats->multishard_query_unpopped_bytes,
+                       sm::description("The total number of bytes that were extracted from the shard reader but were unconsumed by the query and moved back into the reader.")),
+
+        sm::make_derive("multishard_query_failed_reader_stops", _stats->multishard_query_failed_reader_stops,
+                       sm::description("The number of times the stopping of a shard reader failed.")),
+
+        sm::make_derive("multishard_query_failed_reader_saves", _stats->multishard_query_failed_reader_saves,
+                       sm::description("The number of times the saving of a shard reader failed.")),
+
         sm::make_total_operations("counter_cell_lock_acquisition", _cl_stats->lock_acquisitions,
                                  sm::description("The number of acquired counter cell locks.")),
 
@@ -3120,7 +3132,7 @@ table::query(schema_ptr s,
         query::result_memory_limiter& memory_limiter,
         uint64_t max_size,
         db::timeout_clock::time_point timeout,
-        querier_cache_context cache_ctx) {
+        query::querier_cache_context cache_ctx) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = opts.request == query::result_request::only_digest
@@ -3176,7 +3188,7 @@ future<lw_shared_ptr<query::result>, cache_temperature>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, uint64_t max_result_size, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
+    query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _data_query_stage(&cf,
             std::move(s),
             seastar::cref(cmd),
@@ -3203,7 +3215,7 @@ future<reconcilable_result, cache_temperature>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const dht::partition_range& range,
                           query::result_memory_accounter&& accounter, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     column_family& cf = find_column_family(cmd.cf_id);
-    querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
+    query::querier_cache_context cache_ctx(_querier_cache, cmd.query_uuid, cmd.is_first_page);
     return _mutation_query_stage(std::move(s),
             cf.as_mutation_source(),
             seastar::cref(range),

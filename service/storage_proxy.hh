@@ -222,10 +222,17 @@ private:
     dht::partition_range_vector get_restricted_ranges(const schema& s, dht::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
     static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
-    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(clock_type::time_point timeout,
-            std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, dht::partition_range_vector::iterator&& i,
-            dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
-            uint32_t remaining_row_count, uint32_t remaining_partition_count);
+    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>, replicas_per_token_range> query_partition_key_range_concurrent(clock_type::time_point timeout,
+            std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
+            lw_shared_ptr<query::read_command> cmd,
+            db::consistency_level cl,
+            dht::partition_range_vector::iterator&& i,
+            dht::partition_range_vector&& ranges,
+            int concurrency_factor,
+            tracing::trace_state_ptr trace_state,
+            uint32_t remaining_row_count,
+            uint32_t remaining_partition_count,
+            replicas_per_token_range preferred_replicas);
 
     future<coordinator_query_result> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,

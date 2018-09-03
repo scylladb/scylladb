@@ -25,32 +25,34 @@
 
 #include <boost/range/adaptor/map.hpp>
 
-static sstring cannot_use_reason(querier::can_use cu)
+namespace query {
+
+enum class can_use {
+    yes,
+    no_schema_version_mismatch,
+    no_ring_pos_mismatch,
+    no_clustering_pos_mismatch
+};
+
+static sstring cannot_use_reason(can_use cu)
 {
     switch (cu)
     {
-        case querier::can_use::yes:
+        case can_use::yes:
             return "can be used";
-        case querier::can_use::no_emit_only_live_rows_mismatch:
-            return "emit only live rows mismatch";
-        case querier::can_use::no_schema_version_mismatch:
+        case can_use::no_schema_version_mismatch:
             return "schema version mismatch";
-        case querier::can_use::no_ring_pos_mismatch:
+        case can_use::no_ring_pos_mismatch:
             return "ring pos mismatch";
-        case querier::can_use::no_clustering_pos_mismatch:
+        case can_use::no_clustering_pos_mismatch:
             return "clustering pos mismatch";
     }
     return "unknown reason";
 }
 
-querier::position querier::current_position() const {
-    const dht::decorated_key* dk = std::visit([] (const auto& cs) { return cs->current_partition(); }, _compaction_state);
-    const clustering_key_prefix* clustering_key = *_last_ckey ? &**_last_ckey : nullptr;
-    return {dk, clustering_key};
-}
-
-bool querier::ring_position_matches(const dht::partition_range& range, const querier::position& pos) const {
-    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+static bool ring_position_matches(const schema& s, const dht::partition_range& range, const query::partition_slice& slice,
+        const position_view& pos) {
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(slice.options.contains(query::partition_slice::option::reversed));
 
     const auto expected_start = dht::ring_position_view(*pos.partition_key);
     // If there are no clustering columns or the select is distinct we don't
@@ -58,10 +60,10 @@ bool querier::ring_position_matches(const dht::partition_range& range, const que
     // anything more in the last page's partition and thus the start bound is
     // exclusive. Otherwise there migh be clustering rows still and it is
     // inclusive.
-    const auto expected_inclusiveness = _schema->clustering_key_size() > 0 &&
-        !_slice->options.contains<query::partition_slice::option::distinct>() &&
+    const auto expected_inclusiveness = s.clustering_key_size() > 0 &&
+        !slice.options.contains<query::partition_slice::option::distinct>() &&
         pos.clustering_key;
-    const auto comparator = dht::ring_position_comparator(*_schema);
+    const auto comparator = dht::ring_position_comparator(s);
 
     if (is_reversed && !range.is_singular()) {
         const auto& end = range.end();
@@ -72,8 +74,8 @@ bool querier::ring_position_matches(const dht::partition_range& range, const que
     return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
 }
 
-bool querier::clustering_position_matches(const query::partition_slice& slice, const querier::position& pos) const {
-    const auto& row_ranges = slice.row_ranges(*_schema, pos.partition_key->key());
+static bool clustering_position_matches(const schema& s, const query::partition_slice& slice, const position_view& pos) {
+    const auto& row_ranges = slice.row_ranges(s, pos.partition_key->key());
 
     if (row_ranges.empty()) {
         // This is a valid slice on the last page of a query with
@@ -89,9 +91,9 @@ bool querier::clustering_position_matches(const query::partition_slice& slice, c
         return &row_ranges == &slice.default_row_ranges();
     }
 
-    clustering_key_prefix::equality eq(*_schema);
+    clustering_key_prefix::equality eq(s);
 
-    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(_slice->options.contains(query::partition_slice::option::reversed));
+    const auto is_reversed = flat_mutation_reader::consume_reversed_partitions(slice.options.contains(query::partition_slice::option::reversed));
 
     // If the page ended mid-partition the first partition range should start
     // with the last clustering key (exclusive).
@@ -103,41 +105,76 @@ bool querier::clustering_position_matches(const query::partition_slice& slice, c
     return !start->is_inclusive() && eq(start->value(), *pos.clustering_key);
 }
 
-bool querier::matches(const dht::partition_range& range) const {
-    const auto& qr = *_range;
-    if (qr.is_singular() != range.is_singular()) {
+static bool ranges_match(const schema& s, const dht::partition_range& original_range, const dht::partition_range& new_range) {
+    if (original_range.is_singular() != new_range.is_singular()) {
         return false;
     }
 
-    const auto cmp = dht::ring_position_comparator(*_schema);
+    const auto cmp = dht::ring_position_comparator(s);
     const auto bound_eq = [&] (const stdx::optional<dht::partition_range::bound>& a, const stdx::optional<dht::partition_range::bound>& b) {
         return bool(a) == bool(b) && (!a || a->equal(*b, cmp));
     };
-    // For singular ranges end() == start() so they are interchangable.
+
+    // For singular ranges end() == start() so they are interchangeable.
     // For non-singular ranges we check only the end().
-    return bound_eq(qr.end(), range.end());
+    return bound_eq(original_range.end(), new_range.end());
 }
 
-querier::can_use querier::can_be_used_for_page(emit_only_live_rows only_live, const ::schema& s,
-        const dht::partition_range& range, const query::partition_slice& slice) const {
-    if (only_live != emit_only_live_rows(std::holds_alternative<lw_shared_ptr<compact_for_data_query_state>>(_compaction_state))) {
-        return can_use::no_emit_only_live_rows_mismatch;
+static bool ranges_match(const schema& s, dht::partition_ranges_view original_ranges, dht::partition_ranges_view new_ranges) {
+    if (new_ranges.empty()) {
+        return false;
     }
-    if (s.version() != _schema->version()) {
+    if (original_ranges.size() == 1) {
+        if (new_ranges.size() != 1) {
+            return false;
+        }
+        return ranges_match(s, original_ranges.front(), new_ranges.front());
+    }
+
+    // As the query progresses the number of to-be-read ranges can never surpass
+    // that of the original ranges.
+    if (original_ranges.size() < new_ranges.size()) {
+        return false;
+    }
+
+    // If there is a difference in the size of the range lists we assume we
+    // already read ranges from the original list and these ranges are missing
+    // from the head of the new list.
+    auto new_ranges_it = new_ranges.begin();
+    auto original_ranges_it = original_ranges.begin() + (original_ranges.size() - new_ranges.size());
+
+    // The first range in the new list can be partially read so we only check
+    // that one of its bounds match that of its original counterpart, just like
+    // we do with single ranges.
+    if (!ranges_match(s, *original_ranges_it++, *new_ranges_it++)) {
+        return false;
+    }
+
+    const auto cmp = dht::ring_position_comparator(s);
+
+    // The rest of the list, those ranges that we didn't even started reading
+    // yet should be *identical* to their original counterparts.
+    return std::equal(original_ranges_it, original_ranges.end(), new_ranges_it,
+            [&cmp] (const dht::partition_range& a, const dht::partition_range& b) { return a.equal(b, cmp); });
+}
+
+template <typename Querier>
+static can_use can_be_used_for_page(const Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice) {
+    if (s.version() != q.schema()->version()) {
         return can_use::no_schema_version_mismatch;
     }
 
-    const auto pos = current_position();
+    const auto pos = q.current_position();
 
     if (!pos.partition_key) {
         // There was nothing read so far so we assume we are ok.
         return can_use::yes;
     }
 
-    if (!ring_position_matches(range, pos)) {
+    if (!ring_position_matches(s, range, slice, pos)) {
         return can_use::no_ring_pos_mismatch;
     }
-    if (!clustering_position_matches(slice, pos)) {
+    if (!clustering_position_matches(s, slice, pos)) {
         return can_use::no_clustering_pos_mismatch;
     }
     return can_use::yes;
@@ -158,23 +195,24 @@ void querier_cache::scan_cache_entries() {
     }
 }
 
-querier_cache::entries::iterator querier_cache::find_querier(utils::UUID key, const dht::partition_range& range, tracing::trace_state_ptr trace_state) {
-    const auto queriers = _index.equal_range(key);
+static querier_cache::entries::iterator find_querier(querier_cache::entries& entries, querier_cache::index& index, utils::UUID key,
+        dht::partition_ranges_view ranges, tracing::trace_state_ptr trace_state) {
+    const auto queriers = index.equal_range(key);
 
-    if (queriers.first == _index.end()) {
+    if (queriers.first == index.end()) {
         tracing::trace(trace_state, "Found no cached querier for key {}", key);
-        return _entries.end();
+        return entries.end();
     }
 
-    const auto it = std::find_if(queriers.first, queriers.second, [&] (const entry& e) {
-        return e.value().matches(range);
+    const auto it = std::find_if(queriers.first, queriers.second, [&] (const querier_cache::entry& e) {
+        return ranges_match(e.schema(), e.ranges(), ranges);
     });
 
     if (it == queriers.second) {
-        tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range {}", key, range);
-        return _entries.end();
+        tracing::trace(trace_state, "Found cached querier(s) for key {} but none matches the query range(s) {}", key, ranges);
+        return entries.end();
     }
-    tracing::trace(trace_state, "Found cached querier for key {} and range {}", key, range);
+    tracing::trace(trace_state, "Found cached querier for key {} and range(s) {}", key, ranges);
     return it->pos();
 }
 
@@ -185,7 +223,9 @@ querier_cache::querier_cache(size_t max_cache_size, std::chrono::seconds entry_t
     _expiry_timer.arm_periodic(entry_ttl / 2);
 }
 
-void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_ptr trace_state) {
+template <typename Querier>
+static void insert_querier(querier_cache::entries& entries, querier_cache::index& index, querier_cache::stats& stats,
+        size_t max_queriers_memory_usage, utils::UUID key, Querier&& q, lowres_clock::time_point expires, tracing::trace_state_ptr trace_state) {
     // FIXME: see #3159
     // In reverse mode flat_mutation_reader drops any remaining rows of the
     // current partition when the page ends so it cannot be reused across
@@ -196,7 +236,7 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
 
     tracing::trace(trace_state, "Caching querier with key {}", key);
 
-    auto memory_usage = boost::accumulate(_entries | boost::adaptors::transformed(std::mem_fn(&entry::memory_usage)), size_t(0));
+    auto memory_usage = boost::accumulate(entries | boost::adaptors::transformed(std::mem_fn(&querier_cache::entry::memory_usage)), size_t(0));
 
     // We add the memory-usage of the to-be added querier to the memory-usage
     // of all the cached queriers. We now need to makes sure this number is
@@ -205,50 +245,91 @@ void querier_cache::insert(utils::UUID key, querier&& q, tracing::trace_state_pt
     // it goes below the limit.
     memory_usage += q.memory_usage();
 
-    if (memory_usage >= _max_queriers_memory_usage) {
-        auto it = _entries.begin();
-        const auto end = _entries.end();
-        while (it != end && memory_usage >= _max_queriers_memory_usage) {
-            ++_stats.memory_based_evictions;
+    if (memory_usage >= max_queriers_memory_usage) {
+        auto it = entries.begin();
+        const auto end = entries.end();
+        while (it != end && memory_usage >= max_queriers_memory_usage) {
+            ++stats.memory_based_evictions;
             memory_usage -= it->memory_usage();
-            --_stats.population;
-            it = _entries.erase(it);
+            --stats.population;
+            it = entries.erase(it);
         }
     }
 
-    auto& e = _entries.emplace_back(key, std::move(q), lowres_clock::now() + _entry_ttl);
-    e.set_pos(--_entries.end());
-    _index.insert(e);
-    ++_stats.population;
+    auto& e = entries.emplace_back(key, std::move(q), expires);
+    e.set_pos(--entries.end());
+    index.insert(e);
+    ++stats.population;
 }
 
-querier querier_cache::lookup(utils::UUID key,
-        emit_only_live_rows only_live,
+void querier_cache::insert(utils::UUID key, data_querier&& q, tracing::trace_state_ptr trace_state) {
+    insert_querier(_entries, _data_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+            std::move(trace_state));
+}
+
+void querier_cache::insert(utils::UUID key, mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    insert_querier(_entries, _mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+            std::move(trace_state));
+}
+
+void querier_cache::insert(utils::UUID key, shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    insert_querier(_entries, _shard_mutation_querier_index, _stats, _max_queriers_memory_usage, key, std::move(q), lowres_clock::now() + _entry_ttl,
+            std::move(trace_state));
+}
+
+template <typename Querier>
+static std::optional<Querier> lookup_querier(querier_cache::entries& entries,
+        querier_cache::index& index,
+        querier_cache::stats& stats,
+        utils::UUID key,
         const schema& s,
-        const dht::partition_range& range,
+        dht::partition_ranges_view ranges,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state,
-        const noncopyable_function<querier()>& create_fun) {
-    auto it = find_querier(key, range, trace_state);
-    ++_stats.lookups;
-    if (it == _entries.end()) {
-        ++_stats.misses;
-        return create_fun();
+        tracing::trace_state_ptr trace_state) {
+    auto it = find_querier(entries, index, key, ranges, trace_state);
+    ++stats.lookups;
+    if (it == entries.end()) {
+        ++stats.misses;
+        return std::nullopt;
     }
 
-    auto q = std::move(*it).value();
-    _entries.erase(it);
-    --_stats.population;
+    auto q = std::move(*it).template value<Querier>();
+    entries.erase(it);
+    --stats.population;
 
-    const auto can_be_used = q.can_be_used_for_page(only_live, s, range, slice);
-    if (can_be_used == querier::can_use::yes) {
+    const auto can_be_used = can_be_used_for_page(q, s, ranges.front(), slice);
+    if (can_be_used == can_use::yes) {
         tracing::trace(trace_state, "Reusing querier");
-        return q;
+        return std::optional<Querier>(std::move(q));
     }
 
     tracing::trace(trace_state, "Dropping querier because {}", cannot_use_reason(can_be_used));
-    ++_stats.drops;
-    return create_fun();
+    ++stats.drops;
+    return std::nullopt;
+}
+
+std::optional<data_querier> querier_cache::lookup_data_querier(utils::UUID key,
+        const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    return lookup_querier<data_querier>(_entries, _data_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+}
+
+std::optional<mutation_querier> querier_cache::lookup_mutation_querier(utils::UUID key,
+        const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    return lookup_querier<mutation_querier>(_entries, _mutation_querier_index, _stats, key, s, range, slice, std::move(trace_state));
+}
+
+std::optional<shard_mutation_querier> querier_cache::lookup_shard_mutation_querier(utils::UUID key,
+        const schema& s,
+        const dht::partition_range_vector& ranges,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    return lookup_querier<shard_mutation_querier>(_entries, _shard_mutation_querier_index, _stats, key, s, ranges, slice, std::move(trace_state));
 }
 
 void querier_cache::set_entry_ttl(std::chrono::seconds entry_ttl) {
@@ -287,20 +368,52 @@ querier_cache_context::querier_cache_context(querier_cache& cache, utils::UUID k
     , _is_first_page(is_first_page) {
 }
 
-void querier_cache_context::insert(querier&& q, tracing::trace_state_ptr trace_state) {
+void querier_cache_context::insert(data_querier&& q, tracing::trace_state_ptr trace_state) {
     if (_cache && _key != utils::UUID{}) {
         _cache->insert(_key, std::move(q), std::move(trace_state));
     }
 }
 
-querier querier_cache_context::lookup(emit_only_live_rows only_live,
-        const schema& s,
+void querier_cache_context::insert(mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{}) {
+        _cache->insert(_key, std::move(q), std::move(trace_state));
+    }
+}
+
+void querier_cache_context::insert(shard_mutation_querier&& q, tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{}) {
+        _cache->insert(_key, std::move(q), std::move(trace_state));
+    }
+}
+
+std::optional<data_querier> querier_cache_context::lookup_data_querier(const schema& s,
         const dht::partition_range& range,
         const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state,
-        const noncopyable_function<querier()>& create_fun) {
+        tracing::trace_state_ptr trace_state) {
     if (_cache && _key != utils::UUID{} && !_is_first_page) {
-        return _cache->lookup(_key, only_live, s, range, slice, std::move(trace_state), create_fun);
+        return _cache->lookup_data_querier(_key, s, range, slice, std::move(trace_state));
     }
-    return create_fun();
+    return std::nullopt;
 }
+
+std::optional<mutation_querier> querier_cache_context::lookup_mutation_querier(const schema& s,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{} && !_is_first_page) {
+        return _cache->lookup_mutation_querier(_key, s, range, slice, std::move(trace_state));
+    }
+    return std::nullopt;
+}
+
+std::optional<shard_mutation_querier> querier_cache_context::lookup_shard_mutation_querier(const schema& s,
+        const dht::partition_range_vector& ranges,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state) {
+    if (_cache && _key != utils::UUID{} && !_is_first_page) {
+        return _cache->lookup_shard_mutation_querier(_key, s, ranges, slice, std::move(trace_state));
+    }
+    return std::nullopt;
+}
+
+} // namespace query

@@ -663,6 +663,23 @@ std::ostream& operator<<(std::ostream& out, const token& t);
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
+class partition_ranges_view {
+    const dht::partition_range* _data = nullptr;
+    size_t _size = 0;
+
+public:
+    partition_ranges_view() = default;
+    partition_ranges_view(const dht::partition_range& range) : _data(&range), _size(1) {}
+    partition_ranges_view(const dht::partition_range_vector& ranges) : _data(ranges.data()), _size(ranges.size()) {}
+    bool empty() const { return _size == 0; }
+    size_t size() const { return _size; }
+    const dht::partition_range& front() const { return *_data; }
+    const dht::partition_range& back() const { return *(_data + _size - 1); }
+    const dht::partition_range* begin() const { return _data; }
+    const dht::partition_range* end() const { return _data + _size; }
+};
+std::ostream& operator<<(std::ostream& out, partition_ranges_view v);
+
 void set_global_partitioner(const sstring& class_name, unsigned ignore_msb = 0);
 i_partitioner& global_partitioner();
 

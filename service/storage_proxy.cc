@@ -82,6 +82,7 @@
 #include "core/metrics.hh"
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
+#include "multishard_mutation_query.hh"
 
 namespace service {
 
@@ -3155,11 +3156,18 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     });
 }
 
-future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>
-storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout, std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
-        lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, dht::partition_range_vector::iterator&& i,
-        dht::partition_range_vector&& ranges, int concurrency_factor, tracing::trace_state_ptr trace_state,
-        uint32_t remaining_row_count, uint32_t remaining_partition_count) {
+future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>, replicas_per_token_range>
+storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::time_point timeout,
+        std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
+        lw_shared_ptr<query::read_command> cmd,
+        db::consistency_level cl,
+        dht::partition_range_vector::iterator&& i,
+        dht::partition_range_vector&& ranges,
+        int concurrency_factor,
+        tracing::trace_state_ptr trace_state,
+        uint32_t remaining_row_count,
+        uint32_t remaining_partition_count,
+        replicas_per_token_range preferred_replicas) {
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<::shared_ptr<abstract_read_executor>> exec;
@@ -3167,12 +3175,20 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto p = shared_from_this();
     auto& cf= _db.local().find_column_family(schema);
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &cf : nullptr;
+    std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
 
+    const auto preferred_replicas_for_range = [&preferred_replicas] (const dht::partition_range& r) {
+        auto it = preferred_replicas.find(r.transform(std::mem_fn(&dht::ring_position::token)));
+        return it == preferred_replicas.end() ? std::vector<gms::inet_address>{} : replica_ids_to_endpoints(it->second);
+    };
+    const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
     while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
         dht::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
-        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, pcf);
+        std::vector<gms::inet_address> merged_preferred_replicas = preferred_replicas_for_range(*i);
+        std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints, merged_preferred_replicas, pcf);
+        std::vector<dht::token_range> merged_ranges{to_token_range(range)};
         ++i;
 
         // getRestrictedRange has broken the queried range into per-[vnode] token ranges, but this doesn't take
@@ -3180,9 +3196,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
         while (i != ranges.end())
         {
+            const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
             dht::partition_range& next_range = *i;
             std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
-            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, pcf);
+            std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints, current_range_preferred_replicas, pcf);
 
             // Origin has this to say here:
             // *  If the current range right is the min token, we should stop merging because CFS.getRangeSlice
@@ -3196,13 +3213,14 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             }
 
             std::vector<gms::inet_address> merged = intersection(live_endpoints, next_endpoints);
+            std::vector<gms::inet_address> current_merged_preferred_replicas = intersection(merged_preferred_replicas, current_range_preferred_replicas);
 
             // Check if there is enough endpoint for the merge to be possible.
             if (!is_sufficient_live_nodes(cl, ks, merged)) {
                 break;
             }
 
-            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, pcf);
+            std::vector<gms::inet_address> filtered_merged = filter_for_query(cl, ks, merged, current_merged_preferred_replicas, pcf);
 
             // Estimate whether merging will be a win or not
             if (!locator::i_endpoint_snitch::get_local_snitch_ptr()->is_worth_merging_for_range_query(filtered_merged, filtered_endpoints, next_filtered_endpoints)) {
@@ -3231,8 +3249,10 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
             // If we get there, merge this range and the next one
             range = dht::partition_range(range.start(), next_range.end());
             live_endpoints = std::move(merged);
+            merged_preferred_replicas = std::move(current_merged_preferred_replicas);
             filtered_endpoints = std::move(filtered_merged);
             ++i;
+            merged_ranges.push_back(to_token_range(next_range));
         }
         slogger.trace("creating range read executor with targets {}", filtered_endpoints);
         try {
@@ -3244,6 +3264,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         }
 
         exec.push_back(::make_shared<range_slice_read_executor>(schema, cf.shared_from_this(), p, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state));
+        ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
     }
 
     query::result_merger merger(cmd->row_limit, cmd->partition_limit);
@@ -3253,24 +3274,47 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         return rex->execute(timeout);
     }, std::move(merger));
 
-    return f.then([p, exec = std::move(exec), results = std::move(results), i = std::move(i), ranges = std::move(ranges),
-                   cl, cmd, concurrency_factor, timeout, remaining_row_count, remaining_partition_count, trace_state = std::move(trace_state)]
-                   (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
+    return f.then([p,
+            exec = std::move(exec),
+            results = std::move(results),
+            i = std::move(i),
+            ranges = std::move(ranges),
+            cl,
+            cmd,
+            concurrency_factor,
+            timeout,
+            remaining_row_count,
+            remaining_partition_count,
+            trace_state = std::move(trace_state),
+            preferred_replicas = std::move(preferred_replicas),
+            ranges_per_exec = std::move(ranges_per_exec)] (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
         result->ensure_counts();
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
         results.emplace_back(std::move(result));
         if (i == ranges.end() || !remaining_row_count || !remaining_partition_count) {
-            return make_ready_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(results));
+            auto used_replicas = replicas_per_token_range();
+            for (auto& e : exec) {
+                // We add used replicas in separate per-vnode entries even if
+                // they were merged, for two reasons:
+                // 1) The list of replicas is determined for each vnode
+                // separately and thus this makes lookups more convenient.
+                // 2) On the next page the ranges might not be merged.
+                auto replica_ids = endpoints_to_replica_ids(e->used_targets());
+                for (auto& r : ranges_per_exec[e.get()]) {
+                    used_replicas.emplace(std::move(r), replica_ids);
+                }
+            }
+            return make_ready_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>, replicas_per_token_range>(std::move(results), std::move(used_replicas));
         } else {
             cmd->row_limit = remaining_row_count;
             cmd->partition_limit = remaining_partition_count;
-            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i),
-                    std::move(ranges), concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count);
+            return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges),
+                    concurrency_factor * 2, std::move(trace_state), remaining_row_count, remaining_partition_count, std::move(preferred_replicas));
         }
     }).handle_exception([p] (std::exception_ptr eptr) {
         p->handle_read_error(eptr, true);
-        return make_exception_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(eptr);
+        return make_exception_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>, replicas_per_token_range>(eptr);
     });
 }
 
@@ -3326,9 +3370,19 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     const auto row_limit = cmd->row_limit;
     const auto partition_limit = cmd->partition_limit;
 
-    return query_partition_key_range_concurrent(query_options.timeout(*this), std::move(results), cmd, cl, ranges.begin(), std::move(ranges),
-            concurrency_factor, std::move(query_options.trace_state), cmd->row_limit, cmd->partition_limit)
-            .then([row_limit, partition_limit](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
+    return query_partition_key_range_concurrent(query_options.timeout(*this),
+            std::move(results),
+            cmd,
+            cl,
+            ranges.begin(),
+            std::move(ranges),
+            concurrency_factor,
+            std::move(query_options.trace_state),
+            cmd->row_limit,
+            cmd->partition_limit,
+            std::move(query_options.preferred_replicas)).then([row_limit, partition_limit] (
+                    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results,
+                    replicas_per_token_range used_replicas) {
         query::result_merger merger(row_limit, partition_limit);
         merger.reserve(results.size());
 
@@ -3336,7 +3390,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             merger(std::move(r));
         }
 
-        return make_ready_future<coordinator_query_result>(coordinator_query_result(merger.get()));
+        return make_ready_future<coordinator_query_result>(coordinator_query_result(merger.get(), std::move(used_replicas)));
     });
 }
 
@@ -4106,178 +4160,6 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_truncate();
 }
 
-// Merges reconcilable_result:s from different shards into one
-// Drops partitions which exceed the limit.
-class mutation_result_merger {
-    schema_ptr _schema;
-    lw_shared_ptr<const query::read_command> _cmd;
-    unsigned _row_count = 0;
-    unsigned _partition_count = 0;
-    bool _short_read_allowed;
-    // we get a batch of partitions each time, each with a key
-    // partition batches should be maintained in key order
-    // batches that share a key should be merged and sorted in decorated_key
-    // order
-    struct partitions_batch {
-        std::vector<partition> partitions;
-        query::short_read short_read;
-    };
-    std::multimap<unsigned, partitions_batch> _partitions;
-    query::result_memory_accounter _memory_accounter;
-    stdx::optional<unsigned> _stop_after_key;
-public:
-    explicit mutation_result_merger(schema_ptr schema, lw_shared_ptr<const query::read_command> cmd)
-            : _schema(std::move(schema))
-            , _cmd(std::move(cmd))
-            , _short_read_allowed(_cmd->slice.options.contains(query::partition_slice::option::allow_short_read)) {
-    }
-    query::result_memory_accounter& memory() {
-        return _memory_accounter;
-    }
-    const query::result_memory_accounter& memory() const {
-        return _memory_accounter;
-    }
-    void add_result(unsigned key, foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
-        if (_stop_after_key && key > *_stop_after_key) {
-            // A short result was added that goes before this one.
-            return;
-        }
-        std::vector<partition> partitions;
-        partitions.reserve(partial_result->partitions().size());
-        // Following three lines to simplify patch; can remove later
-        for (const partition& p : partial_result->partitions()) {
-            partitions.push_back(p);
-            _row_count += p._row_count;
-            _partition_count += p._row_count > 0;
-        }
-        _memory_accounter.update(partial_result->memory_usage());
-        if (partial_result->is_short_read()) {
-            _stop_after_key = key;
-        }
-        _partitions.emplace(key, partitions_batch { std::move(partitions), partial_result->is_short_read() });
-    }
-    reconcilable_result get() && {
-        auto unsorted = std::unordered_set<unsigned>();
-        struct partitions_and_last_key {
-            std::vector<partition> partitions;
-            stdx::optional<dht::decorated_key> last; // set if we had a short read
-        };
-        auto merged = std::map<unsigned, partitions_and_last_key>();
-        auto short_read = query::short_read(this->short_read());
-        // merge batches with equal keys, and note if we need to sort afterwards
-        for (auto&& key_value : _partitions) {
-            auto&& key = key_value.first;
-            if (_stop_after_key && key > *_stop_after_key) {
-                break;
-            }
-            auto&& batch = key_value.second;
-            auto&& dest = merged[key];
-            if (dest.partitions.empty()) {
-                dest.partitions = std::move(batch.partitions);
-            } else {
-                unsorted.insert(key);
-                std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(dest.partitions));
-            }
-            // In case of a short read we need to remove all partitions from the
-            // batch that come after the last partition of the short read
-            // result.
-            if (batch.short_read) {
-                // Nobody sends a short read with no data.
-                const auto& last = dest.partitions.back().mut().decorated_key(*_schema);
-                if (!dest.last || last.less_compare(*_schema, *dest.last)) {
-                    dest.last = last;
-                }
-                short_read = query::short_read::yes;
-            }
-        }
-
-        // Sort batches that arrived with the same keys
-        for (auto key : unsorted) {
-            struct comparator {
-                const schema& s;
-                dht::decorated_key::less_comparator dkcmp;
-
-                bool operator()(const partition& a, const partition& b) const {
-                    return dkcmp(a.mut().decorated_key(s), b.mut().decorated_key(s));
-                }
-                bool operator()(const dht::decorated_key& a, const partition& b) const {
-                    return dkcmp(a, b.mut().decorated_key(s));
-                }
-                bool operator()(const partition& a, const dht::decorated_key& b) const {
-                    return dkcmp(a.mut().decorated_key(s), b);
-                }
-            };
-            auto cmp = comparator { *_schema, dht::decorated_key::less_comparator(_schema) };
-
-            auto&& batch = merged[key];
-            boost::sort(batch.partitions, cmp);
-            if (batch.last) {
-                // This batch was built from a result that was a short read.
-                // We need to remove all partitions that are after that short
-                // read.
-                auto it = boost::range::upper_bound(batch.partitions, std::move(*batch.last), cmp);
-                batch.partitions.erase(it, batch.partitions.end());
-            }
-        }
-
-        auto final = std::vector<partition>();
-        final.reserve(_partition_count);
-        for (auto&& batch : merged | boost::adaptors::map_values) {
-            std::move(batch.partitions.begin(), batch.partitions.end(), std::back_inserter(final));
-        }
-
-        if (short_read) {
-            // Short read row and partition counts may be incorrect, recalculate.
-            _row_count = 0;
-            _partition_count = 0;
-            for (const auto& p : final) {
-                _row_count += p.row_count();
-                _partition_count += p.row_count() > 0;
-            }
-
-            if (_row_count >= _cmd->row_limit || _partition_count > _cmd->partition_limit) {
-                // Even though there was a short read contributing to the final
-                // result we got limited by total row limit or partition limit.
-                // Note that we cannot with trivial check make unset short read flag
-                // in case _partition_count == _cmd->partition_limit since the short
-                // read may have caused the last partition to contain less rows
-                // than asked for.
-                short_read = query::short_read::no;
-            }
-        }
-
-        // Trim back partition count and row count in case we overshot.
-        // Should be rare for dense tables.
-        while ((_partition_count > _cmd->partition_limit)
-                || (_partition_count && (_row_count - final.back().row_count() >= _cmd->row_limit))) {
-            _row_count -= final.back().row_count();
-            _partition_count -= final.back().row_count() > 0;
-            final.pop_back();
-        }
-        if (_row_count > _cmd->row_limit) {
-            auto mut = final.back().mut().unfreeze(_schema);
-            static const auto all = std::vector<query::clustering_range>({query::clustering_range::make_open_ended_both_sides()});
-            auto is_reversed = _cmd->slice.options.contains(query::partition_slice::option::reversed);
-            auto final_rows = _cmd->row_limit - (_row_count - final.back().row_count());
-            _row_count -= final.back().row_count();
-            auto rc = mut.partition().compact_for_query(*_schema, _cmd->timestamp, all, is_reversed, final_rows);
-            final.back() = partition(rc, freeze(mut));
-            _row_count += rc;
-        }
-
-        return reconcilable_result(_row_count, std::move(final), short_read, std::move(_memory_accounter).done());
-    }
-    bool short_read() const {
-        return bool(_stop_after_key) || (_short_read_allowed && _row_count > 0 && _memory_accounter.check());
-    }
-    unsigned partition_count() const {
-        return _partition_count;
-    }
-    unsigned row_count() const {
-        return _row_count;
-    }
-};
-
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
 storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr,
                                        storage_proxy::clock_type::time_point timeout,
@@ -4308,39 +4190,6 @@ storage_proxy::query_mutations_locally(schema_ptr s, lw_shared_ptr<query::read_c
     }
 }
 
-}
-
-namespace {
-
-struct element_and_shard {
-    unsigned element;   // element in a partition range vector
-    unsigned shard;
-};
-
-bool operator==(element_and_shard a, element_and_shard b) {
-    return a.element == b.element && a.shard == b.shard;
-}
-
-}
-
-namespace std {
-
-template <>
-struct hash<element_and_shard> {
-    size_t operator()(element_and_shard es) const {
-        return es.element * 31 + es.shard;
-    }
-};
-
-}
-
-namespace service {
-
-struct partition_range_and_sort_key {
-    query::partition_range pr;
-    unsigned sort_key_shard_order;   // for the same source partition range, we sort in shard order
-};
-
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>
 storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    lw_shared_ptr<query::read_command> cmd,
@@ -4348,103 +4197,9 @@ storage_proxy::query_nonsingular_mutations_locally(schema_ptr s,
                                                    tracing::trace_state_ptr trace_state,
                                                    uint64_t max_size,
                                                    storage_proxy::clock_type::time_point timeout) {
-    // no one permitted us to modify *cmd, so make a copy
-    auto shard_cmd = make_lw_shared<query::read_command>(*cmd);
-    auto range_count = static_cast<unsigned>(prs.size());
-    return do_with(cmd,
-            shard_cmd,
-            0u,
-            false,
-            range_count,
-            std::unordered_map<element_and_shard, partition_range_and_sort_key>{},
-            mutation_result_merger{s, cmd},
-            dht::ring_position_exponential_vector_sharder{std::move(prs)},
-            global_schema_ptr(s),
-            tracing::global_trace_state_ptr(std::move(trace_state)),
-            cache_temperature(0.0f),
-            [this, s, max_size, timeout] (lw_shared_ptr<query::read_command>& cmd,
-                    lw_shared_ptr<query::read_command>& shard_cmd,
-                    unsigned& mutation_result_merger_key,
-                    bool& no_more_ranges,
-                    unsigned& partition_range_count,
-                    std::unordered_map<element_and_shard, partition_range_and_sort_key>& shards_for_this_iteration,
-                    mutation_result_merger& mrm,
-                    dht::ring_position_exponential_vector_sharder& rpevs,
-                    global_schema_ptr& gs,
-                    tracing::global_trace_state_ptr& gt,
-                    cache_temperature& hit_rate) {
-      return _db.local().get_result_memory_limiter().new_mutation_read(max_size).then([&, timeout, s] (query::result_memory_accounter ma) {
-        mrm.memory() = std::move(ma);
-        return repeat_until_value([&, s, timeout] () -> future<stdx::optional<std::pair<reconcilable_result, cache_temperature>>> {
-            // We don't want to query a sparsely populated table sequentially, because the latency
-            // will go through the roof.  We don't want to query a densely populated table in parallel,
-            // because we'll throw away most of the results.  So we'll exponentially increase
-            // concurrency starting at 1, so we won't waste on dense tables and at most
-            // `log(nr_shards) + ignore_msb_bits` latency multiplier for near-empty tables.
-            //
-            // We use the ring_position_exponential_vector_sharder to give us subranges that follow
-            // this scheme.
-            shards_for_this_iteration.clear();
-            // If we're reading from less than smp::count shards, then we can just append
-            // each shard in order without sorting.  If we're reading from more, then
-            // we'll read from some shards at least twice, so the partitions within will be
-            // out-of-order wrt. other shards
-            auto this_iteration_subranges = rpevs.next(*s);
-            auto retain_shard_order = true;
-            no_more_ranges = true;
-            if (this_iteration_subranges) {
-                no_more_ranges = false;
-                retain_shard_order = this_iteration_subranges->inorder;
-                auto sort_key = 0u;
-                for (auto&& now : this_iteration_subranges->per_shard_ranges) {
-                    shards_for_this_iteration.emplace(element_and_shard{this_iteration_subranges->element, now.shard}, partition_range_and_sort_key{now.ring_range, sort_key++});
-                }
-            }
-
-            auto key_base = mutation_result_merger_key;
-
-            // prepare for next iteration
-            // Each iteration uses a merger key that is either i in the loop above (so in the range [0, shards_in_parallel),
-            // or, the element index in prs (so in the range [0, partition_range_count).  Make room for sufficient keys.
-            mutation_result_merger_key += std::max(smp::count, partition_range_count);
-
-            shard_cmd->partition_limit = cmd->partition_limit - mrm.partition_count();
-            shard_cmd->row_limit = cmd->row_limit - mrm.row_count();
-
-            return parallel_for_each(shards_for_this_iteration, [&, key_base, timeout, retain_shard_order] (const std::pair<const element_and_shard, partition_range_and_sort_key>& elem_shard_range) {
-                auto&& elem = elem_shard_range.first.element;
-                auto&& shard = elem_shard_range.first.shard;
-                auto&& range = elem_shard_range.second.pr;
-                auto sort_key_shard_order = elem_shard_range.second.sort_key_shard_order;
-                _stats.replica_cross_shard_ops += shard != engine().cpu_id();
-                return _db.invoke_on(shard, [&, range, gt, fstate = mrm.memory().state_for_another_shard(), timeout] (database& db) {
-                    query::result_memory_accounter accounter(db.get_result_memory_limiter(), std::move(fstate));
-                    return db.query_mutations(gs, *shard_cmd, range, std::move(accounter), std::move(gt), timeout).then([&hit_rate] (reconcilable_result&& rr, cache_temperature ht) {
-                        hit_rate = ht;
-                        return make_foreign(make_lw_shared(std::move(rr)));
-                    });
-                }).then([&, key_base, retain_shard_order, elem, sort_key_shard_order] (foreign_ptr<lw_shared_ptr<reconcilable_result>> partial_result) {
-                    // Each outer (sequential) iteration is in result order, so we pick increasing keys.
-                    // Within the inner (parallel) iteration, the results can be in order (if retain_shard_order), or not (if !retain_shard_order).
-                    // If the results are unordered, we still have to order them according to which element of prs they originated from.
-                    auto key = key_base; // for outer loop
-                    if (retain_shard_order) {
-                        key += sort_key_shard_order;  // inner loop is ordered
-                    } else {
-                        key += elem;  // inner loop ordered only by position within prs
-                    }
-                    mrm.add_result(key, std::move(partial_result));
-                });
-            }).then([&] () -> stdx::optional<std::pair<reconcilable_result, cache_temperature>> {
-                if (mrm.short_read() || mrm.partition_count() >= cmd->partition_limit || mrm.row_count() >= cmd->row_limit || no_more_ranges) {
-                    return stdx::make_optional(std::make_pair(std::move(mrm).get(), hit_rate));
-                }
-                return stdx::nullopt;
-            });
-        });
-      });
-    }).then([] (std::pair<reconcilable_result, cache_temperature>&& result) {
-        return make_ready_future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>(make_foreign(make_lw_shared(std::move(result.first))), result.second);
+    return do_with(cmd, std::move(prs), [=, s = std::move(s), trace_state = std::move(trace_state)] (lw_shared_ptr<query::read_command>& cmd,
+                const dht::partition_range_vector& prs) mutable {
+        return query_mutations_on_all_shards(_db, std::move(s), *cmd, prs, std::move(trace_state), max_size, timeout);
     });
 }
 

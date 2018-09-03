@@ -315,7 +315,7 @@ scylla_tests = [
     'tests/fragmented_temporary_buffer_test',
     'tests/json_test',
     'tests/auth_passwords_test',
-
+    'tests/multishard_mutation_query_test',
 ]
 
 perf_tests = [
@@ -645,6 +645,7 @@ scylla_core = (['database.cc',
                  'querier.cc',
                  'data/cell.cc',
                  'multishard_writer.cc',
+                 'multishard_mutation_query.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]

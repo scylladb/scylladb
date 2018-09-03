@@ -46,6 +46,7 @@
 #include "database.hh"
 #include "partition_slice_builder.hh"
 #include "schema_registry.hh"
+#include "service/priority_manager.hh"
 
 static schema_ptr make_schema() {
     return schema_builder("ks", "cf")
@@ -1532,9 +1533,13 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     const io_priority_class& pc,
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd_sm,
-                    mutation_reader::forwarding fwd_mr) {
-                auto factory = [remote_memtables, s, &slice, &pc, trace_state] (unsigned shard,
+                    mutation_reader::forwarding fwd_mr) mutable {
+                auto factory = [remote_memtables] (unsigned shard,
+                        schema_ptr s,
                         const dht::partition_range& range,
+                        const query::partition_slice& slice,
+                        const io_priority_class& pc,
+                        tracing::trace_state_ptr trace_state,
                         streamed_mutation::forwarding fwd_sm,
                         mutation_reader::forwarding fwd_mr) {
                     return smp::submit_to(shard, [mt = &*remote_memtables->at(shard), s = global_schema_ptr(s), &range, &slice, &pc,
@@ -1549,7 +1554,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_as_mutation_source) {
                     });
                 };
 
-                return make_multishard_combining_reader(s, range, *partitioner, factory, fwd_sm, fwd_mr);
+                return make_multishard_combining_reader(s, range, slice, pc, *partitioner, factory, trace_state, fwd_sm, fwd_mr);
             });
         };
 
@@ -1568,17 +1573,22 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
     do_with_cql_env([] (cql_test_env& env) -> future<> {
         std::vector<bool> shards_touched(smp::count, false);
         simple_schema s;
-        auto factory = [&shards_touched, &s] (unsigned shard,
+        auto factory = [&shards_touched] (unsigned shard,
+                schema_ptr s,
                 const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[shard] = true;
-            return smp::submit_to(shard, [gs = global_schema_ptr(s.schema())] () mutable {
+            return smp::submit_to(shard, [gs = global_schema_ptr(s)] () mutable {
                 return make_foreign(std::make_unique<flat_mutation_reader>(make_empty_flat_reader(gs.get())));
             });
         };
 
-        assert_that(make_multishard_combining_reader(s.schema(), query::full_partition_range, dht::global_partitioner(), std::move(factory)))
+        assert_that(make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
+                    service::get_local_sstable_query_read_priority(), dht::global_partitioner(), std::move(factory)))
                 .produces_end_of_stream();
 
         for (unsigned i = 0; i < smp::count; ++i) {
@@ -1683,8 +1693,12 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
 
         auto s = simple_schema();
 
-        auto factory = [shard_of_interest, &s, remote_control = remote_control.get()] (unsigned shard,
+        auto factory = [&s, shard_of_interest, remote_control = remote_control.get()] (unsigned shard,
+                schema_ptr,
                 const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             return smp::submit_to(shard, [shard_of_interest, gs = global_simple_schema(s), remote_control] () mutable {
@@ -1704,7 +1718,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         {
             const auto mutations_by_token = std::map<dht::token, std::vector<mutation>>();
             auto partitioner = dummy_partitioner(dht::global_partitioner(), mutations_by_token);
-            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, partitioner, std::move(factory));
+            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
+                    service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
 
             reader.fill_buffer().get();
 
@@ -1941,7 +1956,11 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         auto partitioner = dummy_partitioner(dht::global_partitioner(), std::move(pkeys_by_tokens));
 
         auto factory = [&s, &remote_controls, &shard_pkeys] (unsigned shard,
-                const dht::partition_range&,
+                schema_ptr,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                const io_priority_class& pc,
+                tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding,
                 mutation_reader::forwarding) {
             return smp::submit_to(shard, [shard, gs = global_simple_schema(s), remote_control = remote_controls.at(shard).get(),
@@ -1953,7 +1972,8 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         };
 
         {
-            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, partitioner, std::move(factory));
+            auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
+                    service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
             reader.fill_buffer().get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }

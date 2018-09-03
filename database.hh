@@ -688,7 +688,7 @@ public:
         query::result_memory_limiter& memory_limiter,
         uint64_t max_result_size,
         db::timeout_clock::time_point timeout = db::no_timeout,
-        querier_cache_context cache_ctx = { });
+        query::querier_cache_context cache_ctx = { });
 
     void start();
     future<> stop();
@@ -1167,6 +1167,11 @@ private:
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
+
+        uint64_t multishard_query_unpopped_fragments = 0;
+        uint64_t multishard_query_unpopped_bytes = 0;
+        uint64_t multishard_query_failed_reader_stops = 0;
+        uint64_t multishard_query_failed_reader_saves = 0;
     };
 
     lw_shared_ptr<db_stats> _stats;
@@ -1201,7 +1206,7 @@ private:
         query::result_memory_limiter&,
         uint64_t,
         db::timeout_clock::time_point,
-        querier_cache_context> _data_query_stage;
+        query::querier_cache_context> _data_query_stage;
 
     mutation_query_stage _mutation_query_stage;
 
@@ -1222,7 +1227,7 @@ private:
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
 
-    querier_cache _querier_cache;
+    query::querier_cache _querier_cache;
 
     std::unique_ptr<db::large_partition_handler> _large_partition_handler;
 
@@ -1410,8 +1415,12 @@ public:
         _querier_cache.set_entry_ttl(entry_ttl);
     }
 
-    const querier_cache::stats& get_querier_cache_stats() const {
+    const query::querier_cache::stats& get_querier_cache_stats() const {
         return _querier_cache.get_stats();
+    }
+
+    query::querier_cache& get_querier_cache() {
+        return _querier_cache;
     }
 
     friend class distributed_loader;
