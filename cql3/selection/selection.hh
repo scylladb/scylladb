@@ -259,14 +259,14 @@ public:
     class restrictions_filter {
         ::shared_ptr<restrictions::statement_restrictions> _restrictions;
         const query_options& _options;
-        mutable bool _current_pratition_key_does_not_match = false;
+        mutable bool _current_partition_key_does_not_match = false;
         mutable bool _current_static_row_does_not_match = false;
     public:
         restrictions_filter() = default;
         explicit restrictions_filter(::shared_ptr<restrictions::statement_restrictions> restrictions, const query_options& options) : _restrictions(restrictions), _options(options) {}
         bool operator()(const selection& selection, const std::vector<bytes>& pk, const std::vector<bytes>& ck, const query::result_row_view& static_row, const query::result_row_view& row) const;
         void reset() {
-            _current_pratition_key_does_not_match = false;
+            _current_partition_key_does_not_match = false;
             _current_static_row_does_not_match = false;
         }
     };
