@@ -137,7 +137,7 @@ struct stats : public write_stats {
     utils::estimated_histogram estimated_read;
     utils::estimated_histogram estimated_range;
     uint64_t reads = 0;
-    uint64_t background_reads = 0; // client no longer waits for the read
+    uint64_t foreground_reads = 0; // client still waits for the read
     uint64_t read_retries = 0; // read is retried with new limit
     uint64_t speculative_digest_reads = 0;
     uint64_t speculative_data_reads = 0;

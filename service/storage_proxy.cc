@@ -668,10 +668,10 @@ storage_proxy::storage_proxy(distributed<database>& db, storage_proxy::config cf
         sm::make_current_bytes("background_write_bytes", [this] { return _stats.background_write_bytes; },
                        sm::description("number of bytes in pending background write requests")),
 
-        sm::make_queue_length("foreground_reads", [this] { return _stats.reads - _stats.background_reads; },
+        sm::make_queue_length("foreground_reads", [this] { return _stats.foreground_reads; },
                        sm::description("number of currently pending foreground read requests")),
 
-        sm::make_queue_length("background_reads", [this] { return _stats.background_reads; },
+        sm::make_queue_length("background_reads", [this] { return _stats.reads - _stats.foreground_reads; },
                        sm::description("number of currently pending background read requests")),
 
         sm::make_total_operations("read_retries", [this] { return _stats.read_retries; },
@@ -2604,16 +2604,24 @@ protected:
     promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
     tracing::trace_state_ptr _trace_state;
     lw_shared_ptr<column_family> _cf;
-
+    bool _foreground = true;
+private:
+    void on_read_resolved() noexcept {
+        // We could have !_foreground if this is called on behalf of background reconciliation.
+        _proxy->_stats.foreground_reads -= int(_foreground);
+        _foreground = false;
+    }
 public:
     abstract_read_executor(schema_ptr s, lw_shared_ptr<column_family> cf, shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets, tracing::trace_state_ptr trace_state) :
                            _schema(std::move(s)), _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)) {
         _proxy->_stats.reads++;
+        _proxy->_stats.foreground_reads++;
     }
     virtual ~abstract_read_executor() {
         _proxy->_stats.reads--;
+        _proxy->_stats.foreground_reads -= int(_foreground);
     }
 
     /// Targets that were successfully ised for data and/or digest requests.
@@ -2760,6 +2768,7 @@ protected:
                     // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
                     _proxy->schedule_repair(data_resolver->get_diffs_for_repair(), _cl, _trace_state).then([this, result = std::move(result)] () mutable {
                         _result_promise.set_value(std::move(result));
+                        on_read_resolved();
                     }).handle_exception([this, exec] (std::exception_ptr eptr) {
                         try {
                             std::rethrow_exception(eptr);
@@ -2769,6 +2778,7 @@ protected:
                         } catch (...) {
                             _result_promise.set_exception(std::current_exception());
                         }
+                        on_read_resolved();
                     });
                 } else {
                     _proxy->_stats.read_retries++;
@@ -2807,6 +2817,7 @@ protected:
                 }
             } catch (...) {
                 _result_promise.set_exception(std::current_exception());
+                on_read_resolved();
             }
         });
     }
@@ -2838,6 +2849,7 @@ public:
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         background_repair_check = true;
                     }
+                    exec->on_read_resolved();
                 } else { // digest mismatch
                     if (is_datacenter_local(exec->_cl)) {
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
@@ -2854,9 +2866,9 @@ public:
                 }
             } catch (...) {
                 exec->_result_promise.set_exception(std::current_exception());
+                exec->on_read_resolved();
             }
 
-            exec->_proxy->_stats.background_reads++;
             digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->_stats.read_repair_repaired_background++;
@@ -2868,8 +2880,6 @@ public:
                 }
             }).handle_exception([] (std::exception_ptr eptr) {
                 // ignore any failures during background repair
-            }).then([exec] {
-                exec->_proxy->_stats.background_reads--;
             });
         });
 
