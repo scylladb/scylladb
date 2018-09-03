@@ -627,7 +627,7 @@ bool single_column_restriction::slice::is_satisfied_by(bytes_view data, const qu
     if (_column_def.type->is_counter()) {
         fail(unimplemented::cause::COUNTERS);
     }
-    return to_range(_slice, options).contains(data, _column_def.type->as_tri_comparator());
+    return to_range(_slice, options).contains(data, _column_def.type->underlying_type()->as_tri_comparator());
 }
 
 bool single_column_restriction::contains::is_satisfied_by(const schema& schema,
