@@ -58,17 +58,6 @@ if __name__ == '__main__':
             node_exporter.enable()
             node_exporter.start()
         else:
-            conf = '''
-# Run node_exporter
-
-start on startup
-
-script
-   /usr/bin/node_exporter
-end script
-'''[1:-1]
-            with open('/etc/init/node_exporter.conf', 'w') as f:
-                f.write(conf)
-            run('service node_exporter start')
+            run('service node-exporter start')
 
     print('node_exporter successfully installed')

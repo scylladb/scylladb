@@ -18,7 +18,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-description "A timer job file for running scylla-housekeeping"
+description "Scylla Housekeeping daily mode"
 
 start on started scylla-server
 stop on stopping scylla-server
@@ -27,9 +27,6 @@ setuid scylla
 setgid scylla
 
 script
- # make sure scylla is up before checking for the version
-  sleep 5
-  /usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid --repo-files '/etc/apt/sources.list.d/scylla*.list' -c /etc/scylla.d/housekeeping.cfg  -q version --mode r || true
   while [ 1 ]
   do
     sleep 1d

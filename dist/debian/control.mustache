@@ -5,22 +5,6 @@ Section: database
 Priority: optional
 X-Python3-Version: >= 3.4
 Standards-Version: 3.9.5
-Build-Depends: python3-setuptools, python3-all, python3-all-dev, debhelper (>= 9), liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, thrift-compiler, ragel, ninja-build, git, libgnutls28-dev, libhwloc-dev, libnuma-dev, libpciaccess-dev, xfslibs-dev, python3-pyparsing, libxml2-dev, libsctp-dev, python-urwid, pciutils, libprotobuf-dev, protobuf-compiler, systemtap-sdt-dev, cmake, libssl-dev, scylla-gcc73-g++-7, scylla-libthrift010-dev, scylla-antlr35-c++-dev, scylla-libboost-program-options165-dev, scylla-libboost-filesystem165-dev, scylla-libboost-system165-dev, scylla-libboost-thread165-dev, scylla-libboost-test165-dev,
-{{#jessie}}
- libsystemd-dev, scylla-antlr35, libyaml-cpp-dev
-{{/jessie}}
-{{#stretch}}
- libsystemd-dev, antlr3, scylla-libyaml-cpp05-dev
-{{/stretch}}
-{{#trusty}}
- scylla-antlr35, libyaml-cpp-dev
-{{/trusty}}
-{{#xenial}}
- libsystemd-dev, antlr3, libyaml-cpp-dev
-{{/xenial}}
-{{#bionic}}
- libsystemd-dev, antlr3, libyaml-cpp-dev
-{{/bionic}}
 
 Package: {{product}}-conf
 Architecture: any
@@ -32,22 +16,7 @@ Conflicts: {{product}}-server (<< 1.1)
 
 Package: {{product}}-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, {{product}}-conf, python-yaml, python-urwid, python-requests, curl, util-linux, python3-yaml, python3, uuid-runtime, pciutils, python3-pyudev, gzip,
-{{#jessie}}
- realpath
-{{/jessie}}
-{{#stretch}}
- realpath
-{{/stretch}}
-{{#trusty}}
- realpath, hugepages, num-utils
-{{/trusty}}
-{{#xenial}}
- realpath, hugepages
-{{/xenial}}
-{{#bionic}}
- coreutils, hugepages
-{{/bionic}}
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, {{product}}-conf, python-yaml, python-urwid, python-requests, curl, util-linux, python3-yaml, python3, uuid-runtime, pciutils, python3-pyudev, gzip, realpath | coreutils, num-utils
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.

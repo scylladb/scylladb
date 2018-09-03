@@ -1,6 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
+
+. /etc/os-release
 
 if [ "$1" = configure ]; then
     getent passwd scylla || NOUSR=1
@@ -29,5 +31,10 @@ grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.y
 echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
 echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
 mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+
+if [[ "$ID" = "debian" && "$VERSION_ID" = "8" ]] || [[ "$ID" = "ubuntu" && "$VERSION_ID" = "14.04" ]]; then
+    echo "kernel.core_pattern=|/usr/lib/scylla/scylla_save_coredump %e %t %p" > /etc/sysctl.d/99-scylla-coredump.conf
+    echo "scylla ALL=(ALL) NOPASSWD: /usr/lib/scylla/scylla_prepare,/usr/lib/scylla/scylla_stop,/usr/lib/scylla/scylla_io_setup,/usr/lib/scylla/scylla-ami/scylla_ami_setup" > /etc/sudoers.d/scylla
+fi
 
 #DEBHELPER#

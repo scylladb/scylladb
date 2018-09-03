@@ -4,27 +4,18 @@ export PYBUILD_DISABLE=1
 jobs := $(shell echo $$DEB_BUILD_OPTIONS | sed -r "s/.*parallel=([0-9]+).*/-j\1/")
 
 override_dh_auto_configure:
-	./configure.py --with=scylla --with=iotune --enable-dpdk --mode=release --static-thrift --static-boost --static-yaml-cpp --compiler=/opt/scylladb/bin/g++-7 --cflags="-I/opt/scylladb/include -L/opt/scylladb/lib/x86-linux-gnu/" --ldflags="-Wl,-rpath=/opt/scylladb/lib"
 
 override_dh_auto_build:
-	PATH="/opt/scylladb/bin:$$PATH" ninja $(jobs)
 
 override_dh_auto_clean:
-	rm -rf build/release seastar/build
-	rm -rf Cql.tokens
-	rm -rf build.ninja seastar/build.ninja
+
+override_dh_auto_install:
+	dh_auto_install
+	install -d $(CURDIR)/debian/scylla-server/usr/bin
+	ln -sf /opt/scylladb/bin/scylla $(CURDIR)/debian/scylla-server/usr/bin/scylla
+	ln -sf /opt/scylladb/bin/iotune $(CURDIR)/debian/scylla-server/usr/bin/iotune
 
 override_dh_installinit:
-{{#trusty}}
-{{#scylla}}
-	dh_installinit --no-start --upstart-only
-{{/scylla}}
-{{^scylla}}
-	dh_installinit --no-start --name scylla-server --upstart-only
-{{/scylla}}
-	dh_installinit --no-start --name scylla-housekeeping --upstart-only
-{{/trusty}}
-{{^trusty}}
 {{#scylla}}
 	dh_installinit --no-start
 {{/scylla}}
@@ -35,13 +26,16 @@ override_dh_installinit:
 	dh_installinit --no-start --name scylla-housekeeping-restart
 	dh_installinit --no-start --name scylla-fstrim
 	dh_installinit --no-start --name node-exporter
-{{/trusty}}
-{{#trusty}}
-override_dh_installcron:
-	dh_installcron
-{{/trusty}}
 
 override_dh_strip:
 	dh_strip --dbg-package={{product}}-server-dbg
+
+override_dh_makeshlibs:
+
+override_dh_shlibdeps:
+
+override_dh_fixperms:
+	dh_fixperms
+	chmod 755 $(CURDIR)/debian/{{product}}-server/opt/scylladb/lib/ld.so
 %:
-	dh $@ --with-python3 --buildsystem=pybuild
+	dh $@

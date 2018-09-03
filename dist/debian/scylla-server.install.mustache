@@ -8,40 +8,16 @@ scylla-housekeeping usr/lib/scylla
 tools/scyllatop usr/lib/scylla
 swagger-ui/dist usr/lib/scylla/swagger-ui
 api/api-doc usr/lib/scylla/api
-build/release/scylla usr/bin
-build/release/iotune usr/bin
+bin/* opt/scylladb/bin
+lib/* opt/scylladb/lib
+libexec/* opt/scylladb/libexec
 dist/common/bin/scyllatop usr/bin
 dist/common/sbin/* usr/sbin
 {{#dist}}
 conf/housekeeping.cfg etc/scylla.d
 {{/dist}}
-{{#jessie}}
 dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
 dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
 dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-dist/debian/sysctl.d/99-scylla-coredump.conf etc/sysctl.d
 dist/debian/scripts/scylla_save_coredump usr/lib/scylla
 dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
-{{/jessie}}
-{{#stretch}}
-dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
-dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
-dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
-{{/stretch}}
-{{#trusty}}
-dist/debian/sudoers.d/scylla etc/sudoers.d
-dist/debian/sysctl.d/99-scylla-coredump.conf etc/sysctl.d
-dist/debian/scripts/scylla_save_coredump usr/lib/scylla
-dist/debian/scripts/scylla_delay_fstrim usr/lib/scylla
-{{/trusty}}
-{{#xenial}}
-dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
-dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
-dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-{{/xenial}}
-{{#bionic}}
-dist/common/systemd/scylla-housekeeping-daily.timer /lib/systemd/system
-dist/common/systemd/scylla-housekeeping-restart.timer /lib/systemd/system
-dist/common/systemd/scylla-fstrim.timer /lib/systemd/system
-{{/bionic}}
