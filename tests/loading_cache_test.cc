@@ -269,7 +269,7 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
         using namespace std::chrono;
         std::vector<int> ivec(num_loaders);
         load_count = 0;
-        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1s, test_logger);
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 1h, test_logger);
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
         prepare().get();
