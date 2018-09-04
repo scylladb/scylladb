@@ -149,6 +149,7 @@ if __name__ == '__main__':
             f.write('{uuid} {mount_at} xfs noatime,nofail 0 0\n'.format(uuid=uuid, mount_at=mount_at))
         mounts_conf = '/etc/systemd/system/scylla-server.service.d/mounts.conf'
         if not os.path.exists(mounts_conf):
+            makedirs('/etc/systemd/system/scylla-server.service.d/')
             with open(mounts_conf, 'w') as f:
                 f.write('[Unit]\nRequiresMountsFor={mount_at}\n'.format(mount_at=mount_at))
         else:
