@@ -116,7 +116,7 @@ future<> db::batchlog_manager::start() {
     // round-robin scheduling.
     if (engine().cpu_id() == 0) {
         _timer.set_callback([this] {
-            return do_batch_log_replay().handle_exception([] (auto ep) {
+            do_batch_log_replay().handle_exception([] (auto ep) {
                 blogger.error("Exception in batch replay: {}", ep);
             }).finally([this] {
                 _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
