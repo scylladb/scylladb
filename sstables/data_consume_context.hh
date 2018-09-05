@@ -109,6 +109,10 @@ public:
         return _ctx->fast_forward_to(begin, end);
     }
 
+    bool need_skip(uint64_t pos) const {
+        return pos > _ctx->position();
+    }
+
     future<> skip_to(indexable_element el, uint64_t begin) {
         sstlog.trace("data_consume_rows_context {}: skip_to({} -> {}, el={})", _ctx.get(), _ctx->position(), begin, static_cast<int>(el));
         if (begin <= _ctx->position()) {
