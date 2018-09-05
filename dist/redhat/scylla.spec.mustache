@@ -213,6 +213,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla-housekeeping
 %ghost /etc/systemd/system/scylla-server.service.d/
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
+%ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
 
 %package conf
 Group:          Applications/Databases
