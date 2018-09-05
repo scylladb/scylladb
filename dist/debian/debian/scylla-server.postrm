@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    purge|remove)
+        rm -rf /etc/systemd/system/scylla-server.service.d/
+        ;;
+esac
+
+#DEBHELPER#
