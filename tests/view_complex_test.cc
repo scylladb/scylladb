@@ -233,7 +233,7 @@ void test_partial_delete_selected_column(cql_test_env& e, std::function<void()>&
     });
 
     BOOST_TEST_PASSPOINT();
-    e.execute_cql("update cf using ttl 3 set b = 1 where p = 1 and c = 1").get();
+    e.execute_cql("update cf using timestamp 15 and ttl 3 set b = 1 where p = 1 and c = 1").get();
     maybe_flush();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get0();
