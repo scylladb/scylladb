@@ -2462,15 +2462,17 @@ future<> storage_service::rebuild(sstring source_dc) {
         if (source_dc != "") {
             streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
         }
-        for (const auto& keyspace_name : ss._db.local().get_non_system_keyspaces()) {
-            streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
-        }
-        return streamer->stream_async().then([streamer] {
-            slogger.info("Streaming for rebuild successful");
-        }).handle_exception([] (auto ep) {
-            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-            slogger.warn("Error while rebuilding node: {}", std::current_exception());
-            return make_exception_future<>(std::move(ep));
+        auto keyspaces = make_lw_shared<std::vector<sstring>>(ss._db.local().get_non_system_keyspaces());
+        return do_for_each(*keyspaces, [keyspaces, streamer, &ss] (sstring& keyspace_name) {
+            return streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
+        }).then([streamer] {
+            return streamer->stream_async().then([streamer] {
+                slogger.info("Streaming for rebuild successful");
+            }).handle_exception([] (auto ep) {
+                // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                slogger.warn("Error while rebuilding node: {}", std::current_exception());
+                return make_exception_future<>(std::move(ep));
+            });
         });
     });
 }

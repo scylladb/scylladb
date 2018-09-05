@@ -114,6 +114,9 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, dh
     for (auto& desired_range : desired_ranges) {
         auto found = false;
         for (auto& x : range_addresses) {
+            if (need_preempt()) {
+                seastar::thread::yield();
+            }
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
                 std::vector<inet_address>& addresses = x.second;
@@ -157,6 +160,9 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     for (auto& desired_range : desired_ranges) {
         for (auto& x : range_addresses) {
             const range<token>& src_range = x.first;
+            if (need_preempt()) {
+                seastar::thread::yield();
+            }
             if (src_range.contains(desired_range, dht::tri_compare)) {
                 std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                 auto it = pending_range_addresses.find(desired_range);
@@ -226,7 +232,8 @@ void range_streamer::add_rx_ranges(const sstring& keyspace_name, std::unordered_
 }
 
 // TODO: This is the legacy range_streamer interface, it is add_rx_ranges which adds rx ranges.
-void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges) {
+future<> range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges) {
+  return seastar::async([this, keyspace_name, ranges= std::move(ranges)] () mutable {
     if (_nr_tx_added) {
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
@@ -249,6 +256,7 @@ void range_streamer::add_ranges(const sstring& keyspace_name, dht::token_range_v
         }
     }
     _to_stream.emplace(keyspace_name, std::move(range_fetch_map));
+  });
 }
 
 future<> range_streamer::stream_async() {

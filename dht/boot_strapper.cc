@@ -51,20 +51,22 @@ future<> boot_strapper::bootstrap() {
 
     auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _tokens, _address, "Bootstrap", streaming::stream_reason::bootstrap);
     streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
-    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
+    auto keyspaces = make_lw_shared<std::vector<sstring>>(_db.local().get_non_system_keyspaces());
+    return do_for_each(*keyspaces, [this, keyspaces, streamer] (sstring& keyspace_name) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
         dht::token_range_vector ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
         blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
-        streamer->add_ranges(keyspace_name, ranges);
-    }
-
-    return streamer->stream_async().then([streamer] () {
-        service::get_local_storage_service().finish_bootstrapping();
-    }).handle_exception([streamer] (std::exception_ptr eptr) {
-        blogger.warn("Error during bootstrap: {}", eptr);
-        return make_exception_future<>(std::move(eptr));
+        return streamer->add_ranges(keyspace_name, ranges);
+    }).then([this, streamer] {
+        return streamer->stream_async().then([streamer] () {
+            service::get_local_storage_service().finish_bootstrapping();
+        }).handle_exception([streamer] (std::exception_ptr eptr) {
+            blogger.warn("Error during bootstrap: {}", eptr);
+            return make_exception_future<>(std::move(eptr));
+        });
     });
+
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata metadata, database& db) {

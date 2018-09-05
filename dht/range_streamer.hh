@@ -120,7 +120,7 @@ public:
         _source_filters.emplace(std::move(filter));
     }
 
-    void add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
+    future<> add_ranges(const sstring& keyspace_name, dht::token_range_vector ranges);
     void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
     void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<inet_address, dht::token_range_vector> ranges_per_endpoint);
 private:
