@@ -1850,7 +1850,7 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             seastar::measuring_output_stream stream;
             ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
             get_compacted_row_slice(_schema, slice, column_kind::static_column,
-                                    r, slice.static_columns, _static_cells_wr);
+                                    r, slice.static_columns, out);
             _memory_accounter.update(stream.size());
         }
         if (_pw.requested_digest()) {
