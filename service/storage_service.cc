@@ -666,6 +666,8 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     db::system_keyspace::update_tokens(tokens).get();
     auto& gossiper = gms::get_local_gossiper();
     if (!db().local().is_replacing()) {
+        // Wait until we know tokens of existing node before announcing join status.
+        gossiper.wait_for_range_setup().get();
         // if not an existing token then bootstrap
         gossiper.add_local_application_state({
             { gms::application_state::TOKENS, value_factory.tokens(tokens) },
