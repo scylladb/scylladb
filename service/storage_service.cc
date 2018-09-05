@@ -103,6 +103,7 @@ static const sstring ROLES_FEATURE = "ROLES";
 static const sstring LA_SSTABLE_FEATURE = "LA_SSTABLE_FORMAT";
 static const sstring STREAM_WITH_RPC_STREAM = "STREAM_WITH_RPC_STREAM";
 static const sstring MC_SSTABLE_FEATURE = "MC_SSTABLE_FORMAT";
+static const sstring ROW_LEVEL_REPAIR = "ROW_LEVEL_REPAIR";
 
 distributed<storage_service> _the_storage_service;
 
@@ -146,6 +147,7 @@ storage_service::storage_service(distributed<database>& db, sharded<auth::servic
         , _la_sstable_feature(_feature_service, LA_SSTABLE_FEATURE)
         , _stream_with_rpc_stream_feature(_feature_service, STREAM_WITH_RPC_STREAM)
         , _mc_sstable_feature(_feature_service, MC_SSTABLE_FEATURE)
+        , _row_level_repair_feature(_feature_service, ROW_LEVEL_REPAIR)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
         , _update_pending_ranges_action([this] { return do_update_pending_ranges(); })
         , _sys_dist_ks(sys_dist_ks) {
@@ -247,7 +249,8 @@ sstring storage_service::get_config_supported_features() {
         LA_SSTABLE_FEATURE,
         STREAM_WITH_RPC_STREAM,
         MATERIALIZED_VIEWS_FEATURE,
-        INDEXES_FEATURE
+        INDEXES_FEATURE,
+        ROW_LEVEL_REPAIR
     };
     auto& config = service::get_local_storage_service()._db.local().get_config();
     if (config.enable_sstables_mc_format()) {
