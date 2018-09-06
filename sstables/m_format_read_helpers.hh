@@ -132,7 +132,7 @@ inline api::timestamp_type parse_timestamp(const serialization_header& header,
 
 inline gc_clock::duration parse_ttl(uint32_t value) {
     if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
-        throw malformed_sstable_exception("Too big ttl: " + value);
+        throw malformed_sstable_exception(format("Too big ttl: {}", value));
     }
     return gc_clock::duration(value);
 }
@@ -144,7 +144,7 @@ inline gc_clock::duration parse_ttl(const serialization_header& header,
 
 inline gc_clock::time_point parse_expiry(uint32_t value) {
     if (value > std::numeric_limits<gc_clock::duration::rep>::max()) {
-        throw malformed_sstable_exception("Too big expiry: " + value);
+        throw malformed_sstable_exception(format("Too big expiry: {}", value));
     }
     return gc_clock::time_point(gc_clock::duration(value));
 }
