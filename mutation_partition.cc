@@ -1753,9 +1753,10 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
         } else if (_short_reads_allowed) {
             seastar::measuring_output_stream stream;
             ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
+            auto start = stream.size();
             get_compacted_row_slice(_schema, slice, column_kind::static_column,
                                     r, slice.static_columns, out);
-            _memory_accounter.update(stream.size());
+            _memory_accounter.update(stream.size() - start);
         }
         if (_pw.requested_digest()) {
             max_timestamp max_ts{_pw.last_modified()};
@@ -1816,8 +1817,9 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
     } else if (_short_reads_allowed) {
         seastar::measuring_output_stream stream;
         ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
+        auto start = stream.size();
         write_row(out);
-        stop = _memory_accounter.update_and_check(stream.size());
+        stop = _memory_accounter.update_and_check(stream.size() - start);
     }
 
     _live_clustering_rows++;
