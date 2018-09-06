@@ -125,16 +125,9 @@ inline future<> read_vint(random_access_reader& in, T& value) {
     }
 }
 
-inline api::timestamp_type parse_timestamp(uint64_t value) {
-    if (value > api::max_timestamp) {
-        throw malformed_sstable_exception("Too big timestamp: " + value);
-    }
-    return static_cast<api::timestamp_type >(value);
-}
-
 inline api::timestamp_type parse_timestamp(const serialization_header& header,
                                            uint64_t delta) {
-    return parse_timestamp(header.get_min_timestamp() + delta);
+    return static_cast<api::timestamp_type>(header.get_min_timestamp() + delta);
 }
 
 inline gc_clock::duration parse_ttl(uint32_t value) {
