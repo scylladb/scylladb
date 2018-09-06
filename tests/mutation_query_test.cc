@@ -26,11 +26,13 @@
 
 #include <boost/test/unit_test.hpp>
 #include <query-result-set.hh>
+#include <query-result-writer.hh>
 
 #include "tests/test_services.hh"
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
 #include "tests/result_set_assertions.hh"
+#include "tests/mutation_source_test.hh"
 
 #include "mutation_query.hh"
 #include "core/do_with.hh"
@@ -530,3 +532,22 @@ SEASTAR_TEST_CASE(test_partition_limit) {
         }
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    std::vector<mutation> mutations = gen(1);
+    schema_ptr s = gen.schema();
+    mutation_source source = make_source(std::move(mutations));
+    query::result_memory_limiter l(std::numeric_limits<ssize_t>::max());
+    query::partition_slice slice = make_full_slice(*s);
+    slice.options.set<query::partition_slice::option::allow_short_read>();
+
+    query::result::builder digest_only_builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash}, l.new_digest_read(query::result_memory_limiter::maximum_result_size).get0());
+    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), digest_only_builder).get0();
+
+    query::result::builder result_and_digest_builder(slice, query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash}, l.new_data_read(query::result_memory_limiter::maximum_result_size).get0());
+    data_query(s, source, query::full_partition_range, slice, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), result_and_digest_builder).get0();
+
+    BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
+}
+
