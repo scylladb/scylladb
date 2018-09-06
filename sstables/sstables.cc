@@ -1299,11 +1299,7 @@ double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_befor
 }
 
 future<> sstable::read_statistics(const io_priority_class& pc) {
-    return read_simple<component_type::Statistics>(_components->statistics, pc).then([this] {
-        if (_version == version_types::mc) {
-            adjust_serialization_header();
-        }
-    });
+    return read_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
 void sstable::write_statistics(const io_priority_class& pc) {
@@ -2118,9 +2114,9 @@ static sstring pk_type_to_string(const schema& s) {
 
 static serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
     serialization_header header;
-    header.min_timestamp.value = enc_stats.min_timestamp - encoding_stats::timestamp_epoch;
-    header.min_local_deletion_time.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
-    header.min_ttl.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
+    header.min_timestamp_base.value = enc_stats.min_timestamp - encoding_stats::timestamp_epoch;
+    header.min_local_deletion_time_base.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
+    header.min_ttl_base.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
 
     header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
 

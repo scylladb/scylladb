@@ -134,7 +134,7 @@ inline api::timestamp_type parse_timestamp(uint64_t value) {
 
 inline api::timestamp_type parse_timestamp(const serialization_header& header,
                                            uint64_t delta) {
-    return parse_timestamp(header.min_timestamp.value + delta);
+    return parse_timestamp(header.get_min_timestamp() + delta);
 }
 
 inline gc_clock::duration parse_ttl(uint32_t value) {
@@ -146,7 +146,7 @@ inline gc_clock::duration parse_ttl(uint32_t value) {
 
 inline gc_clock::duration parse_ttl(const serialization_header& header,
                                     uint32_t delta) {
-    return parse_ttl(header.min_ttl.value + delta);
+    return parse_ttl(header.get_min_ttl() + delta);
 }
 
 inline gc_clock::time_point parse_expiry(uint32_t value) {
@@ -158,7 +158,7 @@ inline gc_clock::time_point parse_expiry(uint32_t value) {
 
 inline gc_clock::time_point parse_expiry(const serialization_header& header,
                                    uint32_t delta) {
-    return parse_expiry(header.min_local_deletion_time.value + delta);
+    return parse_expiry(header.get_min_local_deletion_time() + delta);
 }
 
 };   // namespace sstables
