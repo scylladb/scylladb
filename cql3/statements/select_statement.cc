@@ -970,6 +970,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     }
 
     check_needs_filtering(restrictions);
+    size_t restrictions_size = restrictions->get_partition_key_restrictions()->size() + restrictions->get_clustering_columns_restrictions()->size() + restrictions->get_non_pk_restriction().size();
+    if (restrictions->uses_secondary_indexing() && restrictions_size > 1) {
+        throw exceptions::invalid_request_exception("Indexed query may not contain multiple restrictions in 2.3");
+    }
 
     ::shared_ptr<cql3::statements::select_statement> stmt;
     if (restrictions->uses_secondary_indexing()) {
