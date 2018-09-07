@@ -267,11 +267,12 @@ void messaging_service::start_listen() {
     // FIXME: we don't set so.tcp_nodelay, because we can't tell at this point whether the connection will come from a
     //        local or remote datacenter, and whether or not the connection will be used for gossip. We can fix
     //        the first by wrapping its server_socket, but not the second.
+    auto limits = rpc_resource_limits(_mcfg.rpc_memory_limit);
     if (!_server[0]) {
         auto listen = [&] (const gms::inet_address& a) {
             auto addr = ipv4_addr{a.raw_addr(), _port};
             return std::unique_ptr<rpc_protocol_server_wrapper>(new rpc_protocol_server_wrapper(*_rpc,
-                    so, addr, rpc_resource_limits(_mcfg.rpc_memory_limit)));
+                    so, addr, limits));
         };
         _server[0] = listen(_listen_address);
         if (listen_to_bc) {
@@ -282,7 +283,7 @@ void messaging_service::start_listen() {
     if (!_server_tls[0]) {
         auto listen = [&] (const gms::inet_address& a) {
             return std::unique_ptr<rpc_protocol_server_wrapper>(
-                    [this, &so, &a] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
+                    [this, &so, &a, limits] () -> std::unique_ptr<rpc_protocol_server_wrapper>{
                 if (_encrypt_what == encrypt_what::none) {
                     return nullptr;
                 }
@@ -290,7 +291,7 @@ void messaging_service::start_listen() {
                 lo.reuse_address = true;
                 auto addr = make_ipv4_address(ipv4_addr{a.raw_addr(), _ssl_port});
                 return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
-                        so, seastar::tls::listen(_credentials, addr, lo));
+                        so, seastar::tls::listen(_credentials, addr, lo), limits);
             }());
         };
         _server_tls[0] = listen(_listen_address);
