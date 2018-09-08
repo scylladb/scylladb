@@ -2114,7 +2114,7 @@ static sstring pk_type_to_string(const schema& s) {
 
 static serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
     serialization_header header;
-    header.min_timestamp_base.value = enc_stats.min_timestamp - encoding_stats::timestamp_epoch;
+    header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
     header.min_local_deletion_time_base.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
     header.min_ttl_base.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
 
