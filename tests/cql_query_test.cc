@@ -3758,3 +3758,259 @@ SEASTAR_TEST_CASE(test_static_multi_cell_static_lists_with_ckey) {
         }
     });
 }
+
+
+/**
+ * A class to represent a single multy-column slice expression.
+ * The purpose of this class is to provide facilities for testing
+ * the multicolumn slice expression. The class uses an abstraction
+ * of integer tuples with predefined max values as a counting system
+ * with Digits num of digits and Base-1 as the maximum value.
+ *
+ * The table this class is designed to test is a table with exactly
+ * Digits clustering columns of type int and at least one none clustering
+ * of type int.
+ * The none clustering column should containing the conversion of the
+ * clustering key into an int according to base conversion rules where the
+ * last clustering key is the smallest digit.
+ * This conversion produces a  mapping from int to the tuple space spanned
+ * by the clustering keys of the table (including prefix tuples).
+ *
+ * The test case represent a specific slice expression and utility functions to
+ * run and validate it.
+ * For a usage example see: test_select_with_mixed_order_table
+ */
+template <int Base,int Digits>
+class slice_testcase
+{
+private:
+    std::vector<int> _gt_range;
+    bool _gt_inclusive;
+    std::vector<int> _lt_range;
+    bool _lt_inclusive;
+public:
+    /**
+     *  The mapping of tuples is to integers between 0 and this value.
+     */
+    static const int total_num_of_values = std::pow(Base,Digits);
+
+    /**
+     * Consructor for the testcase
+     * @param gt_range - the tuple for the greater than part of the expression
+     *        as a vector of integers.An empty vector indicates no grater than
+     *        part.
+     * @param gt_inclusive - is the greater than inclusive (>=).
+     * @param lt_range - the tuple for the less than part of the expression
+     *        as a vector of integers.An empty vector indicates no less than
+     *        part.
+     * @param lt_inclusive - is the less than inclusive (<=)
+     */
+    slice_testcase(std::vector<int> gt_range, bool gt_inclusive, std::vector<int> lt_range, bool lt_inclusive) {
+        _gt_range = gt_range;
+        _lt_range = lt_range;
+        _gt_inclusive = gt_inclusive;
+        _lt_inclusive = lt_inclusive;
+    }
+
+    /**
+     * Builds a vector of the expected result assuming a select with
+     * this slice expression. The select is assumed to be only on the
+     * none clustering column.
+     * @return
+     */
+    auto genrate_results_for_validation() {
+        std::vector<std::vector<bytes_opt>> vals;
+        for(auto val : generate_results()){
+            vals.emplace_back(std::vector<bytes_opt>{ int32_type->decompose(val) });
+        }
+        return vals;
+    }
+
+    /**
+     * Generates the actual slice expression that can be embedded
+     * into an SQL select query.
+     * @param column_names - the mames of the table clustering columns
+     * @return the SQL expression as a text.
+     */
+    auto generate_cql_slice_expresion(std::vector<std::string> column_names) {
+        std::string expression;
+        if (!_gt_range.empty()) {
+            expression += "(";
+            expression += column_names[0];
+            for(std::size_t i=1; i < _gt_range.size(); i++) {
+                expression += ", "+column_names[i];
+            }
+            expression += ") ";
+            expression += _gt_inclusive ? ">= " : "> ";
+            expression += "(";
+            expression += std::to_string(_gt_range[0]);
+            for(std::size_t i=1; i<_gt_range.size(); i++) {
+                expression += ", ";
+                expression += std::to_string(_gt_range[i]);
+            }
+            expression += ")";
+        }
+        if (!_gt_range.empty() && !_lt_range.empty()) {
+            expression += " AND ";
+        }
+        if (!_lt_range.empty()) {
+            expression += "(";
+            expression += column_names[0];
+            for(std::size_t i=1; i < _lt_range.size(); i++) {
+                expression += ", ";
+                expression += column_names[i];
+            }
+            expression += ") ";
+            expression += _lt_inclusive ? "<= " : "< ";
+
+            expression += "(";
+            expression += std::to_string(_lt_range[0]);
+            for(std::size_t i=1; i < _lt_range.size(); i++) {
+                expression += ", ";
+                expression += std::to_string(_lt_range[i]);
+            }
+            expression += ")";
+        }
+        return expression;
+    }
+
+    /**
+     * Maps a tuple of integers to integer
+     * @param tuple - the tuple to convert as a vector of integers.
+     * @return the integer this tuple is mapped to.
+     */
+    static int tuple_to_bound_val(std::vector<int> tuple) {
+        int ret = 0;
+        int factor = std::pow(Base, Digits-1);
+        for (int val : tuple) {
+            ret += val * factor;
+            factor /= Base;
+        }
+        return ret;
+    }
+
+    /**
+     * Maps back from integer space to tuple space.
+     * There can be more than one tuple maped to the same int.
+     * There will never be more than one tuple of a certain size
+     * that is maped to the same int.
+     * For example: (1) and (1,0) will be maped to the same integer,
+     * but no other tuple of size 1 or 2 will be maped to this int.
+     * @param val - the value to map
+     * @param num_componnents - the size of the produced tuple.
+     * @return the tuple of the requested size.
+     */
+    static auto bound_val_to_tuple(int val, std::size_t num_componnents = Digits) {
+        std::vector<int> tuple;
+        int factor = std::pow(Base, Digits-1);
+        while (tuple.size() < num_componnents) {
+            tuple.emplace_back(val/factor);
+            val %= factor;
+            factor /= Base;
+        }
+        return tuple;
+    }
+private:
+    /**
+     * A helper function to generate the expected results of a select
+     * statement with this slice. The select statement is assumed to
+     * select only the none clustering column.
+     * @return a vector of integers representing the expected results.
+     */
+    std::vector<int> generate_results() {
+        std::vector<int> vals;
+        int start_val = 0;
+        int end_val =  total_num_of_values -1;
+        if (!_gt_range.empty()) {
+            start_val = tuple_to_bound_val(_gt_range);
+            if (!_gt_inclusive) {
+                start_val += std::pow(Base,Digits - _gt_range.size());
+            }
+        }
+        if (!_lt_range.empty()) {
+            end_val = tuple_to_bound_val(_lt_range);
+            if (!_lt_inclusive) {
+                end_val--;
+            } else {
+                end_val += std::pow(Base, Digits - _lt_range.size()) - 1;
+            }
+        }
+        for (int i=start_val; i<=end_val; i++) {
+            vals.emplace_back(i);
+        }
+        return vals;
+    }
+};
+
+
+SEASTAR_TEST_CASE(test_select_with_mixed_order_table) {
+    using slice_test_type = slice_testcase<5,4>;
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        std::string select_query_template = "SELECT f FROM foo WHERE a=0 AND %s;";
+        std::vector<std::string> column_names = { "b", "c", "d", "e" };
+        e.execute_cql("CREATE TABLE foo (a int, b int, c int,d int,e int,f int, PRIMARY KEY (a, b, c, d, e)) WITH CLUSTERING ORDER BY (b DESC, c ASC, d DESC,e ASC);").get();
+        e.require_table_exists("ks", "foo").get();
+
+        // We convert the range 0-> max mapped integers to the mapped tuple,
+        // this will create a table satisfying the slice_testcase assumption.
+        for(int i=0; i < slice_test_type::total_num_of_values; i++) {
+            auto tuple = slice_test_type::bound_val_to_tuple(i);
+            e.execute_cql(sprint("INSERT INTO foo (a, b, c, d, e, f) VALUES (0, %s, %s, %s, %s, %s);",
+                    tuple[0],tuple[1],tuple[2],tuple[3],i)).get();
+        }
+
+        // a vector to hold all test cases.
+        std::vector<slice_test_type> test_cases;
+
+        //generates all inclusiveness permutations for the specified bounds
+        auto generate_with_inclusiveness_permutations = [&test_cases] (std::vector<int> gt_range,std::vector<int> lt_range) {
+            if(gt_range.empty() || lt_range.empty()) {
+                test_cases.emplace_back(slice_test_type{gt_range, false, lt_range,false});
+                test_cases.emplace_back(slice_test_type{gt_range, true, lt_range,true});
+            } else {
+                for(int i=0; i<=3; i++) {
+                    test_cases.emplace_back(slice_test_type{gt_range, i&1, lt_range, i&2});
+                }
+            }
+        };
+
+
+        // no overlap in componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (1,2,3,4)
+        generate_with_inclusiveness_permutations({0,1,2,3},{1,2,3,4});
+        // overlap in  componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,2,2,2)
+        generate_with_inclusiveness_permutations({0,1,2,3},{0,2,2,2});
+        // overlap in  componnents equal num of componnents - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,2)
+        generate_with_inclusiveness_permutations({0,1,2,3},{0,1,2,2});
+        // no overlap less compnnents in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (1,2)
+        generate_with_inclusiveness_permutations({0,1,2,3},{1,2});
+        // overlap in compnnents for less componnents in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,2)
+        generate_with_inclusiveness_permutations({0,1,2,3},{0,2});
+        // lt side is a prefix of gt side </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,1)
+        generate_with_inclusiveness_permutations({0,1,2,3},{0,1});
+        // gt side is a prefix of lt side </<= expression - (b,c,d,e) >/>= (0,1) and (b,c) </<= (0,1,2,3)
+        generate_with_inclusiveness_permutations({0,1},{0,1,2,3});
+        // no overlap less compnnents in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (1,2,3,4)
+        generate_with_inclusiveness_permutations({0,1},{1,2,3,4});
+        // overlap in compnnents for less componnents in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (0,2,3,4)
+        generate_with_inclusiveness_permutations({0,1},{0,2,3,4});
+        // one sided >/>= 1 expression - (b) >/>= (1)
+        generate_with_inclusiveness_permutations({1},{});
+        // one sided >/>= partial expression - (b,c) >/>= (0,1)
+        generate_with_inclusiveness_permutations({0,1},{});
+        // one sided >/>= full expression - (b,c,d,e) >/>= (0,1,2,3)
+        generate_with_inclusiveness_permutations({0,1,2,3},{});
+        // one sided </<= 1 expression - - (b) </<= (3)
+        generate_with_inclusiveness_permutations({},{3});
+        // one sided </<= partial expression - (b,c) </<= (3,4)
+        generate_with_inclusiveness_permutations({},{3,4});
+        // one sided </<= full expression - (b,c,d,e) </<= (2,3,4,4)
+        generate_with_inclusiveness_permutations({},{2,3,4,4});
+        // equality and empty - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,3)
+        generate_with_inclusiveness_permutations({0,1,2,3},{0,1,2,3});
+
+        for (auto&& test_case  : test_cases) {
+            auto msg = e.execute_cql(sprint(select_query_template,test_case.generate_cql_slice_expresion(column_names))).get0();
+            assert_that(msg).is_rows().with_rows_ignore_order(test_case.genrate_results_for_validation());
+        }
+    });
+}
