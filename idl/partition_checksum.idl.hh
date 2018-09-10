@@ -50,3 +50,8 @@ class position_in_partition {
     bound_weight get_bound_weight();
     std::optional<clustering_key_prefix> get_clustering_key_prefix();
 };
+
+struct partition_key_and_mutation_fragments {
+    partition_key get_key();
+    std::list<frozen_mutation_fragment> get_mutation_fragments();
+};
