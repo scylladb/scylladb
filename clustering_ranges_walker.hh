@@ -200,6 +200,10 @@ public:
         return _current_start;
     }
 
+    position_in_partition_view upper_bound() const {
+        return _current_end;
+    }
+
     // When lower_bound() changes, this also does
     // Always > 0.
     size_t lower_bound_change_counter() const {
