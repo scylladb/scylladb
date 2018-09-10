@@ -139,6 +139,33 @@ struct repair_sync_boundary {
     }
 };
 
+// Hash of a repair row
+class repair_hash {
+public:
+    uint64_t hash = 0;
+    repair_hash() = default;
+    explicit repair_hash(uint64_t h) : hash(h) {
+    }
+    void clear() {
+        hash = 0;
+    }
+    void add(const repair_hash& other) {
+        hash ^= other.hash;
+    }
+    bool operator==(const repair_hash& x) const {
+        return x.hash == hash;
+    }
+    bool operator!=(const repair_hash& x) const {
+        return x.hash != hash;
+    }
+    bool operator<(const repair_hash& x) const {
+        return x.hash < hash;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const repair_hash& x) {
+        return os << x.hash;
+    }
+};
+
 namespace std {
 template<>
 struct hash<partition_checksum> {
