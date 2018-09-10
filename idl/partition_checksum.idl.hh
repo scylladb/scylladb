@@ -31,3 +31,10 @@ class partition_checksum {
 class repair_hash {
     uint64_t hash;
 };
+
+enum class partition_region : uint8_t {
+    partition_start,
+    static_row,
+    clustered,
+    partition_end,
+};
