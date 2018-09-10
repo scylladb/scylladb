@@ -1173,6 +1173,14 @@ public:
             }
         case state::COMPLEX_COLUMN_SIZE_2:
             _subcolumns_to_read = _u64;
+            if (_subcolumns_to_read == 0) {
+                auto id = get_column_id();
+                move_to_next_column();
+                if (_consumer.consume_complex_column_end(std::move(id)) != consumer_m::proceed::yes) {
+                    _state = state::COLUMN;
+                    return consumer_m::proceed::no;
+                }
+            }
             goto column_label;
         case state::RANGE_TOMBSTONE_MARKER:
         range_tombstone_marker_label:
