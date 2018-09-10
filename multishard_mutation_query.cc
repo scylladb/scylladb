@@ -150,6 +150,31 @@ class read_context {
         future_used_state,
         future_dismantling_state>;
 
+    struct dismantle_buffer_stats {
+        size_t partitions = 0;
+        size_t fragments = 0;
+        size_t bytes = 0;
+
+        void add(const schema& s, const mutation_fragment& mf) {
+            partitions += unsigned(mf.is_partition_start());
+            ++fragments;
+            bytes += mf.memory_usage(s);
+        }
+        void add(const schema& s, const range_tombstone& rt) {
+            ++fragments;
+            bytes += rt.memory_usage(s);
+        }
+        void add(const schema& s, const static_row& sr) {
+            ++fragments;
+            bytes += sr.memory_usage(s);
+        }
+        void add(const schema& s, const partition_start& ps) {
+            ++partitions;
+            ++fragments;
+            bytes += ps.memory_usage(s);
+        }
+    };
+
     distributed<database>& _db;
     schema_ptr _schema;
     const query::read_command& _cmd;
@@ -182,8 +207,8 @@ class read_context {
 
     ready_to_save_state* prepare_reader_for_saving(dismantling_state& current_state, future<stopped_foreign_reader>&& stopped_reader_fut,
             const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
-    void dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
-    void dismantle_compaction_state(detached_compaction_state compaction_state);
+    dismantle_buffer_stats dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
+    dismantle_buffer_stats dismantle_compaction_state(detached_compaction_state compaction_state);
     future<> save_reader(ready_to_save_state& current_state, const dht::decorated_key& last_pkey,
             const std::optional<clustering_key_prefix>& last_ckey);
 
@@ -343,14 +368,18 @@ future<> read_context::stop() {
     };
 
     std::vector<future<>> futures;
+    auto immediate_cleanup = size_t(0);
+    auto future_cleanup = size_t(0);
 
     // Wait for pending read-aheads in the background.
     for (shard_id shard = 0; shard != smp::count; ++shard) {
         auto& rs = _readers[shard];
 
         if (auto maybe_dismantling_state = std::get_if<dismantling_state>(&rs)) {
+            ++immediate_cleanup;
             cleanup(shard, std::move(*maybe_dismantling_state));
         } else if (auto maybe_future_dismantling_state = std::get_if<future_dismantling_state>(&rs)) {
+            ++future_cleanup;
             futures.emplace_back(maybe_future_dismantling_state->fut.then_wrapped([=] (future<dismantling_state>&& current_state_fut) {
                 if (current_state_fut.failed()) {
                     mmq_log.debug("Failed to stop reader on shard {}: {}", shard, current_state_fut.get_exception());
@@ -362,13 +391,23 @@ future<> read_context::stop() {
         }
     }
 
+    if (const auto total = immediate_cleanup + future_cleanup) {
+        tracing::trace(_trace_state,
+                "Stopping {} shard readers, {} ready for immediate cleanup, {} will be cleaned up after finishes read-ahead",
+                total,
+                immediate_cleanup,
+                future_cleanup);
+    }
+
     return when_all(futures.begin(), futures.end()).discard_result();
 }
 
-void read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey) {
+read_context::dismantle_buffer_stats read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer,
+        const dht::decorated_key& pkey) {
     auto& partitioner = dht::global_partitioner();
 
     std::vector<mutation_fragment> tmp_buffer;
+    dismantle_buffer_stats stats;
 
     auto rit = std::reverse_iterator(combined_buffer.end());
     const auto rend = std::reverse_iterator(combined_buffer.begin());
@@ -377,8 +416,10 @@ void read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> 
             const auto shard = partitioner.shard_of(rit->as_partition_start().key().token());
             auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
             for (auto& smf : tmp_buffer) {
+                stats.add(*_schema, smf);
                 shard_buffer.emplace_front(std::move(smf));
             }
+            stats.add(*_schema, *rit);
             shard_buffer.emplace_front(std::move(*rit));
             tmp_buffer.clear();
         } else {
@@ -389,24 +430,33 @@ void read_context::dismantle_combined_buffer(circular_buffer<mutation_fragment> 
     const auto shard = partitioner.shard_of(pkey.token());
     auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
     for (auto& smf : tmp_buffer) {
+        stats.add(*_schema, smf);
         shard_buffer.emplace_front(std::move(smf));
     }
+
+    return stats;
 }
 
-void read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
+read_context::dismantle_buffer_stats read_context::dismantle_compaction_state(detached_compaction_state compaction_state) {
     auto& partitioner = dht::global_partitioner();
     const auto shard = partitioner.shard_of(compaction_state.partition_start.key().token());
     auto& shard_buffer = std::get<dismantling_state>(_readers[shard]).buffer;
+    auto stats = dismantle_buffer_stats();
 
     for (auto& rt : compaction_state.range_tombstones | boost::adaptors::reversed) {
+        stats.add(*_schema, rt);
         shard_buffer.emplace_front(std::move(rt));
     }
 
     if (compaction_state.static_row) {
+        stats.add(*_schema, *compaction_state.static_row);
         shard_buffer.emplace_front(std::move(*compaction_state.static_row));
     }
 
+    stats.add(*_schema, compaction_state.partition_start);
     shard_buffer.emplace_front(std::move(compaction_state.partition_start));
+
+    return stats;
 }
 
 read_context::ready_to_save_state* read_context::prepare_reader_for_saving(
@@ -525,8 +575,14 @@ future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsume
     }
 
     auto last_pkey = compaction_state.partition_start.key();
-    dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
-    dismantle_compaction_state(std::move(compaction_state));
+
+    const auto cb_stats = dismantle_combined_buffer(std::move(unconsumed_buffer), last_pkey);
+    tracing::trace(_trace_state, "Dismantled combined buffer: {} partitions/{} fragments/{} bytes", cb_stats.partitions, cb_stats.fragments,
+            cb_stats.bytes);
+
+    const auto cs_stats = dismantle_compaction_state(std::move(compaction_state));
+    tracing::trace(_trace_state, "Dismantled compaction state: {} partitions/{} fragments/{} bytes", cs_stats.partitions, cs_stats.fragments,
+            cs_stats.bytes);
 
     return do_with(std::move(last_pkey), std::move(last_ckey), [this] (const dht::decorated_key& last_pkey,
                 const std::optional<clustering_key_prefix>& last_ckey) {
