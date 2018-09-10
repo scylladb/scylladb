@@ -225,4 +225,9 @@ struct hash<repair_hash> {
     size_t operator()(repair_hash h) const { return h.hash; }
 };
 
+template<>
+struct hash<node_repair_meta_id> {
+    size_t operator()(node_repair_meta_id id) const { return utils::tuple_hash()(id.ip, id.repair_meta_id); }
+};
+
 }
