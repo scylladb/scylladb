@@ -166,6 +166,18 @@ public:
     }
 };
 
+// Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
+struct get_sync_boundary_response {
+    std::optional<repair_sync_boundary> boundary;
+    repair_hash row_buf_combined_csum;
+    // The current size of the row buf
+    uint64_t row_buf_size;
+    // The number of bytes this verb read from disk
+    uint64_t new_rows_size;
+    // The number of rows this verb read from disk
+    uint64_t new_rows_nr;
+};
+
 namespace std {
 template<>
 struct hash<partition_checksum> {
