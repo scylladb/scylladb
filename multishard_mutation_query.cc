@@ -150,8 +150,6 @@ class read_context {
 
     void dismantle_reader(shard_id shard, future<stopped_foreign_reader>&& stopped_reader_fut);
 
-    future<> cleanup_readers();
-
     ready_to_save_state* prepare_reader_for_saving(dismantling_state& current_state, future<stopped_foreign_reader>&& stopped_reader_fut,
             const dht::decorated_key& last_pkey, const std::optional<clustering_key_prefix>& last_ckey);
     void dismantle_combined_buffer(circular_buffer<mutation_fragment> combined_buffer, const dht::decorated_key& pkey);
@@ -200,6 +198,8 @@ public:
 
     future<> save_readers(circular_buffer<mutation_fragment> unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey);
+
+    future<> stop();
 };
 
 future<read_context::bundled_remote_reader> read_context::do_make_remote_reader(
@@ -294,7 +294,7 @@ void read_context::dismantle_reader(shard_id shard, future<stopped_foreign_reade
     }
 }
 
-future<> read_context::cleanup_readers() {
+future<> read_context::stop() {
     auto cleanup = [db = &_db.local()] (shard_id shard, dismantling_state state) {
         return state.reader_fut.then_wrapped([db, shard, params = std::move(state.params),
                 read_operation = std::move(state.read_operation)] (future<stopped_foreign_reader>&& fut) mutable {
@@ -321,8 +321,13 @@ future<> read_context::cleanup_readers() {
         if (auto maybe_dismantling_state = std::get_if<dismantling_state>(&rs)) {
             cleanup(shard, std::move(*maybe_dismantling_state));
         } else if (auto maybe_future_dismantling_state = std::get_if<future_dismantling_state>(&rs)) {
-            futures.emplace_back(maybe_future_dismantling_state->fut.then([=] (dismantling_state&& current_state) {
-                cleanup(shard, std::move(current_state));
+            futures.emplace_back(maybe_future_dismantling_state->fut.then_wrapped([=] (future<dismantling_state>&& current_state_fut) {
+                if (current_state_fut.failed()) {
+                    mmq_log.debug("Failed to stop reader on shard {}: {}", shard, current_state_fut.get_exception());
+                    ++_db.local().get_stats().multishard_query_failed_reader_stops;
+                } else {
+                    cleanup(shard, current_state_fut.get0());
+                }
             }));
         }
     }
@@ -486,7 +491,7 @@ future<> read_context::lookup_readers() {
 future<> read_context::save_readers(circular_buffer<mutation_fragment> unconsumed_buffer, detached_compaction_state compaction_state,
             std::optional<clustering_key_prefix> last_ckey) {
     if (_cmd.query_uuid == utils::UUID{}) {
-        return cleanup_readers();
+        return make_ready_future<>();
     }
 
     auto last_pkey = compaction_state.partition_start.key();
@@ -590,6 +595,8 @@ static future<reconcilable_result> do_query_mutations(
                         std::move(last_ckey)).then_wrapped([result = std::move(result)] (future<>&&) mutable {
                     return make_ready_future<reconcilable_result>(std::move(result));
                 });
+            }).finally([&ctx] {
+                return ctx->stop();
             });
         });
     });
