@@ -1220,7 +1220,17 @@ public:
     virtual proceed consume_partition_end() override {
         sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
         if (_opened_range_tombstone) {
-            throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
+            if (!_mf_filter || _mf_filter->out_of_range()) {
+                throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
+            }
+            auto range_end = _mf_filter->upper_bound();
+            position_in_partition::less_compare less(*_schema);
+            auto start_pos = position_in_partition_view(position_in_partition_view::range_tag_t{},
+                                                        bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));
+            if (!less(range_end, start_pos)) {
+                auto end_bound = range_end.as_end_bound_view();
+                consume_range_tombstone_end(end_bound.prefix(), end_bound.kind(), _opened_range_tombstone->tomb);
+            }
         }
         _is_mutation_end = true;
         _in_progress_row.reset();
