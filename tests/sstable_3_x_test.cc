@@ -46,6 +46,7 @@
 #include "types.hh"
 #include "partition_slice_builder.hh"
 #include "schema.hh"
+#include "utils/UUID_gen.hh"
 
 using namespace sstables;
 
@@ -4406,5 +4407,54 @@ SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
     std::sort(keys.begin(), keys.end(), cmp);
 
     assert_that(sst.read_rows_flat()).produces(keys);
+}
+
+/*
+ * Test for a bug discovered with Scylla's compaction_history tables
+ * containing complex columns with zero subcolumns.
+ */
+SEASTAR_THREAD_TEST_CASE(test_complex_column_zero_subcolumns_read) {
+    using utils::UUID;
+    const sstring path =
+        "tests/sstables/3.x/uncompressed/complex_column_zero_subcolumns";
+
+    schema_ptr s = schema_builder("test_ks", "test_table")
+        .with_column("id", uuid_type, column_kind::partition_key)
+        .with_column("bytes_in", long_type)
+        .with_column("bytes_out", long_type)
+        .with_column("columnfamily_name", utf8_type)
+        .with_column("compacted_at", timestamp_type)
+        .with_column("keyspace_name", utf8_type)
+        .with_column("rows_merged", map_type_impl::get_instance(int32_type, long_type, true))
+        .build();
+
+    sstable_assertions sst(s, path);
+    sst.load();
+
+    auto to_pkey = [&s] (const UUID& key) {
+        auto bytes = uuid_type->decompose(key);
+        auto pk = partition_key::from_single_value(*s, bytes);
+        return dht::global_partitioner().decorate_key(*s, pk);
+    };
+
+    std::vector<UUID> keys {
+        UUID{"09fea990-b320-11e8-83a7-000000000000"},
+        UUID{"0a310430-b320-11e8-83a7-000000000000"},
+        UUID{"0a214cc0-b320-11e8-83a7-000000000000"},
+        UUID{"0a00a560-b320-11e8-83a7-000000000000"},
+        UUID{"0a0a6960-b320-11e8-83a7-000000000000"},
+        UUID{"0a147b80-b320-11e8-83a7-000000000000"},
+        UUID{"0a187320-b320-11e8-83a7-000000000000"},
+    };
+
+    auto rd = sst.read_rows_flat();
+    rd.set_max_buffer_size(1);
+    auto r = assert_that(std::move(rd));
+    for (const auto& key : keys) {
+        r.produces_partition_start(to_pkey(key))
+        .produces_row_with_key(clustering_key::make_empty())
+        .produces_partition_end();
+    }
+    r.produces_end_of_stream();
 }
 
