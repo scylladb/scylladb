@@ -44,3 +44,9 @@ enum class partition_region : uint8_t {
     clustered,
     partition_end,
 };
+
+class position_in_partition {
+    partition_region get_type();
+    bound_weight get_bound_weight();
+    std::optional<clustering_key_prefix> get_clustering_key_prefix();
+};
