@@ -27,3 +27,7 @@ enum class repair_checksum : uint8_t {
 class partition_checksum {
   std::array<uint8_t, 32> digest();
 };
+
+class repair_hash {
+    uint64_t hash;
+};
