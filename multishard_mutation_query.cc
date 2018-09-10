@@ -253,15 +253,24 @@ future<foreign_unique_ptr<flat_mutation_reader>> read_context::make_remote_reade
 
     auto created = promise<used_state>();
     rs = future_used_state{created.get_future()};
-    return do_make_remote_reader(_db, shard, std::move(schema), pr, ps, pc, std::move(trace_state)).then([this, &rs, created = std::move(created)] (
-                bundled_remote_reader&& bundled_reader) mutable {
+    return do_make_remote_reader(_db, shard, std::move(schema), pr, ps, pc, std::move(trace_state)).then_wrapped([this, &rs,
+            created = std::move(created)] (future<bundled_remote_reader>&& bundled_reader_fut) mutable {
+        if (bundled_reader_fut.failed()) {
+            auto ex = bundled_reader_fut.get_exception();
+            if (!std::holds_alternative<future_used_state>(rs)) {
+                created.set_exception(ex);
+            }
+            return make_exception_future<foreign_unique_ptr<flat_mutation_reader>>(std::move(ex));
+        }
+
+        auto bundled_reader = bundled_reader_fut.get0();
         auto new_state = used_state{std::move(bundled_reader.params), std::move(bundled_reader.read_operation)};
         if (std::holds_alternative<future_used_state>(rs)) {
             rs = std::move(new_state);
         } else {
             created.set_value(std::move(new_state));
         }
-        return std::move(bundled_reader.reader);
+        return make_ready_future<foreign_unique_ptr<flat_mutation_reader>>(std::move(bundled_reader.reader));
     });
 }
 
