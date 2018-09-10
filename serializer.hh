@@ -21,6 +21,7 @@
 #pragma once
 
 #include <vector>
+#include <unordered_set>
 #include <array>
 #include <seastar/core/sstring.hh>
 #include <unordered_map>

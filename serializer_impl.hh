@@ -82,6 +82,17 @@ template<typename Container>
 struct container_traits;
 
 template<typename T>
+struct container_traits<std::unordered_set<T>> {
+    struct back_emplacer {
+        std::unordered_set<T>& c;
+        back_emplacer(std::unordered_set<T>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace(std::move(v));
+        }
+    };
+};
+
+template<typename T>
 struct container_traits<std::vector<T>> {
     struct back_emplacer {
         std::vector<T>& c;
@@ -206,6 +217,28 @@ struct vector_serializer {
 };
 
 }
+
+template<typename T>
+struct serializer<std::unordered_set<T>> {
+    template<typename Input>
+    static std::unordered_set<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::unordered_set<T> v;
+        v.reserve(sz);
+        deserialize_array_helper<false, T>::doit(in, v, sz);
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::unordered_set<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        serialize_array_helper<false, T>::doit(out, v);
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        skip_array<T>(in, sz);
+    }
+};
 
 template<typename T>
 struct serializer<std::vector<T>>
