@@ -219,4 +219,10 @@ struct hash<partition_checksum> {
         return h;
     }
 };
+
+template<>
+struct hash<repair_hash> {
+    size_t operator()(repair_hash h) const { return h.hash; }
+};
+
 }
