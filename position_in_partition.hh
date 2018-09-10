@@ -210,6 +210,9 @@ public:
     struct before_clustering_row_tag_t { };
     struct range_tag_t { };
     using range_tombstone_tag_t = range_tag_t;
+    partition_region get_type() const { return _type; }
+    bound_weight get_bound_weight() const { return _bound_weight; }
+    const std::optional<clustering_key_prefix>& get_clustering_key_prefix() const { return _ck; }
     position_in_partition(partition_region type, bound_weight weight, std::optional<clustering_key_prefix> ck)
         : _type(type), _bound_weight(weight), _ck(std::move(ck)) { }
     explicit position_in_partition(partition_start_tag_t) : _type(partition_region::partition_start) { }
