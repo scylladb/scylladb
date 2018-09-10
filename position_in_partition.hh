@@ -66,7 +66,7 @@ int position_weight(bound_kind k) {
     abort();
 }
 
-enum class partition_region {
+enum class partition_region : uint8_t {
     partition_start,
     static_row,
     clustered,
