@@ -204,6 +204,12 @@ public:
 
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
 
+enum class row_level_diff_detect_algorithm : uint8_t {
+    send_full_set,
+};
+
+std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo);
+
 namespace std {
 template<>
 struct hash<partition_checksum> {

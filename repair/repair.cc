@@ -198,6 +198,14 @@ static std::ostream& operator<<(std::ostream& os, const std::unordered_map<T1, T
     return os;
 }
 
+std::ostream& operator<<(std::ostream& out, row_level_diff_detect_algorithm algo) {
+    switch (algo) {
+    case row_level_diff_detect_algorithm::send_full_set:
+        return out << "send_full_set";
+    };
+    return out << "unknown";
+}
+
 static std::vector<sstring> list_column_families(const database& db, const sstring& keyspace) {
     std::vector<sstring> ret;
     for (auto &&e : db.get_column_families_mapping()) {
