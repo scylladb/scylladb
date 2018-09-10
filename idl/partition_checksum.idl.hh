@@ -55,3 +55,8 @@ struct partition_key_and_mutation_fragments {
     partition_key get_key();
     std::list<frozen_mutation_fragment> get_mutation_fragments();
 };
+
+class repair_sync_boundary {
+    dht::decorated_key pk;
+    position_in_partition position;
+};
