@@ -26,6 +26,7 @@
 #include "clustering_bounds_comparator.hh"
 #include "query-request.hh"
 
+#include <optional>
 #include <boost/icl/interval_set.hpp>
 
 inline
@@ -191,7 +192,7 @@ public:
 class position_in_partition {
     partition_region _type;
     int _bound_weight = 0;
-    stdx::optional<clustering_key_prefix> _ck;
+    std::optional<clustering_key_prefix> _ck;
 public:
     friend class clustering_interval_set;
     struct partition_start_tag_t { };
