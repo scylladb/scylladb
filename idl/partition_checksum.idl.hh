@@ -68,3 +68,7 @@ struct get_sync_boundary_response {
     uint64_t new_rows_size;
     uint64_t new_rows_nr;
 };
+
+enum class row_level_diff_detect_algorithm : uint8_t {
+    send_full_set,
+};
