@@ -30,6 +30,36 @@ logging::logger mmq_log("multishard_mutation_query");
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 
+/// Context object for a multishard read.
+///
+/// Handles logic related to looking up, creating, saving and cleaning up remote
+/// (shard) readers for the `multishard_mutation_reader`.
+/// Has a state machine for each of the shard readers. See the state transition
+/// diagram below, above the declaration of `reader state`.
+/// The `read_context` is a short-lived object that is only kept around for the
+/// duration of a single page. A new `read_context` is created on each page and
+/// is discarded at the end of the page, after the readers are either saved
+/// or the process of their safe disposal was started in the background.
+/// Intended usage:
+/// * Create the `read_context`.
+/// * Call `read_context::lookup_readers()` to find any saved readers from the
+///   previous page.
+/// * Create the `multishard_mutation_reader`.
+/// * Fill the page.
+/// * Destroy the `multishard_mutation_reader` to trigger the disposal of the
+///   shard readers.
+/// * Call `read_context::save_readers()` if the read didn't finish yet, that is
+///   more pages are expected.
+/// * Call `read_context::stop()` to initiate the cleanup of any unsaved readers
+///   and their dependencies.
+/// * Destroy the `read_context`.
+///
+/// Note:
+/// 1) Each step can only be started when the previous phase has finished.
+/// 2) This usage is implemented in the `do_query_mutations()` function below.
+/// 3) Both, `read_context::lookup_readers()` and `read_context::save_readers()`
+///    knows to do nothing when the query is not stateful and just short
+///    circuit.
 class read_context {
     struct reader_params {
         std::unique_ptr<const dht::partition_range> range;
