@@ -178,6 +178,14 @@ struct get_sync_boundary_response {
     uint64_t new_rows_nr;
 };
 
+struct node_repair_meta_id {
+    gms::inet_address ip;
+    uint32_t repair_meta_id;
+    bool operator==(const node_repair_meta_id& x) const {
+        return x.ip == ip && x.repair_meta_id == repair_meta_id;
+    }
+};
+
 namespace std {
 template<>
 struct hash<partition_checksum> {
