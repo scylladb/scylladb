@@ -22,6 +22,7 @@
 #define BOOST_TEST_MODULE core
 
 #include <array>
+#include <random>
 #include <unordered_set>
 
 #include "auth/passwords.hh"
@@ -31,7 +32,7 @@
 
 #include "seastarx.hh"
 
-static auto rng_for_salt = auth::passwords::make_seeded_random_engine();
+static auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
 //
 // The same password hashed multiple times will result in different strings because the salt will be different.

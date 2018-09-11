@@ -96,15 +96,6 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt);
 } // namespace detail
 
 ///
-/// Make and seed new random engine instance for generating random salt strings.
-///
-template <typename RandomNumberEngine = std::default_random_engine>
-RandomNumberEngine make_seeded_random_engine() {
-    static thread_local std::random_device rd{};
-    return RandomNumberEngine(rd());
-}
-
-///
 /// Run a one-way hashing function on cleartext to produce encrypted text.
 ///
 /// Prior to applying the hashing function, random salt is amended to the cleartext. The random salt bytes are generated

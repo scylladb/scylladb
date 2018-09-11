@@ -78,7 +78,7 @@ static const class_registrator<
         cql3::query_processor&,
         ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
-static thread_local auto rng_for_salt = passwords::make_seeded_random_engine<std::default_random_engine>();
+static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
 password_authenticator::~password_authenticator() {
 }
