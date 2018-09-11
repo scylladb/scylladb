@@ -671,3 +671,6 @@ future<> consume_partitions(flat_mutation_reader& reader, Consumer consumer, db:
         });
     });
 }
+
+flat_mutation_reader
+make_generating_reader(schema_ptr s, std::function<future<mutation_fragment_opt> ()> get_next_fragment);
