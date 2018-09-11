@@ -37,7 +37,7 @@ GCC6_CONCEPT(
         // The returned fragments are expected to have the same
         // position_in_partition. Iterators and references are expected
         // to be valid until the next call to operator()().
-        { p() } -> future<boost::iterator_range<std::vector<mutation_fragment>::iterator>>;
+        { p(timeout) } -> future<boost::iterator_range<std::vector<mutation_fragment>::iterator>>;
         // These have the same semantics as their
         // flat_mutation_reader counterparts.
         { p.next_partition() };
@@ -73,12 +73,12 @@ class mutation_fragment_merger {
     iterator _it;
     iterator _end;
 
-    future<> fetch() {
+    future<> fetch(db::timeout_clock::time_point timeout) {
         if (!empty()) {
             return make_ready_future<>();
         }
 
-        return _producer().then([this] (boost::iterator_range<iterator> fragments) {
+        return _producer(timeout).then([this] (boost::iterator_range<iterator> fragments) {
             _it = fragments.begin();
             _end = fragments.end();
         });
@@ -102,8 +102,8 @@ public:
         , _producer(std::move(producer)) {
     }
 
-    future<mutation_fragment_opt> operator()() {
-        return fetch().then([this] () -> mutation_fragment_opt {
+    future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
+        return fetch(timeout).then([this] () -> mutation_fragment_opt {
             if (empty()) {
                 return mutation_fragment_opt();
             }
@@ -190,7 +190,7 @@ private:
 private:
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
     void add_readers(std::vector<flat_mutation_reader> new_readers);
-    future<> prepare_next();
+    future<> prepare_next(db::timeout_clock::time_point timeout);
     // Collect all forwardable readers into _next, and remove them from
     // their previous containers (_halted_readers and _fragment_heap).
     void prepare_forwardable_readers();
@@ -201,7 +201,7 @@ public:
             mutation_reader::forwarding fwd_mr);
     // Produces the next batch of mutation-fragments of the same
     // position.
-    future<mutation_fragment_batch> operator()();
+    future<mutation_fragment_batch> operator()(db::timeout_clock::time_point timeout);
     void next_partition();
     future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout);
     future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout);
@@ -294,9 +294,9 @@ struct mutation_reader_merger::fragment_heap_compare {
     }
 };
 
-future<> mutation_reader_merger::prepare_next() {
-    return parallel_for_each(_next, [this] (reader_and_last_fragment_kind rk) {
-        return (*rk.reader)().then([this, rk] (mutation_fragment_opt mfo) {
+future<> mutation_reader_merger::prepare_next(db::timeout_clock::time_point timeout) {
+    return parallel_for_each(_next, [this, timeout] (reader_and_last_fragment_kind rk) {
+        return (*rk.reader)(timeout).then([this, rk] (mutation_fragment_opt mfo) {
             if (mfo) {
                 if (mfo->is_partition_start()) {
                     _reader_heap.emplace_back(rk.reader, std::move(*mfo));
@@ -360,7 +360,7 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     maybe_add_readers(std::nullopt);
 }
 
-future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()() {
+future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::operator()(db::timeout_clock::time_point timeout) {
     // Avoid merging-related logic if we know that only a single reader owns
     // current partition.
     if (_single_reader.reader) {
@@ -369,7 +369,7 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
                 _current.clear();
                 return make_ready_future<mutation_fragment_batch>(_current);
             }
-            return _single_reader.reader->fill_buffer().then([this] { return operator()(); });
+            return _single_reader.reader->fill_buffer(timeout).then([this, timeout] { return operator()(timeout); });
         }
         _current.clear();
         _current.emplace_back(_single_reader.reader->pop_mutation_fragment());
@@ -381,7 +381,7 @@ future<mutation_reader_merger::mutation_fragment_batch> mutation_reader_merger::
     }
 
     if (!_next.empty()) {
-        return prepare_next().then([this] { return (*this)(); });
+        return prepare_next(timeout).then([this, timeout] { return (*this)(timeout); });
     }
 
     _current.clear();
@@ -471,8 +471,8 @@ combined_mutation_reader::combined_mutation_reader(schema_ptr schema,
 }
 
 future<> combined_mutation_reader::fill_buffer(db::timeout_clock::time_point timeout) {
-    return repeat([this] {
-        return _producer().then([this] (mutation_fragment_opt mfo) {
+    return repeat([this, timeout] {
+        return _producer(timeout).then([this] (mutation_fragment_opt mfo) {
             if (!mfo) {
                 _end_of_stream = true;
                 return stop_iteration::yes;
