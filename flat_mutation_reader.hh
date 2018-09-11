@@ -145,12 +145,12 @@ public:
             _buffer_size += memory_usage;
         }
 
-        future<mutation_fragment_opt> operator()() {
+        future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout) {
             if (is_buffer_empty()) {
                 if (is_end_of_stream()) {
                     return make_ready_future<mutation_fragment_opt>();
                 }
-                return fill_buffer(db::no_timeout).then([this] { return operator()(); });
+                return fill_buffer(timeout).then([this, timeout] { return operator()(timeout); });
             }
             return make_ready_future<mutation_fragment_opt>(pop_mutation_fragment());
         }
@@ -320,8 +320,8 @@ public:
 
     flat_mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
 
-    future<mutation_fragment_opt> operator()() {
-        return _impl->operator()();
+    future<mutation_fragment_opt> operator()(db::timeout_clock::time_point timeout = db::no_timeout) {
+        return _impl->operator()(timeout);
     }
 
     template <typename Consumer>
