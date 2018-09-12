@@ -1029,7 +1029,7 @@ class multishard_combining_reader : public flat_mutation_reader::impl {
     // * Move flat_mutation_reader instance into a struct managed through a
     //   shared pointer. Continuations using this internal state will share
     //   owhership of this struct with the shard reader instance.
-    // * Add an adandoned flag to the struct which will be set when the shard
+    // * Add a stopped flag to the struct which will be set when the shard
     //   reader is destroyed. When this is set don't do any work in the
     //   pending continuations, just "run through them".
     class shard_reader {
