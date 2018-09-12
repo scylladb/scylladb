@@ -1186,6 +1186,10 @@ future<> multishard_combining_reader::shard_reader::create_reader() {
 }
 
 void multishard_combining_reader::shard_reader::read_ahead(db::timeout_clock::time_point timeout) {
+    if (_read_ahead) {
+        return;
+    }
+
     if (_state->reader) {
         _read_ahead.emplace(_state->reader->fill_buffer(timeout));
     } else {

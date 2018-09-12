@@ -23,6 +23,7 @@
 #include "schema_registry.hh"
 #include "tests/cql_test_env.hh"
 #include "tests/eventually.hh"
+#include "tests/cql_assertions.hh"
 #include "tests/mutation_assertions.hh"
 
 #include <seastar/tests/test-utils.hh>
@@ -50,7 +51,8 @@ public:
     }
 };
 
-static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_env& env, delete_rows dr = {}) {
+static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql_test_env& env, unsigned partition_count = 10 * smp::count,
+        unsigned row_per_partition_count = 10, delete_rows dr = {}) {
     env.execute_cql("CREATE KEYSPACE multishard_mutation_query_cache_ks WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1};").get();
     env.execute_cql("CREATE TABLE multishard_mutation_query_cache_ks.test (pk int, ck int, v int, PRIMARY KEY(pk, ck));").get();
 
@@ -62,9 +64,9 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_cf(cql
     std::vector<dht::decorated_key> pkeys;
 
     auto row_counter = int(0);
-    for (int pk = 0; pk < 10 * static_cast<int>(smp::count); ++pk) {
+    for (int pk = 0; pk < int(partition_count); ++pk) {
         pkeys.emplace_back(dht::global_partitioner().decorate_key(*s, partition_key::from_single_value(*s, data_value(pk).serialize())));
-        for (int ck = 0; ck < 10; ++ck) {
+        for (int ck = 0; ck < int(row_per_partition_count); ++ck) {
             env.execute_prepared(insert_id, {{
                     cql3::raw_value::make_value(data_value(pk).serialize()),
                     cql3::raw_value::make_value(data_value(ck).serialize()),
@@ -325,7 +327,7 @@ SEASTAR_THREAD_TEST_CASE(test_range_tombstones_at_page_boundaries) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_cf(env, {6, 2});
+        auto [s, pkeys] = create_test_cf(env, 10, 10, {6, 2});
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -345,6 +347,37 @@ SEASTAR_THREAD_TEST_CASE(test_range_tombstones_at_page_boundaries) {
         BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::memory_based_evictions), 0);
 
         require_eventually_empty_caches(env.db());
+
+        return make_ready_future<>();
+    }).get();
+}
+
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_many_partitions) {
+    do_with_cql_env([] (cql_test_env& env) -> future<> {
+        using namespace std::chrono_literals;
+
+        env.db().invoke_on_all([] (database& db) {
+            db.set_querier_cache_entry_ttl(2s);
+        }).get();
+
+        // This test is designed to shake out any possible read-ahead related
+        // concurrent access problems in the code. As such it is only really
+        // useful when running fast, in release mode. As well as not being
+        // useful it would also be unbearably slow in debug mode.
+        // Let's still run it but with a much-reduced partition count.
+#ifdef DEBUG
+        const int pcount = 4 * smp::count;
+#else
+        const int pcount = 4000 * smp::count;
+#endif
+        const int rcount = 100;
+        create_test_cf(env, pcount, rcount);
+
+        auto res = env.execute_cql("SELECT COUNT(*) FROM multishard_mutation_query_cache_ks.test").get0();
+        assert_that(res).is_rows().with_rows({{data_value(int64_t{pcount * rcount}).serialize()}});
+
+        BOOST_REQUIRE_EQUAL(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0);
 
         return make_ready_future<>();
     }).get();
