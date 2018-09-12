@@ -338,10 +338,10 @@ future<> read_context::create_underlying(bool skip_first_fragment, db::timeout_c
     } else {
         _sm_range = dht::partition_range::make_singular({dht::ring_position(*_key)});
     }
-    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase, timeout).then([this, skip_first_fragment] {
+    return _underlying.fast_forward_to(std::move(_sm_range), *_underlying_snapshot, _phase, timeout).then([this, skip_first_fragment, timeout] {
         _underlying_snapshot = {};
         if (skip_first_fragment) {
-            return _underlying.underlying()().then([](auto &&mf) {});
+            return _underlying.underlying()(timeout).then([](auto &&mf) {});
         } else {
             return make_ready_future<>();
         }
@@ -369,8 +369,8 @@ private:
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
-        return _read_context->create_underlying(false, timeout).then([this, phase] {
-          return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
+        return _read_context->create_underlying(false, timeout).then([this, phase, timeout] {
+          return _read_context->underlying().underlying()(timeout).then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
                 if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
@@ -532,8 +532,8 @@ public:
         , _read_context(ctx)
     {}
 
-    future<flat_mutation_reader_opt, mutation_fragment_opt > operator()() {
-        return _reader.move_to_next_partition().then([this] (auto&& mfopt) mutable {
+    future<flat_mutation_reader_opt, mutation_fragment_opt > operator()(db::timeout_clock::time_point timeout) {
+        return _reader.move_to_next_partition(timeout).then([this] (auto&& mfopt) mutable {
             {
                 if (!mfopt) {
                     this->handle_end_of_stream();
@@ -658,7 +658,7 @@ private:
     }
 
     future<flat_mutation_reader_opt> read_from_secondary(db::timeout_clock::time_point timeout) {
-        return _secondary_reader().then([this, timeout] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
+        return _secondary_reader(timeout).then([this, timeout] (flat_mutation_reader_opt fropt, mutation_fragment_opt ps) {
             if (fropt) {
                 if (ps) {
                     push_mutation_fragment(std::move(*ps));

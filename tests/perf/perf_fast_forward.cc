@@ -507,7 +507,7 @@ public:
 
 static
 uint64_t consume_all(flat_mutation_reader& rd) {
-    return rd.consume(counting_consumer()).get0();
+    return rd.consume(counting_consumer(), db::no_timeout).get0();
 }
 
 static
@@ -516,13 +516,13 @@ uint64_t consume_all_with_next_partition(flat_mutation_reader& rd) {
     do {
         fragments += consume_all(rd);
         rd.next_partition();
-        rd.fill_buffer().get();
+        rd.fill_buffer(db::no_timeout).get();
     } while(!rd.is_end_of_stream() || !rd.is_buffer_empty());
     return fragments;
 }
 
 static void assert_partition_start(flat_mutation_reader& rd) {
-    auto mfopt = rd().get0();
+    auto mfopt = rd(db::no_timeout).get0();
     assert(mfopt);
     assert(mfopt->is_partition_start());
 }
@@ -546,7 +546,7 @@ static test_result scan_rows_with_stride(column_family& cf, int n_rows, int n_re
             rd.fast_forward_to(position_range(
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck)),
                 position_in_partition(position_in_partition::clustering_row_tag_t(), clustering_key::from_singular(*cf.schema(), ck + n_read))
-            )).get();
+            ), db::no_timeout).get();
         }
         fragments += consume_all(rd);
         ck += n_read + n_skip;
@@ -585,7 +585,7 @@ static test_result scan_with_stride_partitions(column_family& cf, int n, int n_r
                 dht::partition_range::bound(keys[pk], true),
                 dht::partition_range::bound(keys[std::min(n, pk + n_read) - 1], true)
             );
-            rd.fast_forward_to(pr).get();
+            rd.fast_forward_to(pr, db::no_timeout).get();
         }
         fragments += consume_all(rd);
         pk += n_read + n_skip;
@@ -607,7 +607,7 @@ static test_result slice_rows(column_family& cf, int offset = 0, int n_read = 1)
 
     rd.fast_forward_to(position_range(
             position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
-            position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
+            position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read))), db::no_timeout).get();
     uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
@@ -662,7 +662,7 @@ static test_result slice_rows_single_key(column_family& cf, int offset = 0, int 
     assert_partition_start(rd);
     rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read)))).get();
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), offset + n_read))), db::no_timeout).get();
     uint64_t fragments = consume_all_with_next_partition(rd);
 
     return {before, fragments};
@@ -723,13 +723,13 @@ static test_result test_forwarding_with_restriction(column_family& cf, table_con
 
     rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 1)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2)))).get();
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), 2))), db::no_timeout).get();
 
     fragments += consume_all(rd);
 
     rd.fast_forward_to(position_range(
         position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key - 2)),
-        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2)))).get();
+        position_in_partition::for_key(clustering_key::from_singular(*cf.schema(), first_key + 2))), db::no_timeout).get();
 
     fragments += consume_all_with_next_partition(rd);
     return {before, fragments};

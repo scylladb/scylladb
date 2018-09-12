@@ -33,7 +33,7 @@ class flat_reader_assertions {
     dht::partition_range _pr;
 private:
     mutation_fragment_opt read_next() {
-        return _reader().get0();
+        return _reader(db::no_timeout).get0();
     }
 public:
     flat_reader_assertions(flat_mutation_reader reader)
@@ -208,11 +208,11 @@ public:
         const schema& s = *_reader.schema();
         range_tombstone_list actual_list(s);
         position_in_partition::equal_compare eq(s);
-        while (mutation_fragment* next = _reader.peek().get0()) {
+        while (mutation_fragment* next = _reader.peek(db::no_timeout).get0()) {
             if (!next->is_range_tombstone() || !eq(next->position(), mfo->position())) {
                 break;
             }
-            actual_list.apply(s, _reader().get0()->as_range_tombstone());
+            actual_list.apply(s, _reader(db::no_timeout).get0()->as_range_tombstone());
         }
         actual_list.apply(s, mfo->as_range_tombstone());
         {
@@ -285,7 +285,7 @@ public:
     }
 
     flat_reader_assertions& produces(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         if (!mo) {
             BOOST_FAIL(sprint("Expected %s, but got end of stream, at: %s", m, seastar::current_backtrace()));
         }
@@ -310,7 +310,7 @@ public:
 
     flat_reader_assertions& produces_eos_or_empty_mutation() {
         BOOST_TEST_MESSAGE("Expecting eos or empty mutation");
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         if (mo) {
             if (!mo->partition().empty()) {
                 BOOST_FAIL(sprint("Mutation is not empty: %s", *mo));
@@ -356,7 +356,7 @@ public:
 
     flat_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         _pr = pr;
-        _reader.fast_forward_to(_pr).get();
+        _reader.fast_forward_to(_pr, db::no_timeout).get();
         return *this;
     }
 
@@ -366,7 +366,7 @@ public:
     }
 
     flat_reader_assertions& fast_forward_to(position_range pr) {
-        _reader.fast_forward_to(std::move(pr)).get();
+        _reader.fast_forward_to(std::move(pr), db::no_timeout).get();
         return *this;
     }
 
@@ -378,7 +378,7 @@ public:
     }
 
     flat_reader_assertions& produces_compacted(const mutation& m, const stdx::optional<query::clustering_row_ranges>& ck_ranges = {}) {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mo));
         memory::disable_failure_guard dfg;
         mutation got = *mo;
@@ -388,13 +388,13 @@ public:
     }
 
     mutation_assertion next_mutation() {
-        auto mo = read_mutation_from_flat_mutation_reader(_reader).get0();
+        auto mo = read_mutation_from_flat_mutation_reader(_reader, db::no_timeout).get0();
         BOOST_REQUIRE(bool(mo));
         return mutation_assertion(std::move(*mo));
     }
 
     future<> fill_buffer() {
-        return _reader.fill_buffer();
+        return _reader.fill_buffer(db::no_timeout);
     }
 
     bool is_buffer_full() const {

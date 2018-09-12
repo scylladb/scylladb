@@ -117,17 +117,17 @@ static void test_streamed_mutation_forwarding_is_consistent_with_slicing(populat
 
             void consume_end_of_stream() { }
         };
-        fwd_reader.consume(consumer(m.schema(), builder)).get0();
+        fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         BOOST_REQUIRE(bool(builder));
         for (auto&& range : ranges) {
             BOOST_TEST_MESSAGE(sprint("fwd %s", range));
-            fwd_reader.fast_forward_to(position_range(range)).get();
-            fwd_reader.consume(consumer(m.schema(), builder)).get0();
+            fwd_reader.fast_forward_to(position_range(range), db::no_timeout).get();
+            fwd_reader.consume(consumer(m.schema(), builder), db::no_timeout).get0();
         }
         mutation_opt fwd_m = builder->consume_end_of_stream();
         BOOST_REQUIRE(bool(fwd_m));
 
-        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader).get0();
+        mutation_opt sliced_m = read_mutation_from_flat_mutation_reader(sliced_reader, db::no_timeout).get0();
         BOOST_REQUIRE(bool(sliced_m));
         assert_that(*sliced_m).is_equal_to(*fwd_m, slice_with_ranges.row_ranges(*m.schema(), m.key()));
     }
@@ -1012,7 +1012,7 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
             }
             result.partition().apply(*s, std::move(mf));
             return stop_iteration::no;
-        }).get();
+        }, db::no_timeout).get();
 
         assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
     }
@@ -1029,9 +1029,9 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
             BOOST_REQUIRE(!mf.position().has_clustering_key());
             result.partition().apply(*s, std::move(mf));
             return stop_iteration::no;
-        }).get();
+        }, db::no_timeout).get();
 
-        rd.fast_forward_to(prange).get();
+        rd.fast_forward_to(prange, db::no_timeout).get();
 
         position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
         auto consume_clustered = [&] (mutation_fragment&& mf) {
@@ -1044,9 +1044,9 @@ void test_slicing_with_overlapping_range_tombstones(populate_fn populate) {
             return stop_iteration::no;
         };
 
-        rd.consume_pausable(consume_clustered).get();
-        rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
-        rd.consume_pausable(consume_clustered).get();
+        rd.consume_pausable(consume_clustered, db::no_timeout).get();
+        rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows()), db::no_timeout).get();
+        rd.consume_pausable(consume_clustered, db::no_timeout).get();
 
         assert_that(result).is_equal_to(m1 + m2);
     }

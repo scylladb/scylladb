@@ -153,7 +153,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         auto rd = std::make_unique<flat_mutation_reader>(
             make_combined_reader(s, cache.make_reader(s), mt->make_flat_reader(s)));
         rd->set_max_buffer_size(1);
-        rd->fill_buffer().get();
+        rd->fill_buffer(db::no_timeout).get();
 
         scheduling_latency_measurer slm;
         slm.start();
@@ -164,7 +164,7 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
         rd->set_max_buffer_size(1024*1024);
         rd->consume_pausable([] (mutation_fragment) {
             return stop_iteration::no;
-        }).get();
+        }, db::no_timeout).get();
 
         mt = {};
         rd = {};

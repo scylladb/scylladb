@@ -66,7 +66,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                             return make_exception_future<>(std::runtime_error("Failed to write"));
                         }
                         return repeat([&shards_after, reader = std::move(reader), error] () mutable {
-                            return reader().then([&shards_after, error] (mutation_fragment_opt mf_opt) mutable {
+                            return reader(db::no_timeout).then([&shards_after, error] (mutation_fragment_opt mf_opt) mutable {
                                 if (mf_opt) {
                                     if (mf_opt->is_partition_start()) {
                                         auto shard = dht::global_partitioner().shard_of(mf_opt->as_partition_start().key().token());

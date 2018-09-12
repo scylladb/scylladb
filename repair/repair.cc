@@ -595,7 +595,7 @@ future<partition_checksum> partition_checksum::compute_legacy(flat_mutation_read
     return do_with(std::move(mr),
                    partition_checksum(), [] (auto& reader, auto& checksum) {
         return repeat([&reader, &checksum] () {
-            return read_mutation_from_flat_mutation_reader(reader).then([&checksum] (auto mopt) {
+            return read_mutation_from_flat_mutation_reader(reader, db::no_timeout).then([&checksum] (auto mopt) {
                 if (!mopt) {
                     return stop_iteration::yes;
                 }
@@ -615,7 +615,7 @@ future<partition_checksum> partition_checksum::compute_legacy(flat_mutation_read
 future<partition_checksum> partition_checksum::compute_streamed(flat_mutation_reader m)
 {
     return do_with(std::move(m), [] (auto& m) {
-        return m.consume(partition_hasher(*m.schema()));
+        return m.consume(partition_hasher(*m.schema()), db::no_timeout);
     });
 }
 

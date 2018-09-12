@@ -178,7 +178,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
             return repeat([sink, si, got_error_from_peer] () mutable {
-                return si->reader().then([sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+                return si->reader(db::no_timeout).then([sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
                     if (mf && !(*got_error_from_peer)) {
                         frozen_mutation_fragment fmf = freeze(*s, *mf);
                         auto size = fmf.representation().size();

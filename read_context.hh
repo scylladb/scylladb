@@ -47,7 +47,7 @@ public:
         : _cache(cache)
         , _read_context(context)
     { }
-    future<mutation_fragment_opt> move_to_next_partition() {
+    future<mutation_fragment_opt> move_to_next_partition(db::timeout_clock::time_point timeout) {
         _last_key = std::move(_new_last_key);
         auto start = population_range_start();
         auto phase = _cache.phase_of(start);
@@ -75,7 +75,7 @@ public:
         if (_reader->is_end_of_stream() && _reader->is_buffer_empty()) {
             return make_ready_future<mutation_fragment_opt>();
         }
-        return (*_reader)().then([this] (auto&& mfopt) {
+        return (*_reader)(timeout).then([this] (auto&& mfopt) {
             if (mfopt) {
                 assert(mfopt->is_partition_start());
                 _new_last_key = mfopt->as_partition_start().key();
@@ -219,8 +219,8 @@ public:
     }
     // Gets the next fragment from the underlying reader
     future<mutation_fragment_opt> get_next_fragment(db::timeout_clock::time_point timeout) {
-        return ensure_underlying(timeout).then([this] {
-            return _underlying.underlying()();
+        return ensure_underlying(timeout).then([this, timeout] {
+            return _underlying.underlying()(timeout);
         });
     }
 };

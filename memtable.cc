@@ -623,7 +623,7 @@ memtable::apply(memtable& mt) {
         return consume_partitions(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
             return stop_iteration::no;
-        });
+        }, db::no_timeout);
     });
 }
 

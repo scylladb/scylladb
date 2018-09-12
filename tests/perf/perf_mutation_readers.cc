@@ -125,7 +125,7 @@ future<> combined::consume_all(flat_mutation_reader mr) const
         return mr.consume_pausable([] (mutation_fragment mf) {
             perf_tests::do_not_optimize(mf);
             return stop_iteration::no;
-        }).then([] {
+        }, db::no_timeout).then([] {
             perf_tests::stop_measuring_time();
         });
     });
@@ -248,7 +248,7 @@ protected:
             return mr.consume_pausable([] (mutation_fragment mf) {
                 perf_tests::do_not_optimize(mf);
                 return stop_iteration::no;
-            });
+            }, db::no_timeout);
         });
     }
 };

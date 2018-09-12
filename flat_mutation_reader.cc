@@ -196,11 +196,11 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
         position_range _current;
         mutation_fragment_opt _next;
         // When resolves, _next is engaged or _end_of_stream is set.
-        future<> ensure_next() {
+        future<> ensure_next(db::timeout_clock::time_point timeout) {
             if (_next) {
                 return make_ready_future<>();
             }
-            return _underlying().then([this] (auto&& mfo) {
+            return _underlying(timeout).then([this] (auto&& mfo) {
                 _next = std::move(mfo);
                 if (!_next) {
                     _end_of_stream = true;
@@ -213,11 +213,11 @@ flat_mutation_reader make_forwardable(flat_mutation_reader m) {
             position_in_partition(position_in_partition::after_static_row_tag_t())
         }) { }
         virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
-            return repeat([this] {
+            return repeat([this, timeout] {
                 if (is_buffer_full()) {
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-                return ensure_next().then([this] {
+                return ensure_next(timeout).then([this] {
                     if (is_end_of_stream()) {
                         return stop_iteration::yes;
                     }
@@ -290,7 +290,7 @@ flat_mutation_reader make_nonforwardable(flat_mutation_reader r, bool single_par
             }
             _underlying.next_partition();
             _static_row_done = false;
-            return _underlying.fill_buffer().then([this] {
+            return _underlying.fill_buffer(timeout).then([this] {
                 _end_of_stream = is_end_end_of_underlying_stream();
             });
         }

@@ -89,10 +89,10 @@ struct mock_consumer {
 static size_t count_fragments(mutation m) {
     auto r = flat_mutation_reader_from_mutations({m});
     size_t res = 0;
-    auto mfopt = r().get0();
+    auto mfopt = r(db::no_timeout).get0();
     while (bool(mfopt)) {
         ++res;
-        mfopt = r().get0();
+        mfopt = r(db::no_timeout).get0();
     }
     return res;
 }
@@ -103,7 +103,7 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_single_partition) {
             size_t fragments_in_m = count_fragments(m);
             for (size_t depth = 1; depth <= fragments_in_m + 1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations({m});
-                auto result = r.consume(mock_consumer(depth)).get0();
+                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
@@ -125,24 +125,24 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
             size_t fragments_in_m2 = count_fragments(m2);
             for (size_t depth = 1; depth < fragments_in_m1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations({m1, m2});
-                auto result = r.consume(mock_consumer(depth)).get0();
+                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(1, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(1, result._consume_end_of_partition_call_count);
                 BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone() ? 1 : 0, result._consume_tombstone_call_count);
                 auto r2 = flat_mutation_reader_from_mutations({m1, m2});
-                auto start = r2().get0();
+                auto start = r2(db::no_timeout).get0();
                 BOOST_REQUIRE(start);
                 BOOST_REQUIRE(start->is_partition_start());
                 for (auto& mf : result._fragments) {
-                    auto mfopt = r2().get0();
+                    auto mfopt = r2(db::no_timeout).get0();
                     BOOST_REQUIRE(mfopt);
                     BOOST_REQUIRE(mf.equal(*m1.schema(), *mfopt));
                 }
             }
             for (size_t depth = fragments_in_m1; depth < fragments_in_m1 + fragments_in_m2 + 1; ++depth) {
                 auto r = flat_mutation_reader_from_mutations({m1, m2});
-                auto result = r.consume(mock_consumer(depth)).get0();
+                auto result = r.consume(mock_consumer(depth), db::no_timeout).get0();
                 BOOST_REQUIRE(result._consume_end_of_stream_called);
                 BOOST_REQUIRE_EQUAL(2, result._consume_new_partition_call_count);
                 BOOST_REQUIRE_EQUAL(2, result._consume_end_of_partition_call_count);
@@ -155,14 +155,14 @@ SEASTAR_TEST_CASE(test_flat_mutation_reader_consume_two_partitions) {
                 }
                 BOOST_REQUIRE_EQUAL(tombstones_count, result._consume_tombstone_call_count);
                 auto r2 = flat_mutation_reader_from_mutations({m1, m2});
-                auto start = r2().get0();
+                auto start = r2(db::no_timeout).get0();
                 BOOST_REQUIRE(start);
                 BOOST_REQUIRE(start->is_partition_start());
                 for (auto& mf : result._fragments) {
-                    auto mfopt = r2().get0();
+                    auto mfopt = r2(db::no_timeout).get0();
                     BOOST_REQUIRE(mfopt);
                     if (mfopt->is_partition_start() || mfopt->is_end_of_partition()) {
-                        mfopt = r2().get0();
+                        mfopt = r2(db::no_timeout).get0();
                     }
                     BOOST_REQUIRE(mfopt);
                     BOOST_REQUIRE(mf.equal(*m1.schema(), *mfopt));
@@ -476,10 +476,10 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
     auto consume_fn = [&] (flat_mutation_reader& fmr, flat_stream_consumer fsc) {
         if (thread) {
             assert(bool(!reversed));
-            return fmr.consume_in_thread(std::move(fsc));
+            return fmr.consume_in_thread(std::move(fsc), db::no_timeout);
         } else {
             auto reversed_flag = flat_mutation_reader::consume_reversed_partitions(bool(reversed));
-            return fmr.consume(std::move(fsc), reversed_flag).get0();
+            return fmr.consume(std::move(fsc), db::no_timeout, reversed_flag).get0();
         }
     };
 
@@ -519,7 +519,7 @@ void test_flat_stream(schema_ptr s, std::vector<mutation> muts, reversed_partiti
         };
         BOOST_TEST_MESSAGE("Consume all, filtered");
         fmr = flat_mutation_reader_from_mutations(muts);
-        muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter));
+        muts2 = fmr.consume_in_thread(flat_stream_consumer(s, reversed), std::move(filter), db::no_timeout);
         BOOST_REQUIRE_EQUAL(muts.size() / 2, muts2.size());
         for (auto j = size_t(1); j < muts.size(); j += 2) {
             BOOST_REQUIRE_EQUAL(muts[j], muts2[j / 2]);
@@ -608,8 +608,8 @@ SEASTAR_TEST_CASE(test_abandoned_flat_mutation_reader_from_mutation) {
     return seastar::async([] {
         for_each_mutation([&] (const mutation& m) {
             auto rd = flat_mutation_reader_from_mutations({mutation(m)});
-            rd().get();
-            rd().get();
+            rd(db::no_timeout).get();
+            rd(db::no_timeout).get();
             // We rely on AddressSanitizer telling us if nothing was leaked.
         });
     });

@@ -109,7 +109,7 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
         rd.consume_pausable([&] (mutation_fragment mf) {
             mfs.emplace_back(std::move(mf));
             return stop_iteration::no;
-        }).get();
+        }, db::no_timeout).get();
 
         for (auto&& mf : mfs) {
             auto refrozen_mf = freeze(s, mf).unfreeze(s);

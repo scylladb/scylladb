@@ -754,7 +754,7 @@ future<compaction_info> compaction::run(std::unique_ptr<compaction> c) {
             // leave this block either successfully or exceptionally with the reader object
             // destroyed.
             auto r = std::move(reader);
-            r.consume_in_thread(std::move(cfc), c->filter_func());
+            r.consume_in_thread(std::move(cfc), c->filter_func(), db::no_timeout);
         } catch (...) {
             delete_sstables_for_interrupted_compaction(c->_info->new_sstables, c->_info->ks, c->_info->cf);
             c = nullptr; // make sure writers are stopped while running in thread context

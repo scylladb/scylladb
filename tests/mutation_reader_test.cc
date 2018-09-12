@@ -1214,11 +1214,11 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }).get();
+            }, db::no_timeout).get();
 
             for (auto&& range : ranges) {
                 auto prange = position_range(range);
-                rd.fast_forward_to(prange).get();
+                rd.fast_forward_to(prange, db::no_timeout).get();
                 rd.consume_pausable([&](mutation_fragment&& mf) {
                     if (!mf.relevant_for_range(*s, prange.start())) {
                         BOOST_FAIL(sprint("Received fragment which is not relevant for range: %s, range: %s", mf, prange));
@@ -1229,14 +1229,14 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
                     }
                     result.partition().apply(*s, std::move(mf));
                     return stop_iteration::no;
-                }).get();
+                }, db::no_timeout).get();
             }
 
             assert_that(result).is_equal_to(expected, ranges);
         };
 
         check_next_partition(combined[0]);
-        rd.fast_forward_to(dht::partition_range::make_singular(keys[2])).get();
+        rd.fast_forward_to(dht::partition_range::make_singular(keys[2]), db::no_timeout).get();
         check_next_partition(combined[2]);
     });
 }
@@ -1281,7 +1281,7 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 }
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }).get();
+            }, db::no_timeout).get();
 
             assert_that(result).is_equal_to(m1 + m2, query::clustering_row_ranges({range}));
         }
@@ -1304,9 +1304,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 BOOST_REQUIRE(!mf.position().has_clustering_key());
                 result.partition().apply(*s, std::move(mf));
                 return stop_iteration::no;
-            }).get();
+            }, db::no_timeout).get();
 
-            rd.fast_forward_to(prange).get();
+            rd.fast_forward_to(prange, db::no_timeout).get();
 
             position_in_partition last_pos = position_in_partition::before_all_clustered_rows();
             auto consume_clustered = [&] (mutation_fragment&& mf) {
@@ -1319,9 +1319,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
                 return stop_iteration::no;
             };
 
-            rd.consume_pausable(consume_clustered).get();
-            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows())).get();
-            rd.consume_pausable(consume_clustered).get();
+            rd.consume_pausable(consume_clustered, db::no_timeout).get();
+            rd.fast_forward_to(position_range(prange.end(), position_in_partition::after_all_clustered_rows()), db::no_timeout).get();
+            rd.consume_pausable(consume_clustered, db::no_timeout).get();
 
             assert_that(result).is_equal_to(m1 + m2);
         }
@@ -1346,7 +1346,7 @@ SEASTAR_TEST_CASE(test_combined_mutation_source_is_a_mutation_source) {
                         mf_m.partition().apply(*s, mf);
                         memtables[source_index++ % memtables.size()]->apply(mf_m);
                         return stop_iteration::no;
-                    }).get();
+                    }, db::no_timeout).get();
                 }
 
                 std::vector<mutation_source> sources;
@@ -1717,7 +1717,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
             auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
                     service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
 
-            reader.fill_buffer().get();
+            reader.fill_buffer(db::no_timeout).get();
 
             BOOST_REQUIRE(reader.is_buffer_full());
             BOOST_REQUIRE(smp::submit_to(shard_of_interest, [remote_control = remote_control.get()] {
@@ -1868,7 +1868,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_destroyed_with_pending_read_ahead) 
         {
             auto reader = make_foreign_reader(s.schema(), std::move(remote_reader));
 
-            reader.fill_buffer().get();
+            reader.fill_buffer(db::no_timeout).get();
 
             BOOST_REQUIRE(!reader.is_buffer_empty());
         }
@@ -1970,7 +1970,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_destroyed_with_pending
         {
             auto reader = make_multishard_combining_reader(s.schema(), query::full_partition_range, s.schema()->full_slice(),
                     service::get_local_sstable_query_read_priority(), partitioner, std::move(factory));
-            reader.fill_buffer().get();
+            reader.fill_buffer(db::no_timeout).get();
             BOOST_REQUIRE(reader.is_buffer_full());
         }
 

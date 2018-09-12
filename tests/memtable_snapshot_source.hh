@@ -78,7 +78,7 @@ private:
         consume_partitions(rd, [&] (mutation&& m) {
             new_mt->apply(std::move(m));
             return stop_iteration::no;
-        }).get();
+        }, db::no_timeout).get();
         _memtables.erase(_memtables.begin(), _memtables.begin() + count);
         _memtables.push_back(new_mt);
     }

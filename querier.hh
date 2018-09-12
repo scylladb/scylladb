@@ -90,7 +90,7 @@ auto consume_page(flat_mutation_reader& reader,
     // on it because it stores references to some of it's own members.
     // Move it to the heap before any consumption begins to avoid
     // accidents.
-    return reader.peek().then([=, &reader, consumer = std::make_unique<Consumer>(std::move(consumer)), &slice] (
+    return reader.peek(timeout).then([=, &reader, consumer = std::make_unique<Consumer>(std::move(consumer)), &slice] (
                 mutation_fragment* next_fragment) mutable {
         const auto next_fragment_kind = next_fragment ? next_fragment->mutation_fragment_kind() : mutation_fragment::kind::partition_end;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_kind, *consumer);
@@ -103,7 +103,7 @@ auto consume_page(flat_mutation_reader& reader,
                 compaction_state,
                 clustering_position_tracker(std::move(consumer), last_ckey));
 
-        return reader.consume(std::move(reader_consumer), is_reversed, timeout).then([last_ckey] (auto&&... results) mutable {
+        return reader.consume(std::move(reader_consumer), timeout, is_reversed).then([last_ckey] (auto&&... results) mutable {
             return make_ready_future<std::optional<clustering_key_prefix>, std::decay_t<decltype(results)>...>(std::move(*last_ckey), std::move(results)...);
         });
     });

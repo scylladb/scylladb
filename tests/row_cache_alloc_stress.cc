@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mo = read_mutation_from_flat_mutation_reader(reader).get0();
+                auto mo = read_mutation_from_flat_mutation_reader(reader, db::no_timeout).get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
                        row_count + 1 /* one row was already in cache before update()*/);
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
             for (auto&& key : keys) {
                 auto range = dht::partition_range::make_singular(key);
                 auto reader = cache.make_reader(s, range);
-                auto mfopt = reader().get0();
+                auto mfopt = reader(db::no_timeout).get0();
                 assert(mfopt);
                 assert(mfopt->is_partition_start());
             }
@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
 
                 try {
                     auto reader = cache.make_reader(s, range);
-                    assert(!reader().get0());
+                    assert(!reader(db::no_timeout).get0());
                     auto evicted_from_cache = logalloc::segment_size + large_cell_size;
                     new char[evicted_from_cache + logalloc::segment_size];
                     assert(false); // The test is not invoking the case which it's supposed to test

@@ -3548,7 +3548,7 @@ future<> sstable::write_components(
     }
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), cfg, stats, &pc] () mutable {
         auto wr = get_writer(*schema, estimated_partitions, cfg, stats, pc);
-        mr.consume_in_thread(std::move(wr));
+        mr.consume_in_thread(std::move(wr), db::no_timeout);
     });
 }
 
