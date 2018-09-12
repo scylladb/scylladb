@@ -30,6 +30,7 @@ Options:
   --root /path/to/root     alternative install root (default /)
   --prefix /prefix         directory prefix (default /usr)
   --housekeeping           enable housekeeping service
+  --target centos          specify target distribution
   --help                   this helpful message
 EOF
     exit 1
@@ -38,6 +39,7 @@ EOF
 root=/
 prefix=/usr
 housekeeping=false
+target=centos
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -53,6 +55,10 @@ while [ $# -gt 0 ]; do
             housekeeping=true
             shift 1
             ;;
+        "--target")
+            target="$2"
+            shift 2
+            ;;
         "--help")
             shift 1
 	    print_usage
@@ -67,9 +73,8 @@ rprefix="$root/$prefix"
 retc="$root/etc"
 rdoc="$rprefix/share/doc"
 
-. /etc/os-release
-
-MUSTACHE_DIST="\"redhat\": true"
+MUSTACHE_DIST="\"redhat\": true, \"$target\": true, \"target\": \"$target\""
+mkdir -p build
 pystache dist/common/systemd/scylla-server.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-server.service
 pystache dist/common/systemd/scylla-housekeeping-daily.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-daily.service
 pystache dist/common/systemd/scylla-housekeeping-restart.service.mustache "{ $MUSTACHE_DIST }" > build/scylla-housekeeping-restart.service
@@ -127,7 +132,7 @@ cp -r scylla-housekeeping "$rprefix"/lib/scylla/scylla-housekeeping
 install -d "$rprefix"/sbin
 cp -P dist/common/sbin/* "$rprefix"/sbin
 
-if [[ "$ID" = fedora && "$VERSION_ID" -ge 27 ]]; then
+if [[ "$target" = "fedora" ]]; then
     install -m755 scylla-gdb.py -Dt "$rprefix"/lib/scylla/
 fi
 
