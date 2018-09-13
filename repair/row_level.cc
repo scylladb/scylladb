@@ -20,7 +20,11 @@
  */
 
 #include "repair/repair.hh"
+#include "message/messaging_service.hh"
 #include <vector>
+#include <algorithm>
+
+extern logging::logger rlogger;
 
 struct shard_config {
     unsigned shard;
@@ -35,3 +39,31 @@ static const std::vector<row_level_diff_detect_algorithm>& suportted_diff_detect
     };
     return _algorithms;
 };
+
+static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(const std::vector<gms::inet_address>& nodes) {
+    std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms(nodes.size());
+    parallel_for_each(boost::irange(size_t(0), nodes.size()), [&nodes_algorithms, &nodes] (size_t idx) {
+        return netw::get_local_messaging_service().send_repair_get_diff_algorithms(netw::messaging_service::msg_addr(nodes[idx])).then(
+                [&nodes_algorithms, &nodes, idx] (std::vector<row_level_diff_detect_algorithm> algorithms) {
+            std::sort(algorithms.begin(), algorithms.end());
+            nodes_algorithms[idx] = std::move(algorithms);
+            rlogger.trace("Got node_algorithms={}, from node={}", nodes_algorithms[idx], nodes[idx]);
+        });
+    }).get();
+
+    auto common_algorithms = suportted_diff_detect_algorithms();
+    for (auto& algorithms : nodes_algorithms) {
+        std::sort(common_algorithms.begin(), common_algorithms.end());
+        std::vector<row_level_diff_detect_algorithm> results;
+        std::set_intersection(algorithms.begin(), algorithms.end(),
+                common_algorithms.begin(), common_algorithms.end(),
+                std::back_inserter(results));
+        common_algorithms = std::move(results);
+    }
+    rlogger.trace("peer_algorithms={}, local_algorithms={}, common_diff_detect_algorithms={}",
+            nodes_algorithms, suportted_diff_detect_algorithms(), common_algorithms);
+    if (common_algorithms.empty()) {
+        throw std::runtime_error("Can not find row level repair diff detect algorithm");
+    }
+    return common_algorithms.back();
+}
