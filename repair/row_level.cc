@@ -21,11 +21,13 @@
 
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
+#include "mutation_fragment.hh"
 #include "xx_hasher.hh"
 #include "dht/i_partitioner.hh"
 #include <vector>
 #include <algorithm>
 #include <random>
+#include <optional>
 
 extern logging::logger rlogger;
 
@@ -152,5 +154,46 @@ private:
         if (ps.partition_tombstone()) {
             consume(ps.partition_tombstone());
         }
+    }
+};
+
+class repair_row {
+    frozen_mutation_fragment _fm;
+    lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
+    repair_sync_boundary _boundary;
+    repair_hash _hash;
+    lw_shared_ptr<mutation_fragment> _mf;
+public:
+    repair_row() = delete;
+    repair_row(frozen_mutation_fragment fm,
+            position_in_partition pos,
+            lw_shared_ptr<const decorated_key_with_hash> dk_with_hash,
+            repair_hash hash,
+            lw_shared_ptr<mutation_fragment> mf = {})
+            : _fm(std::move(fm))
+            , _dk_with_hash(std::move(dk_with_hash))
+            , _boundary({_dk_with_hash->dk, std::move(pos)})
+            , _hash(std::move(hash))
+            , _mf(std::move(mf)) {
+    }
+    mutation_fragment& get_mutation_fragment() {
+        if (!_mf) {
+            throw std::runtime_error("get empty mutation_fragment");
+        }
+        return *_mf;
+    }
+    frozen_mutation_fragment& get_frozen_mutation() { return _fm; }
+    const frozen_mutation_fragment& get_frozen_mutation() const { return _fm; }
+    const lw_shared_ptr<const decorated_key_with_hash>& get_dk_with_hash() const {
+        return _dk_with_hash;
+    }
+    size_t size() const {
+        return _fm.representation().size();
+    }
+    const repair_sync_boundary& boundary() const {
+        return _boundary;
+    }
+    const repair_hash& hash() const {
+        return _hash;
     }
 };
