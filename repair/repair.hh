@@ -175,6 +175,7 @@ public:
     semaphore sp_parallelism_semaphore{1};
     lw_shared_ptr<streaming::stream_plan> _sp_in;
     lw_shared_ptr<streaming::stream_plan> _sp_out;
+    repair_stats _stats;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -191,6 +192,9 @@ public:
         const std::vector<gms::inet_address>& neighbors_out);
     void abort();
     void check_in_abort();
+    void update_statistics(const repair_stats& stats) {
+        _stats.add(stats);
+    }
 };
 
 future<uint64_t> estimate_partitions(seastar::sharded<database>& db, const sstring& keyspace,
