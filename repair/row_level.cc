@@ -23,6 +23,7 @@
 #include "message/messaging_service.hh"
 #include <vector>
 #include <algorithm>
+#include <random>
 
 extern logging::logger rlogger;
 
@@ -66,4 +67,10 @@ static row_level_diff_detect_algorithm get_common_diff_detect_algorithm(const st
         throw std::runtime_error("Can not find row level repair diff detect algorithm");
     }
     return common_algorithms.back();
+}
+
+static uint64_t get_random_seed() {
+    static thread_local std::default_random_engine random_engine{std::random_device{}()};
+    static thread_local std::uniform_int_distribution<uint64_t> random_dist{};
+    return random_dist(random_engine);
 }
