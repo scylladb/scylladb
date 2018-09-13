@@ -461,3 +461,45 @@ SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_secondary_index_collections) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table t (p int primary key, s1 set<int>, m1 map<int, text>, l1 list<int>, s2 frozen<set<int>>, m2 frozen<map<int, text>>, l2 frozen<list<int>>)").get();
+
+        //NOTICE(sarna): should be lifted after issue #2962 is resolved
+        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(s1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(m1)").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("create index on t(l1)").get(), exceptions::invalid_request_exception);
+
+        e.execute_cql("create index on t(FULL(s2))").get();
+        e.execute_cql("create index on t(FULL(m2))").get();
+        e.execute_cql("create index on t(FULL(l2))").get();
+
+        e.execute_cql("insert into t(p, s2, m2, l2) values (1, {1}, {1: 'one', 2: 'two'}, [2])").get();
+        e.execute_cql("insert into t(p, s2, m2, l2) values (2, {2}, {3: 'three'}, [3, 4, 5])").get();
+        e.execute_cql("insert into t(p, s2, m2, l2) values (3, {3}, {5: 'five', 7: 'seven'}, [7, 8, 9])").get();
+
+        auto set_type = set_type_impl::get_instance(int32_type, true);
+        auto map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
+        auto list_type = list_type_impl::get_instance(int32_type, true);
+
+        eventually([&] {
+            auto res = e.execute_cql("SELECT p from t where s2 = {2}").get0();
+            assert_that(res).is_rows().with_rows({{{int32_type->decompose(2)}}});
+            res = e.execute_cql("SELECT p from t where s2 = {}").get0();
+            assert_that(res).is_rows().with_size(0);
+        });
+        eventually([&] {
+            auto res = e.execute_cql("SELECT p from t where m2 = {5: 'five', 7: 'seven'}").get0();
+            assert_that(res).is_rows().with_rows({{{int32_type->decompose(3)}}});
+            res = e.execute_cql("SELECT p from t where m2 = {1: 'one', 2: 'three'}").get0();
+            assert_that(res).is_rows().with_size(0);
+        });
+        eventually([&] {
+            auto res = e.execute_cql("SELECT p from t where l2 = [2]").get0();
+            assert_that(res).is_rows().with_rows({{{int32_type->decompose(1)}}});
+            res = e.execute_cql("SELECT p from t where l2 = [3]").get0();
+            assert_that(res).is_rows().with_size(0);
+        });
+    });
+}
