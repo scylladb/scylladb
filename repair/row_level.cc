@@ -197,3 +197,80 @@ public:
         return _hash;
     }
 };
+
+class repair_reader {
+public:
+using is_local_reader = bool_class<class is_local_reader_tag>;
+
+private:
+    schema_ptr _schema;
+    dht::partition_range _range;
+    // Used to find the range that repair master will work on
+    dht::selective_token_range_sharder _sharder;
+    // Seed for the repair row hashing
+    uint64_t _seed;
+    // Local reader or multishard reader to read the range
+    flat_mutation_reader _reader;
+    // Current partition read from disk
+    lw_shared_ptr<const decorated_key_with_hash> _current_dk;
+
+public:
+    repair_reader(
+            seastar::sharded<database>& db,
+            column_family& cf,
+            dht::token_range range,
+            dht::i_partitioner& local_partitioner,
+            dht::i_partitioner& remote_partitioner,
+            unsigned remote_shard,
+            uint64_t seed,
+            is_local_reader local_reader)
+            : _schema(cf.schema())
+            , _range(dht::to_partition_range(range))
+            , _sharder(remote_partitioner, range, remote_shard)
+            , _seed(seed)
+            , _reader(make_reader(db, cf, local_partitioner, local_reader)) {
+    }
+
+private:
+    flat_mutation_reader
+    make_reader(seastar::sharded<database>& db,
+            column_family& cf,
+            dht::i_partitioner& local_partitioner,
+            is_local_reader local_reader) {
+        if (local_reader) {
+            return cf.make_streaming_reader(_schema, _range);
+        }
+        return make_multishard_streaming_reader(db, local_partitioner, _schema, [this] {
+            auto shard_range = _sharder.next();
+            if (shard_range) {
+                return std::optional<dht::partition_range>(dht::to_partition_range(*shard_range));
+            }
+            return std::optional<dht::partition_range>();
+        });
+    }
+
+public:
+    future<mutation_fragment_opt>
+    read_mutation_fragment() {
+        return _reader(db::no_timeout);
+    }
+
+    lw_shared_ptr<const decorated_key_with_hash>& get_current_dk() {
+        return _current_dk;
+    }
+
+    void set_current_dk(const dht::decorated_key& key) {
+        _current_dk = make_lw_shared<const decorated_key_with_hash>(*_schema, key, _seed);
+    }
+
+    void clear_current_dk() {
+        _current_dk = {};
+    }
+
+    void check_current_dk() {
+        if (!_current_dk) {
+            throw std::runtime_error("Current partition_key is unknown");
+        }
+    }
+
+};
