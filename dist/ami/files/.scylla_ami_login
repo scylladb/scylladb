@@ -94,7 +94,7 @@ if __name__ == '__main__':
     colorprint(MSG_HEADER)
     aws = aws_instance()
     if not aws.is_supported_instance_class():
-        colorprint(MSG_UNSUPPORTED_INSTANCE_TYPE.format(type=aws.instance_class()))
+        colorprint(MSG_UNSUPPORTED_INSTANCE_TYPE, type=aws.instance_class())
     else:
         setup = systemd_unit('scylla-ami-setup.service')
         res = setup.is_active()
