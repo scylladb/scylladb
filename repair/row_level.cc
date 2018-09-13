@@ -1128,3 +1128,94 @@ public:
         return apply_rows(std::move(rows), from, update_working_row_buf::no, update_peer_row_hash_sets::no);
     }
 };
+
+future<> repair_init_messaging_service_handler() {
+    return netw::get_messaging_service().invoke_on_all([] (auto& ms) {
+        ms.register_repair_get_full_row_hashes([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] {
+                auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                std::unordered_set<repair_hash> hashes = rm->request_full_row_hashes_handler();
+                return make_ready_future<std::unordered_set<repair_hash>>(std::move(hashes));
+            }) ;
+        });
+        ms.register_repair_get_combined_row_hash([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                std::optional<repair_sync_boundary> common_sync_boundary) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
+                    common_sync_boundary = std::move(common_sync_boundary)] () mutable {
+                auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                return rm->request_combined_row_hash_handler(std::move(common_sync_boundary));
+            });
+        });
+        ms.register_repair_get_sync_boundary([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                std::optional<repair_sync_boundary> skipped_sync_boundary) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id,
+                    skipped_sync_boundary = std::move(skipped_sync_boundary)] () mutable {
+                auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                return rm->request_sync_boundary_handler(std::move(skipped_sync_boundary));
+            });
+        });
+        ms.register_repair_get_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                std::unordered_set<repair_hash> set_diff, bool needs_all_rows) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, set_diff = std::move(set_diff), needs_all_rows] () mutable {
+                auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                return rm->request_row_diff_handler(set_diff, repair_meta::needs_all_rows_t(needs_all_rows));
+            });
+        });
+        ms.register_repair_put_row_diff([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                repair_rows_on_wire row_diff) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, row_diff = std::move(row_diff)] () mutable {
+                auto rm = repair_meta::get_repair_meta(from, repair_meta_id);
+                return rm->send_row_diff_handler(std::move(row_diff), from);
+            });
+        });
+        ms.register_repair_row_level_start([] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
+                sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed,
+                unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, ks_name, cf_name,
+                    range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, remote_partitioner_name] () mutable {
+                return repair_meta::repair_row_level_start_handler(from, repair_meta_id, std::move(ks_name),
+                        std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
+                        shard_config{remote_shard, remote_shard_count, remote_ignore_msb, std::move(remote_partitioner_name)});
+            });
+        });
+        ms.register_repair_row_level_stop([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                sstring ks_name, sstring cf_name, dht::token_range range) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, ks_name, cf_name, range] () mutable {
+                return repair_meta::repair_row_level_stop_handler(from, repair_meta_id,
+                        std::move(ks_name), std::move(cf_name), std::move(range));
+            });
+        });
+        ms.register_repair_get_estimated_partitions([] (const rpc::client_info& cinfo, uint32_t repair_meta_id) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id] () mutable {
+                return repair_meta::repair_get_estimated_partitions_handler(from, repair_meta_id);
+            });
+        });
+        ms.register_repair_set_estimated_partitions([] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+                uint64_t estimated_partitions) {
+            auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+            auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+            return smp::submit_to(src_cpu_id % smp::count, [from, repair_meta_id, estimated_partitions] () mutable {
+                return repair_meta::repair_set_estimated_partitions_handler(from, repair_meta_id, estimated_partitions);
+            });
+        });
+        ms.register_repair_get_diff_algorithms([] (const rpc::client_info& cinfo) {
+            return make_ready_future<std::vector<row_level_diff_detect_algorithm>>(suportted_diff_detect_algorithms());
+        });
+    });
+}
