@@ -115,6 +115,37 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         const sstring& keyspace, const sstring& cf,
         const ::dht::token_range& range, repair_checksum rt);
 
+class repair_stats {
+public:
+    uint64_t round_nr = 0;
+    uint64_t round_nr_fast_path_already_synced = 0;
+    uint64_t round_nr_fast_path_same_combined_hashes= 0;
+    uint64_t round_nr_slow_path = 0;
+
+    uint64_t rpc_call_nr = 0;
+
+    uint64_t tx_hashes_nr = 0;
+    uint64_t rx_hashes_nr = 0;
+
+    uint64_t tx_row_nr = 0;
+    uint64_t rx_row_nr = 0;
+
+    uint64_t tx_row_bytes = 0;
+    uint64_t rx_row_bytes = 0;
+
+    std::map<gms::inet_address, uint64_t> row_from_disk_bytes;
+    std::map<gms::inet_address, uint64_t> row_from_disk_nr;
+
+    std::map<gms::inet_address, uint64_t> tx_row_nr_peer;
+    std::map<gms::inet_address, uint64_t> rx_row_nr_peer;
+
+    lowres_clock::time_point start_time = lowres_clock::now();
+
+public:
+    void add(const repair_stats& o);
+    sstring get_stats();
+};
+
 class repair_info {
 public:
     seastar::sharded<database>& db;

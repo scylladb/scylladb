@@ -1002,6 +1002,67 @@ static sstring get_local_dc() {
             utils::fb_utilities::get_broadcast_address());
 }
 
+void repair_stats::add(const repair_stats& o) {
+    round_nr += o.round_nr;
+    round_nr_fast_path_already_synced += o.round_nr_fast_path_already_synced;
+    round_nr_fast_path_same_combined_hashes += o.round_nr_fast_path_same_combined_hashes;
+    round_nr_slow_path += o.round_nr_slow_path;
+    rpc_call_nr += o.rpc_call_nr;
+    tx_hashes_nr += o.tx_hashes_nr;
+    rx_hashes_nr += o.rx_hashes_nr;
+    tx_row_nr += o.tx_row_nr;
+    rx_row_nr += o.rx_row_nr;
+    tx_row_bytes += o.tx_row_bytes;
+    rx_row_bytes += o.rx_row_bytes;
+    auto add_map = [] (auto& target, auto& src) {
+         for (const auto& [k, v] : src) {
+             target[k] += v;
+         }
+    };
+    add_map(row_from_disk_bytes, o.row_from_disk_bytes);
+    add_map(row_from_disk_nr, o.row_from_disk_nr);
+    add_map(tx_row_nr_peer, o.tx_row_nr_peer);
+    add_map(rx_row_nr_peer, o.rx_row_nr_peer);
+}
+
+sstring repair_stats::get_stats() {
+    std::map<gms::inet_address, float> row_from_disk_bytes_per_sec;
+    std::map<gms::inet_address, float> row_from_disk_rows_per_sec;
+    auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(lowres_clock::now() - start_time).count();
+    for (auto& x : row_from_disk_bytes) {
+        if (std::fabs(duration) > FLT_EPSILON) {
+            row_from_disk_bytes_per_sec[x.first] = x.second / duration / 1024 / 1024;
+        } else {
+            row_from_disk_bytes_per_sec[x.first] = 0;
+        }
+    }
+    for (auto& x : row_from_disk_nr) {
+        if (std::fabs(duration) > FLT_EPSILON) {
+            row_from_disk_rows_per_sec[x.first] = x.second / duration;
+        } else {
+            row_from_disk_rows_per_sec[x.first] = 0;
+        }
+    }
+    return format("round_nr={}, round_nr_fast_path_already_synced={}, round_nr_fast_path_same_combined_hashes={}, round_nr_slow_path={}, rpc_call_nr={}, tx_hashes_nr={}, rx_hashes_nr={}, duration={} seconds, tx_row_nr={}, rx_row_nr={}, tx_row_bytes={}, rx_row_bytes={}, row_from_disk_bytes={}, row_from_disk_nr={}, row_from_disk_bytes_per_sec={} MiB/s, row_from_disk_rows_per_sec={} Rows/s, tx_row_nr_peer={}, rx_row_nr_peer={}",
+            round_nr,
+            round_nr_fast_path_already_synced,
+            round_nr_fast_path_same_combined_hashes,
+            round_nr_slow_path,
+            rpc_call_nr,
+            tx_hashes_nr,
+            rx_hashes_nr,
+            duration,
+            tx_row_nr,
+            rx_row_nr,
+            tx_row_bytes,
+            rx_row_bytes,
+            row_from_disk_bytes,
+            row_from_disk_nr,
+            row_from_disk_bytes_per_sec,
+            row_from_disk_rows_per_sec,
+            tx_row_nr_peer,
+            rx_row_nr_peer);
+}
 
 struct repair_options {
     // If primary_range is true, we should perform repair only on this node's
