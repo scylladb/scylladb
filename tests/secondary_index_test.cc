@@ -342,7 +342,7 @@ SEASTAR_TEST_CASE(test_index_with_partition_key) {
 
         // Queries that restrict only a part of the partition key and an index require filtering, because we need to compute token
         // in order to create a valid index view query
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * from tab WHERE a = 1 and e = 5"), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * from tab WHERE a = 1 and e = 5").get(), exceptions::invalid_request_exception);
 
         // Indexed queries with full primary key are allowed without filtering as well
         eventually([&] {
@@ -362,7 +362,7 @@ SEASTAR_TEST_CASE(test_index_with_partition_key) {
         });
 
         // This query needs filtering, because clustering key restrictions do not form a prefix
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * from tab WHERE a = 1 and b = 2 and d = 4 and e = 5"), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * from tab WHERE a = 1 and b = 2 and d = 4 and e = 5").get(), exceptions::invalid_request_exception);
         eventually([&] {
             auto res = e.execute_cql("SELECT * from tab WHERE a = 1 and b = 2 and d = 4 and e = 5 ALLOW FILTERING").get0();
             assert_that(res).is_rows().with_rows({
