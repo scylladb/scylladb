@@ -20,6 +20,7 @@
  */
 
 #include "repair.hh"
+#include "repair/row_level.hh"
 #include "range_split.hh"
 
 #include "atomic_cell_hash.hh"
@@ -653,7 +654,8 @@ repair_info::repair_info(seastar::sharded<database>& db_,
     , id(id_)
     , shard(engine().cpu_id())
     , data_centers(data_centers_)
-    , hosts(hosts_) {
+    , hosts(hosts_)
+    , _row_level_repair(service::get_local_storage_service().cluster_supports_row_level_repair()) {
 }
 
 future<> repair_info::do_streaming() {
@@ -703,6 +705,8 @@ future<> repair_info::do_streaming() {
 }
 
 void repair_info::check_failed_ranges() {
+    rlogger.info("repair {} on shard {} stats: ranges_nr={}, sub_ranges_nr={}, {}",
+        id, shard, ranges.size(), _sub_ranges_nr, _stats.get_stats());
     if (nr_failed_ranges) {
         rlogger.info("repair {} on shard {} failed - {} ranges failed", id, shard, nr_failed_ranges);
         throw std::runtime_error(format("repair {:d} on shard {:d} failed to do checksum for {:d} sub ranges", id, shard, nr_failed_ranges));
@@ -958,7 +962,12 @@ static future<> repair_range(repair_info& ri, const dht::token_range& range) {
     return do_with(get_neighbors(ri.db.local(), ri.keyspace, range, ri.data_centers, ri.hosts), [&ri, range, id] (const auto& neighbors) {
         rlogger.debug("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, ri.keyspace, ri.cfs);
         return do_for_each(ri.cfs.begin(), ri.cfs.end(), [&ri, &neighbors, range] (auto&& cf) {
-            return repair_cf_range(ri, cf, range, neighbors);
+            ri._sub_ranges_nr++;
+            if (ri.row_level_repair()) {
+                return repair_cf_range_row_level(ri, cf, range, neighbors);
+            } else {
+                return repair_cf_range(ri, cf, range, neighbors);
+            }
         });
     });
 }
@@ -1237,38 +1246,58 @@ private:
     }
 };
 
+
+static thread_local semaphore ranges_parallelism_semaphore(16);
+
+static future<> do_repair_ranges(lw_shared_ptr<repair_info> ri) {
+    if (ri->row_level_repair()) {
+        // repair all the ranges in limited parallelism
+        return parallel_for_each(ri->ranges, [ri] (auto&& range) {
+            return with_semaphore(ranges_parallelism_semaphore, 1, [ri, &range] {
+                ri->check_in_abort();
+                ri->ranges_index++;
+                rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
+                    ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
+                return repair_range(*ri, range);
+            });
+        });
+    } else {
+        // repair all the ranges in sequence
+        return do_for_each(ri->ranges, [ri] (auto&& range) {
+            ri->check_in_abort();
+            ri->ranges_index++;
+            rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
+                ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
+            return do_with(dht::selective_token_range_sharder(range, ri->shard), [ri] (auto& sharder) {
+                return repeat([ri, &sharder] () {
+                    check_in_shutdown();
+                    ri->check_in_abort();
+                    auto range_shard = sharder.next();
+                    if (range_shard) {
+                        return repair_range(*ri, *range_shard).then([] {
+                            return make_ready_future<stop_iteration>(stop_iteration::no);
+                        });
+                    } else {
+                        return make_ready_future<stop_iteration>(stop_iteration::yes);
+                    }
+                });
+            });
+        }).then([ri] {
+            // Do streaming for the remaining ranges we do not stream in
+            // repair_cf_range
+            ri->check_in_abort();
+            return ri->do_streaming();
+        });
+    }
+}
+
 // repair_ranges repairs a list of token ranges, each assumed to be a token
 // range for which this node holds a replica, and, importantly, each range
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(lw_shared_ptr<repair_info> ri) {
     repair_tracker.add_repair_info(ri->id, ri);
-    // repair all the ranges in sequence
-    return do_for_each(ri->ranges, [ri] (auto&& range) {
-        ri->check_in_abort();
-        ri->ranges_index++;
-        rlogger.info("Repair {} out of {} ranges, id={}, shard={}, keyspace={}, table={}, range={}",
-            ri->ranges_index, ri->ranges.size(), ri->id, ri->shard, ri->keyspace, ri->cfs, range);
-        return do_with(dht::selective_token_range_sharder(range, ri->shard), [ri] (auto& sharder) {
-            return repeat([ri, &sharder] () {
-                check_in_shutdown();
-                ri->check_in_abort();
-                auto range_shard = sharder.next();
-                if (range_shard) {
-                    return repair_range(*ri, *range_shard).then([] {
-                        return make_ready_future<stop_iteration>(stop_iteration::no);
-                    });
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        });
-    }).then([ri] {
-        // Do streaming for the remaining ranges we do not stream in
-        // repair_cf_range
-        ri->check_in_abort();
-        return ri->do_streaming();
-    }).then([ri] {
+    return do_repair_ranges(ri).then([ri] {
         ri->check_failed_ranges();
         repair_tracker.remove_repair_info(ri->id);
         return make_ready_future<>();

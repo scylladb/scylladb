@@ -174,6 +174,7 @@ void storage_service::enable_all_features() {
     _la_sstable_feature.enable();
     _stream_with_rpc_stream_feature.enable();
     _mc_sstable_feature.enable();
+    _row_level_repair_feature.enable();
 }
 
 enum class node_external_status {

@@ -176,6 +176,8 @@ public:
     lw_shared_ptr<streaming::stream_plan> _sp_in;
     lw_shared_ptr<streaming::stream_plan> _sp_out;
     repair_stats _stats;
+    bool _row_level_repair;
+    uint64_t _sub_ranges_nr = 0;
 public:
     repair_info(seastar::sharded<database>& db_,
             const sstring& keyspace_,
@@ -194,6 +196,9 @@ public:
     void check_in_abort();
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
+    }
+    bool row_level_repair() {
+        return _row_level_repair;
     }
 };
 

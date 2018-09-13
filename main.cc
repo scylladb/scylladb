@@ -48,6 +48,7 @@
 #include "init.hh"
 #include "release.hh"
 #include "repair/repair.hh"
+#include "repair/row_level.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
 #include <sys/time.h>
@@ -757,6 +758,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).get();
+            repair_init_messaging_service_handler().get();
             supervisor::notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_messaging_service_part().get();
