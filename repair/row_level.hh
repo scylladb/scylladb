@@ -21,4 +21,13 @@
 
 #pragma once
 
+#include <vector>
+#include "gms/inet_address.hh"
+
 future<> repair_init_messaging_service_handler();
+
+class repair_info;
+
+future<> repair_cf_range_row_level(repair_info& ri,
+        sstring cf_name, dht::token_range range,
+        const std::vector<gms::inet_address>& all_peer_nodes);

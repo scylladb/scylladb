@@ -1219,3 +1219,340 @@ future<> repair_init_messaging_service_handler() {
         });
     });
 }
+
+class row_level_repair {
+    repair_info& _ri;
+    sstring _cf_name;
+    dht::token_range _range;
+    std::vector<gms::inet_address> _all_live_peer_nodes;
+    column_family& _cf;
+
+    // All particular peer nodes not including the node itself.
+    std::vector<gms::inet_address> _all_nodes;
+
+    // Repair master and followers will propose a sync boundary. Each of them
+    // read N bytes of rows from disk, the row with largest
+    // `position_in_partition` value is the proposed sync boundary of that
+    // node. The repair master uses `request_sync_boundary` rpc call to
+    // get all the proposed sync boundary and stores in in
+    // `_sync_boundaries`. The `request_sync_boundary` rpc call also
+    // returns the combined hashes and the total size for the rows which are
+    // in the `_row_buf`. `_row_buf` buffers the rows read from sstable. It
+    // contains rows at most of `_max_row_buf_size` bytes.
+    // If all the peers return the same `_sync_boundaries` and
+    // `_combined_hashes`, we think the rows are synced.
+    // If not, we proceed to the next step.
+    std::vector<repair_sync_boundary> _sync_boundaries;
+    std::vector<repair_hash> _combined_hashes;
+
+    // `common_sync_boundary` is the boundary all the peers agrees on
+    std::optional<repair_sync_boundary> _common_sync_boundary = {};
+
+    // `_skipped_sync_boundary` is used in case we find the range is synced
+    // only with the `request_sync_boundary` rpc call. We use it to make
+    // sure the remote peers update the `_current_sync_boundary` and
+    // `_last_sync_boundary` correctly.
+    std::optional<repair_sync_boundary> _skipped_sync_boundary = {};
+
+    // If the total size of the `_row_buf` on either of the nodes is zero,
+    // we set this flag, which is an indication that rows are not synced.
+    bool _zero_rows;
+
+    // Sum of estimated_partitions on all peers
+    uint64_t _estimated_partitions = 0;
+
+    // A flag indicates any error during the repair
+    bool _failed = false;
+
+    // Max buffer size per repair round
+    static constexpr size_t _max_row_buf_size = 256 * 1024;
+
+    // Seed for the repair row hashing. If we ever had a hash conflict for a row
+    // and we are not using stable hash, there is chance we will fix the row in
+    // the next repair.
+    uint64_t _seed;
+
+public:
+    row_level_repair(repair_info& ri,
+            sstring cf_name,
+            dht::token_range range,
+            std::vector<gms::inet_address> all_live_peer_nodes)
+        : _ri(ri)
+        , _cf_name(std::move(cf_name))
+        , _range(std::move(range))
+        , _all_live_peer_nodes(std::move(all_live_peer_nodes))
+        , _cf(_ri.db.local().find_column_family(_ri.keyspace, _cf_name))
+        , _all_nodes(_all_live_peer_nodes)
+        , _seed(get_random_seed()) {
+    }
+
+private:
+    enum class op_status {
+        next_round,
+        next_step,
+        all_done,
+    };
+
+    // Step A: Negotiate sync boundary to use
+    op_status negotiate_sync_boundary(repair_meta& master) {
+        _ri.check_in_abort();
+        _sync_boundaries.clear();
+        _combined_hashes.clear();
+        _zero_rows = false;
+        rlogger.debug("ROUND {}, _last_sync_boundary={}, _current_sync_boundary={}, _skipped_sync_boundary={}",
+                master.stats().round_nr, master.last_sync_boundary(), master.current_sync_boundary(), _skipped_sync_boundary);
+        master.stats().round_nr++;
+        parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
+            // By calling `request_sync_boundary`, the `_last_sync_boundary`
+            // is moved to the `_current_sync_boundary` or
+            // `_skipped_sync_boundary` if it is not std::nullopt.
+            return master.request_sync_boundary(node, _skipped_sync_boundary).then([&, this] (get_sync_boundary_response res) {
+                master.stats().row_from_disk_bytes[node] += res.new_rows_size;
+                master.stats().row_from_disk_nr[node] += res.new_rows_nr;
+                if (res.boundary && res.row_buf_size > 0) {
+                    _sync_boundaries.push_back(*res.boundary);
+                    _combined_hashes.push_back(res.row_buf_combined_csum);
+                } else {
+                    // row_size equals 0 means there is no data from on
+                    // that node, so we ignore the sync boundary of
+                    // this node when calculating common sync boundary
+                    _zero_rows = true;
+                }
+                rlogger.debug("Called master.request_sync_boundary for node {} sb={}, combined_csum={}, row_size={}, zero_rows={}, skipped_sync_boundary={}",
+                    node, res.boundary, res.row_buf_combined_csum, res.row_buf_size, _zero_rows, _skipped_sync_boundary);
+            });
+        }).get();
+        rlogger.debug("sync_boundaries nr={}, combined_hashes nr={}",
+            _sync_boundaries.size(), _combined_hashes.size());
+        if (!_sync_boundaries.empty()) {
+            // We have data to sync between (_last_sync_boundary, _current_sync_boundary]
+            auto res = master.get_common_sync_boundary(_zero_rows, _sync_boundaries, _combined_hashes);
+            _common_sync_boundary = res.first;
+            bool already_synced = res.second;
+            rlogger.debug("Calling master._get_common_sync_boundary: common_sync_boundary={}, already_synced={}",
+                    _common_sync_boundary, already_synced);
+            // If rows between (_last_sync_boundary, _current_sync_boundary] are synced, goto first step
+            // This is the first fast path.
+            if (already_synced) {
+                _skipped_sync_boundary = _common_sync_boundary;
+                rlogger.debug("Skip set skipped_sync_boundary={}", _skipped_sync_boundary);
+                master.stats().round_nr_fast_path_already_synced++;
+                return op_status::next_round;
+            } else {
+                _skipped_sync_boundary = std::nullopt;
+            }
+        } else {
+            master.stats().round_nr_fast_path_already_synced++;
+            // We are done with this range because all the nodes have no more data.
+            return op_status::all_done;
+        }
+        return op_status::next_step;
+    }
+
+    // Step B: Get missing rows from peer nodes so that local node contains all the rows
+    op_status get_missing_rows_from_follower_nodes(repair_meta& master) {
+        _ri.check_in_abort();
+        // `combined_hashes` contains the combined hashes for the
+        // `_working_row_buf`. Like `_row_buf`, `_working_row_buf` contains
+        // rows which are within the (_last_sync_boundary, _current_sync_boundary]
+        // By calling `request_combined_row_hash(_common_sync_boundary)`,
+        // all the nodes move the `_current_sync_boundary` to `_common_sync_boundary`,
+        // Rows within the (_last_sync_boundary, _current_sync_boundary] are
+        // moved from the `_row_buf` to `_working_row_buf`.
+        std::vector<repair_hash> combined_hashes;
+        combined_hashes.resize(_all_nodes.size());
+        parallel_for_each(boost::irange(size_t(0), _all_nodes.size()), [&, this] (size_t idx) {
+            // Request combined hashes from all nodes between (_last_sync_boundary, _current_sync_boundary]
+            // Each node will
+            // - Set `_current_sync_boundary` to `_common_sync_boundary`
+            // - Move rows from `_row_buf` to `_working_row_buf`
+            // But the full hashes (each and every hashes for the rows in
+            // the `_working_row_buf`) are not returned until repair master
+            // explicitly requests with request_full_row_hashes() below as
+            // an optimization. Because if the combined_hashes from all
+            // peers are identical, we think rows in the `_working_row_buff`
+            // are identical, there is no need to transfer each and every
+            // row hashes to the repair master.
+            return master.request_combined_row_hash(_common_sync_boundary, _all_nodes[idx]).then([&, this, idx] (repair_hash h) {
+                rlogger.debug("Calling master.request_combined_row_hash for node {}, got hash={}", _all_nodes[idx], h);
+                combined_hashes[idx]= std::move(h);
+            });
+        }).get();
+
+        // If all the peers has the same combined_hashes. This means they contain
+        // the identical rows. So there is no need to sync for this sync boundary.
+        bool same_combined_hashes = std::adjacent_find(combined_hashes.begin(), combined_hashes.end(),
+            std::not_equal_to<repair_hash>()) == combined_hashes.end();
+        if (same_combined_hashes) {
+            // `_working_row_buf` on all the nodes are the same
+            // This is the second fast path.
+            master.stats().round_nr_fast_path_same_combined_hashes++;
+            return op_status::next_round;
+        }
+
+        master.reset_peer_row_hash_sets();
+        // Note: We can not work on _all_live_peer_nodes in parallel,
+        // because syncing with _all_live_peer_nodes in serial avoids
+        // getting the same rows from more than one peers.
+        for (unsigned node_idx = 0; node_idx < _all_live_peer_nodes.size(); node_idx++) {
+            auto& node = _all_live_peer_nodes[node_idx];
+            // Here is an optimization to avoid transferring full rows hashes,
+            // if remote and local node, has the same combined_hashes.
+            // For example:
+            // node1: 1 2 3
+            // node2: 1 2 3 4
+            // node3: 1 2 3 4
+            // After node1 get the row 4 from node2, node1 update it is
+            // combined_hashes, so we can avoid fetching the full row hashes from node3.
+            if (combined_hashes[node_idx + 1] == master.working_row_buf_combined_hash()) {
+                // local node and peer node have the same combined hash. This
+                // means we can set peer_row_hash_sets[n] to local row hashes
+                // without fetching it from peers to save network traffic.
+                master.peer_row_hash_sets(node_idx) = master.working_row_hashes();
+                rlogger.debug("Calling optimize master.working_row_hashes for node {}, hash_sets={}",
+                    node, master.peer_row_hash_sets(node_idx).size());
+                continue;
+            }
+
+            // Fast path: if local has zero row and remote has rows, request them all.
+            if (master.working_row_buf_combined_hash() == repair_hash() && combined_hashes[node_idx + 1] != repair_hash()) {
+                master.request_row_diff_and_update_peer_row_hash_sets(node, node_idx).get();
+                continue;
+            }
+
+            // Ask the peer to send the full list hashes in the working row buf.
+            master.peer_row_hash_sets(node_idx) = master.request_full_row_hashes(node).get0();
+            rlogger.debug("Calling master.request_full_row_hashes for node {}, hash_sets={}",
+                node, master.peer_row_hash_sets(node_idx).size());
+
+            // With hashes of rows from peer node, we can figure out
+            // what rows repair master is missing. Note we get missing
+            // data from repair follower 1, apply the rows, then get
+            // missing data from repair follower 2 and so on. We do it
+            // sequentially because the rows from repair follower 1 to
+            // repair master might reduce the amount of missing data
+            // between repair master and repair follower 2.
+            std::unordered_set<repair_hash> set_diff = repair_meta::get_set_diff(master.peer_row_hash_sets(node_idx), master.working_row_hashes());
+            // Request missing sets from peer node
+            rlogger.debug("Calling master.request_row_diff to node {}, local={}, peer={}, set_diff={}",
+                    node, master.working_row_hashes().size(), master.peer_row_hash_sets(node_idx).size(), set_diff);
+            // If we need to pull all rows from the peer. We can avoid
+            // sending the row hashes on wire by setting needs_all_rows flag.
+            auto needs_all_rows = repair_meta::needs_all_rows_t(set_diff.size() == master.peer_row_hash_sets(node_idx).size());
+            master.request_row_diff(std::move(set_diff), needs_all_rows, node, node_idx).get();
+            rlogger.debug("After request_row_diff node {}, hash_sets={}", master.myip(), master.working_row_hashes().size());
+        }
+        return op_status::next_step;
+    }
+
+    // Step C: Send missing rows to the peer nodes
+    void send_missing_rows_to_follower_nodes(repair_meta& master) {
+        // At this time, repair master contains all the rows between (_last_sync_boundary, _current_sync_boundary]
+        // So we can figure out which rows peer node are missing and send the missing rows to them
+        _ri.check_in_abort();
+        std::unordered_set<repair_hash> local_row_hash_sets = master.working_row_hashes();
+        parallel_for_each(boost::irange(size_t(0), _all_live_peer_nodes.size()), [&, this] (size_t idx) {
+            auto set_diff = repair_meta::get_set_diff(local_row_hash_sets, master.peer_row_hash_sets(idx));
+            rlogger.trace("Calling master.send_row_diff to node {}, set_diff={}", _all_live_peer_nodes[idx], set_diff.size());
+            return master.send_row_diff(set_diff, _all_live_peer_nodes[idx]);
+        }).get();
+        master.stats().round_nr_slow_path++;
+    }
+
+public:
+    future<> run() {
+        return seastar::async([this] {
+            _ri.check_in_abort();
+            auto repair_meta_id = repair_meta::get_next_repair_meta_id().get0();
+            auto algorithm = get_common_diff_detect_algorithm(_all_live_peer_nodes);
+            auto master_node_shard_config = shard_config {
+                    engine().cpu_id(),
+                    dht::global_partitioner().shard_count(),
+                    dht::global_partitioner().sharding_ignore_msb(),
+                    dht::global_partitioner().name()
+            };
+            repair_meta master(_ri.db,
+                    _cf,
+                    _range,
+                    algorithm,
+                    _max_row_buf_size,
+                    _seed,
+                    repair_meta::repair_master::yes,
+                    repair_meta_id,
+                    std::move(master_node_shard_config),
+                    _all_live_peer_nodes.size());
+
+            // All nodes including the node itself.
+            _all_nodes.insert(_all_nodes.begin(), master.myip());
+
+            rlogger.debug(">>> Started Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}, seed={}",
+                    master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, _range, _seed);
+
+            try {
+                parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
+                    return master.repair_row_level_start(node, _ri.keyspace, _cf_name, _range).then([&] () {
+                        return master.repair_get_estimated_partitions(node).then([this, node] (uint64_t partitions) {
+                            rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
+                            _estimated_partitions += partitions;
+                        });
+                    });
+                }).get();
+
+                parallel_for_each(_all_nodes, [&, this] (const gms::inet_address& node) {
+                    rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
+                    return master.repair_set_estimated_partitions(node, _estimated_partitions);
+                }).get();
+
+                while (true) {
+                    auto status = negotiate_sync_boundary(master);
+                    if (status == op_status::next_round) {
+                        continue;
+                    } else if (status == op_status::all_done) {
+                        break;
+                    }
+                    status = get_missing_rows_from_follower_nodes(master);
+                    if (status == op_status::next_round) {
+                        continue;
+                    }
+                    send_missing_rows_to_follower_nodes(master);
+                }
+            } catch (std::exception& e) {
+                rlogger.info("Got error in row level repair: {}", e);
+                // In case the repair process fail, we need to call repair_row_level_stop to clean up repair followers
+                _failed = true;
+                _ri.nr_failed_ranges++;
+            }
+
+            parallel_for_each(_all_nodes, [&] (const gms::inet_address& node) {
+                return master.repair_row_level_stop(node, _ri.keyspace, _cf_name, _range);
+            }).get();
+
+            _ri.update_statistics(master.stats());
+            if (_failed) {
+                throw std::runtime_error(format("Failed to repair for keyspace={}, cf={}, range={}", _ri.keyspace, _cf_name, _range));
+            }
+            rlogger.debug("<<< Finished Row Level Repair (Master): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, range={}, tx_hashes_nr={}, rx_hashes_nr={}, tx_row_nr={}, rx_row_nr={}, row_from_disk_bytes={}, row_from_disk_nr={}",
+                    master.myip(), _all_live_peer_nodes, master.repair_meta_id(), _ri.keyspace, _cf_name, _range, master.stats().tx_hashes_nr, master.stats().rx_hashes_nr, master.stats().tx_row_nr, master.stats().rx_row_nr, master.stats().row_from_disk_bytes, master.stats().row_from_disk_nr);
+        });
+    }
+};
+
+future<> repair_cf_range_row_level(repair_info& ri,
+        sstring cf_name, dht::token_range range,
+        const std::vector<gms::inet_address>& all_peer_nodes) {
+    auto all_live_peer_nodes = boost::copy_range<std::vector<gms::inet_address>>(all_peer_nodes |
+        boost::adaptors::filtered([] (const gms::inet_address& node) { return gms::get_local_gossiper().is_alive(node); }));
+    if (all_live_peer_nodes.size() != all_peer_nodes.size()) {
+        rlogger.warn("Repair for range={} is partial, peer nodes={}, live peer nodes={}",
+                range, all_peer_nodes, all_live_peer_nodes);
+        ri.nr_failed_ranges++;
+    }
+    if (all_live_peer_nodes.empty()) {
+        rlogger.info(">>> Skipped Row Level Repair (Master): local={}, peers={}, keyspace={}, cf={}, range={}",
+            utils::fb_utilities::get_broadcast_address(), all_peer_nodes, ri.keyspace, cf_name, range);
+        return make_ready_future<>();
+    }
+    return do_with(row_level_repair(ri, std::move(cf_name), std::move(range), std::move(all_live_peer_nodes)), [] (row_level_repair& repair) {
+        return repair.run();
+    });
+}
