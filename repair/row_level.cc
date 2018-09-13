@@ -21,7 +21,9 @@
 
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
+#include "sstables/sstables.hh"
 #include "mutation_fragment.hh"
+#include "multishard_writer.hh"
 #include "xx_hasher.hh"
 #include "dht/i_partitioner.hh"
 #include <vector>
@@ -273,4 +275,102 @@ public:
         }
     }
 
+};
+
+class repair_writer {
+    schema_ptr _schema;
+    uint64_t _estimated_partitions;
+    size_t _nr_peer_nodes;
+    // Needs more than one for repair master
+    std::vector<std::optional<future<uint64_t>>> _writer_done;
+    std::vector<std::optional<seastar::queue<mutation_fragment_opt>>> _mq;
+    // Current partition written to disk
+    std::vector<lw_shared_ptr<const decorated_key_with_hash>> _current_dk_written_to_sstable;
+public:
+    repair_writer(
+            schema_ptr schema,
+            uint64_t estimated_partitions,
+            size_t nr_peer_nodes)
+            : _schema(std::move(schema))
+            , _estimated_partitions(estimated_partitions)
+            , _nr_peer_nodes(nr_peer_nodes) {
+        init_writer();
+    }
+
+    future<> write_start_and_mf(lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf, unsigned node_idx)  {
+        _current_dk_written_to_sstable[node_idx] = dk;
+        if (mf.is_partition_start()) {
+            return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
+        } else {
+            auto start = mutation_fragment(partition_start(dk->dk, tombstone()));
+            return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(start))).then([this, node_idx, mf = std::move(mf)] () mutable {
+                return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
+            });
+        }
+    };
+
+    void init_writer() {
+        _writer_done.resize(_nr_peer_nodes);
+        _mq.resize(_nr_peer_nodes);
+        _current_dk_written_to_sstable.resize(_nr_peer_nodes);
+    }
+
+    void create_writer(unsigned node_idx) {
+        if (_writer_done[node_idx]) {
+            return;
+        }
+        _mq[node_idx] = seastar::queue<mutation_fragment_opt>(16);
+        auto get_next_mutation_fragment = [this, node_idx] () mutable {
+            return _mq[node_idx]->pop_eventually();
+        };
+        _writer_done[node_idx] = distribute_reader_and_consume_on_shards(_schema, dht::global_partitioner(),
+            make_generating_reader(_schema, std::move(get_next_mutation_fragment)),
+            [ks_name = this->_schema->ks_name(), cf_name = this->_schema->cf_name(), estimated_partitions = this->_estimated_partitions] (flat_mutation_reader reader) {
+                column_family& cf = service::get_local_storage_service().db().local().find_column_family(ks_name, cf_name);
+                sstables::sstable_writer_config sst_cfg;
+                sst_cfg.large_partition_handler = cf.get_large_partition_handler();
+                sstables::shared_sstable sst = cf.make_streaming_sstable_for_write();
+                schema_ptr s = reader.schema();
+                auto& pc = service::get_local_streaming_write_priority();
+                return sst->write_components(std::move(reader), std::max(1ul, estimated_partitions), s, sst_cfg, {}, pc).then([sst] {
+                    return sst->open_data();
+                }).then([&cf, sst] {
+                    return cf.add_sstable_and_update_cache(sst);
+                });
+            }
+        );
+    }
+
+    future<> do_write(unsigned node_idx, lw_shared_ptr<const decorated_key_with_hash> dk, mutation_fragment mf) {
+        if (_current_dk_written_to_sstable[node_idx]) {
+            if (_current_dk_written_to_sstable[node_idx]->dk.equal(*_schema, dk->dk)) {
+                return _mq[node_idx]->push_eventually(mutation_fragment_opt(std::move(mf)));
+            } else {
+                return _mq[node_idx]->push_eventually(mutation_fragment(partition_end())).then([this,
+                        node_idx, dk = std::move(dk), mf = std::move(mf)] () mutable {
+                    return write_start_and_mf(std::move(dk), std::move(mf), node_idx);
+                });
+            }
+        } else {
+            return write_start_and_mf(std::move(dk), std::move(mf), node_idx);
+        }
+    }
+
+    future<> wait_for_writer_done() {
+        return parallel_for_each(boost::irange(unsigned(0), unsigned(_nr_peer_nodes)), [this] (unsigned node_idx) {
+            if (_writer_done[node_idx] && _mq[node_idx]) {
+                // Partition_end is never sent on wire, so we have to write one ourselves.
+                return _mq[node_idx]->push_eventually(mutation_fragment(partition_end())).then([this, node_idx] () mutable {
+                    // Empty mutation_fragment_opt means no more data, so the writer can seal the sstables.
+                    return _mq[node_idx]->push_eventually(mutation_fragment_opt()).then([this, node_idx] () mutable {
+                        return (*_writer_done[node_idx]).then([] (uint64_t partitions) {
+                            rlogger.debug("Managed to write partitions={} to sstable", partitions);
+                            return make_ready_future<>();
+                        });
+                    });
+                });
+            }
+            return make_ready_future<>();
+        });
+    }
 };
