@@ -268,6 +268,10 @@ void range_tombstone_stream::reset() {
     _list.clear();
 }
 
+bool range_tombstone_stream::empty() const {
+    return _list.empty();
+}
+
 position_range position_range::from_range(const query::clustering_range& range) {
     auto bv_range = bound_view::from_range(range);
     return {
