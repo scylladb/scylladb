@@ -1051,38 +1051,34 @@ SEASTAR_TEST_CASE(restricted_reader_timeout) {
             auto tmp = make_lw_shared<tmpdir>();
             auto sst = create_sstable(s, tmp->path);
 
-            auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{10});
+            auto timeout = std::chrono::duration_cast<db::timeout_clock::time_point::duration>(std::chrono::milliseconds{1});
 
-            auto reader1 = reader_wrapper(semaphore, s.schema(), sst, timeout);
-            reader1().get();
+            auto reader1 = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst, timeout);
+            (*reader1)().get();
 
-            auto reader2 = reader_wrapper(semaphore, s.schema(), sst, timeout);
-            auto read2_fut = reader2();
+            auto reader2 = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst, timeout);
+            auto read2_fut = (*reader2)();
 
-            auto reader3 = reader_wrapper(semaphore, s.schema(), sst, timeout);
-            auto read3_fut = reader3();
+            auto reader3 = std::make_unique<reader_wrapper>(semaphore, s.schema(), sst, timeout);
+            auto read3_fut = (*reader3)();
 
             BOOST_REQUIRE_EQUAL(semaphore.waiters(), 2);
 
-            seastar::sleep<db::timeout_clock>(std::chrono::milliseconds(40)).get();
+            const auto futures_failed = eventually_true([&] { return read2_fut.failed() && read3_fut.failed(); });
+            BOOST_CHECK(futures_failed);
 
-            // Altough we have regular BOOST_REQUIREs for this below, if
-            // the test goes wrong these futures will be still pending
-            // when we leave scope and deleted memory will be accessed.
-            // To stop people from trying to debug a failing test just
-            // assert here so they know this is really just the test
-            // failing and the underlying problem is that the timeout
-            // doesn't work.
-            assert(read2_fut.failed());
-            assert(read3_fut.failed());
-
-            // reader2 should have timed out.
-            BOOST_REQUIRE(read2_fut.failed());
-            BOOST_REQUIRE_THROW(std::rethrow_exception(read2_fut.get_exception()), semaphore_timed_out);
-
-            // readerk should have timed out.
-            BOOST_REQUIRE(read3_fut.failed());
-            BOOST_REQUIRE_THROW(std::rethrow_exception(read3_fut.get_exception()), semaphore_timed_out);
+            if (futures_failed) {
+                BOOST_CHECK_THROW(std::rethrow_exception(read2_fut.get_exception()), semaphore_timed_out);
+                BOOST_CHECK_THROW(std::rethrow_exception(read3_fut.get_exception()), semaphore_timed_out);
+            } else {
+                // We need special cleanup when the test failed to avoid invalid
+                // memory access.
+                reader1.reset();
+                BOOST_CHECK(eventually_true([&] { return read2_fut.available(); }));
+                reader2.reset();
+                BOOST_CHECK(eventually_true([&] { return read3_fut.available(); }));
+                reader3.reset();
+            }
        }
 
         // All units should have been deposited back.
