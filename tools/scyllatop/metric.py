@@ -1,5 +1,4 @@
 import logging
-import re
 import parseexception
 
 
@@ -50,7 +49,7 @@ class Metric(object):
             if match:
                 metric = match.groupdict()['metric']
                 logging.debug('discover list result: {0}'.format(metric))
-                hlp  = ""
+                hlp = ""
                 results.append(Metric(metric, metric_source, hlp))
 
         logging.info('found {0} metrics'.format(len(results)))
@@ -66,7 +65,7 @@ class Metric(object):
             match = metric_source._METRIC_DISCOVER_PATTERN_WITH_HELP.search(line)
             if match:
                 metric = match.groupdict()['metric']
-                hlp  = match.groupdict()['help']
+                hlp = match.groupdict()['help']
                 results.append(Metric(metric, metric_source, hlp))
 
         logging.info('found {0} metrics'.format(len(results)))
