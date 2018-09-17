@@ -3806,9 +3806,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
