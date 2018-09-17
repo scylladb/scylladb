@@ -3764,9 +3764,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     tombstone tomb{write_timestamp, tp};
     range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
     mut.partition().apply_delete(*s, std::move(rt));
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
