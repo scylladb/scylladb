@@ -20,7 +20,15 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re, platform
+import argparse
+import os
+import platform
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import textwrap
 from distutils.spawn import find_executable
 
 tempfile.tempdir = "./build/tmp"
@@ -35,8 +43,9 @@ for line in open('/etc/os-release'):
     if key == 'ID_LIKE':
         os_ids += value.split(' ')
 
+
 # distribution "internationalization", converting package names.
-# Fedora name is key, values is distro -> package name dict. 
+# Fedora name is key, values is distro -> package name dict.
 i18n_xlat = {
     'boost-devel': {
         'debian': 'libboost-dev',
@@ -44,13 +53,15 @@ i18n_xlat = {
     },
 }
 
+
 def pkgname(name):
     if name in i18n_xlat:
         dict = i18n_xlat[name]
         for id in os_ids:
             if id in dict:
                 return dict[id]
-    return name 
+    return name
+
 
 def get_flags():
     with open('/proc/cpuinfo') as f:
@@ -59,17 +70,19 @@ def get_flags():
                 if line.rstrip('\n').startswith('flags'):
                     return re.sub(r'^flags\s+: ', '', line).split()
 
+
 def add_tristate(arg_parser, name, dest, help):
-    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
-                            help = 'Enable ' + help)
-    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false', default = None,
-                            help = 'Disable ' + help)
+    arg_parser.add_argument('--enable-' + name, dest=dest, action='store_true', default=None,
+                            help='Enable ' + help)
+    arg_parser.add_argument('--disable-' + name, dest=dest, action='store_false', default=None,
+                            help='Disable ' + help)
+
 
 def apply_tristate(var, test, note, missing):
     if (var is None) or var:
         if test():
             return True
-        elif var == True:
+        elif var is True:
             print(missing)
             sys.exit(1)
         else:
@@ -77,21 +90,26 @@ def apply_tristate(var, test, note, missing):
             return False
     return False
 
+
 def have_pkg(package):
     return subprocess.call(['pkg-config', package]) == 0
+
 
 def pkg_config(option, package):
     output = subprocess.check_output(['pkg-config', option, package])
     return output.decode('utf-8').strip()
 
-def try_compile(compiler, source = '', flags = []):
-    return try_compile_and_link(compiler, source, flags = flags + ['-c'])
+
+def try_compile(compiler, source='', flags=[]):
+    return try_compile_and_link(compiler, source, flags=flags + ['-c'])
+
 
 def ensure_tmp_dir_exists():
     if not os.path.exists(tempfile.tempdir):
         os.makedirs(tempfile.tempdir)
 
-def try_compile_and_link(compiler, source = '', flags = []):
+
+def try_compile_and_link(compiler, source='', flags=[]):
     ensure_tmp_dir_exists()
     with tempfile.NamedTemporaryFile() as sfile:
         ofile = tempfile.mktemp()
@@ -101,17 +119,19 @@ def try_compile_and_link(compiler, source = '', flags = []):
             # We can't write to /dev/null, since in some cases (-ftest-coverage) gcc will create an auxiliary
             # output file based on the name of the output file, and "/dev/null.gcsa" is not a good name
             return subprocess.call([compiler, '-x', 'c++', '-o', ofile, sfile.name] + args.user_cflags.split() + flags,
-                                   stdout = subprocess.DEVNULL,
-                                   stderr = subprocess.DEVNULL) == 0
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL) == 0
         finally:
             if os.path.exists(ofile):
                 os.unlink(ofile)
+
 
 def flag_supported(flag, compiler):
     # gcc ignores -Wno-x even if it is not supported
     adjusted = re.sub('^-Wno-', '-W', flag)
     split = adjusted.split(' ')
-    return try_compile(flags = ['-Werror'] + split, compiler = compiler)
+    return try_compile(flags=['-Werror'] + split, compiler=compiler)
+
 
 def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
@@ -120,11 +140,12 @@ def debug_flag(compiler):
 
         x<int> a;
         ''')
-    if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
+    if try_compile(source=src_with_auto, flags=['-g', '-std=gnu++1y'], compiler=compiler):
         return '-g'
     else:
         print('Note: debug information disabled; upgrade your compiler')
         return ''
+
 
 def debug_compress_flag(compiler):
     if try_compile(compiler=compiler, flags=['-gz']):
@@ -132,23 +153,27 @@ def debug_compress_flag(compiler):
     else:
         return ''
 
+
 def gold_supported(compiler):
     src_main = 'int main(int argc, char **argv) { return 0; }'
-    if try_compile_and_link(source = src_main, flags = ['-fuse-ld=gold'], compiler = compiler):
+    if try_compile_and_link(source=src_main, flags=['-fuse-ld=gold'], compiler=compiler):
         return '-fuse-ld=gold'
     else:
         print('Note: gold not found; using default system linker')
         return ''
+
 
 def maybe_static(flag, libs):
     if flag and not args.static:
         libs = '-Wl,-Bstatic {} -Wl,-Bdynamic'.format(libs)
     return libs
 
+
 class Thrift(object):
     def __init__(self, source, service):
         self.source = source
         self.service = service
+
     def generated(self, gen_dir):
         basename = os.path.splitext(os.path.basename(self.source))[0]
         files = [basename + '_' + ext
@@ -156,38 +181,49 @@ class Thrift(object):
         files += [self.service + ext
                   for ext in ['.cpp', '.h']]
         return [os.path.join(gen_dir, file) for file in files]
+
     def headers(self, gen_dir):
         return [x for x in self.generated(gen_dir) if x.endswith('.h')]
+
     def sources(self, gen_dir):
         return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
+
     def objects(self, gen_dir):
         return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
+
     def endswith(self, end):
         return self.source.endswith(end)
 
+
 def default_target_arch():
-    mach = platform.machine()
     if platform.machine() in ['i386', 'i686', 'x86_64']:
         return 'nehalem'
     else:
         return ''
 
+
 class Antlr3Grammar(object):
     def __init__(self, source):
         self.source = source
+
     def generated(self, gen_dir):
         basename = os.path.splitext(self.source)[0]
         files = [basename + ext
                  for ext in ['Lexer.cpp', 'Lexer.hpp', 'Parser.cpp', 'Parser.hpp']]
         return [os.path.join(gen_dir, file) for file in files]
+
     def headers(self, gen_dir):
         return [x for x in self.generated(gen_dir) if x.endswith('.hpp')]
+
     def sources(self, gen_dir):
         return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
+
     def objects(self, gen_dir):
         return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
+
     def endswith(self, end):
         return self.source.endswith(end)
+
 
 modes = {
     'debug': {
@@ -326,58 +362,58 @@ perf_tests = [
 
 apps = [
     'scylla',
-    ]
+]
 
 tests = scylla_tests + perf_tests
 
 other = [
     'iotune',
-    ]
+]
 
 all_artifacts = apps + tests + other
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
-arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
-                        const = '-static',
-                        help = 'Static link (useful for running on hosts outside the build environment')
-arg_parser.add_argument('--pie', dest = 'pie', action = 'store_true',
-                        help = 'Build position-independent executable (PIE)')
-arg_parser.add_argument('--so', dest = 'so', action = 'store_true',
-                        help = 'Build shared object (SO) instead of executable')
+arg_parser.add_argument('--static', dest='static', action='store_const', default='',
+                        const='-static',
+                        help='Static link (useful for running on hosts outside the build environment')
+arg_parser.add_argument('--pie', dest='pie', action='store_true',
+                        help='Build position-independent executable (PIE)')
+arg_parser.add_argument('--so', dest='so', action='store_true',
+                        help='Build shared object (SO) instead of executable')
 arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
-arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
-                        help = 'Extra flags for the C++ compiler')
-arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', default = '',
-                        help = 'Extra flags for the linker')
-arg_parser.add_argument('--target', action = 'store', dest = 'target', default = default_target_arch(),
-                        help = 'Target architecture (-march)')
-arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
-                        help = 'C++ compiler path')
+arg_parser.add_argument('--cflags', action='store', dest='user_cflags', default='',
+                        help='Extra flags for the C++ compiler')
+arg_parser.add_argument('--ldflags', action='store', dest='user_ldflags', default='',
+                        help='Extra flags for the linker')
+arg_parser.add_argument('--target', action='store', dest='target', default=default_target_arch(),
+                        help='Target architecture (-march)')
+arg_parser.add_argument('--compiler', action='store', dest='cxx', default='g++',
+                        help='C++ compiler path')
 arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='gcc',
                         help='C compiler path')
-arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
-                        help = 'Shortcut for compile for OSv')
-arg_parser.add_argument('--enable-dpdk', action = 'store_true', dest = 'dpdk', default = False,
-                        help = 'Enable dpdk (from seastar dpdk sources)')
-arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target', default = '',
-                        help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
-arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
-                        help = 'Enable(1)/disable(0)compiler debug information generation')
-arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_true',
-			help = 'Link libgcc and libstdc++ statically')
-arg_parser.add_argument('--static-thrift', dest = 'staticthrift', action = 'store_true',
-            help = 'Link libthrift statically')
-arg_parser.add_argument('--static-boost', dest = 'staticboost', action = 'store_true',
-            help = 'Link boost statically')
-arg_parser.add_argument('--static-yaml-cpp', dest = 'staticyamlcpp', action = 'store_true',
-            help = 'Link libyaml-cpp statically')
-arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
-                        help = 'Enable(1)/disable(0)compiler debug information generation for tests')
-arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
-                        help = 'Python3 path')
-add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
-add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
+arg_parser.add_argument('--with-osv', action='store', dest='with_osv', default='',
+                        help='Shortcut for compile for OSv')
+arg_parser.add_argument('--enable-dpdk', action='store_true', dest='dpdk', default=False,
+                        help='Enable dpdk (from seastar dpdk sources)')
+arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
+                        help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
+arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
+                        help='Enable(1)/disable(0)compiler debug information generation')
+arg_parser.add_argument('--static-stdc++', dest='staticcxx', action='store_true',
+                        help='Link libgcc and libstdc++ statically')
+arg_parser.add_argument('--static-thrift', dest='staticthrift', action='store_true',
+                        help='Link libthrift statically')
+arg_parser.add_argument('--static-boost', dest='staticboost', action='store_true',
+                        help='Link boost statically')
+arg_parser.add_argument('--static-yaml-cpp', dest='staticyamlcpp', action='store_true',
+                        help='Link libyaml-cpp statically')
+arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debuginfo', type=int, default=0,
+                        help='Enable(1)/disable(0)compiler debug information generation for tests')
+arg_parser.add_argument('--python', action='store', dest='python', default='python3',
+                        help='Python3 path')
+add_tristate(arg_parser, name='hwloc', dest='hwloc', help='hwloc support')
+add_tristate(arg_parser, name='xen', dest='xen', help='Xen support')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
@@ -392,264 +428,262 @@ defines = []
 
 extra_cxxflags = {}
 
-cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
+cassandra_interface = Thrift(source='interface/cassandra.thrift', service='Cassandra')
 
 scylla_core = (['database.cc',
-                 'atomic_cell.cc',
-                 'schema.cc',
-                 'frozen_schema.cc',
-                 'schema_registry.cc',
-                 'bytes.cc',
-                 'mutation.cc',
-                 'mutation_fragment.cc',
-                 'partition_version.cc',
-                 'row_cache.cc',
-                 'canonical_mutation.cc',
-                 'frozen_mutation.cc',
-                 'memtable.cc',
-                 'schema_mutations.cc',
-                 'supervisor.cc',
-                 'utils/logalloc.cc',
-                 'utils/large_bitset.cc',
-                 'utils/buffer_input_stream.cc',
-                 'utils/limiting_data_source.cc',
-                 'mutation_partition.cc',
-                 'mutation_partition_view.cc',
-                 'mutation_partition_serializer.cc',
-                 'mutation_reader.cc',
-                 'flat_mutation_reader.cc',
-                 'mutation_query.cc',
-                 'json.cc',
-                 'keys.cc',
-                 'counters.cc',                 
-                 'compress.cc',
-                 'sstables/mp_row_consumer.cc',
-                 'sstables/sstables.cc',
-                 'sstables/sstable_version.cc',
-                 'sstables/compress.cc',
-                 'sstables/row.cc',
-                 'sstables/partition.cc',
-                 'sstables/compaction.cc',
-                 'sstables/compaction_strategy.cc',
-                 'sstables/compaction_manager.cc',
-                 'sstables/integrity_checked_file_impl.cc',
-                 'sstables/prepended_input_stream.cc',
-                 'sstables/m_format_write_helpers.cc',
-                 'sstables/m_format_read_helpers.cc',
-                 'transport/event.cc',
-                 'transport/event_notifier.cc',
-                 'transport/server.cc',
-                 'transport/messages/result_message.cc',
-                 'cql3/abstract_marker.cc',
-                 'cql3/attributes.cc',
-                 'cql3/cf_name.cc',
-                 'cql3/cql3_type.cc',
-                 'cql3/operation.cc',
-                 'cql3/index_name.cc',
-                 'cql3/keyspace_element_name.cc',
-                 'cql3/lists.cc',
-                 'cql3/sets.cc',
-                 'cql3/maps.cc',
-                 'cql3/functions/functions.cc',
-                 'cql3/functions/castas_fcts.cc',
-                 'cql3/statements/cf_prop_defs.cc',
-                 'cql3/statements/cf_statement.cc',
-                 'cql3/statements/authentication_statement.cc',
-                 'cql3/statements/create_keyspace_statement.cc',
-                 'cql3/statements/create_table_statement.cc',
-                 'cql3/statements/create_view_statement.cc',
-                 'cql3/statements/create_type_statement.cc',
-                 'cql3/statements/drop_index_statement.cc',
-                 'cql3/statements/drop_keyspace_statement.cc',
-                 'cql3/statements/drop_table_statement.cc',
-                 'cql3/statements/drop_view_statement.cc',
-                 'cql3/statements/drop_type_statement.cc',
-                 'cql3/statements/schema_altering_statement.cc',
-                 'cql3/statements/ks_prop_defs.cc',
-                 'cql3/statements/modification_statement.cc',
-                 'cql3/statements/parsed_statement.cc',
-                 'cql3/statements/property_definitions.cc',
-                 'cql3/statements/update_statement.cc',
-                 'cql3/statements/delete_statement.cc',
-                 'cql3/statements/batch_statement.cc',
-                 'cql3/statements/select_statement.cc',
-                 'cql3/statements/use_statement.cc',
-                 'cql3/statements/index_prop_defs.cc',
-                 'cql3/statements/index_target.cc',
-                 'cql3/statements/create_index_statement.cc',
-                 'cql3/statements/truncate_statement.cc',
-                 'cql3/statements/alter_table_statement.cc',
-                 'cql3/statements/alter_view_statement.cc',
-                 'cql3/statements/list_users_statement.cc',
-                 'cql3/statements/authorization_statement.cc',
-                 'cql3/statements/permission_altering_statement.cc',
-                 'cql3/statements/list_permissions_statement.cc',
-                 'cql3/statements/grant_statement.cc',
-                 'cql3/statements/revoke_statement.cc',
-                 'cql3/statements/alter_type_statement.cc',
-                 'cql3/statements/alter_keyspace_statement.cc',
-                 'cql3/statements/role-management-statements.cc',
-                 'cql3/update_parameters.cc',
-                 'cql3/ut_name.cc',
-                 'cql3/role_name.cc',
-                 'thrift/handler.cc',
-                 'thrift/server.cc',
-                 'thrift/thrift_validation.cc',
-                 'utils/runtime.cc',
-                 'utils/murmur_hash.cc',
-                 'utils/uuid.cc',
-                 'utils/big_decimal.cc',
-                 'types.cc',
-                 'validation.cc',
-                 'service/priority_manager.cc',
-                 'service/migration_manager.cc',
-                 'service/storage_proxy.cc',
-                 'cql3/operator.cc',
-                 'cql3/relation.cc',
-                 'cql3/column_identifier.cc',
-                 'cql3/column_specification.cc',
-                 'cql3/constants.cc',
-                 'cql3/query_processor.cc',
-                 'cql3/query_options.cc',
-                 'cql3/single_column_relation.cc',
-                 'cql3/token_relation.cc',
-                 'cql3/column_condition.cc',
-                 'cql3/user_types.cc',
-                 'cql3/untyped_result_set.cc',
-                 'cql3/selection/abstract_function_selector.cc',
-                 'cql3/selection/simple_selector.cc',
-                 'cql3/selection/selectable.cc',
-                 'cql3/selection/selector_factories.cc',
-                 'cql3/selection/selection.cc',
-                 'cql3/selection/selector.cc',
-                 'cql3/restrictions/statement_restrictions.cc',
-                 'cql3/result_set.cc',
-                 'cql3/variable_specifications.cc',
-                 'db/consistency_level.cc',
-                 'db/system_keyspace.cc',
-                 'db/system_distributed_keyspace.cc',
-                 'db/schema_tables.cc',
-                 'db/cql_type_parser.cc',
-                 'db/legacy_schema_migrator.cc',
-                 'db/commitlog/commitlog.cc',
-                 'db/commitlog/commitlog_replayer.cc',
-                 'db/commitlog/commitlog_entry.cc',
-                 'db/hints/manager.cc',
-                 'db/hints/resource_manager.cc',
-                 'db/config.cc',
-                 'db/extensions.cc',
-                 'db/heat_load_balance.cc',
-                 'db/large_partition_handler.cc',
-                 'db/marshal/type_parser.cc',
-                 'db/batchlog_manager.cc',
-                 'db/view/view.cc',
-                 'db/view/row_locking.cc',
-                 'index/secondary_index_manager.cc',
-                 'index/secondary_index.cc',
-                 'utils/UUID_gen.cc',
-                 'utils/i_filter.cc',
-                 'utils/bloom_filter.cc',
-                 'utils/bloom_calculations.cc',
-                 'utils/rate_limiter.cc',
-                 'utils/file_lock.cc',
-                 'utils/dynamic_bitset.cc',
-                 'utils/managed_bytes.cc',
-                 'utils/exceptions.cc',
-                 'utils/config_file.cc',
-                 'gms/version_generator.cc',
-                 'gms/versioned_value.cc',
-                 'gms/gossiper.cc',
-                 'gms/failure_detector.cc',
-                 'gms/gossip_digest_syn.cc',
-                 'gms/gossip_digest_ack.cc',
-                 'gms/gossip_digest_ack2.cc',
-                 'gms/endpoint_state.cc',
-                 'gms/application_state.cc',
-                 'gms/inet_address.cc',
-                 'dht/i_partitioner.cc',
-                 'dht/murmur3_partitioner.cc',
-                 'dht/byte_ordered_partitioner.cc',
-                 'dht/random_partitioner.cc',
-                 'dht/boot_strapper.cc',
-                 'dht/range_streamer.cc',
-                 'unimplemented.cc',
-                 'query.cc',
-                 'query-result-set.cc',
-                 'locator/abstract_replication_strategy.cc',
-                 'locator/simple_strategy.cc',
-                 'locator/local_strategy.cc',
-                 'locator/network_topology_strategy.cc',
-                 'locator/everywhere_replication_strategy.cc',
-                 'locator/token_metadata.cc',
-                 'locator/snitch_base.cc',
-                 'locator/simple_snitch.cc',
-                 'locator/rack_inferring_snitch.cc',
-                 'locator/gossiping_property_file_snitch.cc',
-                 'locator/production_snitch_base.cc',
-                 'locator/ec2_snitch.cc',
-                 'locator/ec2_multi_region_snitch.cc',
-                 'locator/gce_snitch.cc',
-                 'message/messaging_service.cc',
-                 'service/client_state.cc',
-                 'service/migration_task.cc',
-                 'service/storage_service.cc',
-                 'service/misc_services.cc',
-                 'service/pager/paging_state.cc',
-                 'service/pager/query_pagers.cc',
-                 'streaming/stream_task.cc',
-                 'streaming/stream_session.cc',
-                 'streaming/stream_request.cc',
-                 'streaming/stream_summary.cc',
-                 'streaming/stream_transfer_task.cc',
-                 'streaming/stream_receive_task.cc',
-                 'streaming/stream_plan.cc',
-                 'streaming/progress_info.cc',
-                 'streaming/session_info.cc',
-                 'streaming/stream_coordinator.cc',
-                 'streaming/stream_manager.cc',
-                 'streaming/stream_result_future.cc',
-                 'streaming/stream_session_state.cc',
-                 'clocks-impl.cc',
-                 'partition_slice_builder.cc',
-                 'init.cc',
-                 'lister.cc',
-                 'repair/repair.cc',
-                 'exceptions/exceptions.cc',
-                 'auth/allow_all_authenticator.cc',
-                 'auth/allow_all_authorizer.cc',
-                 'auth/authenticated_user.cc',
-                 'auth/authenticator.cc',
-                 'auth/common.cc',
-                 'auth/default_authorizer.cc',
-                 'auth/resource.cc',
-                 'auth/roles-metadata.cc',
-                 'auth/passwords.cc',
-                 'auth/password_authenticator.cc',
-                 'auth/permission.cc',
-                 'auth/permissions_cache.cc',
-                 'auth/service.cc',
-                 'auth/standard_role_manager.cc',
-                 'auth/transitional.cc',
-                 'auth/authentication_options.cc',
-                 'auth/role_or_anonymous.cc',
-                 'tracing/tracing.cc',
-                 'tracing/trace_keyspace_helper.cc',
-                 'tracing/trace_state.cc',
-                 'table_helper.cc',
-                 'range_tombstone.cc',
-                 'range_tombstone_list.cc',
-                 'disk-error-handler.cc',
-                 'duration.cc',
-                 'vint-serialization.cc',
-                 'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
-                 'querier.cc',
-                 'data/cell.cc',
-                 'multishard_writer.cc',
-                 'multishard_mutation_query.cc',
-                 ]
-                + [Antlr3Grammar('cql3/Cql.g')]
-                + [Thrift('interface/cassandra.thrift', 'Cassandra')]
-                )
+                'atomic_cell.cc',
+                'schema.cc',
+                'frozen_schema.cc',
+                'schema_registry.cc',
+                'bytes.cc',
+                'mutation.cc',
+                'mutation_fragment.cc',
+                'partition_version.cc',
+                'row_cache.cc',
+                'canonical_mutation.cc',
+                'frozen_mutation.cc',
+                'memtable.cc',
+                'schema_mutations.cc',
+                'supervisor.cc',
+                'utils/logalloc.cc',
+                'utils/large_bitset.cc',
+                'utils/buffer_input_stream.cc',
+                'utils/limiting_data_source.cc',
+                'mutation_partition.cc',
+                'mutation_partition_view.cc',
+                'mutation_partition_serializer.cc',
+                'mutation_reader.cc',
+                'flat_mutation_reader.cc',
+                'mutation_query.cc',
+                'json.cc',
+                'keys.cc',
+                'counters.cc',
+                'compress.cc',
+                'sstables/mp_row_consumer.cc',
+                'sstables/sstables.cc',
+                'sstables/sstable_version.cc',
+                'sstables/compress.cc',
+                'sstables/row.cc',
+                'sstables/partition.cc',
+                'sstables/compaction.cc',
+                'sstables/compaction_strategy.cc',
+                'sstables/compaction_manager.cc',
+                'sstables/integrity_checked_file_impl.cc',
+                'sstables/prepended_input_stream.cc',
+                'sstables/m_format_write_helpers.cc',
+                'sstables/m_format_read_helpers.cc',
+                'transport/event.cc',
+                'transport/event_notifier.cc',
+                'transport/server.cc',
+                'transport/messages/result_message.cc',
+                'cql3/abstract_marker.cc',
+                'cql3/attributes.cc',
+                'cql3/cf_name.cc',
+                'cql3/cql3_type.cc',
+                'cql3/operation.cc',
+                'cql3/index_name.cc',
+                'cql3/keyspace_element_name.cc',
+                'cql3/lists.cc',
+                'cql3/sets.cc',
+                'cql3/maps.cc',
+                'cql3/functions/functions.cc',
+                'cql3/functions/castas_fcts.cc',
+                'cql3/statements/cf_prop_defs.cc',
+                'cql3/statements/cf_statement.cc',
+                'cql3/statements/authentication_statement.cc',
+                'cql3/statements/create_keyspace_statement.cc',
+                'cql3/statements/create_table_statement.cc',
+                'cql3/statements/create_view_statement.cc',
+                'cql3/statements/create_type_statement.cc',
+                'cql3/statements/drop_index_statement.cc',
+                'cql3/statements/drop_keyspace_statement.cc',
+                'cql3/statements/drop_table_statement.cc',
+                'cql3/statements/drop_view_statement.cc',
+                'cql3/statements/drop_type_statement.cc',
+                'cql3/statements/schema_altering_statement.cc',
+                'cql3/statements/ks_prop_defs.cc',
+                'cql3/statements/modification_statement.cc',
+                'cql3/statements/parsed_statement.cc',
+                'cql3/statements/property_definitions.cc',
+                'cql3/statements/update_statement.cc',
+                'cql3/statements/delete_statement.cc',
+                'cql3/statements/batch_statement.cc',
+                'cql3/statements/select_statement.cc',
+                'cql3/statements/use_statement.cc',
+                'cql3/statements/index_prop_defs.cc',
+                'cql3/statements/index_target.cc',
+                'cql3/statements/create_index_statement.cc',
+                'cql3/statements/truncate_statement.cc',
+                'cql3/statements/alter_table_statement.cc',
+                'cql3/statements/alter_view_statement.cc',
+                'cql3/statements/list_users_statement.cc',
+                'cql3/statements/authorization_statement.cc',
+                'cql3/statements/permission_altering_statement.cc',
+                'cql3/statements/list_permissions_statement.cc',
+                'cql3/statements/grant_statement.cc',
+                'cql3/statements/revoke_statement.cc',
+                'cql3/statements/alter_type_statement.cc',
+                'cql3/statements/alter_keyspace_statement.cc',
+                'cql3/statements/role-management-statements.cc',
+                'cql3/update_parameters.cc',
+                'cql3/ut_name.cc',
+                'cql3/role_name.cc',
+                'thrift/handler.cc',
+                'thrift/server.cc',
+                'thrift/thrift_validation.cc',
+                'utils/runtime.cc',
+                'utils/murmur_hash.cc',
+                'utils/uuid.cc',
+                'utils/big_decimal.cc',
+                'types.cc',
+                'validation.cc',
+                'service/priority_manager.cc',
+                'service/migration_manager.cc',
+                'service/storage_proxy.cc',
+                'cql3/operator.cc',
+                'cql3/relation.cc',
+                'cql3/column_identifier.cc',
+                'cql3/column_specification.cc',
+                'cql3/constants.cc',
+                'cql3/query_processor.cc',
+                'cql3/query_options.cc',
+                'cql3/single_column_relation.cc',
+                'cql3/token_relation.cc',
+                'cql3/column_condition.cc',
+                'cql3/user_types.cc',
+                'cql3/untyped_result_set.cc',
+                'cql3/selection/abstract_function_selector.cc',
+                'cql3/selection/simple_selector.cc',
+                'cql3/selection/selectable.cc',
+                'cql3/selection/selector_factories.cc',
+                'cql3/selection/selection.cc',
+                'cql3/selection/selector.cc',
+                'cql3/restrictions/statement_restrictions.cc',
+                'cql3/result_set.cc',
+                'cql3/variable_specifications.cc',
+                'db/consistency_level.cc',
+                'db/system_keyspace.cc',
+                'db/system_distributed_keyspace.cc',
+                'db/schema_tables.cc',
+                'db/cql_type_parser.cc',
+                'db/legacy_schema_migrator.cc',
+                'db/commitlog/commitlog.cc',
+                'db/commitlog/commitlog_replayer.cc',
+                'db/commitlog/commitlog_entry.cc',
+                'db/hints/manager.cc',
+                'db/hints/resource_manager.cc',
+                'db/config.cc',
+                'db/extensions.cc',
+                'db/heat_load_balance.cc',
+                'db/large_partition_handler.cc',
+                'db/marshal/type_parser.cc',
+                'db/batchlog_manager.cc',
+                'db/view/view.cc',
+                'db/view/row_locking.cc',
+                'index/secondary_index_manager.cc',
+                'index/secondary_index.cc',
+                'utils/UUID_gen.cc',
+                'utils/i_filter.cc',
+                'utils/bloom_filter.cc',
+                'utils/bloom_calculations.cc',
+                'utils/rate_limiter.cc',
+                'utils/file_lock.cc',
+                'utils/dynamic_bitset.cc',
+                'utils/managed_bytes.cc',
+                'utils/exceptions.cc',
+                'utils/config_file.cc',
+                'gms/version_generator.cc',
+                'gms/versioned_value.cc',
+                'gms/gossiper.cc',
+                'gms/failure_detector.cc',
+                'gms/gossip_digest_syn.cc',
+                'gms/gossip_digest_ack.cc',
+                'gms/gossip_digest_ack2.cc',
+                'gms/endpoint_state.cc',
+                'gms/application_state.cc',
+                'gms/inet_address.cc',
+                'dht/i_partitioner.cc',
+                'dht/murmur3_partitioner.cc',
+                'dht/byte_ordered_partitioner.cc',
+                'dht/random_partitioner.cc',
+                'dht/boot_strapper.cc',
+                'dht/range_streamer.cc',
+                'unimplemented.cc',
+                'query.cc',
+                'query-result-set.cc',
+                'locator/abstract_replication_strategy.cc',
+                'locator/simple_strategy.cc',
+                'locator/local_strategy.cc',
+                'locator/network_topology_strategy.cc',
+                'locator/everywhere_replication_strategy.cc',
+                'locator/token_metadata.cc',
+                'locator/snitch_base.cc',
+                'locator/simple_snitch.cc',
+                'locator/rack_inferring_snitch.cc',
+                'locator/gossiping_property_file_snitch.cc',
+                'locator/production_snitch_base.cc',
+                'locator/ec2_snitch.cc',
+                'locator/ec2_multi_region_snitch.cc',
+                'locator/gce_snitch.cc',
+                'message/messaging_service.cc',
+                'service/client_state.cc',
+                'service/migration_task.cc',
+                'service/storage_service.cc',
+                'service/misc_services.cc',
+                'service/pager/paging_state.cc',
+                'service/pager/query_pagers.cc',
+                'streaming/stream_task.cc',
+                'streaming/stream_session.cc',
+                'streaming/stream_request.cc',
+                'streaming/stream_summary.cc',
+                'streaming/stream_transfer_task.cc',
+                'streaming/stream_receive_task.cc',
+                'streaming/stream_plan.cc',
+                'streaming/progress_info.cc',
+                'streaming/session_info.cc',
+                'streaming/stream_coordinator.cc',
+                'streaming/stream_manager.cc',
+                'streaming/stream_result_future.cc',
+                'streaming/stream_session_state.cc',
+                'clocks-impl.cc',
+                'partition_slice_builder.cc',
+                'init.cc',
+                'lister.cc',
+                'repair/repair.cc',
+                'exceptions/exceptions.cc',
+                'auth/allow_all_authenticator.cc',
+                'auth/allow_all_authorizer.cc',
+                'auth/authenticated_user.cc',
+                'auth/authenticator.cc',
+                'auth/common.cc',
+                'auth/default_authorizer.cc',
+                'auth/resource.cc',
+                'auth/roles-metadata.cc',
+                'auth/passwords.cc',
+                'auth/password_authenticator.cc',
+                'auth/permission.cc',
+                'auth/permissions_cache.cc',
+                'auth/service.cc',
+                'auth/standard_role_manager.cc',
+                'auth/transitional.cc',
+                'auth/authentication_options.cc',
+                'auth/role_or_anonymous.cc',
+                'tracing/tracing.cc',
+                'tracing/trace_keyspace_helper.cc',
+                'tracing/trace_state.cc',
+                'table_helper.cc',
+                'range_tombstone.cc',
+                'range_tombstone_list.cc',
+                'disk-error-handler.cc',
+                'duration.cc',
+                'vint-serialization.cc',
+                'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
+                'querier.cc',
+                'data/cell.cc',
+                'multishard_writer.cc',
+                'multishard_mutation_query.cc',
+                ] + [Antlr3Grammar('cql3/Cql.g')] + [Thrift('interface/cassandra.thrift', 'Cassandra')]
+               )
 
 api = ['api/api.cc',
        'api/api-doc/storage_service.json',
@@ -781,13 +815,13 @@ tests_not_using_seastar_test_framework = set([
 ]) | pure_boost_tests
 
 for t in tests_not_using_seastar_test_framework:
-    if not t in scylla_tests:
+    if t not in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
 
 for t in scylla_tests:
     deps[t] = [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
-        deps[t] += scylla_tests_dependencies 
+        deps[t] += scylla_tests_dependencies
         deps[t] += scylla_tests_seastar_deps
     else:
         deps[t] += scylla_core + idls + ['tests/cql_test_env.cc']
@@ -816,7 +850,7 @@ deps['tests/reusable_buffer_test'] = ['tests/reusable_buffer_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
-    '-Wno-maybe-uninitialized', # false positives on gcc 5
+    '-Wno-maybe-uninitialized',  # false positives on gcc 5
     '-Wno-tautological-compare',
     '-Wno-parentheses-equality',
     '-Wno-c++11-narrowing',
@@ -829,11 +863,11 @@ warnings = [
     '-Wno-overflow',
     '-Wno-noexcept-type',
     '-Wno-nonnull-compare'
-    ]
+]
 
 warnings = [w
             for w in warnings
-            if flag_supported(flag = w, compiler = args.cxx)]
+            if flag_supported(flag=w, compiler=args.cxx)]
 
 warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
@@ -842,10 +876,10 @@ optimization_flags = [
 ]
 optimization_flags = [o
                       for o in optimization_flags
-                      if flag_supported(flag = o, compiler = args.cxx)]
+                      if flag_supported(flag=o, compiler=args.cxx)]
 modes['release']['opt'] += ' ' + ' '.join(optimization_flags)
 
-gold_linker_flag = gold_supported(compiler = args.cxx)
+gold_linker_flag = gold_supported(compiler=args.cxx)
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
@@ -866,6 +900,7 @@ else:
 optional_packages = [['libsystemd', 'libsystemd-daemon']]
 pkgs = []
 
+
 def setup_first_pkg_of_list(pkglist):
     # The HAVE_pkg symbol is taken from the first alternative
     upkg = pkglist[0].upper().replace('-', '_')
@@ -875,6 +910,7 @@ def setup_first_pkg_of_list(pkglist):
             defines.append('HAVE_{}=1'.format(upkg))
             return True
     return False
+
 
 for pkglist in optional_packages:
     if isinstance(pkglist, str):
@@ -962,31 +998,30 @@ seastar_cflags += ' ' + debug_compress_flag(compiler=args.cxx)
 if args.target != '':
     seastar_cflags += ' -march=' + args.target
 seastar_ldflags = args.user_ldflags
-seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags),
-                  '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']),
-                 ]
+seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' % (seastar_ldflags),
+                  '--c++-dialect=gnu++1z', '--optflags=%s' % (modes['release']['opt']), ]
 
-status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
+status = subprocess.call([args.python, './configure.py'] + seastar_flags, cwd='seastar')
 
 if status != 0:
     print('Seastar configuration failed')
     sys.exit(1)
 
 
-pc = { mode : 'build/{}/seastar.pc'.format(mode) for mode in build_modes }
+pc = {mode: 'build/{}/seastar.pc'.format(mode) for mode in build_modes}
 ninja = find_executable('ninja') or find_executable('ninja-build')
 if not ninja:
     print('Ninja executable (ninja or ninja-build) not found on PATH\n')
     sys.exit(1)
-status = subprocess.call([ninja] + list(pc.values()), cwd = 'seastar')
+status = subprocess.call([ninja] + list(pc.values()), cwd='seastar')
 if status:
     print('Failed to generate {}\n'.format(pc))
     sys.exit(1)
 
 for mode in build_modes:
-    cfg =  dict([line.strip().split(': ', 1)
-                 for line in open('seastar/' + pc[mode])
-                 if ': ' in line])
+    cfg = dict([line.strip().split(': ', 1)
+                for line in open('seastar/' + pc[mode])
+                if ': ' in line])
     if args.staticcxx:
         cfg['Libs'] = cfg['Libs'].replace('-lstdc++ ', '')
     modes[mode]['seastar_cflags'] = cfg['Cflags']
@@ -997,8 +1032,7 @@ seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_re
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
 libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-llz4', '-lz', '-lsnappy', pkg_config("--libs", "jsoncpp"),
                  maybe_static(args.staticboost, '-lboost_filesystem'), ' -lcrypt', ' -lcryptopp',
-                 maybe_static(args.staticboost, '-lboost_date_time'),
-                ])
+                 maybe_static(args.staticboost, '-lboost_date_time'), ])
 
 xxhash_dir = 'xxHash'
 
@@ -1023,7 +1057,7 @@ else:
 outdir = 'build'
 buildfile = 'build.ninja'
 
-os.makedirs(outdir, exist_ok = True)
+os.makedirs(outdir, exist_ok=True)
 do_sanitize = True
 if args.static:
     do_sanitize = False
@@ -1097,7 +1131,7 @@ with open(buildfile, 'w') as f:
             rule antlr3.{mode}
                 # We replace many local `ExceptionBaseType* ex` variables with a single function-scope one.
                 # Because we add such a variable to every function, and because `ExceptionBaseType` is not a global
-                # name, we also add a global typedef to avoid compilation errors. 
+                # name, we also add a global typedef to avoid compilation errors.
                 command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in $
                      && {antlr3_exec} $builddir/{mode}/gen/$in $
                      && sed -i -e 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' $
@@ -1107,9 +1141,13 @@ with open(buildfile, 'w') as f:
                             s/exceptions::syntax_exception e/exceptions::syntax_exception\& e/' $
                         build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
-            ''').format(mode = mode, antlr3_exec = antlr3_exec, **modeval))
-        f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
-            artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
+            ''').format(mode=mode, antlr3_exec=antlr3_exec, **modeval))
+        f.write(
+            'build {mode}: phony {artifacts}\n'.format(
+                mode=mode,
+                artifacts=str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))
+            )
+        )
         compiles = {}
         ragels = {}
         swaggers = {}
@@ -1137,7 +1175,7 @@ with open(buildfile, 'w') as f:
                 if binary.startswith('tests/'):
                     local_libs = '$libs'
                     if binary not in tests_not_using_seastar_test_framework or binary in pure_boost_tests:
-                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework') 
+                        local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                     if has_thrift:
                         local_libs += ' ' + thrift_libs + ' ' + maybe_static(args.staticboost, '-lboost_system')
                     # Our code's debugging information is huge, and multiplied
@@ -1146,7 +1184,7 @@ with open(buildfile, 'w') as f:
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
                     f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
-                                                                                     'seastar/build/{}/libseastar.a'.format(mode)))
+                                                                          'seastar/build/{}/libseastar.a'.format(mode)))
                     f.write('   libs = {}\n'.format(local_libs))
                     f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                               'seastar/build/{}/libseastar.a'.format(mode)))
@@ -1188,16 +1226,16 @@ with open(buildfile, 'w') as f:
             gen_headers += list(serializers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
             if src in extra_cxxflags:
-                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode = mode, extra_cxxflags = extra_cxxflags[src], **modeval))
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=extra_cxxflags[src], **modeval))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
         for hh in swaggers:
             src = swaggers[hh]
-            f.write('build {}: swagger {} | seastar/json/json2code.py\n'.format(hh,src))
+            f.write('build {}: swagger {} | seastar/json/json2code.py\n'.format(hh, src))
         for hh in serializers:
             src = serializers[hh]
-            f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh,src))
+            f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh, src))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
@@ -1212,7 +1250,7 @@ with open(buildfile, 'w') as f:
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
                 if cc.endswith('Parser.cpp') and has_sanitize_address_use_after_scope:
-                    # Parsers end up using huge amounts of stack space and overflowing their stack 
+                    # Parsers end up using huge amounts of stack space and overflowing their stack
                     f.write('  obj_cxxflags = -fno-sanitize-address-use-after-scope\n')
         f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/http/request_parser.hh seastar/build/{mode}/gen/http/http_response_parser.hh: ninja {seastar_deps}\n'
                 .format(**locals()))
@@ -1239,4 +1277,4 @@ with open(buildfile, 'w') as f:
             description = CLEAN
         build clean: clean
         default {modes_list}
-        ''').format(modes_list = ' '.join(build_modes), **globals()))
+        ''').format(modes_list=' '.join(build_modes), **globals()))
