@@ -444,7 +444,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
             auto meta = [&] () -> shared_ptr<const cql3::metadata> {
                 if (!p->is_exhausted()) {
                     auto meta = make_shared<metadata>(*_selection->get_result_metadata());
-                    meta->set_has_more_pages(p->state());
+                    meta->set_paging_state(p->state());
                     return meta;
                 } else {
                     return _selection->get_result_metadata();
@@ -461,7 +461,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
             [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
                 if (!p->is_exhausted()) {
-                    rs->get_metadata().set_has_more_pages(p->state());
+                    rs->get_metadata().set_paging_state(p->state());
                 }
 
                 update_stats_rows_read(rs->size());
@@ -883,7 +883,7 @@ read_posting_list(service::storage_proxy& proxy,
     auto p = service::pager::query_pagers::pager(view_schema, selection,
             state, options, cmd, std::move(partition_ranges), stats, nullptr);
     return p->fetch_page(options.get_page_size(), now, timeout).then([p, &options, limit, now] (std::unique_ptr<cql3::result_set> rs) {
-        rs->get_metadata().set_has_more_pages(p->state());
+        rs->get_metadata().set_paging_state(p->state());
         return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
     });
 }

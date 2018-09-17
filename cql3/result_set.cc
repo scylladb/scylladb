@@ -74,7 +74,7 @@ bool metadata::all_in_same_cf() const {
     return column_specification::all_in_same_table(_column_info->_names);
 }
 
-void metadata::set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
+void metadata::set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state) {
     if (!paging_state) {
         return;
     }
