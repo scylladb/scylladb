@@ -21,7 +21,12 @@
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-import argparse, tarfile, os, os.path, subprocess, shutil, tempfile, io
+import argparse
+import io
+import os
+import subprocess
+import tarfile
+
 
 def ldd(executable):
     '''Given an executable file, return a dictionary with the keys
@@ -43,6 +48,7 @@ def ldd(executable):
         else:
             libraries[elements[0]] = os.path.realpath(elements[2])
     return libraries
+
 
 ap = argparse.ArgumentParser(description='Create a relocatable scylla package.')
 ap.add_argument('dest',
@@ -90,7 +96,7 @@ ar = tarfile.open(output, mode='w')
 #
 #    bin/scylla args -> libexec/scylla libexec/scylla.bin args -> lib/ld.so libexec/scylla.bin args
 
-thunk=b'''\
+thunk = b'''\
 #!/bin/bash
 
 x="$(readlink -f "$0")"
