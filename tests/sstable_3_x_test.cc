@@ -3952,9 +3952,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
         mut.partition().apply_delete(*s, std::move(rt));
         seastar::thread::yield();
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
