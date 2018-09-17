@@ -3849,9 +3849,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
                            clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
