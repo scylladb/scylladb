@@ -3920,9 +3920,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
         mut.partition().apply_insert(*s, ckey, ts);
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
