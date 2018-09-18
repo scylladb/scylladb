@@ -3255,9 +3255,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_deleted_column) {
         throw std::runtime_error("no column definition found");
     }
     mut.set_cell(clustering_key::make_empty(), *column_def, atomic_cell::make_dead(write_timestamp, write_time_point));
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_deleted_row) {
@@ -3764,9 +3765,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_simple_range_tombstone) {
     tombstone tomb{write_timestamp, tp};
     range_tombstone rt{clustering_key_prefix::from_single_value(*s, bytes("aaa")), clustering_key_prefix::from_single_value(*s, bytes("aaa")), tomb};
     mut.partition().apply_delete(*s, std::move(rt));
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 // Test the case when for RTs their adjacent bounds are written as boundary RT markers.
@@ -3805,9 +3807,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones) {
                            clustering_key::from_deeply_exploded(*s, {"aaa", "bbb"}), tomb};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 // Test the case when subsequent RTs have a common clustering but those bounds are both exclusive
@@ -3847,9 +3850,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_non_adjacent_range_tombstones) {
                            clustering_key_prefix::from_single_value(*s, bytes("ccc")), bound_kind::excl_end};
         mut.partition().apply_delete(*s, std::move(rt));
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
@@ -3917,9 +3921,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_mixed_rows_and_range_tombstones) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"ddd", "eee"});
         mut.partition().apply_insert(*s, ckey, ts);
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
@@ -3948,9 +3953,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_many_range_tombstones) {
         mut.partition().apply_delete(*s, std::move(rt));
         seastar::thread::yield();
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
@@ -4002,9 +4008,10 @@ SEASTAR_THREAD_TEST_CASE(test_write_adjacent_range_tombstones_with_rows) {
         clustering_key ckey = clustering_key::from_deeply_exploded(*s, {"aaa", "ccc", "ccc"});
         mut.partition().apply_insert(*s, ckey, ts);
     }
-    mt->apply(std::move(mut));
+    mt->apply(mut);
 
-    write_and_compare_sstables(s, mt, table_name);
+    tmpdir tmp = write_and_compare_sstables(s, mt, table_name);
+    validate_read(s, tmp.path, {mut});
 }
 
 SEASTAR_THREAD_TEST_CASE(test_write_range_tombstone_same_start_with_row) {
