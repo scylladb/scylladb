@@ -1075,7 +1075,7 @@ public:
         case state::COLUMN_END:
         column_end_label:
             _state = state::NEXT_COLUMN;
-            if (is_column_counter()) {
+            if (is_column_counter() && !_column_flags.is_deleted()) {
                 if (_consumer.consume_counter_column(get_column_id(),
                                                      to_bytes_view(_column_value),
                                                      _column_timestamp) == consumer_m::proceed::no) {
