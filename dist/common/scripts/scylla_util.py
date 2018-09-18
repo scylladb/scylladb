@@ -15,19 +15,20 @@
 # You should have received a copy of the GNU General Public License
 # along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
 
-import urllib.request, urllib.error, urllib.parse
-import urllib.request, urllib.parse, urllib.error
-import logging
-import time
-import re
-import os
-import string
-import subprocess
-import platform
 import configparser
 import io
+import logging
+import os
+import platform
+import re
 import shlex
 import shutil
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
 
 def curl(url, byte=False):
     max_retries = 5
@@ -47,6 +48,7 @@ def curl(url, byte=False):
             if (retries >= max_retries):
                 raise
 
+
 class aws_instance:
     """Describe several aspects of the current AWS instance"""
     def __disk_name(self, dev):
@@ -58,7 +60,7 @@ class aws_instance:
 
     def __device_exists(self, dev):
         if dev[0:4] != "/dev":
-            dev = "/dev/%s" %dev
+            dev = "/dev/%s" % dev
         return os.path.exists(dev)
 
     def __xenify(self, devname):
@@ -72,17 +74,17 @@ class aws_instance:
         nvme_re = re.compile(r"nvme\d+n\d+$")
         nvmes_present = list(filter(nvme_re.match, os.listdir("/dev")))
         if nvmes_present:
-            self._disks["ephemeral"] = nvmes_present;
+            self._disks["ephemeral"] = nvmes_present
 
         for dev in devmap.splitlines():
             t = devname.match(dev).group()
-            if t == "ephemeral"  and nvmes_present:
-                continue;
+            if t == "ephemeral" and nvmes_present:
+                continue
             if t not in self._disks:
                 self._disks[t] = []
             if not self.__device_exists(self.__xenify(dev)):
                 continue
-            self._disks[t] += [ self.__xenify(dev) ]
+            self._disks[t] += [self.__xenify(dev)]
 
     def __mac_address(self, nic='eth0'):
         with open('/sys/class/net/{}/address'.format(nic)) as f:
@@ -127,7 +129,7 @@ class aws_instance:
         """Returns all disks in the system, as visible from the AWS registry"""
         disks = set()
         for v in list(self._disks.values()):
-            disks = disks.union([ self.__disk_name(x) for x in v ])
+            disks = disks.union([self.__disk_name(x) for x in v])
         return disks
 
     def root_device(self):
@@ -167,21 +169,24 @@ class aws_instance:
         return True if re.search(r'^vpc-id$', mac_stat, flags=re.MULTILINE) else False
 
 
-## Regular expression helpers
+# Regular expression helpers
 # non-advancing comment matcher
-_nocomment=r"^\s*(?!#)"
+_nocomment = r"^\s*(?!#)"
 # non-capturing grouping
-_scyllaeq=r"(?:\s*|=)"
+_scyllaeq = r"(?:\s*|=)"
 _cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
 _smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
+
 
 def _reopt(s):
     return s + r"?"
 
+
 def is_developer_mode():
     f = open("/etc/scylla.d/dev-mode.conf", "r")
     pattern = re.compile(_nocomment + r".*developer-mode" + _scyllaeq + "(1|true)")
-    return len([ x for x in f if pattern.match(x) ]) >= 1
+    return len([x for x in f if pattern.match(x)]) >= 1
+
 
 class scylla_cpuinfo:
     """Class containing information about how Scylla sees CPUs in this machine.
@@ -190,9 +195,9 @@ class scylla_cpuinfo:
     def __parse_cpuset(self):
         f = open("/etc/scylla.d/cpuset.conf", "r")
         pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + "\s*\"")
-        grp = [ pattern.match(x) for x in f.readlines() if pattern.match(x) ]
+        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
         if not grp:
-            d = { "cpuset" : None, "smp" : None }
+            d = {"cpuset": None, "smp": None}
         else:
             # if more than one, use last
             d = grp[-1].groupdict()
@@ -200,12 +205,12 @@ class scylla_cpuinfo:
         if d["cpuset"]:
             groups = d["cpuset"].split(",")
             for g in groups:
-                ends = [ int(x) for x in g.split("-") ]
-                actual_set = actual_set.union(set(range(ends[0], ends[-1] +1)))
+                ends = [int(x) for x in g.split("-")]
+                actual_set = actual_set.union(set(range(ends[0], ends[-1] + 1)))
             d["cpuset"] = actual_set
         if d["smp"]:
             d["smp"] = int(d["smp"])
-        self._cpu_data = d;
+        self._cpu_data = d
 
     def __system_cpus(self):
         cur_proc = -1
@@ -214,7 +219,7 @@ class scylla_cpuinfo:
         for line in f:
             if line == '\n':
                 continue
-            key, value = [ x.strip() for x in line.split(":") ]
+            key, value = [x.strip() for x in line.split(":")]
             if key == "processor":
                 cur_proc = int(value)
                 results[cur_proc] = {}
@@ -235,7 +240,7 @@ class scylla_cpuinfo:
 
     def system_nr_cores(self):
         """Returns the number of cores available in the system"""
-        return len(set([ x['core id'] for x in list(self._cpu_data["system"].values()) ]))
+        return len(set([x['core id'] for x in list(self._cpu_data["system"].values())]))
 
     def cpuset(self):
         """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
@@ -254,9 +259,10 @@ class scylla_cpuinfo:
         else:
             return len(self._cpu_data["system"])
 
+
 def run(cmd, shell=False, silent=False, exception=True):
-    stdout=subprocess.DEVNULL if silent else None
-    stderr=subprocess.DEVNULL if silent else None
+    stdout = subprocess.DEVNULL if silent else None
+    stderr = subprocess.DEVNULL if silent else None
     if not shell:
         cmd = shlex.split(cmd)
     if exception:
@@ -264,6 +270,7 @@ def run(cmd, shell=False, silent=False, exception=True):
     else:
         p = subprocess.Popen(cmd, shell=shell, stdout=stdout, stderr=stderr)
         return p.wait()
+
 
 def out(cmd, shell=False, exception=True):
     if not shell:
@@ -274,14 +281,18 @@ def out(cmd, shell=False, exception=True):
         p = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE)
         return p.communicate()[0].strip().decode('utf-8')
 
+
 def is_debian_variant():
     return os.path.exists('/etc/debian_version')
+
 
 def is_redhat_variant():
     return os.path.exists('/etc/redhat-release')
 
+
 def is_gentoo_variant():
     return os.path.exists('/etc/gentoo-release')
+
 
 def is_ec2():
     if os.path.exists('/sys/hypervisor/uuid'):
@@ -294,13 +305,15 @@ def is_ec2():
         return True if re.match(r'^Amazon EC2$', s) else False
     return False
 
+
 def is_systemd():
     try:
         with open('/proc/1/comm') as f:
             s = f.read()
         return True if re.match(r'^systemd$', s, flags=re.MULTILINE) else False
-    except:
+    except Exception:
         return False
+
 
 def hex2list(hex_str):
     hex_str2 = hex_str.replace("0x", "").replace(",", "")
@@ -322,9 +335,11 @@ def hex2list(hex_str):
         i += 1
     return ",".join(cpu_list)
 
+
 def makedirs(name):
     if not os.path.isdir(name):
         os.makedirs(name)
+
 
 def rmtree(path):
     if not os.path.islink(path):
@@ -332,15 +347,18 @@ def rmtree(path):
     else:
         os.remove(path)
 
+
 def dist_name():
     return platform.dist()[0]
+
 
 def dist_ver():
     return platform.dist()[1]
 
+
 def is_unused_disk(dev):
     # dev is not in /sys/class/block/, like /dev/nvme[0-9]+
-    if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/',''))):
+    if not os.path.isdir('/sys/class/block/{dev}'.format(dev=dev.replace('/dev/', ''))):
         return False
     try:
         fd = os.open(dev, os.O_EXCL)
@@ -349,31 +367,37 @@ def is_unused_disk(dev):
     except OSError:
         return False
 
-CONCOLORS = {'green':'\033[1;32m', 'red':'\033[1;31m', 'nocolor':'\033[0m'}
+
+CONCOLORS = {'green': '\033[1;32m', 'red': '\033[1;31m', 'nocolor': '\033[0m'}
+
+
 def colorprint(msg, **kwargs):
     fmt = dict(CONCOLORS)
     fmt.update(kwargs)
     print(msg.format(**fmt))
 
+
 def get_mode_cpuset(nic, mode):
     try:
-        mode_cpu_mask=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
+        mode_cpu_mask = out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
         return hex2list(mode_cpu_mask)
     except subprocess.CalledProcessError:
         return '-1'
 
+
 def get_cur_cpuset():
     cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-    cpuset=cfg.get('CPUSET')
+    cpuset = cfg.get('CPUSET')
     return re.sub(r'^--cpuset (.+)$', r'\1', cpuset).strip()
+
 
 def get_tune_mode(nic):
     if not os.path.exists('/etc/scylla.d/cpuset.conf'):
         return
-    cur_cpuset=get_cur_cpuset()
-    mq_cpuset=get_mode_cpuset(nic, 'mq')
-    sq_cpuset=get_mode_cpuset(nic, 'sq')
-    sq_split_cpuset=get_mode_cpuset(nic, 'sq_split')
+    cur_cpuset = get_cur_cpuset()
+    mq_cpuset = get_mode_cpuset(nic, 'mq')
+    sq_cpuset = get_mode_cpuset(nic, 'sq')
+    sq_split_cpuset = get_mode_cpuset(nic, 'sq_split')
 
     if cur_cpuset == mq_cpuset:
         return 'mq'
@@ -382,19 +406,23 @@ def get_tune_mode(nic):
     elif cur_cpuset == sq_split_cpuset:
         return 'sq_split'
 
+
 def create_perftune_conf(nic='eth0'):
     if os.path.exists('/etc/scylla.d/perftune.yaml'):
         return
-    mode=get_tune_mode(nic)
-    yaml=out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
+    mode = get_tune_mode(nic)
+    yaml = out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
     with open('/etc/scylla.d/perftune.yaml', 'w') as f:
         f.write(yaml)
+
 
 def is_valid_nic(nic):
     return os.path.exists('/sys/class/net/{}'.format(nic))
 
+
 class SystemdException(Exception):
     pass
+
 
 class systemd_unit:
     def __init__(self, unit):
@@ -428,6 +456,7 @@ class systemd_unit:
 
     def unmask(self):
         return run('systemctl unmask {}'.format(self._unit))
+
 
 class sysconfig_parser:
     def __load(self):
