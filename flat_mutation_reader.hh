@@ -306,6 +306,21 @@ public:
             _buffer_size = 0;
             return std::exchange(_buffer, {});
         }
+
+        void move_buffer_content_to(impl& other) {
+            if (other._buffer.empty()) {
+                std::swap(_buffer, other._buffer);
+                other._buffer_size = std::exchange(_buffer_size, 0);
+            } else {
+                seastar::memory::on_alloc_point(); // for exception safety tests
+                other._buffer.reserve(other._buffer.size() + _buffer.size());
+                for (auto&& mf : _buffer) {
+                    other._buffer.emplace_back(std::move(mf));
+                }
+                _buffer.clear();
+                other._buffer_size += std::exchange(_buffer_size, 0);
+            }
+        }
     };
 private:
     std::unique_ptr<impl> _impl;
@@ -440,6 +455,16 @@ public:
     // call.
     circular_buffer<mutation_fragment> detach_buffer() {
         return _impl->detach_buffer();
+    }
+    // Moves the buffer content to `other`.
+    //
+    // If the buffer of `other` is empty this is very efficient as the buffers
+    // are simply swapped. Otherwise the content of the buffer is moved
+    // fragmuent-by-fragment.
+    // Allows efficient implementation of wrapping readers that do no
+    // transformation to the fragment stream.
+    void move_buffer_content_to(impl& other) {
+        _impl->move_buffer_content_to(other);
     }
 };
 
