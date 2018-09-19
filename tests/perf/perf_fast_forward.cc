@@ -105,6 +105,9 @@ using stats_values = std::tuple<
     double, // time
     uint64_t, // frags
     double, // frags_per_second
+    double, // frags_per_second mad
+    double, // frags_per_second max
+    double, // frags_per_second min
     uint64_t, // aio
     uint64_t, // kb
     uint64_t, // blocked
@@ -134,6 +137,9 @@ std::array<sstring, std::tuple_size<stats_values>::value> stats_formats =
 {
     "{:.6f}",
     "{}",
+    "{:.0f}",
+    "{:.0f}",
+    "{:.0f}",
     "{:.0f}",
     "{}",
     "{}",
@@ -406,6 +412,15 @@ struct test_result {
     uint64_t fragments_read;
     metrics_snapshot before;
     metrics_snapshot after;
+private:
+    double _fragment_rate_mad = 0;
+    double _fragment_rate_max = 0;
+    double _fragment_rate_min = 0;
+    sstring_vec _params;
+    std::optional<sstring> _error;
+public:
+
+    test_result() = default;
 
     test_result(metrics_snapshot before, uint64_t fragments_read)
         : fragments_read(fragments_read)
@@ -417,6 +432,15 @@ struct test_result {
     }
 
     double fragment_rate() const { return double(fragments_read) / duration_in_seconds(); }
+    double fragment_rate_mad() const { return _fragment_rate_mad; }
+    double fragment_rate_max() const { return _fragment_rate_max; }
+    double fragment_rate_min() const { return _fragment_rate_min; }
+
+    void set_fragment_rate_stats(double mad, double max, double min) {
+        _fragment_rate_mad = mad;
+        _fragment_rate_max = max;
+        _fragment_rate_min = min;
+    }
 
     uint64_t aio_reads() const { return after.io.aio_reads - before.io.aio_reads; }
     uint64_t aio_read_bytes() const { return after.io.aio_read_bytes - before.io.aio_read_bytes; }
@@ -442,6 +466,9 @@ struct test_result {
             {"time (s)", "{:>10}"},
             {"frags",    "{:>9}"},
             {"frag/s",   "{:>10}"},
+            {"mad f/s",  "{:>10}"},
+            {"max f/s",  "{:>10}"},
+            {"min f/s",  "{:>10}"},
             {"aio",      "{:>6}"},
             {"(KiB)",    "{:>10}"},
             {"blocked",  "{:>7}"},
@@ -456,11 +483,20 @@ struct test_result {
         };
     }
 
-    stats_values get_stats_values() {
+    void set_params(sstring_vec p) { _params = std::move(p); }
+    const sstring_vec& get_params() const { return _params; }
+
+    void set_error(sstring msg) { _error = std::move(msg); }
+    const std::optional<sstring>& get_error() const { return _error; }
+
+    stats_values get_stats_values() const {
         return stats_values{
             duration_in_seconds(),
             fragments_read,
             fragment_rate(),
+            fragment_rate_mad(),
+            fragment_rate_max(),
+            fragment_rate_min(),
             aio_reads(),
             aio_read_bytes() / 1024,
             reads_blocked(),
@@ -476,21 +512,29 @@ struct test_result {
     }
 };
 
-static void check_no_disk_reads(const test_result& r) {
+static test_result check_no_disk_reads(test_result r) {
     if (r.aio_reads()) {
-        print_error("Expected no disk reads");
+        r.set_error("Expected no disk reads");
     }
+    return r;
 }
 
-static void check_no_index_reads(const test_result& r) {
+static void check_no_index_reads(test_result& r) {
     if (r.index_hits() || r.index_misses()) {
-        print_error("Expected no index reads");
+        r.set_error("Expected no index reads");
     }
 }
 
-static void check_fragment_count(const test_result& r, uint64_t expected) {
+static void check_and_report_no_index_reads(test_result& r) {
+    check_no_index_reads(r);
+    if (r.get_error()) {
+        print_error(*r.get_error());
+    }
+}
+
+static void check_fragment_count(test_result& r, uint64_t expected) {
     if (r.fragments_read != expected) {
-        print_error(sprint("Expected to read %d fragments", expected));
+        r.set_error(sprint("Expected to read %d fragments", expected));
     }
 }
 
@@ -854,6 +898,7 @@ app_template app;
 bool cancel = false;
 bool cache_enabled;
 bool new_test_case = false;
+double test_case_duration = 0.;
 table_config cfg;
 int_range live_range;
 
@@ -880,106 +925,208 @@ void on_test_case() {
     }
 };
 
+using test_result_vector = std::vector<test_result>;
+
+void print(const test_result& tr) {
+    output_mgr->add_test_values(tr.get_params(), tr.get_stats_values());
+    if (tr.get_error()) {
+        print_error(*tr.get_error());
+    }
+}
+
+
+void run_test_case(std::function<std::vector<test_result>()> fn) {
+    auto do_run = [&] {
+        on_test_case();
+        return fn();
+    };
+
+    auto t1 = std::chrono::steady_clock::now();
+    auto rs = do_run();
+    auto t2 = std::chrono::steady_clock::now();
+    auto iteration_duration = (t2 - t1) / std::chrono::duration<double>(1s);
+
+    if (test_case_duration == 0.) {
+        for (auto& r : rs) {
+            print(r);
+        }
+        return;
+    }
+
+    if (iteration_duration == 0.0) {
+        iteration_duration = 1.f;
+    }
+    auto iteration_count = std::max<size_t>(test_case_duration / iteration_duration, 3);
+
+    std::vector<std::vector<test_result>> results(rs.size());
+    results.reserve(iteration_count);
+    for (auto i = 0u; i < iteration_count; i++) {
+        auto rs = do_run();
+        assert(rs.size() == results.size());
+        for (auto j = 0u; j < rs.size(); j++) {
+            results[j].emplace_back(rs[j]);
+        }
+    }
+
+    for (auto&& result : results) {
+        boost::sort(result, [] (const test_result& a, const test_result& b) {
+            return a.fragment_rate() < b.fragment_rate();
+        });
+        auto median = result[result.size() / 2];
+        auto fragment_rate_min = result[0].fragment_rate();
+        auto fragment_rate_max = result[result.size() - 1].fragment_rate();
+
+        std::vector<double> deviation;
+        for (auto& r : result) {
+            deviation.emplace_back(fabs(median.fragment_rate() - r.fragment_rate()));
+        }
+        std::sort(deviation.begin(), deviation.end());
+        auto fragment_rate_mad = deviation[deviation.size() / 2];
+        median.set_fragment_rate_stats(fragment_rate_mad, fragment_rate_max, fragment_rate_min);
+        print(median);
+    }
+}
+
+void run_test_case(std::function<test_result()> fn) {
+    run_test_case([&] {
+        return test_result_vector { fn() };
+    });
+}
+
 void test_large_partition_single_key_slice(column_family& cf) {
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"range", "{:<14}"}}, test_result::stats_names());
     struct first {
     };
     auto test = [&](int_range range) {
         auto r = test_slicing_using_restrictions(cf, range);
-        output_mgr->add_test_values(to_sstrings(new_test_case ? "->": 0, format("{}", range)), r.get_stats_values());
+        r.set_params(to_sstrings(new_test_case ? "->": 0, format("{}", range)));
         check_fragment_count(r, cardinality(intersection(range, live_range)));
         return r;
     };
 
-    on_test_case();
-    test(int_range::make({0}, {1}));
-    test_result r = test(int_range::make({0}, {1}));
-    check_no_disk_reads(r);
+    run_test_case([&] {
+        return test_result_vector {
+            test(int_range::make({0}, {1})),
+            check_no_disk_reads(test(int_range::make({0}, {1}))),
+        };
+    });
 
-    on_test_case();
-    test(int_range::make({0}, {cfg.n_rows / 2}));
-    r = test(int_range::make({0}, {cfg.n_rows / 2}));
-    check_no_disk_reads(r);
+    run_test_case([&] {
+        return test_result_vector {
+            test(int_range::make({0}, {cfg.n_rows / 2})),
+            check_no_disk_reads(test(int_range::make({0}, {cfg.n_rows / 2}))),
+        };
+    });
 
-    on_test_case();
-    test(int_range::make({0}, {cfg.n_rows}));
-    r = test(int_range::make({0}, {cfg.n_rows}));
-    check_no_disk_reads(r);
+    run_test_case([&] {
+      return test_result_vector {
+        test(int_range::make({0}, {cfg.n_rows})),
+        check_no_disk_reads(test(int_range::make({0}, {cfg.n_rows}))),
+      };
+    });
 
     assert(cfg.n_rows > 200); // assumed below
 
-    on_test_case(); // adjacent, no overlap
-    test(int_range::make({1}, {100, false}));
-    test(int_range::make({100}, {109}));
+    run_test_case([&] { // adjacent, no overlap
+        return test_result_vector {
+            test(int_range::make({1}, {100, false})),
+            test(int_range::make({100}, {109})),
+        };
+    });
 
-    on_test_case(); // adjacent, contained
-    test(int_range::make({1}, {100}));
-    r = test(int_range::make_singular({100}));
-    check_no_disk_reads(r);
+    run_test_case([&] { // adjacent, contained
+        return test_result_vector {
+            test(int_range::make({1}, {100})),
+            check_no_disk_reads(test(int_range::make_singular({100}))),
+        };
+    });
 
-    on_test_case(); // overlap
-    test(int_range::make({1}, {100}));
-    test(int_range::make({51}, {150}));
+    run_test_case([&] { // overlap
+        return test_result_vector {
+            test(int_range::make({1}, {100})),
+            test(int_range::make({51}, {150})),
+        };
+    });
 
-    on_test_case(); // enclosed
-    test(int_range::make({1}, {100}));
-    r = test(int_range::make({51}, {70}));
-    check_no_disk_reads(r);
+    run_test_case([&] { // enclosed
+        return test_result_vector {
+            test(int_range::make({1}, {100})),
+            check_no_disk_reads(test(int_range::make({51}, {70}))),
+        };
+    });
 
-    on_test_case(); // enclosing
-    test(int_range::make({51}, {70}));
-    test(int_range::make({41}, {80}));
-    test(int_range::make({31}, {100}));
+    run_test_case([&] { // enclosing
+        return test_result_vector {
+            test(int_range::make({51}, {70})),
+            test(int_range::make({41}, {80})),
+            test(int_range::make({31}, {100})),
+        };
+    });
 
-    on_test_case(); // adjacent, singular excluded
-    test(int_range::make({0}, {100, false}));
-    test(int_range::make_singular({100}));
+    run_test_case([&] { // adjacent, singular excluded
+        return test_result_vector {
+            test(int_range::make({0}, {100, false})),
+            test(int_range::make_singular({100})),
+        };
+    });
 
-    on_test_case(); // adjacent, singular excluded
-    test(int_range::make({100, false}, {200}));
-    test(int_range::make_singular({100}));
+    run_test_case([&] { // adjacent, singular excluded
+        return test_result_vector {
+            test(int_range::make({100, false}, {200})),
+            test(int_range::make_singular({100})),
+        };
+    });
 
-    on_test_case();
-    test(int_range::make_ending_with({100}));
-    r = test(int_range::make({10}, {20}));
-    check_no_disk_reads(r);
-    r = test(int_range::make_singular({-1}));
-    check_no_disk_reads(r);
+    run_test_case([&] {
+        return test_result_vector {
+            test(int_range::make_ending_with({100})),
+            check_no_disk_reads(test(int_range::make({10}, {20}))),
+            check_no_disk_reads(test(int_range::make_singular({-1}))),
+        };
+    });
 
-    on_test_case();
-    test(int_range::make_starting_with({100}));
-    r = test(int_range::make({150}, {159}));
-    check_no_disk_reads(r);
-    r = test(int_range::make_singular({cfg.n_rows - 1}));
-    check_no_disk_reads(r);
-    r = test(int_range::make_singular({cfg.n_rows + 1}));
-    check_no_disk_reads(r);
+    run_test_case([&] {
+        return test_result_vector {
+            test(int_range::make_starting_with({100})),
+            check_no_disk_reads(test(int_range::make({150}, {159}))),
+            check_no_disk_reads(test(int_range::make_singular({cfg.n_rows - 1}))),
+            check_no_disk_reads(test(int_range::make_singular({cfg.n_rows + 1}))),
+        };
+    });
 
-    on_test_case(); // many gaps
-    test(int_range::make({10}, {20, false}));
-    test(int_range::make({30}, {40, false}));
-    test(int_range::make({60}, {70, false}));
-    test(int_range::make({90}, {100, false}));
-    test(int_range::make({0}, {100, false}));
+    run_test_case([&] { // many gaps
+        return test_result_vector {
+            test(int_range::make({10}, {20, false})),
+            test(int_range::make({30}, {40, false})),
+            test(int_range::make({60}, {70, false})),
+            test(int_range::make({90}, {100, false})),
+            test(int_range::make({0}, {100, false})),
+        };
+    });
 
-    on_test_case(); // many gaps
-    test(int_range::make({10}, {20, false}));
-    test(int_range::make({30}, {40, false}));
-    test(int_range::make({60}, {70, false}));
-    test(int_range::make({90}, {100, false}));
-    test(int_range::make({10}, {100, false}));
+    run_test_case([&] { // many gaps
+        return test_result_vector {
+            test(int_range::make({10}, {20, false})),
+            test(int_range::make({30}, {40, false})),
+            test(int_range::make({60}, {70, false})),
+            test(int_range::make({90}, {100, false})),
+            test(int_range::make({10}, {100, false})),
+        };
+    });
 }
 
 void test_large_partition_skips(column_family& cf) {
     output_mgr->set_test_param_names({{"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
     auto do_test = [&] (int n_read, int n_skip) {
         auto r = scan_rows_with_stride(cf, cfg.n_rows, n_read, n_skip);
-        output_mgr->add_test_values(to_sstrings(n_read, n_skip), r.get_stats_values());
+        r.set_params(to_sstrings(n_read, n_skip));
         check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
+        return r;
     };
     auto test = [&] (int n_read, int n_skip) {
-        on_test_case();
-        do_test(n_read, n_skip);
+        run_test_case([&] {
+            return do_test(n_read, n_skip);
+        });
     };
 
     test(1, 0);
@@ -1006,9 +1153,12 @@ void test_large_partition_skips(column_family& cf) {
         output_mgr->add_test_static_param("cache_enabled", "Testing cache scan of large partition with varying row continuity.");
         for (auto n_read : {1, 64}) {
             for (auto n_skip : {1, 64}) {
-                on_test_case();
-                do_test(n_read, n_skip); // populate with gaps
-                do_test(1, 0);
+                run_test_case([&] {
+                    return test_result_vector {
+                        do_test(n_read, n_skip), // populate with gaps
+                        do_test(1, 0),
+                    };
+                });
             }
         }
     }
@@ -1017,10 +1167,12 @@ void test_large_partition_skips(column_family& cf) {
 void test_large_partition_slicing(column_family& cf) {
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
-        on_test_case();
+      run_test_case([&] {
         auto r = slice_rows(cf, offset, read);
-        output_mgr->add_test_values(to_sstrings(offset, read), r.get_stats_values());
+        r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        return r;
+      });
     };
 
     test(0, 1);
@@ -1037,10 +1189,12 @@ void test_large_partition_slicing(column_family& cf) {
 void test_large_partition_slicing_clustering_keys(column_family& cf) {
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
-        on_test_case();
+      run_test_case([&] {
         auto r = slice_rows_by_ck(cf, offset, read);
-        output_mgr->add_test_values(to_sstrings(offset, read), r.get_stats_values());
+        r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        return r;
+      });
     };
 
     test(0, 1);
@@ -1057,10 +1211,12 @@ void test_large_partition_slicing_clustering_keys(column_family& cf) {
 void test_large_partition_slicing_single_partition_reader(column_family& cf) {
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int offset, int read) {
-        on_test_case();
+      run_test_case([&] {
         auto r = slice_rows_single_key(cf, offset, read);
-        output_mgr->add_test_values(to_sstrings(offset, read), r.get_stats_values());
+        r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        return r;
+      });
     };
 
     test(0, 1);
@@ -1077,10 +1233,12 @@ void test_large_partition_slicing_single_partition_reader(column_family& cf) {
 void test_large_partition_select_few_rows(column_family& cf) {
     output_mgr->set_test_param_names({{"stride", "{:<7}"}, {"rows", "{:<7}"}}, test_result::stats_names());
     auto test = [&](int stride, int read) {
-        on_test_case();
+      run_test_case([&] {
         auto r = select_spread_rows(cf, stride, read);
-        output_mgr->add_test_values(to_sstrings(stride, read), r.get_stats_values());
+        r.set_params(to_sstrings(stride, read));
         check_fragment_count(r, read);
+        return r;
+      });
     };
 
     test(cfg.n_rows / 1, 1);
@@ -1094,33 +1252,41 @@ void test_large_partition_select_few_rows(column_family& cf) {
 void test_large_partition_forwarding(column_family& cf) {
     output_mgr->set_test_param_names({{"pk-scan", "{:<7}"}}, test_result::stats_names());
 
-    on_test_case();
+  run_test_case([&] {
     auto r = test_forwarding_with_restriction(cf, cfg, false);
     check_fragment_count(r, 2);
-    output_mgr->add_test_values(to_sstrings("yes"), r.get_stats_values());
+    r.set_params(to_sstrings("yes"));
+    return r;
+  });
 
-    on_test_case();
-    r = test_forwarding_with_restriction(cf, cfg, true);
+  run_test_case([&] {
+    auto r = test_forwarding_with_restriction(cf, cfg, true);
     check_fragment_count(r, 2);
-    output_mgr->add_test_values(to_sstrings("no"), r.get_stats_values());
+    r.set_params(to_sstrings("no"));
+    return r;
+  });
 }
 
 void test_small_partition_skips(column_family& cf2) {
     output_mgr->set_test_param_names({{"", "{:<2}"}, {"read", "{:<7}"}, {"skip", "{:<7}"}}, test_result::stats_names());
     auto do_test = [&] (int n_read, int n_skip) {
         auto r = scan_with_stride_partitions(cf2, cfg.n_rows, n_read, n_skip);
-        output_mgr->add_test_values(to_sstrings(new_test_case ? "->" : "", n_read, n_skip), r.get_stats_values());
+        r.set_params(to_sstrings(new_test_case ? "->" : "", n_read, n_skip));
         new_test_case = false;
         check_fragment_count(r, count_for_skip_pattern(cfg.n_rows, n_read, n_skip));
         return r;
     };
     auto test = [&] (int n_read, int n_skip) {
-        on_test_case();
-        return do_test(n_read, n_skip);
+      test_result r;
+      run_test_case([&] {
+        r = do_test(n_read, n_skip);
+        return r;
+      });
+      return r;
     };
 
     auto r = test(1, 0);
-    check_no_index_reads(r);
+    check_and_report_no_index_reads(r);
 
     test(1, 1);
     test(1, 8);
@@ -1144,9 +1310,12 @@ void test_small_partition_skips(column_family& cf2) {
         output_mgr->add_test_static_param("cache_enabled", "Testing cache scan with small partitions with varying continuity.");
         for (auto n_read : {1, 64}) {
             for (auto n_skip : {1, 64}) {
-                on_test_case();
-                do_test(n_read, n_skip); // populate with gaps
-                do_test(1, 0);
+                run_test_case([&] {
+                    return test_result_vector {
+                        do_test(n_read, n_skip), // populate with gaps
+                        do_test(1, 0),
+                    };
+                });
             }
         }
     }
@@ -1155,10 +1324,12 @@ void test_small_partition_skips(column_family& cf2) {
 void test_small_partition_slicing(column_family& cf2) {
     output_mgr->set_test_param_names({{"offset", "{:<7}"}, {"read", "{:<7}"}}, test_result::stats_names());
     auto test = [&] (int offset, int read) {
-        on_test_case();
+      run_test_case([&] {
         auto r = slice_partitions(cf2, cfg.n_rows, offset, read);
-        output_mgr->add_test_values(to_sstrings(offset, read), r.get_stats_values());
+        r.set_params(to_sstrings(offset, read));
         check_fragment_count(r, std::min(cfg.n_rows - offset, read));
+        return r;
+      });
     };
 
     test(0, 1);
@@ -1259,6 +1430,7 @@ int main(int argc, char** argv) {
         ("value-size", bpo::value<int>()->default_value(100), "Size of value stored in a cell. Relevant only for population.")
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
+        ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
         ;
 
     return app.run(argc, argv, [] {
@@ -1282,6 +1454,8 @@ int main(int argc, char** argv) {
         db_cfg.enable_cache(app.configuration().count("enable-cache"));
         db_cfg.enable_commitlog(false);
         db_cfg.data_file_directories({datadir}, db::config::config_source::CommandLine);
+
+        test_case_duration = app.configuration()["test-case-duration"].as<double>();
 
         if (!app.configuration().count("verbose")) {
             logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
