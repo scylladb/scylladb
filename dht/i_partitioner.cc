@@ -21,7 +21,9 @@
 
 #include "i_partitioner.hh"
 #include <seastar/core/reactor.hh>
-#include "murmur3_partitioner.hh"
+#include "dht/murmur3_partitioner.hh"
+#include "dht/random_partitioner.hh"
+#include "dht/byte_ordered_partitioner.hh"
 #include "utils/class_registrator.hh"
 #include "types.hh"
 #include "utils/murmur_hash.hh"
@@ -182,13 +184,17 @@ std::unique_ptr<i_partitioner> default_partitioner;
 
 void set_global_partitioner(const sstring& class_name, unsigned ignore_msb)
 {
+    default_partitioner = make_partitioner(class_name, smp::count, ignore_msb);
+}
+
+std::unique_ptr<dht::i_partitioner> make_partitioner(sstring partitioner_name, unsigned shard_count, unsigned sharding_ignore_msb_bits) {
     try {
-        default_partitioner = create_object<i_partitioner, const unsigned&, const unsigned&>(class_name, smp::count, ignore_msb);
+        return create_object<i_partitioner, const unsigned&, const unsigned&>(partitioner_name, shard_count, sharding_ignore_msb_bits);
     } catch (std::exception& e) {
         auto supported_partitioners = ::join(", ", class_registry<i_partitioner>::classes() |
                 boost::adaptors::map_keys);
         throw std::runtime_error(format("Partitioner {} is not supported, supported partitioners = {{ {} }} : {}",
-                class_name, supported_partitioners, e.what()));
+                partitioner_name, supported_partitioners, e.what()));
     }
 }
 

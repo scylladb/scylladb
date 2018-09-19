@@ -807,6 +807,8 @@ public:
     stdx::optional<dht::token_range> next();
 };
 
+std::unique_ptr<dht::i_partitioner> make_partitioner(sstring name, unsigned shard_count, unsigned sharding_ignore_msb_bits);
+
 } // dht
 
 namespace std {
