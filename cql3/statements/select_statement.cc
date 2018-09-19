@@ -471,6 +471,27 @@ select_statement::do_execute(service::storage_proxy& proxy,
             });
 }
 
+template<typename KeyType>
+GCC6_CONCEPT(
+    requires (std::is_same_v<KeyType, partition_key> || std::is_same_v<KeyType, clustering_key_prefix>)
+)
+static KeyType
+generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_key& index_ck, const schema& base_schema, const schema& view_schema) {
+    const auto& base_columns = std::is_same_v<KeyType, partition_key> ? base_schema.partition_key_columns() : base_schema.clustering_key_columns();
+    std::vector<bytes_view> exploded_base_key;
+    exploded_base_key.reserve(base_columns.size());
+
+    for (const column_definition& base_col : base_columns) {
+        const column_definition* view_col = view_schema.view_info()->view_column(base_col);
+        if (view_col->is_partition_key()) {
+            exploded_base_key.push_back(index_pk.get_component(view_schema, view_col->id));
+        } else {
+            exploded_base_key.push_back(index_ck.get_component(view_schema, view_col->id));
+        }
+    }
+    return KeyType::from_range(exploded_base_key);
+}
+
 future<shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy,
                           lw_shared_ptr<query::read_command> cmd,
