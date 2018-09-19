@@ -43,7 +43,9 @@ sessions_cols = {
     'duration'      : 'int',
     'parameters'    : 'map<text, text>',
     'request'       : 'text',
-    'started_at'    : 'timestamp'
+    'started_at'    : 'timestamp',
+    'request_size'  : 'int',
+    'response_size' : 'int'
 }
 
 slow_query_log_cols = {
