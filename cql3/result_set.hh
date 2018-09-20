@@ -111,6 +111,7 @@ private:
 
 public:
     void set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
+    void maybe_set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
 
     void set_skip_metadata();
 
