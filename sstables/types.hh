@@ -266,7 +266,22 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
     disk_array<uint32_t, uint8_t> cardinality;
 
     template <typename Describer>
-    auto describe_type(sstable_version_types v, Describer f) { return f(ancestors, cardinality); }
+    auto describe_type(sstable_version_types v, Describer f) {
+        switch (v) {
+        case sstable_version_types::mc:
+            return f(
+                cardinality
+            );
+        case sstable_version_types::ka:
+        case sstable_version_types::la:
+            return f(
+                ancestors,
+                cardinality
+            );
+        }
+        // Should never reach here - compiler will complain if switch above does not cover all sstable versions
+        abort();
+    }
 };
 
 struct stats_metadata : public metadata_base<stats_metadata> {
