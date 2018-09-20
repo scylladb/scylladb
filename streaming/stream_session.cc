@@ -188,8 +188,6 @@ void stream_session::init_messaging_service_handler() {
     ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::source<frozen_mutation_fragment> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, cf_id, source] () mutable {
-            auto src_cpu_id = from.cpu_id;
-            return smp::submit_to(src_cpu_id % smp::count, [from, estimated_partitions, plan_id, schema_id, cf_id, source] () mutable {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
                     auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
@@ -241,7 +239,6 @@ void stream_session::init_messaging_service_handler() {
                     });
                     return make_ready_future<rpc::sink<int>>(sink);
                 });
-            });
         });
     });
     ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id) {
