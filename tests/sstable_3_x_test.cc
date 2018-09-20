@@ -4310,3 +4310,25 @@ SEASTAR_THREAD_TEST_CASE(test_read_range_tombstone_boundaries_index) {
     assert_that(get_index_reader(sst)).has_monotonic_positions(*s);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_read_table_empty_clustering_key) {
+    // CREATE TABLE empty_clustering_key (pk int, v int, PRIMARY KEY (pk)) with compression = {'sstable_compression': ''};
+    schema_builder builder("sst3", "empty_clustering_key");
+    builder.with_column("pk", int32_type, column_kind::partition_key);
+    builder.with_column("v", int32_type);
+    builder.set_compressor_params(compression_parameters());
+    schema_ptr s = builder.build(schema_builder::compact_storage::no);
+
+    sstable_assertions sst(s, "tests/sstables/3.x/uncompressed/empty_clustering_key");
+    sst.load();
+
+    std::vector<dht::decorated_key> keys;
+    for (int i = 0; i < 10; i++) {
+        auto pk = partition_key::from_single_value(*s, int32_type->decompose(i));
+        keys.emplace_back(dht::global_partitioner().decorate_key(*s, std::move(pk)));
+    }
+    dht::decorated_key::less_comparator cmp(s);
+    std::sort(keys.begin(), keys.end(), cmp);
+
+    assert_that(sst.read_rows_flat()).produces(keys);
+}
+
