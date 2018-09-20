@@ -128,7 +128,7 @@ if __name__ == '__main__':
             f.write(res)
 
     makedirs(mount_at)
-    run('mount -t xfs -o noatime {raid} "{mount_at}"'.format(raid=fsdev, mount_at=mount_at))
+    run('mount -t xfs -o noatime,lazytime {raid} "{mount_at}"'.format(raid=fsdev, mount_at=mount_at))
 
     makedirs('{}/data'.format(root))
     makedirs('{}/commitlog'.format(root))
@@ -146,7 +146,7 @@ if __name__ == '__main__':
         match = re.search(r'^/dev/\S+: (UUID="\S+")', res.strip())
         uuid = match.group(1)
         with open('/etc/fstab', 'a') as f:
-            f.write('{uuid} {mount_at} xfs noatime,nofail 0 0\n'.format(uuid=uuid, mount_at=mount_at))
+            f.write('{uuid} {mount_at} xfs noatime,nofail,lazytime 0 0\n'.format(uuid=uuid, mount_at=mount_at))
         mounts_conf = '/etc/systemd/system/scylla-server.service.d/mounts.conf'
         if not os.path.exists(mounts_conf):
             makedirs('/etc/systemd/system/scylla-server.service.d/')
