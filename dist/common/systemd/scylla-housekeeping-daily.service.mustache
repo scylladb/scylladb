@@ -10,7 +10,7 @@ Group=scylla
 ExecStart=/usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q -c /etc/scylla.d/housekeeping.cfg --repo-files '/etc/apt/sources.list.d/scylla*.list' version --mode d
 {{/debian}}
 {{#redhat}}
-ExecStart=/usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q -c /etc/scylla.d/housekeeping.cfg --repo-files @@REPOFILES@@ version --mode d
+ExecStart=/usr/lib/scylla/scylla-housekeeping --uuid-file /var/lib/scylla-housekeeping/housekeeping.uuid -q -c /etc/scylla.d/housekeeping.cfg --repo-files '/etc/yum.repos.d/scylla*.repo' version --mode d
 {{/redhat}}
 
 [Install]
