@@ -883,14 +883,15 @@ class mp_row_consumer_m : public consumer_m {
                  * and the end built from the row position because it also overlaps with query ranges.
                  */
                 auto ck = cr.key();
-                auto end_kind = clustering_key::make_full(*_schema, ck) ? bound_kind::excl_end : bound_kind::incl_end;
+                bool was_non_full_key = clustering_key::make_full(*_schema, ck);
+                auto end_kind =  was_non_full_key ? bound_kind::excl_end : bound_kind::incl_end;
                 _reader->push_mutation_fragment(range_tombstone(std::move(_opened_range_tombstone->ck),
                                                                 _opened_range_tombstone->kind,
                                                                 ck,
                                                                 end_kind,
                                                                 _opened_range_tombstone->tomb));
                 _opened_range_tombstone->ck = std::move(ck);
-                _opened_range_tombstone->kind = bound_kind::incl_start;
+                _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
             }
             _reader->push_mutation_fragment(std::move(cr));
             break;
@@ -898,9 +899,9 @@ class mp_row_consumer_m : public consumer_m {
             if (_opened_range_tombstone) {
                 // Trim the opened range up to the clustering key of the current row
                 auto& ck = cr.key();
-                clustering_key::make_full(*_schema, ck);
+                bool was_non_full_key = clustering_key::make_full(*_schema, ck);
                 _opened_range_tombstone->ck = std::move(ck);
-                _opened_range_tombstone->kind = bound_kind::incl_start;
+                _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
             }
             if (_mf_filter->is_current_range_changed()) {
                 return proceed::no;
