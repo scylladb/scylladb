@@ -2746,6 +2746,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
     // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,3,5);
     // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,3,4,6);
     // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,4,7);
+    // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,4,0,8);
     // delete from wrong_range_tombstone_order where p = 0 and a = 1 and b = 4 and c = 0;
     // delete from wrong_range_tombstone_order where p = 0 and a = 2;
     // delete from wrong_range_tombstone_order where p = 0 and a = 2 and b = 1;
@@ -2767,7 +2768,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto sst = make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
-        auto reader = sstable_reader(sst, s);
+        auto reader = make_normalizing_sstable_reader(sst, s);
 
         using kind = mutation_fragment::kind;
         assert_that(std::move(reader))
@@ -2779,7 +2780,9 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             .produces(kind::clustering_row, { 1, 2, 3 })
             .produces(kind::range_tombstone, { 1, 3 })
             .produces(kind::clustering_row, { 1, 3 })
+            .produces(kind::range_tombstone, { 1, 3 }, true)
             .produces(kind::clustering_row, { 1, 3, 4 })
+            .produces(kind::range_tombstone, { 1, 3, 4 })
             .produces(kind::clustering_row, { 1, 4 })
             .produces(kind::clustering_row, { 1, 4, 0 })
             .produces(kind::range_tombstone, { 2 })
