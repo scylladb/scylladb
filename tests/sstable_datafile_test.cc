@@ -52,6 +52,7 @@
 #include "tests/index_reader_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "tests/make_random_string.hh"
+#include "tests/normalizing_reader.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1020,6 +1021,22 @@ static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
 
 static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
     return sst->as_mutation_source().make_reader(s, pr, s->full_slice());
+}
+
+// We don't need to normalize the sstable reader for 'mc' format
+// because it is naturally normalized now.
+static flat_mutation_reader make_normalizing_sstable_reader(
+        shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
+    auto sstable_reader = sst->as_mutation_source().make_reader(s, pr, s->full_slice());
+    if (sst->get_version() == sstables::sstable::version_types::mc) {
+        return sstable_reader;
+    }
+
+    return make_normalizing_reader(std::move(sstable_reader));
+}
+
+static flat_mutation_reader make_normalizing_sstable_reader(shared_sstable sst, schema_ptr s) {
+    return make_normalizing_sstable_reader(sst, s, query::full_partition_range);
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
@@ -3324,13 +3341,15 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
 
-        auto rd = sstable_reader(sst, s);
+        auto rd = make_normalizing_sstable_reader(sst, s);
         using kind = mutation_fragment::kind;
         assert_that(std::move(rd))
                 .produces_partition_start(dkey)
                 .produces(kind::range_tombstone, { 0 })
                 .produces(kind::clustering_row, { 0, 0 })
+                .produces(kind::range_tombstone, { 0, 0 })
                 .produces(kind::clustering_row, { 0, 1 })
+                .produces(kind::range_tombstone, { 0, 1 })
                 .produces_partition_end()
                 .produces_end_of_stream();
       }
