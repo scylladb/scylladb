@@ -3366,7 +3366,7 @@ static void write_clustering_prefix(file_writer& writer, bound_kind_m kind,
 
 void sstable_writer_m::write_promoted_index(file_writer& writer) {
     static constexpr size_t width_base = 65536;
-    if (_pi_write_m.promoted_index.empty()) {
+    if (_pi_write_m.promoted_index.size() < 2) {
         return;
     }
     write_vint(writer, _partition_header_length);
