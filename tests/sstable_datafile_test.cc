@@ -4520,30 +4520,32 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
     // insert into ks.test (pk, ck, v) values (1, 3, 1);
     // delete from ks.test where pk = 1 and ck = 2;
     return seastar::async([] {
-      for (const auto version : all_sstable_versions) {
-        auto s = schema_builder("ks", "test")
-                .with_column("pk", int32_type, column_kind::partition_key)
-                .with_column("ck", int32_type, column_kind::clustering_key)
-                .with_column("v", int32_type)
-                .build(schema_builder::compact_storage::yes);
+        for (const auto version : all_sstable_versions) {
+            if (version != sstables::sstable::version_types::mc) { // Does not apply to 'mc' format
+                auto s = schema_builder("ks", "test")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("v", int32_type)
+                    .build(schema_builder::compact_storage::yes);
 
-        auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
-        sst->load().get0();
+                auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
+                sst->load().get0();
 
-        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
-        auto dk = dht::global_partitioner().decorate_key(*s, pk);
-        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
-        mutation m(s, dk);
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
-        m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
+                auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
+                auto dk = dht::global_partitioner().decorate_key(*s, pk);
+                auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+                mutation m(s, dk);
+                m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
+                m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
 
-        {
-            auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
-                    .produces(m)
-                    .produces_end_of_stream();
+                {
+                    auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
+                    assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+                            .produces(m)
+                            .produces_end_of_stream();
+                }
+            }
         }
-      }
     });
 }
 
