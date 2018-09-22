@@ -259,12 +259,15 @@ public:
         return *this;
     }
 
-    flat_reader_assertions& produces(mutation_fragment::kind k, std::vector<int> ck_elements) {
+    flat_reader_assertions& produces(mutation_fragment::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
         std::vector<bytes> ck_bytes;
         for (auto&& e : ck_elements) {
             ck_bytes.emplace_back(int32_type->decompose(e));
         }
         auto ck = clustering_key_prefix::from_exploded(*_reader.schema(), std::move(ck_bytes));
+        if (make_full_key) {
+            clustering_key::make_full(*_reader.schema(), ck);
+        }
 
         auto mfopt = read_next();
         if (!mfopt) {
