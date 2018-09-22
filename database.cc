@@ -1377,13 +1377,10 @@ table::on_compaction_completion(const std::vector<sstables::shared_sstable>& new
 // For replace/remove_ancestors_needed_write, note that we need to update the compaction backlog
 // manually. The new tables will be coming from a remote shard and thus unaccounted for in our
 // list so far, and the removed ones will no longer be needed by us.
-void table::replace_ancestors_needed_rewrite(std::vector<sstables::shared_sstable> new_sstables) {
+void table::replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors, std::vector<sstables::shared_sstable> new_sstables) {
     std::vector<sstables::shared_sstable> old_sstables;
-    std::unordered_set<uint64_t> ancestors;
 
     for (auto& sst : new_sstables) {
-        auto sst_ancestors = sst->ancestors();
-        ancestors.insert(sst_ancestors.begin(), sst_ancestors.end());
         _compaction_strategy.get_backlog_tracker().add_sstable(sst);
     }
 
@@ -1892,19 +1889,19 @@ void distributed_loader::reshard(distributed<database>& db, sstring ks_name, sst
                                 }
                             }
 
+                            std::unordered_set<uint64_t> ancestors;
+                            boost::range::transform(old_sstables_for_shard, std::inserter(ancestors, ancestors.end()),
+                                std::mem_fn(&sstables::sstable::generation));
+
                             if (new_sstables_for_shard.empty()) {
                                 // handles case where sstable needing rewrite doesn't produce any sstable
                                 // for a shard it belongs to when resharded (the reason is explained above).
-                                std::unordered_set<uint64_t> ancestors;
-                                boost::range::transform(old_sstables_for_shard, std::inserter(ancestors, ancestors.end()),
-                                    std::mem_fn(&sstables::sstable::generation));
-
                                 return smp::submit_to(shard, [cf, ancestors = std::move(ancestors)] () mutable {
                                     cf->remove_ancestors_needed_rewrite(ancestors);
                                 });
                             } else {
-                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf] (auto sstables) {
-                                    cf->replace_ancestors_needed_rewrite(sstables);
+                                return forward_sstables_to(shard, directory, new_sstables_for_shard, cf, [cf, ancestors = std::move(ancestors)] (auto sstables) {
+                                    cf->replace_ancestors_needed_rewrite(std::move(ancestors), std::move(sstables));
                                 });
                             }
                         }).then([&cf, sstables] {

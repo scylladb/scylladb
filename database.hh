@@ -537,7 +537,7 @@ private:
     void rebuild_statistics();
 
     // This function replaces new sstables by their ancestors, which are sstables that needed resharding.
-    void replace_ancestors_needed_rewrite(std::vector<sstables::shared_sstable> new_sstables);
+    void replace_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors, std::vector<sstables::shared_sstable> new_sstables);
     void remove_ancestors_needed_rewrite(std::unordered_set<uint64_t> ancestors);
 private:
     mutation_source_opt _virtual_reader;
