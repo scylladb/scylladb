@@ -1431,6 +1431,7 @@ int main(int argc, char** argv) {
         ("name", bpo::value<std::string>()->default_value("default"), "Name of the configuration")
         ("output-format", bpo::value<sstring>()->default_value("text"), "Output file for results. 'text' (default) or 'json'")
         ("test-case-duration", bpo::value<double>()->default_value(1), "Duration in seconds of a single test case (0 for a single run).")
+        ("data-directory", bpo::value<sstring>()->default_value("./perf_large_partition_data"), "Data directory")
         ;
 
     return app.run(argc, argv, [] {
@@ -1448,7 +1449,7 @@ int main(int argc, char** argv) {
             return make_ready_future<int>(0);
         }
 
-        sstring datadir = "./perf_large_partition_data";
+        sstring datadir = app.configuration()["data-directory"].as<sstring>();
         ::mkdir(datadir.c_str(), S_IRWXU);
 
         db_cfg.enable_cache(app.configuration().count("enable-cache"));
