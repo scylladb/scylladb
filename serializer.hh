@@ -79,7 +79,8 @@ public:
         iterator& operator++() {
             _left -= _current.size();
             if (_left) {
-                auto next_view = *_next;
+                auto next_view = bytes_view(reinterpret_cast<const bytes::value_type*>((*_next).begin()),
+                                            (*_next).size());
                 auto next_size = std::min(_left, next_view.size());
                 _current = bytes_view(next_view.data(), next_size);
                 ++_next;
@@ -111,6 +112,15 @@ public:
             _first.remove_suffix(_first.size() - _total_size);
         }
     }
+
+    explicit buffer_view(typename seastar::memory_input_stream<FragmentIterator>::simple stream)
+        : buffer_view(bytes_view(reinterpret_cast<const int8_t*>(stream.begin()), stream.size()))
+    { }
+
+    explicit buffer_view(typename seastar::memory_input_stream<FragmentIterator>::fragmented stream)
+        : buffer_view(bytes_view(reinterpret_cast<const int8_t*>(stream.first_fragment_data()), stream.first_fragment_size()),
+                      stream.size(), stream.fragment_iterator())
+    { }
 
     iterator begin() const {
         return iterator(_first, _total_size, _next);

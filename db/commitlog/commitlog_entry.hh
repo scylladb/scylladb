@@ -25,7 +25,6 @@
 
 #include "frozen_mutation.hh"
 #include "schema.hh"
-#include "utils/data_output.hh"
 #include "stdx.hh"
 
 class commitlog_entry {
@@ -72,7 +71,7 @@ public:
         return _mutation.representation().size();
     }
 
-    void write(data_output& out) const;
+    void write(typename seastar::memory_output_stream<std::vector<temporary_buffer<char>>::iterator>& out) const;
 };
 
 class commitlog_entry_reader {

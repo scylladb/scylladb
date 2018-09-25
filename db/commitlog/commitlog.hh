@@ -42,7 +42,6 @@
 
 #include <memory>
 
-#include "utils/data_output.hh"
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
@@ -176,7 +175,7 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    using output = data_output;
+    using output = fragmented_temporary_buffer::ostream;
     using serializer_func = std::function<void(output&)>;
 
     /**
