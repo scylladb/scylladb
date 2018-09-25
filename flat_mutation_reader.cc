@@ -559,6 +559,75 @@ flat_mutation_reader_from_mutations(std::vector<mutation> mutations, const dht::
     return res;
 }
 
+/// A reader that is empty when created but can be fast-forwarded.
+///
+/// Useful when a reader has to be created without an initial read-range and it
+/// has to be fast-forwardable.
+/// Delays the creation of the underlying reader until it is first
+/// fast-forwarded and thus a range is available.
+class forwardable_empty_mutation_reader : public flat_mutation_reader::impl {
+    mutation_source _source;
+    const query::partition_slice& _slice;
+    const io_priority_class& _pc;
+    tracing::trace_state_ptr _trace_state;
+    flat_mutation_reader_opt _reader;
+public:
+    forwardable_empty_mutation_reader(schema_ptr s,
+            mutation_source source,
+            const query::partition_slice& slice,
+            const io_priority_class& pc,
+            tracing::trace_state_ptr trace_state)
+        : impl(s)
+        , _source(std::move(source))
+        , _slice(slice)
+        , _pc(pc)
+        , _trace_state(std::move(trace_state)) {
+        _end_of_stream = true;
+    }
+    virtual future<> fill_buffer(db::timeout_clock::time_point timeout) override {
+        if (!_reader) {
+            return make_ready_future<>();
+        }
+        if (_reader->is_buffer_empty()) {
+            if (_reader->is_end_of_stream()) {
+                _end_of_stream = true;
+                return make_ready_future<>();
+            } else {
+                return _reader->fill_buffer(timeout).then([this, timeout] { return fill_buffer(timeout); });
+            }
+        }
+        _reader->move_buffer_content_to(*this);
+        return make_ready_future<>();
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
+        if (!_reader) {
+            _reader = _source.make_reader(_schema, pr, _slice, _pc, std::move(_trace_state), streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::yes);
+            _end_of_stream = false;
+            return make_ready_future<>();
+        }
+
+        clear_buffer();
+        _end_of_stream = false;
+        return _reader->fast_forward_to(pr, timeout);
+    }
+    virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
+        throw std::bad_function_call();
+    }
+    virtual void next_partition() override {
+        if (!_reader) {
+            return;
+        }
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty() && !is_end_of_stream()) {
+            _reader->next_partition();
+        }
+    }
+    virtual size_t buffer_size() const override {
+        return impl::buffer_size() + (_reader ? _reader->buffer_size() : 0);
+    }
+};
+
 class flat_multi_range_mutation_reader : public flat_mutation_reader::impl {
 public:
     using ranges_vector = dht::partition_range_vector;
@@ -627,7 +696,11 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
                         mutation_reader::forwarding fwd_mr)
 {
     if (ranges.empty()) {
-        return make_empty_flat_reader(std::move(s));
+        if (fwd_mr) {
+            return make_flat_mutation_reader<forwardable_empty_mutation_reader>(std::move(s), std::move(source), slice, pc, std::move(trace_state));
+        } else {
+            return make_empty_flat_reader(std::move(s));
+        }
     } else if (ranges.size() == 1) {
         return source.make_reader(std::move(s), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
