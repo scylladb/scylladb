@@ -617,6 +617,16 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
                              flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
 
 flat_mutation_reader
+make_flat_multi_range_reader(
+        schema_ptr s,
+        mutation_source source,
+        std::function<std::optional<dht::partition_range>()> generator,
+        const query::partition_slice& slice,
+        const io_priority_class& pc = default_priority_class(),
+        tracing::trace_state_ptr trace_state = nullptr,
+        flat_mutation_reader::partition_range_forwarding fwd_mr = flat_mutation_reader::partition_range_forwarding::yes);
+
+flat_mutation_reader
 make_flat_mutation_reader_from_fragments(schema_ptr, std::deque<mutation_fragment>);
 
 // Calls the consumer for each element of the reader's stream until end of stream
