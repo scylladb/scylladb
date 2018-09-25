@@ -628,21 +628,25 @@ public:
     }
 };
 
+template<typename Generator>
 class flat_multi_range_mutation_reader : public flat_mutation_reader::impl {
-public:
-    using ranges_vector = dht::partition_range_vector;
-private:
-    const ranges_vector& _ranges;
-    ranges_vector::const_iterator _current_range;
+    std::optional<Generator> _generator;
     flat_mutation_reader _reader;
+
+    const dht::partition_range* next() {
+        if (!_generator) {
+            return nullptr;
+        }
+        return (*_generator)();
+    }
+
 public:
-    flat_multi_range_mutation_reader(schema_ptr s, mutation_source source, const ranges_vector& ranges,
+    flat_multi_range_mutation_reader(schema_ptr s, mutation_source source, Generator generator,
                                 const query::partition_slice& slice, const io_priority_class& pc,
                                 tracing::trace_state_ptr trace_state)
         : impl(s)
-        , _ranges(ranges)
-        , _current_range(_ranges.begin())
-        , _reader(source.make_reader(s, *_current_range, slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+        , _generator(std::move(generator))
+        , _reader(source.make_reader(s, *(*_generator)(), slice, pc, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
     {
     }
 
@@ -655,12 +659,12 @@ public:
                 if (!_reader.is_end_of_stream()) {
                     return make_ready_future<>();
                 }
-                ++_current_range;
-                if (_current_range == _ranges.end()) {
+                if (auto r = next()) {
+                    return _reader.fast_forward_to(*r, timeout);
+                } else {
                     _end_of_stream = true;
                     return make_ready_future<>();
                 }
-                return _reader.fast_forward_to(*_current_range, timeout);
             });
         });
     }
@@ -668,10 +672,9 @@ public:
     virtual future<> fast_forward_to(const dht::partition_range& pr, db::timeout_clock::time_point timeout) override {
         clear_buffer();
         _end_of_stream = false;
-        // When end of pr is reached, this reader will increment _current_range
-        // and notice that it now points to _ranges.end().
-        _current_range = std::prev(_ranges.end());
-        return _reader.fast_forward_to(pr, timeout);
+        return _reader.fast_forward_to(pr, timeout).then([this] {
+            _generator.reset();
+        });
     }
 
     virtual future<> fast_forward_to(position_range pr, db::timeout_clock::time_point timeout) override {
@@ -695,6 +698,21 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
                         tracing::trace_state_ptr trace_state,
                         mutation_reader::forwarding fwd_mr)
 {
+    class adapter {
+        dht::partition_range_vector::const_iterator _it;
+        dht::partition_range_vector::const_iterator _end;
+
+    public:
+        adapter(dht::partition_range_vector::const_iterator begin, dht::partition_range_vector::const_iterator end) : _it(begin), _end(end) {
+        }
+        const dht::partition_range* operator()() {
+            if (_it == _end) {
+                return nullptr;
+            }
+            return &*_it++;
+        }
+    };
+
     if (ranges.empty()) {
         if (fwd_mr) {
             return make_flat_mutation_reader<forwardable_empty_mutation_reader>(std::move(s), std::move(source), slice, pc, std::move(trace_state));
@@ -704,8 +722,8 @@ make_flat_multi_range_reader(schema_ptr s, mutation_source source, const dht::pa
     } else if (ranges.size() == 1) {
         return source.make_reader(std::move(s), ranges.front(), slice, pc, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
-        return make_flat_mutation_reader<flat_multi_range_mutation_reader>(std::move(s), std::move(source), ranges,
-                slice, pc, std::move(trace_state));
+        return make_flat_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(source),
+                adapter(ranges.cbegin(), ranges.cend()), slice, pc, std::move(trace_state));
     }
 }
 
