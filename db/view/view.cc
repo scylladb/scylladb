@@ -951,10 +951,19 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // do not wait for it to complete.
                 // Note also that mutate_locally(mut) copies mut (in
                 // frozen form) so don't need to increase its lifetime.
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).handle_exception([&stats] (auto ep) {
-                    vlogger.error("Error applying local view update: {}", ep);
-                    stats.view_updates_failed_local++;
-                    return make_exception_future<>(std::move(ep));
+                // send_to_endpoint() below updates statistics on pending
+                // writes but mutate_locally() doesn't, so we need to do that here.
+                ++stats.writes;
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).then_wrapped([&stats] (auto&& fut) {
+                    --stats.writes;
+                    if (fut.failed()) {
+                        auto ep = fut.get_exception();
+                        vlogger.error("Error applying local view update: {}", ep);
+                        ++stats.view_updates_failed_local;
+                        return make_exception_future<>(std::move(ep));
+                    } else {
+                        return make_ready_future<>();
+                    }
                 }));
             } else {
                 vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
