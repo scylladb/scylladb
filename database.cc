@@ -1260,6 +1260,7 @@ void table::set_metrics() {
                     ms::make_total_operations("view_updates_failed_remote", _view_stats.view_updates_failed_remote, ms::description("Number of updates (mutations) that failed to be pushed to remote view replicas"))(cf)(ks),
                     ms::make_total_operations("view_updates_pushed_local", _view_stats.view_updates_pushed_local, ms::description("Number of updates (mutations) pushed to local view replicas"))(cf)(ks),
                     ms::make_total_operations("view_updates_failed_local", _view_stats.view_updates_failed_local, ms::description("Number of updates (mutations) that failed to be pushed to local view replicas"))(cf)(ks),
+                    ms::make_gauge("view_updates_pending", ms::description("Number of updates pushed to view and are still to be completed"), _view_stats.writes)(cf)(ks),
             });
         }
 
