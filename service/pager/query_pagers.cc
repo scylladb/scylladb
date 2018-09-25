@@ -389,27 +389,28 @@ public:
 
 }
 
-bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
+bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t page_size,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges) {
-    auto est_max_rows =
-            [&] {
-                if (ranges.empty()) {
-                    return cmd.row_limit;
-                }
-                uint32_t n = 0;
-                for (auto& r : ranges) {
-                    if (r.is_singular() && cmd.slice.options.contains<query::partition_slice::option::distinct>()) {
-                        ++n;
-                        continue;
-                    }
-                    return cmd.row_limit;
-                }
-                return n;
-            };
 
-    auto est = est_max_rows();
-    auto need_paging = est > page_size;
+    // Disabling paging also disables query result size limiter. We can do this safely
+    // only if we know for sure that it wouldn't limit anything i.e. the result will
+    // not contain more than one row.
+    auto need_paging = [&] {
+        if (cmd.row_limit <= 1 || ranges.empty()) {
+            return false;
+        } else if (cmd.partition_limit <= 1
+                || (ranges.size() == 1 && query::is_single_partition(ranges.front()))) {
+            auto effective_partition_row_limit = cmd.slice.options.contains<query::partition_slice::option::distinct>() ? 1 : cmd.slice.partition_row_limit();
+
+            auto& cr_ranges = cmd.slice.default_row_ranges();
+            if (effective_partition_row_limit <= 1 || cr_ranges.empty()
+                    || (cr_ranges.size() == 1 && query::is_single_row(s, cr_ranges.front()))) {
+                return false;
+            }
+        }
+        return true;
+    }();
 
     qlogger.debug("Query of {}, page_size={}, limit={} {}", cmd.cf_id, page_size,
                     cmd.row_limit,
@@ -433,4 +434,3 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
     return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
             options, timeout, std::move(cmd), std::move(ranges));
 }
-

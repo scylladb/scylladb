@@ -404,7 +404,7 @@ select_statement::do_execute(service::storage_proxy& proxy,
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
     if (!aggregate && (page_size <= 0
-            || !service::pager::query_pagers::may_need_paging(page_size,
+            || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
         return execute(proxy, command, std::move(key_ranges), state, options, now);
     }
