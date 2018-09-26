@@ -52,6 +52,7 @@
 #include "tests/index_reader_assertions.hh"
 #include "flat_mutation_reader_assertions.hh"
 #include "tests/make_random_string.hh"
+#include "tests/normalizing_reader.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1020,6 +1021,22 @@ static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
 
 static flat_mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
     return sst->as_mutation_source().make_reader(s, pr, s->full_slice());
+}
+
+// We don't need to normalize the sstable reader for 'mc' format
+// because it is naturally normalized now.
+static flat_mutation_reader make_normalizing_sstable_reader(
+        shared_sstable sst, schema_ptr s, const dht::partition_range& pr) {
+    auto sstable_reader = sst->as_mutation_source().make_reader(s, pr, s->full_slice());
+    if (sst->get_version() == sstables::sstable::version_types::mc) {
+        return sstable_reader;
+    }
+
+    return make_normalizing_reader(std::move(sstable_reader));
+}
+
+static flat_mutation_reader make_normalizing_sstable_reader(shared_sstable sst, schema_ptr s) {
+    return make_normalizing_sstable_reader(sst, s, query::full_partition_range);
 }
 
 SEASTAR_TEST_CASE(compaction_manager_test) {
@@ -2492,36 +2509,41 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        d int,
     //        e blob
     //);
-  return for_each_sstable_version([] (const sstables::sstable::version_types version) {
-    auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
-    auto builder = schema_builder("test", "test_multi_schema")
-        .with_column("a", int32_type, column_kind::partition_key)
-        .with_column("c", set_of_ints_type)
-        .with_column("d", int32_type)
-        .with_column("e", bytes_type);
-    auto s = builder.build();
+    return for_each_sstable_version([] (const sstables::sstable::version_types version) {
+        // We prohibit altering types for SSTables in 'mc' format.
+        // This is compliant with the Origin behaviour - see CASSANDRA-12443
+        if (version != sstables::sstable::version_types::mc) {
+            auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+            auto builder = schema_builder("test", "test_multi_schema")
+                .with_column("a", int32_type, column_kind::partition_key)
+                .with_column("c", set_of_ints_type)
+                .with_column("d", int32_type)
+                .with_column("e", int32_type);
+            auto s = builder.build();
 
-    auto sst = make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
-    auto f = sst->load();
-    return f.then([sst, s] {
-        auto reader = make_lw_shared(sstable_reader(sst, s));
-        return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
-            BOOST_REQUIRE(m);
-            BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
-            auto& rows = m->partition().clustered_rows();
-            BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
-            auto& row = rows.begin()->row();
-            BOOST_REQUIRE(!row.deleted_at());
-            auto& cells = row.cells();
-            BOOST_REQUIRE_EQUAL(cells.size(), 1);
-            auto& cdef = *s->get_column_definition("e");
-            BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
-            return (*reader)(db::no_timeout);
-        }).then([reader, s] (mutation_fragment_opt m) {
-            BOOST_REQUIRE(!m);
-        });
+            auto sst = make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
+            auto f = sst->load();
+            return f.then([sst, s] {
+                auto reader = make_lw_shared(sstable_reader(sst, s));
+                return read_mutation_from_flat_mutation_reader(*reader, db::no_timeout).then([reader, s] (mutation_opt m) {
+                    BOOST_REQUIRE(m);
+                    BOOST_REQUIRE(m->key().equal(*s, partition_key::from_singular(*s, 0)));
+                    auto& rows = m->partition().clustered_rows();
+                    BOOST_REQUIRE_EQUAL(rows.calculate_size(), 1);
+                    auto& row = rows.begin()->row();
+                    BOOST_REQUIRE(!row.deleted_at());
+                    auto& cells = row.cells();
+                    BOOST_REQUIRE_EQUAL(cells.size(), 1);
+                    auto& cdef = *s->get_column_definition("e");
+                    BOOST_REQUIRE_EQUAL(cells.cell_at(cdef.id).as_atomic_cell(cdef).value(), int32_type->decompose(5));
+                    return (*reader)(db::no_timeout);
+                }).then([reader, s] (mutation_fragment_opt m) {
+                    BOOST_REQUIRE(!m);
+                });
+            });
+        }
+        return make_ready_future<>();
     });
-  });
 }
 
 SEASTAR_TEST_CASE(sstable_rewrite) {
@@ -2724,6 +2746,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
     // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,3,5);
     // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,3,4,6);
     // insert into wrong_range_tombstone_order (p,a,b,r) values (0,1,4,7);
+    // insert into wrong_range_tombstone_order (p,a,b,c,r) values (0,1,4,0,8);
     // delete from wrong_range_tombstone_order where p = 0 and a = 1 and b = 4 and c = 0;
     // delete from wrong_range_tombstone_order where p = 0 and a = 2;
     // delete from wrong_range_tombstone_order where p = 0 and a = 2 and b = 1;
@@ -2745,7 +2768,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
 
         auto sst = make_sstable(s, get_test_dir("wrong_range_tombstone_order", s), 1, version, big);
         sst->load().get0();
-        auto reader = sstable_reader(sst, s);
+        auto reader = make_normalizing_sstable_reader(sst, s);
 
         using kind = mutation_fragment::kind;
         assert_that(std::move(reader))
@@ -2757,7 +2780,9 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
             .produces(kind::clustering_row, { 1, 2, 3 })
             .produces(kind::range_tombstone, { 1, 3 })
             .produces(kind::clustering_row, { 1, 3 })
+            .produces(kind::range_tombstone, { 1, 3 }, true)
             .produces(kind::clustering_row, { 1, 3, 4 })
+            .produces(kind::range_tombstone, { 1, 3, 4 })
             .produces(kind::clustering_row, { 1, 4 })
             .produces(kind::clustering_row, { 1, 4, 0 })
             .produces(kind::range_tombstone, { 2 })
@@ -3324,13 +3349,15 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         auto pkey = partition_key::from_exploded(*s, { int32_type->decompose(0) });
         auto dkey = dht::global_partitioner().decorate_key(*s, std::move(pkey));
 
-        auto rd = sstable_reader(sst, s);
+        auto rd = make_normalizing_sstable_reader(sst, s);
         using kind = mutation_fragment::kind;
         assert_that(std::move(rd))
                 .produces_partition_start(dkey)
                 .produces(kind::range_tombstone, { 0 })
                 .produces(kind::clustering_row, { 0, 0 })
+                .produces(kind::range_tombstone, { 0, 0 })
                 .produces(kind::clustering_row, { 0, 1 })
+                .produces(kind::range_tombstone, { 0, 1 })
                 .produces_partition_end()
                 .produces_end_of_stream();
       }
@@ -4496,30 +4523,32 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
     // insert into ks.test (pk, ck, v) values (1, 3, 1);
     // delete from ks.test where pk = 1 and ck = 2;
     return seastar::async([] {
-      for (const auto version : all_sstable_versions) {
-        auto s = schema_builder("ks", "test")
-                .with_column("pk", int32_type, column_kind::partition_key)
-                .with_column("ck", int32_type, column_kind::clustering_key)
-                .with_column("v", int32_type)
-                .build(schema_builder::compact_storage::yes);
+        for (const auto version : all_sstable_versions) {
+            if (version != sstables::sstable::version_types::mc) { // Does not apply to 'mc' format
+                auto s = schema_builder("ks", "test")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("v", int32_type)
+                    .build(schema_builder::compact_storage::yes);
 
-        auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
-        sst->load().get0();
+                auto sst = sstables::make_sstable(s, get_test_dir("broken_non_compound_pi_and_range_tombstone", s), 1, version, big);
+                sst->load().get0();
 
-        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
-        auto dk = dht::global_partitioner().decorate_key(*s, pk);
-        auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
-        mutation m(s, dk);
-        m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
-        m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
+                auto pk = partition_key::from_exploded(*s, { int32_type->decompose(1) });
+                auto dk = dht::global_partitioner().decorate_key(*s, pk);
+                auto ck = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+                mutation m(s, dk);
+                m.set_clustered_cell(ck, *s->get_column_definition("v"), atomic_cell::make_live(*int32_type, 1511270919978349, int32_type->decompose(1), { }));
+                m.partition().apply_delete(*s, ck, {1511270943827278, gc_clock::from_time_t(1511270943)});
 
-        {
-            auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
-            assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
-                    .produces(m)
-                    .produces_end_of_stream();
+                {
+                    auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
+                    assert_that(sst->as_mutation_source().make_reader(s, dht::partition_range::make_singular(dk), slice))
+                            .produces(m)
+                            .produces_end_of_stream();
+                }
+            }
         }
-      }
     });
 }
 

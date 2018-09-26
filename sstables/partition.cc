@@ -101,13 +101,18 @@ concept bool RowConsumer() {
  * For other consumers, it is a no-op.
  */
 template <typename Consumer>
-void set_range_tombstone_start_from_end_open_marker(Consumer& c, const index_reader& idx) {
+void set_range_tombstone_start_from_end_open_marker(Consumer& c, const schema& s, const index_reader& idx) {
     if constexpr (Consumer::is_setting_range_tombstone_start_supported) {
         auto open_end_marker = idx.end_open_marker();
         if (open_end_marker) {
             auto[pos, tomb] = *open_end_marker;
             if (pos.is_clustering_row()) {
-                c.set_range_tombstone_start(pos.key(), bound_kind::excl_start, tomb);
+                auto ck = pos.key();
+                bool was_non_full = clustering_key::make_full(s, ck);
+                c.set_range_tombstone_start(
+                        std::move(ck),
+                        was_non_full ? bound_kind::incl_start : bound_kind::excl_start,
+                        tomb);
             } else {
                 auto view = position_in_partition_view(pos).as_start_bound_view();
                 c.set_range_tombstone_start(view.prefix(), view.kind(), tomb);
@@ -374,7 +379,7 @@ private:
                     return make_ready_future<>();
                 }
                 return _context->skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
-                    set_range_tombstone_start_from_end_open_marker(_consumer, idx);
+                    set_range_tombstone_start_from_end_open_marker(_consumer, *_schema, idx);
                 });
             });
         });

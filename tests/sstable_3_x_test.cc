@@ -1006,14 +1006,19 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
     auto make_tombstone = [] (int64_t ts, int32_t tp) {
         return tombstone{api::timestamp_type{ts}, gc_clock::time_point(gc_clock::duration(tp))};
     };
-    auto make_range_tombstone = [] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
-        return range_tombstone {
-            std::move(start),
-            bound_kind::incl_start,
-            std::move(end),
-            bound_kind::incl_end,
-            t};
+    const auto make_range_tombstone_creator = [] (bound_kind start_kind) {
+        return [start_kind] (clustering_key_prefix start, clustering_key_prefix end, tombstone t) {
+            return range_tombstone {
+                std::move(start),
+                start_kind,
+                std::move(end),
+                bound_kind::incl_end,
+                t};
+        };
     };
+
+    const auto make_rt_incl_start = make_range_tombstone_creator(bound_kind::incl_start);
+    const auto make_rt_excl_start = make_range_tombstone_creator(bound_kind::excl_start);
 
     auto make_clustering_range = [] (clustering_key_prefix&& start, clustering_key_prefix&& end) {
         return query::clustering_range::make(
@@ -1044,9 +1049,9 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
 
         for (auto idx : boost::irange(1, 1024 * 128, 5)) {
             range_tombstone rt1 =
-                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
             range_tombstone rt2 =
-                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
 
             r.produces_range_tombstone(rt1)
             .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
@@ -1071,14 +1076,14 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
             auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
 
             range_tombstone rt =
-                    make_range_tombstone(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
+                    make_rt_excl_start(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
             r.produces_range_tombstone(rt, {clustering_range});
 
             for (auto idx : boost::irange(7461, 7501, 5)) {
                 range_tombstone rt1 =
-                        make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+                        make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
                 range_tombstone rt2 =
-                        make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+                        make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
 
                 r.produces_range_tombstone(rt1, {clustering_range})
                 .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
@@ -1102,15 +1107,15 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
 
         auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
         range_tombstone rt =
-                make_range_tombstone(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
+                make_rt_excl_start(to_full_ck(7459, 7459), to_non_full_ck(7460), tomb);
 
         r.produces_range_tombstone(rt, {clustering_range});
 
         for (auto idx : boost::irange(7461, 7501, 5)) {
             range_tombstone rt1 =
-                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
             range_tombstone rt2 =
-                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
 
             r.produces_range_tombstone(rt1, {clustering_range})
             .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))
@@ -1137,15 +1142,15 @@ SEASTAR_THREAD_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read
 
         auto clustering_range = make_clustering_range(to_non_full_ck(7000), to_non_full_ck(8000));
         range_tombstone rt =
-                make_range_tombstone(to_full_ck(7469, 7469), to_non_full_ck(7470), tomb);
+                make_rt_excl_start(to_full_ck(7469, 7469), to_non_full_ck(7470), tomb);
 
         r.produces_range_tombstone(rt, {clustering_range});
 
         for (auto idx : boost::irange(7471, 7501, 5)) {
             range_tombstone rt1 =
-                    make_range_tombstone(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
+                    make_rt_incl_start(to_non_full_ck(idx), to_full_ck(idx + 3, idx + 3), tomb);
             range_tombstone rt2 =
-                    make_range_tombstone(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
+                    make_rt_excl_start(to_full_ck(idx + 3, idx + 3), to_non_full_ck(idx + 4), tomb);
 
             r.produces_range_tombstone(rt1, {clustering_range})
             .produces_row(to_full_ck(idx + 3, idx + 3), to_expected(idx + 3))

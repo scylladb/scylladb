@@ -883,14 +883,15 @@ class mp_row_consumer_m : public consumer_m {
                  * and the end built from the row position because it also overlaps with query ranges.
                  */
                 auto ck = cr.key();
-                auto end_kind = clustering_key::make_full(*_schema, ck) ? bound_kind::excl_end : bound_kind::incl_end;
+                bool was_non_full_key = clustering_key::make_full(*_schema, ck);
+                auto end_kind =  was_non_full_key ? bound_kind::excl_end : bound_kind::incl_end;
                 _reader->push_mutation_fragment(range_tombstone(std::move(_opened_range_tombstone->ck),
                                                                 _opened_range_tombstone->kind,
                                                                 ck,
                                                                 end_kind,
                                                                 _opened_range_tombstone->tomb));
                 _opened_range_tombstone->ck = std::move(ck);
-                _opened_range_tombstone->kind = bound_kind::incl_start;
+                _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
             }
             _reader->push_mutation_fragment(std::move(cr));
             break;
@@ -898,9 +899,9 @@ class mp_row_consumer_m : public consumer_m {
             if (_opened_range_tombstone) {
                 // Trim the opened range up to the clustering key of the current row
                 auto& ck = cr.key();
-                clustering_key::make_full(*_schema, ck);
+                bool was_non_full_key = clustering_key::make_full(*_schema, ck);
                 _opened_range_tombstone->ck = std::move(ck);
-                _opened_range_tombstone->kind = bound_kind::incl_start;
+                _opened_range_tombstone->kind = was_non_full_key ? bound_kind::incl_start : bound_kind::excl_start;
             }
             if (_mf_filter->is_current_range_changed()) {
                 return proceed::no;
@@ -1220,7 +1221,17 @@ public:
     virtual proceed consume_partition_end() override {
         sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
         if (_opened_range_tombstone) {
-            throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
+            if (!_mf_filter || _mf_filter->out_of_range()) {
+                throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
+            }
+            auto range_end = _mf_filter->upper_bound();
+            position_in_partition::less_compare less(*_schema);
+            auto start_pos = position_in_partition_view(position_in_partition_view::range_tag_t{},
+                                                        bound_view(_opened_range_tombstone->ck, _opened_range_tombstone->kind));
+            if (!less(range_end, start_pos)) {
+                auto end_bound = range_end.as_end_bound_view();
+                consume_range_tombstone_end(end_bound.prefix(), end_bound.kind(), _opened_range_tombstone->tomb);
+            }
         }
         _is_mutation_end = true;
         _in_progress_row.reset();

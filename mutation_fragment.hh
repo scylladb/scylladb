@@ -595,6 +595,7 @@ public:
     }
     void apply(const range_tombstone_list&, const query::clustering_range&);
     void reset();
+    bool empty() const;
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone_stream&);
 };
 

@@ -179,6 +179,11 @@ public:
         return bound_view(*_ck, _bound_weight < 0 ? bound_kind::incl_start : bound_kind::excl_start);
     }
 
+    bound_view as_end_bound_view() const {
+        assert(_bound_weight != 0);
+        return bound_view(*_ck, _bound_weight < 0 ? bound_kind::excl_end : bound_kind::incl_end);
+    }
+
     friend std::ostream& operator<<(std::ostream&, position_in_partition_view);
     friend bool no_clustering_row_between(const schema&, position_in_partition_view, position_in_partition_view);
 };
