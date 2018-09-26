@@ -1014,6 +1014,10 @@ public:
     }
 
     std::optional<position_in_partition_view> fast_forward_to(position_range r, db::timeout_clock::time_point) {
+        if (!_mf_filter) {
+            return {};
+        }
+
         return _mf_filter->fast_forward_to(std::move(r));
     }
 

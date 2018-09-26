@@ -1299,11 +1299,7 @@ double sstable::estimate_droppable_tombstone_ratio(gc_clock::time_point gc_befor
 }
 
 future<> sstable::read_statistics(const io_priority_class& pc) {
-    return read_simple<component_type::Statistics>(_components->statistics, pc).then([this] {
-        if (_version == version_types::mc) {
-            adjust_serialization_header();
-        }
-    });
+    return read_simple<component_type::Statistics>(_components->statistics, pc);
 }
 
 void sstable::write_statistics(const io_priority_class& pc) {
@@ -2118,9 +2114,9 @@ static sstring pk_type_to_string(const schema& s) {
 
 static serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats) {
     serialization_header header;
-    header.min_timestamp.value = enc_stats.min_timestamp - encoding_stats::timestamp_epoch;
-    header.min_local_deletion_time.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
-    header.min_ttl.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
+    header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
+    header.min_local_deletion_time_base.value = enc_stats.min_local_deletion_time - encoding_stats::deletion_time_epoch;
+    header.min_ttl_base.value = enc_stats.min_ttl - encoding_stats::ttl_epoch;
 
     header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
 
@@ -3759,7 +3755,7 @@ future<> sstable::set_generation(int64_t new_generation) {
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname) {
-    static std::regex la("la-(\\d+)-(\\w+)-(.*)");
+    static std::regex la_mc("(la|mc)-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     static std::regex dir(".*/([^/]*)/(\\w+)-[\\da-fA-F]+(?:/upload|/snapshots/[^/]+)?/?");
@@ -3776,7 +3772,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
 
     sstlog.debug("Make descriptor sstdir: {}; fname: {}", sstdir, fname);
     std::string s(fname);
-    if (std::regex_match(s, match, la)) {
+    if (std::regex_match(s, match, la_mc)) {
         std::string sdir(sstdir);
         std::smatch dirmatch;
         if (std::regex_match(sdir, dirmatch, dir)) {
@@ -3785,10 +3781,10 @@ entry_descriptor entry_descriptor::make_descriptor(sstring sstdir, sstring fname
         } else {
             throw malformed_sstable_exception(seastar::sprint("invalid version for file %s with path %s. Path doesn't match known pattern.", fname, sstdir));
         }
-        version = sstable::version_types::la;
-        generation = match[1].str();
-        format = sstring(match[2].str());
-        component = sstring(match[3].str());
+        version = (match[1].str() == "la") ? sstable::version_types::la : sstable::version_types::mc;
+        generation = match[2].str();
+        format = sstring(match[3].str());
+        component = sstring(match[4].str());
     } else if (std::regex_match(s, match, ka)) {
         ks = match[1].str();
         cf = match[2].str();

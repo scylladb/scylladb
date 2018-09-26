@@ -358,9 +358,9 @@ struct stats_metadata : public metadata_base<stats_metadata> {
 using bytes_array_vint_size = disk_string_vint_size;
 
 struct serialization_header : public metadata_base<serialization_header> {
-    vint<uint64_t> min_timestamp;
-    vint<uint32_t> min_local_deletion_time;
-    vint<uint32_t> min_ttl;
+    vint<uint64_t> min_timestamp_base;
+    vint<uint32_t> min_local_deletion_time_base;
+    vint<uint32_t> min_ttl_base;
     bytes_array_vint_size pk_type_name;
     disk_array_vint_size<bytes_array_vint_size> clustering_key_types_names;
     struct column_desc {
@@ -381,9 +381,9 @@ struct serialization_header : public metadata_base<serialization_header> {
         switch (v) {
         case sstable_version_types::mc:
             return f(
-                min_timestamp,
-                min_local_deletion_time,
-                min_ttl,
+                min_timestamp_base,
+                min_local_deletion_time_base,
+                min_ttl_base,
                 pk_type_name,
                 clustering_key_types_names,
                 static_columns,
@@ -397,10 +397,17 @@ struct serialization_header : public metadata_base<serialization_header> {
         // Should never reach here - compiler will complain if switch above does not cover all sstable versions
         abort();
     }
-    void adjust() {
-        min_timestamp.value += encoding_stats::timestamp_epoch;
-        min_local_deletion_time.value += encoding_stats::deletion_time_epoch;
-        min_ttl.value += encoding_stats::ttl_epoch;
+
+    uint64_t get_min_timestamp() const {
+        return min_timestamp_base.value + encoding_stats::timestamp_epoch;
+    }
+
+    uint32_t get_min_ttl() const {
+        return min_ttl_base.value + encoding_stats::ttl_epoch;
+    }
+
+    uint32_t get_min_local_deletion_time() const {
+        return min_local_deletion_time_base.value + encoding_stats::deletion_time_epoch;
     }
 };
 

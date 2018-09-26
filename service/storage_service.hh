@@ -289,6 +289,7 @@ private:
     gms::feature _roles_feature;
     gms::feature _la_sstable_feature;
     gms::feature _stream_with_rpc_stream_feature;
+    gms::feature _mc_sstable_feature;
 public:
     void enable_all_features() {
         _range_tombstones_feature.enable();
@@ -305,6 +306,7 @@ public:
         _roles_feature.enable();
         _la_sstable_feature.enable();
         _stream_with_rpc_stream_feature.enable();
+        _mc_sstable_feature.enable();
     }
 
     void finish_bootstrapping() {
@@ -2286,6 +2288,10 @@ public:
 
     bool cluster_supports_stream_with_rpc_stream() const {
         return bool(_stream_with_rpc_stream_feature);
+    }
+
+    bool cluster_supports_mc_sstable() const {
+        return bool(_mc_sstable_feature);
     }
 };
 

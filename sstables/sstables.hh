@@ -592,9 +592,6 @@ private:
         serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
     }
-    void adjust_serialization_header() {
-        get_mutable_serialization_header(*_components).adjust();
-    }
 public:
     future<> read_toc();
 

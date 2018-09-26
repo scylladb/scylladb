@@ -298,7 +298,7 @@ void write_missing_columns(file_writer& out, const schema& s, const row& row) {
 template <typename T>
 void write_unsigned_delta_vint(file_writer& out, T value, T base) {
     using unsigned_type = std::make_unsigned_t<T>;
-    unsigned_type delta = value - base;
+    unsigned_type delta = static_cast<unsigned_type>(value) - base;
     write_vint(out, delta);
 }
 
