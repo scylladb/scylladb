@@ -151,9 +151,6 @@ public:
         }
         if (less(position(), pos)) {
             set_start(s, pos);
-            bound_view new_start = pos.as_start_bound_view();
-            start = new_start.prefix();
-            start_kind = new_start.kind();
         }
         return true;
     }
