@@ -405,7 +405,7 @@ public:
         in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
             : abstract_marker(bind_index, std::move(receiver))
         {
-            assert(dynamic_pointer_cast<const list_type_impl>(receiver->type));
+            assert(dynamic_pointer_cast<const list_type_impl>(_receiver->type));
         }
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
