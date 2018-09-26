@@ -2515,7 +2515,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
             .with_column("a", int32_type, column_kind::partition_key)
             .with_column("c", set_of_ints_type)
             .with_column("d", int32_type)
-            .with_column("e", int32_type);
+            .with_column("e", bytes_type);
         auto s = builder.build();
 
         auto sst = make_sstable(s, get_test_dir("multi_schema_test", s), 1, version, big);
