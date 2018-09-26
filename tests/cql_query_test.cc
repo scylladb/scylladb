@@ -2100,7 +2100,7 @@ SEASTAR_TEST_CASE(test_in_restriction) {
                 {int32_type->decompose(2)},
                 {int32_type->decompose(1)},
             });
-            return e.prepare("select r1 from tir where p1 in ?");
+            return e.prepare("select r1 from tir where p1 in ?;");
         }).then([&e] (cql3::prepared_cache_key_type prepared_id){
             auto my_list_type = list_type_impl::get_instance(int32_type, true);
             std::vector<cql3::raw_value> raw_values;
@@ -2129,8 +2129,34 @@ SEASTAR_TEST_CASE(test_in_restriction) {
             return e.execute_cql("insert into tir2 (p1, c1, r1) values (1, 2, 3);").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into tir2 (p1, c1, r1) values (2, 3, 4);").discard_result();
-        }).then([&e]{
-            return e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3));");
+        }).then([&e] {
+            return e.execute_cql("select r1 from tir2 where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) ALLOW FILTERING;");
+        }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows_ignore_order({
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
+            });
+        }).then([&e] {
+             return e.prepare("select r1 from tir2 where (c1,r1) in ? ALLOW FILTERING;");
+        }).then([&e] (cql3::prepared_cache_key_type prepared_id) {
+            auto my_tuple_type = tuple_type_impl::get_instance({int32_type,int32_type});
+            auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
+            std::vector<tuple_type_impl::native_type> native_tuples = {
+                    {int(0), int(1)},
+                    {int(1), int(2)},
+                    {int(0), int(1)},
+                    {int(1), int(2)},
+                    {int(3), int(3)},
+            };
+            std::vector<data_value> tuples;
+            for (auto&& native_tuple : native_tuples ) {
+                    tuples.emplace_back(make_tuple_value(my_tuple_type,native_tuple));
+            }
+
+            std::vector<cql3::raw_value> raw_values;
+            auto in_values_list = my_list_type->decompose(make_list_value(my_list_type,tuples));
+            raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
+            return e.execute_prepared(prepared_id,raw_values);
         }).then([&e] (shared_ptr<cql_transport::messages::result_message> msg) {
             assert_that(msg).is_rows().with_rows_ignore_order({
                 {int32_type->decompose(1)},

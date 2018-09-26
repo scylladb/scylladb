@@ -262,10 +262,17 @@ public:
                 auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
                 assert(ttype);
 
-                std::vector<std::vector<bytes_view_opt>> elements;
+                std::vector<std::vector<bytes_opt>> elements;
                 elements.reserve(l.size());
                 for (auto&& element : l) {
-                    elements.emplace_back(ttype->split(ttype->decompose(element)));
+                    auto tuple_buff = ttype->decompose(element);
+                    auto tuple = ttype->split(tuple_buff);
+                    std::vector<bytes_opt> elems;
+                    elems.reserve(tuple.size());
+                    for (auto&& e : tuple) {
+                        elems.emplace_back(to_bytes_opt(e));
+                    }
+                    elements.emplace_back(std::move(elems));
                 }
                 return in_value(elements);
               });
