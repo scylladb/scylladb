@@ -48,8 +48,9 @@ using namespace std::chrono_literals;
 
 static db::nop_large_partition_handler nop_lp_handler;
 
-SEASTAR_TEST_CASE(nonexistent_key) {
-    return reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(nonexistent_key) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    reusable_sst(uncompressed_schema(), uncompressed_dir(), 1).then([] (auto sstp) {
         return do_with(make_dkey(uncompressed_schema(), "invalid_key"), [sstp] (auto& key) {
             auto s = uncompressed_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -58,7 +59,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
                 return make_ready_future<>();
             });
         });
-    });
+    }).get();
 }
 
 future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&map) {
@@ -84,20 +85,24 @@ future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, data_value> &&
     });
 }
 
-SEASTAR_TEST_CASE(uncompressed_1) {
-    return test_no_clustered("vinna", {{ "col1", to_sstring("daughter") }, { "col2", 3 }});
+SEASTAR_THREAD_TEST_CASE(uncompressed_1) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    test_no_clustered("vinna", {{ "col1", to_sstring("daughter") }, { "col2", 3 }}).get();
 }
 
-SEASTAR_TEST_CASE(uncompressed_2) {
-    return test_no_clustered("gustaf", {{ "col1", to_sstring("son") }, { "col2", 0 }});
+SEASTAR_THREAD_TEST_CASE(uncompressed_2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    test_no_clustered("gustaf", {{ "col1", to_sstring("son") }, { "col2", 0 }}).get();
 }
 
-SEASTAR_TEST_CASE(uncompressed_3) {
-    return test_no_clustered("isak", {{ "col1", to_sstring("son") }, { "col2", 1 }});
+SEASTAR_THREAD_TEST_CASE(uncompressed_3) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    test_no_clustered("isak", {{ "col1", to_sstring("son") }, { "col2", 1 }}).get();
 }
 
-SEASTAR_TEST_CASE(uncompressed_4) {
-    return test_no_clustered("finna", {{ "col1", to_sstring("daughter") }, { "col2", 2 }});
+SEASTAR_THREAD_TEST_CASE(uncompressed_4) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    test_no_clustered("finna", {{ "col1", to_sstring("daughter") }, { "col2", 2 }}).get();
 }
 
 /*
@@ -147,8 +152,9 @@ inline auto clustered_row(mutation& mutation, const schema& s, std::vector<bytes
     return deletable_row(s, mutation.partition().clustered_row(s, clustering_pair));
 }
 
-SEASTAR_TEST_CASE(complex_sst1_k1) {
-    return generate_clustered<1>("key1").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst1_k1) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<1>("key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row();
@@ -173,11 +179,12 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         match_collection_element<status::live>(reg_list.cells[1], bytes_opt{}, to_bytes("1"));
 
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst1_k2) {
-    return generate_clustered<1>("key2").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst1_k2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<1>("key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row();
@@ -204,11 +211,12 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_absent(row2.cells(), *s, "reg_list");
 
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst2_k1) {
-    return generate_clustered<2>("key1").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst2_k1) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<2>("key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto exploded = exploded_clustering_prefix({"cl1.1", "cl2.1"});
@@ -222,11 +230,12 @@ SEASTAR_TEST_CASE(complex_sst2_k1) {
         auto reg_list = match_collection(row.cells(), *s, "reg_list", tombstone(deletion_time{0, api::missing_timestamp}));
         match_collection_element<status::dead>(reg_list.cells[0], bytes_opt{}, bytes_opt{});
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst2_k2) {
-    return generate_clustered<2>("key2").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst2_k2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<2>("key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row();
@@ -251,11 +260,12 @@ SEASTAR_TEST_CASE(complex_sst2_k2) {
         match_dead_cell(row2.cells(), *s, "reg");
 
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst2_k3) {
-    return generate_clustered<2>("key3").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst2_k3) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<2>("key3").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row();
@@ -269,11 +279,12 @@ SEASTAR_TEST_CASE(complex_sst2_k3) {
         match_absent(row1.cells(), *s, "reg_map");
         match_absent(row1.cells(), *s, "reg_fset");
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst3_k1) {
-    return generate_clustered<3>("key1").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst3_k1) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<3>("key1").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto row = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
@@ -289,11 +300,12 @@ SEASTAR_TEST_CASE(complex_sst3_k1) {
         match_absent(row.cells(), *s, "reg");
         match_absent(row.cells(), *s, "reg_fset");
         return make_ready_future<>();
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(complex_sst3_k2) {
-    return generate_clustered<3>("key2").then([] (auto&& mutation) {
+SEASTAR_THREAD_TEST_CASE(complex_sst3_k2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    generate_clustered<3>("key2").then([] (auto&& mutation) {
         auto s = complex_schema();
 
         auto& sr = mutation.partition().static_row();
@@ -307,7 +319,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
         match_absent(row.cells(), *s, "reg");
         match_absent(row.cells(), *s, "reg_fset");
         return make_ready_future<>();
-    });
+    }).get();
 }
 
 future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
@@ -343,25 +355,28 @@ future<> test_range_reads(const dht::token& min, const dht::token& max, std::vec
     });
 }
 
-SEASTAR_TEST_CASE(read_range) {
+SEASTAR_THREAD_TEST_CASE(read_range) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak"), to_bytes("gustaf"), to_bytes("vinna") };
-    return do_with(std::move(expected), [] (auto& expected) {
+    do_with(std::move(expected), [] (auto& expected) {
         return test_range_reads(dht::minimum_token(), dht::maximum_token(), expected);
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(read_partial_range) {
+SEASTAR_THREAD_TEST_CASE(read_partial_range) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak") };
-    return do_with(std::move(expected), [] (auto& expected) {
+    do_with(std::move(expected), [] (auto& expected) {
         return test_range_reads(dht::global_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected);
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(read_partial_range_2) {
+SEASTAR_THREAD_TEST_CASE(read_partial_range_2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
     std::vector<bytes> expected = { to_bytes("gustaf"), to_bytes("vinna") };
-    return do_with(std::move(expected), [] (auto& expected) {
+    do_with(std::move(expected), [] (auto& expected) {
         return test_range_reads(dht::minimum_token(), dht::global_partitioner().get_token(key_view(bytes_view(expected.front()))), expected);
-    });
+    }).get();
 }
 
 // Must be run in a seastar thread
@@ -393,6 +408,7 @@ void test_mutation_source(sstable_writer_config cfg, sstables::sstable::version_
 
 SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
         for (auto version : {sstables::sstable::version_types::ka, sstables::sstable::version_types::la}) {
             for (auto index_block_size : {1, 128, 64*1024}) {
@@ -407,6 +423,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
 
 SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         auto s = make_lw_shared(schema({}, "ks", "cf",
@@ -445,8 +462,9 @@ SEASTAR_TEST_CASE(test_sstable_can_write_and_read_range_tombstone) {
     });
 }
 
-SEASTAR_TEST_CASE(compact_storage_sparse_read) {
-    return reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(compact_storage_sparse_read) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    reusable_sst(compact_sparse_schema(), "tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_sparse_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -459,11 +477,12 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
                 return make_ready_future<>();
             });
         });
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
-    return reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(compact_storage_simple_dense_read) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    reusable_sst(compact_simple_dense_schema(), "tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_simple_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -478,11 +497,12 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
                 return make_ready_future<>();
             });
         });
-    });
+    }).get();
 }
 
-SEASTAR_TEST_CASE(compact_storage_dense_read) {
-    return reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(compact_storage_dense_read) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    reusable_sst(compact_dense_schema(), "tests/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(make_dkey(compact_dense_schema(), "first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
             auto rd = make_lw_shared<flat_mutation_reader>(sstp->read_row_flat(s, key));
@@ -497,15 +517,16 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
                 return make_ready_future<>();
             });
         });
-    });
+    }).get();
 }
 
 // We recently had an issue, documented at #188, where range-reading from an
 // sstable would break if collections were used.
 //
 // Make sure we don't regress on that.
-SEASTAR_TEST_CASE(broken_ranges_collection) {
-    return reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(broken_ranges_collection) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    reusable_sst(peers_schema(), "tests/sstables/broken_ranges", 2).then([] (auto sstp) {
         auto s = peers_schema();
         auto reader = make_lw_shared<flat_mutation_reader>(sstp->as_mutation_source().make_reader(s, query::full_partition_range));
         return repeat([s, reader] {
@@ -531,7 +552,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
                 return stop_iteration::no;
             });
         });
-    });
+    }).get();
 }
 
 static schema_ptr tombstone_overlap_schema() {
@@ -570,8 +591,9 @@ static future<sstable_ptr> ka_sst(schema_ptr schema, sstring dir, unsigned long 
 //                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
 //                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
 //               ]
-SEASTAR_TEST_CASE(tombstone_in_tombstone) {
-    return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -621,7 +643,7 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
                 });
             });
         });
-    });
+    }).get();
 }
 
 //  Same schema as above, the sstable looks like:
@@ -633,8 +655,9 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
 //
 // We're not sure how this sort of sstable can be generated with Cassandra 2's
 // CQL, but we saw a similar thing is a real use case.
-SEASTAR_TEST_CASE(range_tombstone_reading) {
-    return ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(range_tombstone_reading) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    ka_sst(tombstone_overlap_schema(), "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
         auto s = tombstone_overlap_schema();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -669,7 +692,7 @@ SEASTAR_TEST_CASE(range_tombstone_reading) {
                 });
             });
         });
-    });
+    }).get();
 }
 
 // In this test case we have *three* levels of of tombstones:
@@ -710,8 +733,9 @@ static schema_ptr tombstone_overlap_schema2() {
     }();
     return s;
 }
-SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
-    return ka_sst(tombstone_overlap_schema2(), "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
+SEASTAR_THREAD_TEST_CASE(tombstone_in_tombstone2) {
+    auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
+    ka_sst(tombstone_overlap_schema2(), "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
         auto s = tombstone_overlap_schema2();
         return do_with(sstp->read_rows_flat(s), [sstp, s] (auto& reader) {
             return repeat([sstp, s, &reader] {
@@ -766,11 +790,12 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
                 });
             });
         });
-    });
+    }).get();
 }
 
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -806,6 +831,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
 
 SEASTAR_TEST_CASE(test_has_partition_key) {
     return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         for (const auto version : all_sstable_versions) {
             storage_service_for_tests ssft;
             auto dir = make_lw_shared<tmpdir>();
@@ -852,6 +878,7 @@ static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
     return seastar::async([] {
+        auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
         schema_builder builder("ks", "cf");
@@ -903,6 +930,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -966,6 +994,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -1025,6 +1054,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
 
 SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -1078,6 +1108,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -1122,6 +1153,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -1157,6 +1189,7 @@ SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_k
 
 SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compound) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
@@ -1202,6 +1235,7 @@ SEASTAR_TEST_CASE(test_can_write_and_read_non_compound_range_tombstone_as_compou
 
 SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_position) {
     return seastar::async([] {
+      auto wait_bg = seastar::defer([] { sstables::await_background_jobs().get(); });
       for (const auto version : all_sstable_versions) {
         storage_service_for_tests ssft;
         auto dir = make_lw_shared<tmpdir>();
