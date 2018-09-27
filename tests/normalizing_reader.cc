@@ -58,12 +58,19 @@ future<> normalizing_reader::fill_buffer(db::timeout_clock::time_point timeout) 
 
                 push_mutation_fragment(std::move(mf));
             }
-            _end_of_stream = _rd.is_end_of_stream() && _range_tombstones.empty();
+
+            if (_rd.is_end_of_stream()) {
+                while (auto mfo = _range_tombstones.get_next()) {
+                    push_mutation_fragment(std::move(*mfo));
+                }
+                _end_of_stream = true;
+            }
         });
     });
 }
 
 void normalizing_reader::next_partition() {
+    _range_tombstones.reset();
     clear_buffer_to_next_partition();
     if (is_buffer_empty()) {
         _end_of_stream = false;
@@ -72,12 +79,14 @@ void normalizing_reader::next_partition() {
 }
 future<> normalizing_reader::fast_forward_to(
         const dht::partition_range& pr, db::timeout_clock::time_point timeout) {
+    _range_tombstones.reset();
     clear_buffer();
     _end_of_stream = false;
     return _rd.fast_forward_to(pr, timeout);
 }
 future<> normalizing_reader::fast_forward_to(
         position_range pr, db::timeout_clock::time_point timeout) {
+    _range_tombstones.forward_to(pr.start());
     forward_buffer_to(pr.start());
     _end_of_stream = false;
     return _rd.fast_forward_to(std::move(pr), timeout);
