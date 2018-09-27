@@ -40,24 +40,23 @@
 
 namespace {
 
-template <typename Env>
-void create_table(Env &e) {
-        e.execute_cql("CREATE TABLE test (a tinyint primary key,"
-                      " b smallint,"
-                      " c int,"
-                      " d bigint,"
-                      " e float,"
-                      " f double,"
-                      " g_0 decimal,"
-                      " g_2 decimal,"
-                      " h varint, "
-                      " t text,"
-                      " dt date,"
-                      " tm timestamp,"
-                      " tu timeuuid)").get();
+void create_table(cql_test_env& e) {
+    e.execute_cql("CREATE TABLE test (a tinyint primary key,"
+                  " b smallint,"
+                  " c int,"
+                  " d bigint,"
+                  " e float,"
+                  " f double,"
+                  " g_0 decimal,"
+                  " g_2 decimal,"
+                  " h varint, "
+                  " t text,"
+                  " dt date,"
+                  " tm timestamp,"
+                  " tu timeuuid)").get();
 
-        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (1, 1, 1, 1, 1, 1, 1, 1.00, 1, 'a', '2017-12-02', '2017-12-02t03:00:00', b650cbe0-f914-11e7-8892-000000000004)").get();
-        e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (2, 2, 2, 2, 2, 2, 2, 2.00, 2, 'b', '2016-12-02', '2016-12-02t06:00:00', D2177dD0-EAa2-11de-a572-001B779C76e3)").get();
+    e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (1, 1, 1, 1, 1, 1, 1, 1.00, 1, 'a', '2017-12-02', '2017-12-02t03:00:00', b650cbe0-f914-11e7-8892-000000000004)").get();
+    e.execute_cql("INSERT INTO test (a, b, c, d, e, f, g_0, g_2, h, t, dt, tm, tu) VALUES (2, 2, 2, 2, 2, 2, 2, 2.00, 2, 'b', '2016-12-02', '2016-12-02t06:00:00', D2177dD0-EAa2-11de-a572-001B779C76e3)").get();
 }
 
 } /* anonymous namespace */
