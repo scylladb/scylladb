@@ -215,3 +215,22 @@ SEASTAR_TEST_CASE(test_aggregate_count) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_reverse_type_aggregation) {
+    return do_with_cql_env_thread([&] (auto& e) {
+        e.execute_cql("CREATE TABLE test(p int, c timestamp, v int, primary key (p, c)) with clustering order by (c desc)").get();
+        e.execute_cql("INSERT INTO test(p, c, v) VALUES (1, 1, 1)").get();
+        e.execute_cql("INSERT INTO test(p, c, v) VALUES (1, 2, 1)").get();
+
+        {
+            auto tp = db_clock::from_time_t({ 0 }) + std::chrono::milliseconds(1);
+            auto msg = e.execute_cql("SELECT min(c) FROM test").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
+        }
+        {
+            auto tp = db_clock::from_time_t({ 0 }) + std::chrono::milliseconds(2);
+            auto msg = e.execute_cql("SELECT max(c) FROM test").get0();
+            assert_that(msg).is_rows().with_size(1).with_row({{timestamp_type->decompose(tp)}});
+        }
+    });
+}
