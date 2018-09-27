@@ -54,6 +54,12 @@ lexicographical_relation relation_for_upper_bound(composite_view v) {
     abort();
 }
 
+enum class bound_weight : int8_t {
+    before_all_prefixed = -1,
+    equal = 0,
+    after_all_prefixed = 1,
+};
+
 inline
 int position_weight(bound_kind k) {
     switch(k) {
