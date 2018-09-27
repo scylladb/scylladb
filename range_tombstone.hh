@@ -54,6 +54,11 @@ public:
     range_tombstone(bound_view start, bound_view end, tombstone tomb)
             : range_tombstone(start.prefix(), start.kind(), end.prefix(), end.kind(), std::move(tomb))
     { }
+
+    // Can be called only when both start and end are !is_static_row && !is_clustering_row().
+    range_tombstone(position_in_partition_view start, position_in_partition_view end, tombstone tomb)
+            : range_tombstone(start.as_start_bound_view(), end.as_end_bound_view(), tomb)
+    {}
     range_tombstone(clustering_key_prefix&& start, clustering_key_prefix&& end, tombstone tomb)
             : range_tombstone(std::move(start), bound_kind::incl_start, std::move(end), bound_kind::incl_end, std::move(tomb))
     { }
