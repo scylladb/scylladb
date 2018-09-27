@@ -112,3 +112,9 @@ if __name__ == '__main__':
 
     run('dracut --verbose --add-drivers "ixgbevf nvme ena" --force --kver {c7kver}'.format(c7kver=c7kver))
     run('dracut --verbose --add-drivers "ixgbevf nvme ena" --force --kver {mlkver}'.format(mlkver=mlkver))
+
+    with open('/etc/cloud/cloud.cfg') as f:
+        cfg = f.read()
+    cfg2 = re.sub('^ssh_deletekeys:   0', 'ssh_deletekeys:   1', cfg, flags=re.MULTILINE)
+    with open('/etc/cloud/cloud.cfg', 'w') as f:
+        f.write(cfg2)
