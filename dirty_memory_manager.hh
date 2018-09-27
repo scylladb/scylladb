@@ -111,6 +111,8 @@ class dirty_memory_manager: public logalloc::region_group_reclaimer {
         return over_soft_limit();
     }
 
+    unsigned _extraneous_flushes = 0;
+
     seastar::metrics::metric_groups _metrics;
 public:
     void setup_collectd(sstring namestr);
@@ -213,6 +215,17 @@ public:
         });
     }
 
+    bool has_extraneous_flushes_requested() const {
+        return _extraneous_flushes > 0;
+    }
+
+    void start_extraneous_flush() {
+        ++_extraneous_flushes;
+    }
+
+    void finish_extraneous_flush() {
+        --_extraneous_flushes;
+    }
 private:
     future<flush_permit> get_flush_permit(semaphore_units<>&& background_permit) {
         return get_units(_flush_serializer, 1).then([this, background_permit = std::move(background_permit)] (auto&& units) mutable {

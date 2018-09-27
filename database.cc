@@ -37,6 +37,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/util/defer.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -2141,7 +2142,11 @@ database::database(const db::config& cfg, database_config dbcfg)
     , _streaming_dirty_memory_manager(*this, dbcfg.available_memory * 0.10, cfg.virtual_dirty_soft_limit(), dbcfg.streaming_scheduling_group)
     , _dbcfg(dbcfg)
     , _memtable_controller(make_flush_controller(*_cfg, dbcfg.memtable_scheduling_group, service::get_local_memtable_flush_priority(), [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        return (_dirty_memory_manager.virtual_dirty_memory()) / limit;
+        auto backlog = (_dirty_memory_manager.virtual_dirty_memory()) / limit;
+        if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
+            backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
+        }
+        return backlog;
     }))
     , _read_concurrency_sem(max_count_concurrent_reads,
         max_memory_concurrent_reads(),
@@ -3435,10 +3440,13 @@ future<> memtable_list::request_flush() {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
         _flush_coalescing = shared_promise<>();
-        return _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
+        _dirty_memory_manager->start_extraneous_flush();
+        auto ef = defer([this] { _dirty_memory_manager->finish_extraneous_flush(); });
+        return _dirty_memory_manager->get_flush_permit().then([this, ef = std::move(ef)] (auto permit) mutable {
             auto current_flush = std::move(*_flush_coalescing);
             _flush_coalescing = {};
-            return _dirty_memory_manager->flush_one(*this, std::move(permit)).then_wrapped([this, current_flush = std::move(current_flush)] (auto f) mutable {
+            return _dirty_memory_manager->flush_one(*this, std::move(permit)).then_wrapped([this, ef = std::move(ef),
+                                                                                            current_flush = std::move(current_flush)] (auto f) mutable {
                 if (f.failed()) {
                     current_flush.set_exception(f.get_exception());
                 } else {
