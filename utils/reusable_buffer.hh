@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/core/memory.hh>
 #include <seastar/util/gcc6-concepts.hh>
 
 #include "bytes.hh"
@@ -63,6 +64,10 @@ class reusable_buffer { // extract to utils
 private:
     bytes_mutable_view reserve(size_t n) {
         if (_size < n) {
+            // Reusable buffers are expected to be used when large contiguous
+            // allocations are unavoidable. There is not much point in warning
+            // about them since there isn't much that can be done.
+            seastar::memory::scoped_large_allocation_warning_disable g;
             // std::make_unique would zero-initialise the buffer which is
             // just a waste of cycles. We can, however, summon an ancient
             // entity from the elder days of C++ to help us.
