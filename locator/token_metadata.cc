@@ -130,6 +130,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         _topology.add_endpoint(endpoint);
         remove_by_value(_bootstrap_tokens, endpoint);
         _leaving_endpoints.erase(endpoint);
+        invalidate_cached_rings();
         for (const token& t : tokens)
         {
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
