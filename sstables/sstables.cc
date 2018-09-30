@@ -1787,6 +1787,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
     if (cell.is_dead(_now)) {
         // tombstone cell
 
+        get_stats().on_cell_tombstone_write();
         column_mask mask = column_mask::deletion;
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
@@ -1795,7 +1796,11 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
-    } else if (cdef.is_counter()) {
+        return;
+    }
+
+    get_stats().on_cell_write();
+    if (cdef.is_counter()) {
         // counter cell
         assert(!cell.is_counter_update());
 
@@ -3128,7 +3133,11 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
         auto ldt = cell.deletion_time().time_since_epoch().count();
         _c_stats.update_local_deletion_time(ldt);
         _c_stats.tombstone_histogram.update(ldt);
-    } else if (is_cell_expiring) {
+        _sst.get_stats().on_cell_tombstone_write();
+        return;
+    }
+
+    if (is_cell_expiring) {
         auto expiration = cell.expiry().time_since_epoch().count();
         auto ttl = cell.ttl().count();
         _c_stats.update_ttl(ttl);
@@ -3140,6 +3149,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     } else { // regular live cell
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
+    _sst.get_stats().on_cell_write();
 }
 
 void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker& marker) {
@@ -4274,10 +4284,14 @@ future<> init_metrics() {
             sm::description("Number of static rows written")),
         sm::make_derive("row_writes", [] { return sstables_stats::get_shard_stats().row_writes; },
             sm::description("Number of clustering rows written")),
+        sm::make_derive("cell_writes", [] { return sstables_stats::get_shard_stats().cell_writes; },
+            sm::description("Number of cells written")),
         sm::make_derive("tombstone_writes", [] { return sstables_stats::get_shard_stats().tombstone_writes; },
             sm::description("Number of tombstones written")),
         sm::make_derive("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
             sm::description("Number of range tombstones written")),
+        sm::make_derive("cell_tombstone_writes", [] { return sstables_stats::get_shard_stats().cell_tombstone_writes; },
+            sm::description("Number of cell tombstones written")),
     });
   });
 }

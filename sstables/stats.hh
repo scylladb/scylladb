@@ -30,6 +30,8 @@ class sstables_stats {
         uint64_t row_writes = 0;
         uint64_t tombstone_writes = 0;
         uint64_t range_tombstone_writes = 0;
+        uint64_t cell_writes = 0;
+        uint64_t cell_tombstone_writes = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -57,6 +59,14 @@ public:
 
     inline void on_range_tombstone_write() {
         ++_stats.range_tombstone_writes;
+    }
+
+    inline void on_cell_write() {
+        ++_stats.cell_writes;
+    }
+
+    inline void on_cell_tombstone_write() {
+        ++_stats.cell_tombstone_writes;
     }
 };
 
