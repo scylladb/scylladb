@@ -493,6 +493,7 @@ public:
 };
 
 flat_mutation_reader sstable::read_rows_flat(schema_ptr schema, const io_priority_class& pc, streamed_mutation::forwarding fwd) {
+    get_stats().on_sstable_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
             shared_from_this(), std::move(schema), pc, no_resource_tracking(), fwd, default_read_monitor());
@@ -509,6 +510,7 @@ sstables::sstable::read_row_flat(schema_ptr schema,
                                  streamed_mutation::forwarding fwd,
                                  read_monitor& mon)
 {
+    get_stats().on_single_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
             shared_from_this(), std::move(schema), std::move(key), slice, pc, std::move(resource_tracker), fwd, mutation_reader::forwarding::no, mon);
@@ -525,6 +527,7 @@ sstable::read_range_rows_flat(schema_ptr schema,
                          streamed_mutation::forwarding fwd,
                          mutation_reader::forwarding fwd_mr,
                          read_monitor& mon) {
+    get_stats().on_range_partition_read();
     if (_version == version_types::mc) {
         return make_flat_mutation_reader<sstable_mutation_reader<data_consume_rows_context_m, mp_row_consumer_m>>(
             shared_from_this(), std::move(schema), range, slice, pc, std::move(resource_tracker), fwd, fwd_mr, mon);

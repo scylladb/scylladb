@@ -4292,6 +4292,12 @@ future<> init_metrics() {
             sm::description("Number of range tombstones written")),
         sm::make_derive("cell_tombstone_writes", [] { return sstables_stats::get_shard_stats().cell_tombstone_writes; },
             sm::description("Number of cell tombstones written")),
+        sm::make_derive("single_partition_reads", [] { return sstables_stats::get_shard_stats().single_partition_reads; },
+            sm::description("Number of single partition flat mutation reads")),
+        sm::make_derive("range_partition_reads", [] { return sstables_stats::get_shard_stats().range_partition_reads; },
+            sm::description("Number of partition range flat mutation reads")),
+        sm::make_derive("sstable_partition_reads", [] { return sstables_stats::get_shard_stats().sstable_partition_reads; },
+            sm::description("Number of whole sstable flat mutation reads")),
     });
   });
 }

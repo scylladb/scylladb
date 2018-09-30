@@ -32,6 +32,9 @@ class sstables_stats {
         uint64_t range_tombstone_writes = 0;
         uint64_t cell_writes = 0;
         uint64_t cell_tombstone_writes = 0;
+        uint64_t single_partition_reads = 0;
+        uint64_t range_partition_reads = 0;
+        uint64_t sstable_partition_reads = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -67,6 +70,18 @@ public:
 
     inline void on_cell_tombstone_write() {
         ++_stats.cell_tombstone_writes;
+    }
+
+    inline void on_single_partition_read() {
+        ++_stats.single_partition_reads;
+    }
+
+    inline void on_range_partition_read() {
+        ++_stats.range_partition_reads;
+    }
+
+    inline void on_sstable_partition_read() {
+        ++_stats.sstable_partition_reads;
     }
 };
 
