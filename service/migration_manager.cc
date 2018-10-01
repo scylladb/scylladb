@@ -533,6 +533,10 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, api::time
         if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
+        if (db.column_family_exists(cfm->id())) {
+            throw exceptions::invalid_request_exception(sprint("Table with ID %s already exists: %s", cfm->id(), db.find_schema(cfm->id())));
+        }
+
         mlogger.info("Create new ColumnFamily: {}", cfm);
         return db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, timestamp)
             .then([announce_locally, this] (auto&& mutations) {
