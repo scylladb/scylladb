@@ -974,6 +974,10 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
 
     proxy.local().get_db().invoke_on_all([&] (database& db) {
         return seastar::async([&] {
+            parallel_for_each(boost::range::join(tables_diff.dropped, views_diff.dropped), [&] (schema_diff::dropped_schema& dt) {
+                auto& s = *dt.schema.get();
+                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
+            }).get();
             parallel_for_each(boost::range::join(tables_diff.created, views_diff.created), [&] (global_schema_ptr& gs) {
                 return db.add_column_family_and_make_directory(gs);
             }).get();
@@ -985,10 +989,6 @@ static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
             for (auto&& gs : boost::range::join(tables_diff.altered, views_diff.altered)) {
                 columns_changed.push_back(db.update_column_family(gs));
             }
-            parallel_for_each(boost::range::join(tables_diff.dropped, views_diff.dropped), [&] (schema_diff::dropped_schema& dt) {
-                auto& s = *dt.schema.get();
-                return db.drop_column_family(s.ks_name(), s.cf_name(), [&] { return dt.jp.value(); });
-            }).get();
 
             auto& mm = service::get_local_migration_manager();
             auto it = columns_changed.begin();
