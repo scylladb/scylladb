@@ -72,7 +72,7 @@ SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
                 .is_rows().with_size(0);
             BOOST_REQUIRE_THROW(
                 e.execute_cql(sprint("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='%s'", id)).get(),
-                std::invalid_argument);
+                exceptions::invalid_request_exception);
             BOOST_REQUIRE_THROW(
                 e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='55'").get(),
                 exceptions::configuration_exception);
