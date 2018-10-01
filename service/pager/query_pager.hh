@@ -83,7 +83,6 @@ protected:
     shared_ptr<const cql3::selection::selection> _selection;
     service::query_state& _state;
     const cql3::query_options& _options;
-    db::timeout_clock::duration _timeout;
     lw_shared_ptr<query::read_command> _cmd;
     dht::partition_range_vector _ranges;
     paging_state::replicas_per_token_range _last_replicas;
@@ -92,7 +91,6 @@ public:
     query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
-                db::timeout_clock::duration timeout,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges);
     virtual ~query_pager() {}
@@ -103,14 +101,14 @@ public:
      * @param pageSize the maximum number of elements to return in the next page.
      * @return the page of result.
      */
-    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, gc_clock::time_point);
+    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, gc_clock::time_point, db::timeout_clock::time_point timeout);
 
     /**
      * For more than one page.
      */
-    virtual future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point);
+    virtual future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, gc_clock::time_point, db::timeout_clock::time_point timeout);
 
-    future<cql3::result_generator> fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats);
+    future<cql3::result_generator> fetch_page_generator(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout, cql3::cql_stats& stats);
 
     /**
      * Whether or not this pager is exhausted, i.e. whether or not a call to
@@ -136,8 +134,8 @@ public:
      * Get the current state (snapshot) of the pager. The state can allow to restart the
      * paging on another host from where we are at this point.
      *
-     * @return the current paging state. Will return null if paging is at the
-     * beginning. If the pager is exhausted, the result is undefined.
+     * @return the current paging state. If the pager is exhausted, the result is a valid pointer
+     * to a paging_state instance which will return 0 on calling get_remaining() on it.
      */
     ::shared_ptr<const paging_state> state() const;
 
@@ -146,7 +144,7 @@ protected:
     class query_result_visitor;
     
     future<service::storage_proxy::coordinator_query_result>
-    do_fetch_page(uint32_t page_size, gc_clock::time_point now);
+    do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout);
 
     template<typename Visitor>
     GCC6_CONCEPT(requires query::ResultVisitor<Visitor>)

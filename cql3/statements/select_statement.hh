@@ -126,14 +126,6 @@ public:
         clustering_key_prefix clustering;
     };
 
-    future<::shared_ptr<cql_transport::messages::result_message>> execute(
-            service::storage_proxy& proxy,
-            lw_shared_ptr<query::read_command> cmd,
-            std::vector<primary_key>&& primary_keys,
-            service::query_state& state,
-            const query_options& options,
-            gc_clock::time_point now);
-
     shared_ptr<cql_transport::messages::result_message> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now);
 
@@ -168,6 +160,7 @@ public:
 
 class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
+    schema_ptr _view_schema;
 public:
     static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
                                                                     schema_ptr schema,
@@ -189,7 +182,8 @@ public:
                                    ordering_comparator_type ordering_comparator,
                                    ::shared_ptr<term> limit,
                                    cql_stats &stats,
-                                   const secondary_index::index& index);
+                                   const secondary_index::index& index,
+                                   schema_ptr view_schema);
 
 private:
     static stdx::optional<secondary_index::index> find_idx(database& db,
@@ -199,13 +193,44 @@ private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
                                                                                      service::query_state& state, const query_options& options) override;
 
-    future<dht::partition_range_vector> find_index_partition_ranges(service::storage_proxy& proxy,
+    ::shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(::shared_ptr<const service::pager::paging_state> paging_state,
+            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::storage_proxy& proxy, service::query_state& state, const query_options& options) const;
+
+    future<dht::partition_range_vector, ::shared_ptr<const service::pager::paging_state>> find_index_partition_ranges(service::storage_proxy& proxy,
                                                                     service::query_state& state,
                                                                     const query_options& options);
 
-    future<std::vector<primary_key>> find_index_clustering_rows(service::storage_proxy& proxy,
+    future<std::vector<primary_key>, ::shared_ptr<const service::pager::paging_state>> find_index_clustering_rows(service::storage_proxy& proxy,
                                                                 service::query_state& state,
                                                                 const query_options& options);
+
+    shared_ptr<cql_transport::messages::result_message>
+    process_base_query_results(
+            foreign_ptr<lw_shared_ptr<query::result>> results,
+            lw_shared_ptr<query::read_command> cmd,
+            service::storage_proxy& proxy,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
+
+    future<shared_ptr<cql_transport::messages::result_message>>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            dht::partition_range_vector&& partition_ranges,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
+
+    future<shared_ptr<cql_transport::messages::result_message>>
+    execute_base_query(
+            service::storage_proxy& proxy,
+            std::vector<primary_key>&& primary_keys,
+            service::query_state& state,
+            const query_options& options,
+            gc_clock::time_point now,
+            ::shared_ptr<const service::pager::paging_state> paging_state);
 
     virtual void update_stats_rows_read(int64_t rows_read) override {
         _stats.rows_read += rows_read;

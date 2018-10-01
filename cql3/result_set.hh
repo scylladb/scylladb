@@ -110,7 +110,8 @@ private:
     bool all_in_same_cf() const;
 
 public:
-    void set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state);
+    void set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
+    void maybe_set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state);
 
     void set_skip_metadata();
 

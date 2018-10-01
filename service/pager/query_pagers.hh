@@ -64,7 +64,6 @@ public:
             shared_ptr<const cql3::selection::selection>,
             service::query_state&,
             const cql3::query_options&,
-            db::timeout_clock::duration timeout,
             lw_shared_ptr<query::read_command>,
             dht::partition_range_vector,
             cql3::cql_stats& stats,

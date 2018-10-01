@@ -169,6 +169,10 @@ public:
         return _metadata;
     }
 
+    ::shared_ptr<metadata> get_result_metadata() {
+        return _metadata;
+    }
+
     static ::shared_ptr<selection> wildcard(schema_ptr schema);
     static ::shared_ptr<selection> for_columns(schema_ptr schema, std::vector<const column_definition*> columns);
 

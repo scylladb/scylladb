@@ -66,7 +66,6 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     query_pager::query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                     service::query_state& state,
                     const cql3::query_options& options,
-                    db::timeout_clock::duration timeout,
                     lw_shared_ptr<query::read_command> cmd,
                     dht::partition_range_vector ranges)
                     : _has_clustering_keys(has_clustering_keys(*s, *cmd))
@@ -75,12 +74,11 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                     , _selection(selection)
                     , _state(state)
                     , _options(options)
-                    , _timeout(timeout)
                     , _cmd(std::move(cmd))
                     , _ranges(std::move(ranges))
     {}
 
-    future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now) {
+    future<service::storage_proxy::coordinator_query_result> query_pager::do_fetch_page(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         auto state = _options.get_paging_state();
 
         if (!_last_pkey && state) {
@@ -221,16 +219,15 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
 
         auto ranges = _ranges;
         auto command = ::make_lw_shared<query::read_command>(*_cmd);
-        auto this_timeout = db::timeout_clock::now() + _timeout;
         return get_local_storage_proxy().query(_schema,
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
+                {timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
     }
 
-    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {
-        return do_fetch_page(page_size, now).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+    future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) {
+        return do_fetch_page(page_size, now, timeout).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             handle_result(cql3::selection::result_set_builder::visitor(builder, *_schema, *_selection),
@@ -239,19 +236,19 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
     }
 
     future<std::unique_ptr<cql3::result_set>> query_pager::fetch_page(uint32_t page_size,
-            gc_clock::time_point now) {
+            gc_clock::time_point now, db::timeout_clock::time_point timeout) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
-                [this, page_size, now](auto& builder) {
-                    return this->fetch_page(builder, page_size, now).then([&builder] {
+                [this, page_size, now, timeout](auto& builder) {
+                    return this->fetch_page(builder, page_size, now, timeout).then([&builder] {
                        return builder.build();
                     });
                 });
     }
 
-future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, cql3::cql_stats& stats) {
-    return do_fetch_page(page_size, now).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
+future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout, cql3::cql_stats& stats) {
+    return do_fetch_page(page_size, now, timeout).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
         handle_result(noop_visitor(), qr.query_result, page_size, now);
@@ -266,19 +263,18 @@ public:
     filtering_query_pager(schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
-                db::timeout_clock::duration timeout,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
                 ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions,
                 cql3::cql_stats& stats)
-        : query_pager(s, selection, state, options, timeout, std::move(cmd), std::move(ranges))
+        : query_pager(s, selection, state, options, std::move(cmd), std::move(ranges))
         , _filtering_restrictions(std::move(filtering_restrictions))
         , _stats(stats)
         {}
     virtual ~filtering_query_pager() {}
 
-    virtual future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) override {
-        return do_fetch_page(page_size, now).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
+    virtual future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now, db::timeout_clock::time_point timeout) override {
+        return do_fetch_page(page_size, now, timeout).then([this, &builder, page_size, now] (service::storage_proxy::coordinator_query_result qr) {
             _last_replicas = std::move(qr.last_replicas);
             _query_read_repair_decision = qr.read_repair_decision;
             qr.query_result->ensure_counts();
@@ -362,7 +358,7 @@ public:
             _max = _max - row_count;
             _exhausted = (row_count < page_size && !results->is_short_read()) || _max == 0;
 
-            if (!_exhausted) {
+            if (!_exhausted || row_count > 0) {
                 if (_last_pkey) {
                     update_slice(*_last_pkey);
                 }
@@ -382,9 +378,8 @@ public:
         }
     }
 
-    shared_ptr<const service::pager::paging_state> query_pager::state() const {
-        return _exhausted ?  nullptr : ::make_shared<const paging_state>(*_last_pkey,
-                _last_ckey, _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
+    ::shared_ptr<const paging_state> query_pager::state() const {
+        return ::make_shared<paging_state>(*_last_pkey, _last_ckey, _exhausted ? 0 : _max, _cmd->query_uuid, _last_replicas, _query_read_repair_decision);
     }
 
 }
@@ -422,15 +417,14 @@ bool service::pager::query_pagers::may_need_paging(const schema& s, uint32_t pag
 ::shared_ptr<service::pager::query_pager> service::pager::query_pagers::pager(
         schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
         service::query_state& state, const cql3::query_options& options,
-        db::timeout_clock::duration timeout,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
         cql3::cql_stats& stats,
         ::shared_ptr<cql3::restrictions::statement_restrictions> filtering_restrictions) {
     if (filtering_restrictions) {
         return ::make_shared<filtering_query_pager>(std::move(s), std::move(selection), state,
-                    options, timeout, std::move(cmd), std::move(ranges), std::move(filtering_restrictions), stats);
+                    options, std::move(cmd), std::move(ranges), std::move(filtering_restrictions), stats);
     }
     return ::make_shared<query_pager>(std::move(s), std::move(selection), state,
-            options, timeout, std::move(cmd), std::move(ranges));
+            options, std::move(cmd), std::move(ranges));
 }

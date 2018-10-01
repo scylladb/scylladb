@@ -387,3 +387,77 @@ SEASTAR_TEST_CASE(test_index_with_partition_key) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_index_with_paging) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int, ck text, v int, v2 int, v3 text, PRIMARY KEY (pk, ck))").get();
+        e.execute_cql("CREATE INDEX ON tab (v)").get();
+
+        sstring big_string(4096, 'j');
+        // There should be enough rows to use multiple pages
+        for (int i = 0; i < 64 * 1024; ++i) {
+            e.execute_cql(sprint("INSERT INTO tab (pk, ck, v, v2, v3) VALUES (%s, 'hello%s', 1, %s, '%s')", i % 3, i, i, big_string)).get();
+        }
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{4321, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            assert_that(res).is_rows().with_size(4321);
+        });
+
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1").get0();
+            assert_that(res).is_rows().with_size(64 * 1024);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_index_on_pk_ck_with_paging) {
+    return do_with_cql_env_thread([] (auto& e) {
+        e.execute_cql("CREATE TABLE tab (pk int, pk2 int, ck text, ck2 text, v int, v2 int, v3 text, PRIMARY KEY ((pk, pk2), ck, ck2))").get();
+        e.execute_cql("CREATE INDEX ON tab (v)").get();
+        e.execute_cql("CREATE INDEX ON tab (pk2)").get();
+        e.execute_cql("CREATE INDEX ON tab (ck2)").get();
+
+        sstring big_string(1024 * 1024 + 7, 'j');
+        for (int i = 0; i < 4; ++i) {
+            e.execute_cql(sprint("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES (%s, %s, 'hello%s', 'world%s', 1, %s, '%s')", i % 3, i, i, i, i, big_string)).get();
+        }
+        for (int i = 4; i < 2052; ++i) {
+            e.execute_cql(sprint("INSERT INTO tab (pk, pk2, ck, ck2, v, v2, v3) VALUES (%s, %s, 'hello%s', 'world%s', 1, %s, '%s')", i % 3, i, i, i, i, "small_string")).get();
+        }
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{101, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1", std::move(qo)).get0();
+            assert_that(res).is_rows().with_size(101);
+        });
+
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * FROM tab WHERE v = 1").get0();
+            assert_that(res).is_rows().with_size(2052);
+        });
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE pk2 = 1", std::move(qo)).get0();
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {utf8_type->decompose("hello1")}, {utf8_type->decompose("world1")},
+                {int32_type->decompose(1)}, {int32_type->decompose(1)}, {utf8_type->decompose(big_string)}
+            }});
+        });
+
+        eventually([&] {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, infinite_timeout_config, std::vector<cql3::raw_value>{},
+                    cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
+            auto res = e.execute_cql("SELECT * FROM tab WHERE ck2 = 'world8'", std::move(qo)).get0();
+            assert_that(res).is_rows().with_rows({{
+                {int32_type->decompose(2)}, {int32_type->decompose(8)}, {utf8_type->decompose("hello8")}, {utf8_type->decompose("world8")},
+                {int32_type->decompose(1)}, {int32_type->decompose(8)}, {utf8_type->decompose("small_string")}
+            }});
+        });
+    });
+}

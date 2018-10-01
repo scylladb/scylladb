@@ -74,13 +74,16 @@ bool metadata::all_in_same_cf() const {
     return column_specification::all_in_same_table(_column_info->_names);
 }
 
-void metadata::set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
-    if (!paging_state) {
-        return;
-    }
-
+void metadata::set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state) {
     _flags.set<flag::HAS_MORE_PAGES>();
     _paging_state = std::move(paging_state);
+}
+
+void metadata::maybe_set_paging_state(::shared_ptr<const service::pager::paging_state> paging_state) {
+    assert(paging_state);
+    if (paging_state->get_remaining() > 0) {
+        set_paging_state(std::move(paging_state));
+    }
 }
 
 void metadata::set_skip_metadata() {
