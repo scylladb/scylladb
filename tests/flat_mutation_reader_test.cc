@@ -327,6 +327,72 @@ SEASTAR_TEST_CASE(test_partition_checksum) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_flat_mutation_reader_move_buffer_content_to) {
+    struct dummy_reader_impl : public flat_mutation_reader::impl {
+        using flat_mutation_reader::impl::impl;
+        virtual future<> fill_buffer(db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual void next_partition() { }
+        virtual future<> fast_forward_to(const dht::partition_range&, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range, db::timeout_clock::time_point) override { return make_ready_future<>(); }
+    };
+
+    simple_schema s;
+    auto pkey = s.make_pkey(1);
+    auto mut_orig = mutation(s.schema(), pkey);
+
+    auto mf_range = boost::irange(0, 50) | boost::adaptors::transformed([&] (auto n) {
+        return s.make_row(s.make_ckey(n), "a_16_byte_value_");
+    });
+    for (auto&& mf : mf_range) {
+        mut_orig.apply(mf);
+    }
+
+    // Set a small size so we can fill the buffer at least two times, without
+    // having to have loads of data.
+    const auto max_buffer_size = size_t{100};
+
+    auto reader = flat_mutation_reader_from_mutations({mut_orig}, dht::partition_range::make_open_ended_both_sides());
+    auto dummy_impl = std::make_unique<dummy_reader_impl>(s.schema());
+    reader.set_max_buffer_size(max_buffer_size);
+
+    reader.fill_buffer(db::no_timeout).get();
+    BOOST_REQUIRE(reader.is_buffer_full());
+    auto expected_buf_size = reader.buffer_size();
+
+    // This should take the fast path, as dummy's buffer is empty.
+    reader.move_buffer_content_to(*dummy_impl);
+    BOOST_CHECK(reader.is_buffer_empty());
+    BOOST_CHECK_EQUAL(reader.buffer_size(), 0);
+    BOOST_CHECK_EQUAL(dummy_impl->buffer_size(), expected_buf_size);
+
+    reader.fill_buffer(db::no_timeout).get();
+    BOOST_REQUIRE(!reader.is_buffer_empty());
+    expected_buf_size += reader.buffer_size();
+
+    // This should take the slow path, as dummy's buffer is not empty.
+    reader.move_buffer_content_to(*dummy_impl);
+    BOOST_CHECK(reader.is_buffer_empty());
+    BOOST_CHECK_EQUAL(reader.buffer_size(), 0);
+    BOOST_CHECK_EQUAL(dummy_impl->buffer_size(), expected_buf_size);
+
+    while (!reader.is_end_of_stream()) {
+        reader.fill_buffer(db::no_timeout).get();
+        expected_buf_size += reader.buffer_size();
+
+        reader.move_buffer_content_to(*dummy_impl);
+        BOOST_CHECK(reader.is_buffer_empty());
+        BOOST_CHECK_EQUAL(reader.buffer_size(), 0);
+        BOOST_CHECK_EQUAL(dummy_impl->buffer_size(), expected_buf_size);
+    }
+
+    auto dummy_reader = flat_mutation_reader(std::move(dummy_impl));
+    auto mut_new = read_mutation_from_flat_mutation_reader(dummy_reader, db::no_timeout).get0();
+
+    assert_that(mut_new)
+        .has_mutation()
+        .is_equal_to(mut_orig);
+}
+
 SEASTAR_TEST_CASE(test_multi_range_reader) {
     return seastar::async([] {
         simple_schema s;
@@ -350,40 +416,85 @@ SEASTAR_TEST_CASE(test_multi_range_reader) {
             return flat_mutation_reader_from_mutations(ms, range);
         });
 
-        auto ranges = dht::partition_range_vector {
+        const auto empty_ranges = dht::partition_range_vector{};
+        const auto single_ranges = dht::partition_range_vector{
+                dht::partition_range::make(ring[1], ring[2]),
+        };
+        const auto multiple_ranges = dht::partition_range_vector {
                 dht::partition_range::make(ring[1], ring[2]),
                 dht::partition_range::make_singular(ring[4]),
                 dht::partition_range::make(ring[6], ring[8]),
         };
+        const auto empty_generator = [] { return std::optional<dht::partition_range>{}; };
+        const auto single_generator = [r = std::optional<dht::partition_range>(single_ranges.front())] () mutable {
+            return std::exchange(r, {});
+        };
+        const auto multiple_generator = [it = multiple_ranges.cbegin(), end = multiple_ranges.cend()] () mutable -> std::optional<dht::partition_range> {
+            if (it == end) {
+                return std::nullopt;
+            }
+            return *(it++);
+        };
         auto fft_range = dht::partition_range::make_starting_with(ring[9]);
 
-        BOOST_TEST_MESSAGE("read full partitions and fast forward");
-        assert_that(make_flat_multi_range_reader(s.schema(), source, ranges, s.schema()->full_slice()))
-                .produces(ms[1])
-                .produces(ms[2])
-                .produces(ms[4])
-                .produces(ms[6])
-                .fast_forward_to(fft_range)
-                .produces(ms[9])
-                .produces_end_of_stream();
+        // Generator ranges are single pass, so we need a new range each time they are used.
+        auto run_test = [&] (auto make_empty_ranges, auto make_single_ranges, auto make_multiple_ranges) {
+            BOOST_TEST_MESSAGE("empty ranges");
+            assert_that(make_flat_multi_range_reader(s.schema(), source, make_empty_ranges(), s.schema()->full_slice()))
+                    .produces_end_of_stream()
+                    .fast_forward_to(fft_range)
+                    .produces(ms[9])
+                    .produces_end_of_stream();
 
-        BOOST_TEST_MESSAGE("read, skip partitions and fast forward");
-        assert_that(make_flat_multi_range_reader(s.schema(), source, ranges, s.schema()->full_slice()))
-                .produces_partition_start(keys[1])
-                .next_partition()
-                .produces_partition_start(keys[2])
-                .produces_row_with_key(crs[0].as_clustering_row().key())
-                .next_partition()
-                .produces(ms[4])
-                .next_partition()
-                .produces_partition_start(keys[6])
-                .produces_row_with_key(crs[0].as_clustering_row().key())
-                .produces_row_with_key(crs[1].as_clustering_row().key())
-                .fast_forward_to(fft_range)
-                .next_partition()
-                .produces_partition_start(keys[9])
-                .next_partition()
-                .produces_end_of_stream();
+            BOOST_TEST_MESSAGE("single range");
+            assert_that(make_flat_multi_range_reader(s.schema(), source, make_single_ranges(), s.schema()->full_slice()))
+                    .produces(ms[1])
+                    .produces(ms[2])
+                    .produces_end_of_stream()
+                    .fast_forward_to(fft_range)
+                    .produces(ms[9])
+                    .produces_end_of_stream();
+
+            BOOST_TEST_MESSAGE("read full partitions and fast forward");
+            assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
+                    .produces(ms[1])
+                    .produces(ms[2])
+                    .produces(ms[4])
+                    .produces(ms[6])
+                    .fast_forward_to(fft_range)
+                    .produces(ms[9])
+                    .produces_end_of_stream();
+
+            BOOST_TEST_MESSAGE("read, skip partitions and fast forward");
+            assert_that(make_flat_multi_range_reader(s.schema(), source, make_multiple_ranges(), s.schema()->full_slice()))
+                    .produces_partition_start(keys[1])
+                    .next_partition()
+                    .produces_partition_start(keys[2])
+                    .produces_row_with_key(crs[0].as_clustering_row().key())
+                    .next_partition()
+                    .produces(ms[4])
+                    .next_partition()
+                    .produces_partition_start(keys[6])
+                    .produces_row_with_key(crs[0].as_clustering_row().key())
+                    .produces_row_with_key(crs[1].as_clustering_row().key())
+                    .fast_forward_to(fft_range)
+                    .next_partition()
+                    .produces_partition_start(keys[9])
+                    .next_partition()
+                    .produces_end_of_stream();
+        };
+
+        BOOST_TEST_MESSAGE("vector version");
+        run_test(
+                [&] { return empty_ranges; },
+                [&] { return single_ranges; },
+                [&] { return multiple_ranges; });
+
+        BOOST_TEST_MESSAGE("generator version");
+        run_test(
+                [&] { return empty_generator; },
+                [&] { return single_generator; },
+                [&] { return multiple_generator; });
     });
 }
 
