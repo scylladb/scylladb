@@ -3598,6 +3598,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
            std::rethrow_exception(ep);
        } catch (rpc::timeout_error& e) {
            slogger.trace("Truncation of {} timed out: {}", cfname, e.what());
+           throw;
        } catch (...) {
            throw;
        }
