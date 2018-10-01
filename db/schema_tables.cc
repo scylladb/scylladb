@@ -143,10 +143,10 @@ struct qualified_name {
 static future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
 
 static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
-    std::map<qualified_name, schema_mutations>&& tables_before,
-    std::map<qualified_name, schema_mutations>&& tables_after,
-    std::map<qualified_name, schema_mutations>&& views_before,
-    std::map<qualified_name, schema_mutations>&& views_after);
+    std::map<utils::UUID, schema_mutations>&& tables_before,
+    std::map<utils::UUID, schema_mutations>&& tables_after,
+    std::map<utils::UUID, schema_mutations>&& views_before,
+    std::map<utils::UUID, schema_mutations>&& views_after);
 
 struct user_types_to_drop final {
     seastar::noncopyable_function<void()> drop;
@@ -751,16 +751,24 @@ static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, 
     });
 }
 
+static utils::UUID table_id_from_mutations(const schema_mutations& sm) {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    query::result_set_row table_row = table_rs.row(0);
+    return table_row.get_nonnull<utils::UUID>("id");
+}
+
 // Call inside a seastar thread
 static
-std::map<qualified_name, schema_mutations>
+std::map<utils::UUID, schema_mutations>
 read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, schema_ptr s)
 {
-    std::map<qualified_name, schema_mutations> result;
+    std::map<utils::UUID, schema_mutations> result;
     for (auto&& keyspace_name : keyspace_names) {
         for (auto&& table_name : read_table_names_of_keyspace(proxy, keyspace_name, s).get0()) {
             auto qn = qualified_name(keyspace_name, table_name);
-            result.emplace(qn, read_table_mutations(proxy, qn, s).get0());
+            auto muts = read_table_mutations(proxy, qn, s).get0();
+            auto id = table_id_from_mutations(muts);
+            result.emplace(std::move(id), std::move(muts));
         }
     }
     return result;
@@ -930,14 +938,14 @@ struct schema_diff {
 
 template<typename CreateSchema>
 static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
-    std::map<qualified_name, schema_mutations>&& before,
-    std::map<qualified_name, schema_mutations>&& after,
+    std::map<utils::UUID, schema_mutations>&& before,
+    std::map<utils::UUID, schema_mutations>&& after,
     CreateSchema&& create_schema)
 {
     schema_diff d;
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
-        auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
+        auto&& s = proxy.local().get_db().local().find_schema(key);
         slogger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         d.dropped.emplace_back(schema_diff::dropped_schema{s});
     }
@@ -960,10 +968,10 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
 static void merge_tables_and_views(distributed<service::storage_proxy>& proxy,
-    std::map<qualified_name, schema_mutations>&& tables_before,
-    std::map<qualified_name, schema_mutations>&& tables_after,
-    std::map<qualified_name, schema_mutations>&& views_before,
-    std::map<qualified_name, schema_mutations>&& views_after)
+    std::map<utils::UUID, schema_mutations>&& tables_before,
+    std::map<utils::UUID, schema_mutations>&& tables_after,
+    std::map<utils::UUID, schema_mutations>&& views_before,
+    std::map<utils::UUID, schema_mutations>&& views_after)
 {
     auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), [&] (auto&& sm) {
         return create_table_from_mutations(proxy, std::move(sm));
