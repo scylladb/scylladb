@@ -930,7 +930,7 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 future<> gossiper::replicate(inet_address ep, const endpoint_state& es) {
     return container().invoke_on_all([ep, es, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
         if (engine().cpu_id() != orig) {
-            g.endpoint_state_map[ep].apply_application_state(es);
+            g.endpoint_state_map[ep].add_application_state(es);
         }
     });
 }
@@ -939,7 +939,7 @@ future<> gossiper::replicate(inet_address ep, const std::map<application_state, 
     return container().invoke_on_all([ep, &src, &changed, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
         if (engine().cpu_id() != orig) {
             for (auto&& key : changed) {
-                g.endpoint_state_map[ep].apply_application_state(key, src.at(key));
+                g.endpoint_state_map[ep].add_application_state(key, src.at(key));
             }
         }
     });
@@ -948,7 +948,7 @@ future<> gossiper::replicate(inet_address ep, const std::map<application_state, 
 future<> gossiper::replicate(inet_address ep, application_state key, const versioned_value& value) {
     return container().invoke_on_all([ep, key, &value, orig = engine().cpu_id(), self = shared_from_this()] (gossiper& g) {
         if (engine().cpu_id() != orig) {
-            g.endpoint_state_map[ep].apply_application_state(key, value);
+            g.endpoint_state_map[ep].add_application_state(key, value);
         }
     });
 }
