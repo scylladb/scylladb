@@ -715,6 +715,22 @@ table::make_streaming_reader(schema_ptr s,
     return make_flat_multi_range_reader(s, std::move(source), ranges, slice, pc, nullptr, mutation_reader::forwarding::no);
 }
 
+flat_mutation_reader table::make_streaming_reader(schema_ptr schema, const dht::partition_range& range) const {
+    const auto& slice = schema->full_slice();
+    const auto& pc = service::get_local_streaming_read_priority();
+    auto trace_state = tracing::trace_state_ptr();
+    const auto fwd = streamed_mutation::forwarding::no;
+    const auto fwd_mr = flat_mutation_reader::partition_range_forwarding::no;
+
+    std::vector<flat_mutation_reader> readers;
+    readers.reserve(_memtables->size() + 1);
+    for (auto&& mt : *_memtables) {
+        readers.emplace_back(mt->make_flat_reader(schema, range, slice, pc, trace_state, fwd, fwd_mr));
+    }
+    readers.emplace_back(make_sstable_reader(schema, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+    return make_combined_reader(std::move(schema), std::move(readers), fwd, fwd_mr);
+}
+
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     assert(m.schema() == _counter_cell_locks->schema());
     return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
