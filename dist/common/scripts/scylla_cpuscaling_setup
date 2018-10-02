@@ -47,7 +47,7 @@ if __name__ == '__main__':
         with open('/etc/conf.d/cpupower') as f:
             cur = f.read()
         new = re.sub(r'--governor ondemand', '--governor performance', cur, flags=re.MULTILINE)
-        with open('/etc/conf.d/cpupower') as f:
+        with open('/etc/conf.d/cpupower', 'w') as f:
             f.write(new)
         if is_systemd():
             cpufreq = systemd_unit('cpupower-frequency-set.service')
