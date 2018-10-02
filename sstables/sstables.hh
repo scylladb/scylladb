@@ -60,6 +60,7 @@
 #include "sstable_version.hh"
 #include "db/large_partition_handler.hh"
 #include "column_translation.hh"
+#include "stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -474,6 +475,8 @@ private:
     io_error_handler _read_error_handler;
     io_error_handler _write_error_handler;
 
+    sstables_stats _stats;
+
     const bool has_component(component_type f) const;
 
     const sstring filename(component_type f) const;
@@ -726,6 +729,10 @@ public:
     // returns all info needed for a sstable to be shared with other shards.
     static future<sstable_open_info> load_shared_components(const schema_ptr& s, sstring dir, int generation, version_types v, format_types f,
         const io_priority_class& pc = default_priority_class());
+
+    sstables_stats& get_stats() {
+        return _stats;
+    }
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class

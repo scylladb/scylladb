@@ -1787,6 +1787,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
     if (cell.is_dead(_now)) {
         // tombstone cell
 
+        get_stats().on_cell_tombstone_write();
         column_mask mask = column_mask::deletion;
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
@@ -1795,7 +1796,11 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell, const column_d
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(_version, out, mask, timestamp, deletion_time_size, deletion_time);
-    } else if (cdef.is_counter()) {
+        return;
+    }
+
+    get_stats().on_cell_write();
+    if (cdef.is_counter()) {
         // counter cell
         assert(!cell.is_counter_update());
 
@@ -2448,6 +2453,18 @@ sstable::write_scylla_metadata(const io_priority_class& pc, shard_id shard, ssta
 }
 
 struct sstable_writer::writer_impl {
+    sstable& _sst;
+    const schema& _schema;
+    const io_priority_class& _pc;
+    const sstable_writer_config _cfg;
+
+    writer_impl(sstable& sst, const schema& schema, const io_priority_class& pc, const sstable_writer_config& cfg)
+        : _sst(sst)
+        , _schema(schema)
+        , _pc(pc)
+        , _cfg(cfg)
+    {}
+
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
     virtual void consume(tombstone t) = 0;
     virtual stop_iteration consume(static_row&& sr) = 0;
@@ -2459,9 +2476,6 @@ struct sstable_writer::writer_impl {
 };
 
 class sstable_writer_k_l : public sstable_writer::writer_impl {
-    sstable& _sst;
-    const schema& _schema;
-    const io_priority_class& _pc;
     bool _backup;
     bool _leave_unsealed;
     bool _compression_enabled;
@@ -2477,7 +2491,7 @@ public:
     sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config&, const io_priority_class& pc, shard_id shard = engine().cpu_id());
     ~sstable_writer_k_l();
-    sstable_writer_k_l(sstable_writer_k_l&& o) : _sst(o._sst), _schema(o._schema), _pc(o._pc), _backup(o._backup),
+    sstable_writer_k_l(sstable_writer_k_l&& o) : writer_impl(o._sst, o._schema, o._pc, o._cfg), _backup(o._backup),
             _leave_unsealed(o._leave_unsealed), _compression_enabled(o._compression_enabled), _writer(std::move(o._writer)),
             _components_writer(std::move(o._components_writer)), _shard(o._shard), _monitor(o._monitor),
             _correctly_serialize_non_compound_range_tombstones(o._correctly_serialize_non_compound_range_tombstones) { }
@@ -2531,9 +2545,7 @@ sstable_writer_k_l::~sstable_writer_k_l() {
 
 sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t estimated_partitions,
                                const sstable_writer_config& cfg, const io_priority_class& pc, shard_id shard)
-    : _sst(sst)
-    , _schema(s)
-    , _pc(pc)
+    : writer_impl(sst, s, pc, cfg)
     , _backup(cfg.backup)
     , _leave_unsealed(cfg.leave_unsealed)
     , _shard(shard)
@@ -2547,7 +2559,7 @@ sstable_writer_k_l::sstable_writer_k_l(sstable& sst, const schema& s, uint64_t e
     prepare_file_writer();
 
     _monitor->on_write_started(_writer->offset_tracker());
-    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, cfg, _pc);
+    _components_writer.emplace(_sst, _schema, *_writer, estimated_partitions, _cfg, _pc);
     _sst._shards = { shard };
 }
 
@@ -2683,10 +2695,6 @@ GCC6_CONCEPT(
 // Used for writing SSTables in 'mc' format.
 class sstable_writer_m : public sstable_writer::writer_impl {
 private:
-    sstable& _sst;
-    const schema& _schema;
-    const io_priority_class& _pc;
-    sstable_writer_config _cfg;
     encoding_stats _enc_stats;
     shard_id _shard; // Specifies which shard the new SStable will belong to.
     bool _compression_enabled = false;
@@ -2821,10 +2829,7 @@ public:
     sstable_writer_m(sstable& sst, const schema& s, uint64_t estimated_partitions,
             const sstable_writer_config& cfg, encoding_stats enc_stats,
                       const io_priority_class& pc, shard_id shard = engine().cpu_id())
-        : _sst(sst)
-        , _schema(s)
-        , _pc(pc)
-        , _cfg(cfg)
+        : writer_impl(sst, s, pc, cfg)
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _range_tombstones(_schema)
@@ -3128,7 +3133,11 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
         auto ldt = cell.deletion_time().time_since_epoch().count();
         _c_stats.update_local_deletion_time(ldt);
         _c_stats.tombstone_histogram.update(ldt);
-    } else if (is_cell_expiring) {
+        _sst.get_stats().on_cell_tombstone_write();
+        return;
+    }
+
+    if (is_cell_expiring) {
         auto expiration = cell.expiry().time_since_epoch().count();
         auto ttl = cell.ttl().count();
         _c_stats.update_ttl(ttl);
@@ -3140,6 +3149,7 @@ void sstable_writer_m::write_cell(file_writer& writer, atomic_cell_view cell, co
     } else { // regular live cell
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
+    _sst.get_stats().on_cell_write();
 }
 
 void sstable_writer_m::write_liveness_info(file_writer& writer, const row_marker& marker) {
@@ -3495,22 +3505,29 @@ sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated
 }
 
 void sstable_writer::consume_new_partition(const dht::decorated_key& dk) {
+    _impl->_sst.get_stats().on_partition_write();
     return _impl->consume_new_partition(dk);
 }
 
 void sstable_writer::consume(tombstone t) {
+    _impl->_sst.get_stats().on_tombstone_write();
     return _impl->consume(t);
 }
 
 stop_iteration sstable_writer::consume(static_row&& sr) {
+    if (!sr.empty()) {
+        _impl->_sst.get_stats().on_static_row_write();
+    }
     return _impl->consume(std::move(sr));
 }
 
 stop_iteration sstable_writer::consume(clustering_row&& cr) {
+    _impl->_sst.get_stats().on_row_write();
     return _impl->consume(std::move(cr));
 }
 
 stop_iteration sstable_writer::consume(range_tombstone&& rt) {
+    _impl->_sst.get_stats().on_range_tombstone_write();
     return _impl->consume(std::move(rt));
 }
 
@@ -4246,6 +4263,7 @@ delete_atomically(std::vector<shared_sstable> ssts, const db::large_partition_ha
     return delete_sstables(std::move(sstables_to_delete_atomically));
 }
 
+thread_local sstables_stats::stats sstables_stats::_shard_stats;
 thread_local shared_index_lists::stats shared_index_lists::_shard_stats;
 static thread_local seastar::metrics::metric_groups metrics;
 
@@ -4259,6 +4277,33 @@ future<> init_metrics() {
             sm::description("Index page requests which initiated a read from disk")),
         sm::make_derive("index_page_blocks", [] { return shared_index_lists::shard_stats().blocks; },
             sm::description("Index page requests which needed to wait due to page not being loaded yet")),
+
+        sm::make_derive("partition_writes", [] { return sstables_stats::get_shard_stats().partition_writes; },
+            sm::description("Number of partitions written")),
+        sm::make_derive("static_row_writes", [] { return sstables_stats::get_shard_stats().static_row_writes; },
+            sm::description("Number of static rows written")),
+        sm::make_derive("row_writes", [] { return sstables_stats::get_shard_stats().row_writes; },
+            sm::description("Number of clustering rows written")),
+        sm::make_derive("cell_writes", [] { return sstables_stats::get_shard_stats().cell_writes; },
+            sm::description("Number of cells written")),
+        sm::make_derive("tombstone_writes", [] { return sstables_stats::get_shard_stats().tombstone_writes; },
+            sm::description("Number of tombstones written")),
+        sm::make_derive("range_tombstone_writes", [] { return sstables_stats::get_shard_stats().range_tombstone_writes; },
+            sm::description("Number of range tombstones written")),
+        sm::make_derive("cell_tombstone_writes", [] { return sstables_stats::get_shard_stats().cell_tombstone_writes; },
+            sm::description("Number of cell tombstones written")),
+        sm::make_derive("single_partition_reads", [] { return sstables_stats::get_shard_stats().single_partition_reads; },
+            sm::description("Number of single partition flat mutation reads")),
+        sm::make_derive("range_partition_reads", [] { return sstables_stats::get_shard_stats().range_partition_reads; },
+            sm::description("Number of partition range flat mutation reads")),
+        sm::make_derive("sstable_partition_reads", [] { return sstables_stats::get_shard_stats().sstable_partition_reads; },
+            sm::description("Number of whole sstable flat mutation reads")),
+        sm::make_derive("partition_reads", [] { return sstables_stats::get_shard_stats().partition_reads; },
+            sm::description("Number of partitions read")),
+        sm::make_derive("partition_seeks", [] { return sstables_stats::get_shard_stats().partition_seeks; },
+            sm::description("Number of partitions seeked")),
+        sm::make_derive("row_reads", [] { return sstables_stats::get_shard_stats().row_reads; },
+            sm::description("Number of rows read")),
     });
   });
 }
