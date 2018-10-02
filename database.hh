@@ -1429,6 +1429,13 @@ public:
     friend class distributed_loader;
 };
 
+// Creates a streaming reader that reads from all shards.
+//
+// Shard readers are created via `table::make_streaming_reader()`.
+// Range generator must generate disjoint, monotonically increasing ranges.
+flat_mutation_reader make_multishard_streaming_reader(distributed<database>& db, dht::i_partitioner& partitioner, schema_ptr schema,
+        std::function<std::optional<dht::partition_range>()> range_generator);
+
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
 
 class distributed_loader {
