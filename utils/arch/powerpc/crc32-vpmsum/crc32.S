@@ -775,3 +775,7 @@ FUNC_START(__crc32_vpmsum)
 
 FUNC_END(__crc32_vpmsum)
 #endif
+
+// Mark the stack as non-executable so the final executable won't
+// have an executable stack
+.section        .note.GNU-stack,"",@progbits
