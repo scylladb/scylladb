@@ -215,7 +215,7 @@ private:
             ::shared_ptr<const service::pager::paging_state> paging_state);
 
     lw_shared_ptr<query::read_command>
-    prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now);
+    prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging);
 
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(

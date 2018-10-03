@@ -493,7 +493,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const clustering_
 }
 
 lw_shared_ptr<query::read_command>
-indexed_table_select_statement::prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now) {
+indexed_table_select_statement::prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now, bool use_paging) {
     lw_shared_ptr<query::read_command> cmd = ::make_lw_shared<query::read_command>(
             _schema->id(),
             _schema->version(),
@@ -504,7 +504,7 @@ indexed_table_select_statement::prepare_command_for_base_query(const query_optio
             query::max_partitions,
             utils::UUID(),
             options.get_timestamp(state));
-    if (options.get_page_size() > 0) {
+    if (use_paging) {
         cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
     }
     return cmd;
@@ -518,7 +518,7 @@ indexed_table_select_statement::execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         ::shared_ptr<const service::pager::paging_state> paging_state) {
-    auto cmd = prepare_command_for_base_query(options, state, now);
+    auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
     dht::partition_range_vector per_vnode_ranges;
     per_vnode_ranges.reserve(partition_ranges.size());
@@ -592,7 +592,7 @@ indexed_table_select_statement::execute_base_query(
         const query_options& options,
         gc_clock::time_point now,
         ::shared_ptr<const service::pager::paging_state> paging_state) {
-    auto cmd = prepare_command_for_base_query(options, state, now);
+    auto cmd = prepare_command_for_base_query(options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + options.get_timeout_config().*get_timeout_config_selector();
 
     struct base_query_state {
