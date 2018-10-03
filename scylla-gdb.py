@@ -3,6 +3,8 @@ import re
 from operator import attrgetter
 from collections import defaultdict
 import re
+import sys
+import struct
 import random
 
 def template_arguments(gdb_type):
@@ -1434,6 +1436,22 @@ class sharded:
         return std_vector(self.val['_instances'])[shard]['service']['_p']
 
 
+def ip_to_str(val, byteorder):
+    return '%d.%d.%d.%d' % (struct.unpack('BBBB', val.to_bytes(4, byteorder=byteorder))[::-1])
+
+
+class scylla_gms(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla gms', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        gossiper = sharded(gdb.parse_and_eval('gms::_the_gossiper')).local()
+        for (endpoint, state) in list_unordered_map(gossiper['endpoint_state_map']):
+            ip = ip_to_str(int(endpoint['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
+            for app_state, value in std_map(state['_application_state']):
+                gdb.write('  %s: {version=%d, value=%s}\n' % (app_state, value['version'], value['value']))
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
@@ -1457,3 +1475,4 @@ scylla_tasks()
 scylla_find()
 scylla_task_histogram()
 scylla_active_sstables()
+scylla_gms()
