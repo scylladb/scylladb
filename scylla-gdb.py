@@ -1440,6 +1440,37 @@ def ip_to_str(val, byteorder):
     return '%d.%d.%d.%d' % (struct.unpack('BBBB', val.to_bytes(4, byteorder=byteorder))[::-1])
 
 
+class scylla_netw(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla netw', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+    def invoke(self, arg, for_tty):
+        ms = sharded(gdb.parse_and_eval('netw::_the_messaging_service')).local()
+        gdb.write('Dropped messages: %s\n' % ms['_dropped_messages'])
+        gdb.write('Outgoing connections:\n')
+        for (addr, shard_info) in list_unordered_map(ms['_clients']['_M_elems'][0]):
+            ip = ip_to_str(int(addr['addr']['_addr']['ip']['raw']), byteorder=sys.byteorder)
+            client = shard_info['rpc_client']['_p']
+            rpc_client = std_unique_ptr(client['_p'])
+            gdb.write('IP: %s, (netw::messaging_service::rpc_protocol_client_wrapper*) %s:\n' % (ip, client))
+            gdb.write('  stats: %s\n' % rpc_client['_stats'])
+            gdb.write('  outstanding: %d\n' % int(rpc_client['_outstanding']['_M_h']['_M_element_count']))
+
+        servers = [
+            std_unique_ptr(ms['_server']['_M_elems'][0]),
+            std_unique_ptr(ms['_server']['_M_elems'][1]),
+        ]
+        for srv in servers:
+            if srv:
+                gdb.write('Server: resources=%s\n' % srv['_resources_available'])
+                gdb.write('Incoming connections:\n')
+                for clnt in list_unordered_set(srv['_conns']):
+                    conn = clnt['_p'].cast(clnt.type.template_argument(0).pointer())
+                    ip = ip_to_str(int(conn['_info']['addr']['u']['in']['sin_addr']['s_addr']), byteorder='big')
+                    port = int(conn['_info']['addr']['u']['in']['sin_port'])
+                    gdb.write('%s:%d: \n' % (ip, port))
+                    gdb.write('   %s\n' % (conn['_stats']))
+
+
 class scylla_gms(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla gms', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
@@ -1475,4 +1506,5 @@ scylla_tasks()
 scylla_find()
 scylla_task_histogram()
 scylla_active_sstables()
+scylla_netw()
 scylla_gms()
