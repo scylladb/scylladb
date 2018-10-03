@@ -170,6 +170,9 @@ class std_vector:
             yield i.dereference()
             i += 1
 
+    def __getitem__(self, item):
+        return (self.ref['_M_impl']['_M_start'] + item).dereference()
+
     def __nonzero__(self):
         return self.__len__() > 0
 
