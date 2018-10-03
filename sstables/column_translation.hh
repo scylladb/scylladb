@@ -86,7 +86,9 @@ class column_translation {
                     const column_definition* def = s.get_column_definition(desc.name.value);
                     if (def) {
                         ids.push_back(def->id);
-                        lens.push_back(def->type->value_length_if_fixed());
+                        bytes& type_name = desc.type_name.value;
+                        data_type type = db::marshal::type_parser::parse(to_sstring_view(type_name));
+                        lens.push_back(type->value_length_if_fixed());
                         is_collection.push_back(def->is_multi_cell());
                         is_counter.push_back(def->is_counter());
                     } else {
