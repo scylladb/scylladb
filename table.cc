@@ -22,6 +22,7 @@
 #include "database.hh"
 #include "sstables/sstables.hh"
 #include "service/priority_manager.hh"
+#include "db/view/view_updating_consumer.hh"
 
 static logging::logger tlogger("table");
 
@@ -136,4 +137,17 @@ table::as_mutation_source_excluding(sstables::shared_sstable sst) const {
                                    mutation_reader::forwarding fwd_mr) {
         return this->make_reader_excluding_sstable(std::move(s), std::move(sst), range, slice, pc, std::move(trace_state), fwd, fwd_mr);
     });
+}
+
+stop_iteration db::view::view_updating_consumer::consume_end_of_partition() {
+    if (_as.abort_requested()) {
+        return stop_iteration::yes;
+    }
+    try {
+        auto lock_holder = _table->stream_view_replica_updates(_schema, std::move(*_m), db::no_timeout, _excluded_sstable).get();
+    } catch (...) {
+        tlogger.warn("Failed to push replica updates for table {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+    }
+    _m.reset();
+    return stop_iteration::no;
 }
