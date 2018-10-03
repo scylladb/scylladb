@@ -506,6 +506,10 @@ indexed_table_select_statement::prepare_command_for_base_query(const query_optio
             options.get_timestamp(state));
     if (use_paging) {
         cmd->slice.options.set<query::partition_slice::option::allow_short_read>();
+        cmd->slice.options.set<query::partition_slice::option::send_partition_key>();
+        if (_schema->clustering_key_size() > 0) {
+            cmd->slice.options.set<query::partition_slice::option::send_clustering_key>();
+        }
     }
     return cmd;
 }
