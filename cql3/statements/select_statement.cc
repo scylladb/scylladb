@@ -1158,8 +1158,6 @@ select_statement::prepare_restrictions(database& db,
                                        bool allow_filtering)
 {
     try {
-        // FIXME: this method should take a separate allow_filtering parameter
-        // and pass it on. Currently we pass "for_view" as allow_filtering.
         return ::make_shared<restrictions::statement_restrictions>(db, schema, statement_type::SELECT, std::move(_where_clause), bound_names,
             selection->contains_only_static_columns(), selection->contains_a_collection(), for_view, allow_filtering);
     } catch (const exceptions::unrecognized_entity_exception& e) {
