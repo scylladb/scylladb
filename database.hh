@@ -432,6 +432,9 @@ private:
     // but for correct compaction we need to start the compaction only after
     // reading all sstables.
     std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_need_rewrite;
+    // sstables that should not be compacted (e.g. because they need to be used
+    // to generate view updates later)
+    std::unordered_map<uint64_t, sstables::shared_sstable> _sstables_staging;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
