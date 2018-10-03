@@ -1629,7 +1629,9 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
 
 std::vector<sstables::shared_sstable> table::candidates_for_compaction() const {
     return boost::copy_range<std::vector<sstables::shared_sstable>>(*get_sstables()
-        | boost::adaptors::filtered([this] (auto& sst) { return !_sstables_need_rewrite.count(sst->generation()); }));
+            | boost::adaptors::filtered([this] (auto& sst) {
+        return !_sstables_need_rewrite.count(sst->generation()) && !_sstables_staging.count(sst->generation());
+    }));
 }
 
 std::vector<sstables::shared_sstable> table::sstables_need_rewrite() const {
