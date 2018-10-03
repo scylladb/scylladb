@@ -356,6 +356,16 @@ def list_unordered_map(map, cache=True):
         p = p['_M_nxt']
     raise StopIteration()
 
+def list_unordered_set(map, cache=True):
+    value_type = map.type.template_argument(0)
+    hashnode_ptr_type = gdb.lookup_type('::std::__detail::_Hash_node<' + value_type.name + ', ' + ('false', 'true')[cache] + '>' ).pointer()
+    h = map['_M_h']
+    p = h['_M_before_begin']['_M_nxt']
+    while p:
+        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
+        yield pc.dereference()
+        p = p['_M_nxt']
+
 class scylla(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
