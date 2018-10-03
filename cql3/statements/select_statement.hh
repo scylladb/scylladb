@@ -214,6 +214,9 @@ private:
             gc_clock::time_point now,
             ::shared_ptr<const service::pager::paging_state> paging_state);
 
+    lw_shared_ptr<query::read_command>
+    prepare_command_for_base_query(const query_options& options, service::query_state& state, gc_clock::time_point now);
+
     future<shared_ptr<cql_transport::messages::result_message>>
     execute_base_query(
             service::storage_proxy& proxy,
