@@ -1783,7 +1783,6 @@ future<> gossiper::do_stop_gossiping() {
         return make_ready_future<>();
     }
     return seastar::async([this, g = this->shared_from_this()] {
-        _enabled = false;
         auto* my_ep_state = get_endpoint_state_for_endpoint_ptr(get_broadcast_address());
         if (my_ep_state) {
             logger.info("My status = {}", get_gossip_status(*my_ep_state));
@@ -1809,6 +1808,7 @@ future<> gossiper::do_stop_gossiping() {
         } else {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
+        _enabled = false;
         _scheduled_gossip_task.cancel();
         timer_callback_lock().get();
         //
