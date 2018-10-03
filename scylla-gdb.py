@@ -1425,6 +1425,15 @@ class std_unique_ptr:
         return self.__nonzero__()
 
 
+class sharded:
+    def __init__(self, val):
+        self.val = val
+
+    def local(self):
+        shard = int(gdb.parse_and_eval('\'seastar\'::local_engine->_id'))
+        return std_vector(self.val['_instances'])[shard]['service']['_p']
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
