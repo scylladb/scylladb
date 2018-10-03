@@ -684,9 +684,11 @@ table::make_reader(schema_ptr s,
     return make_combined_reader(s, std::move(readers), fwd, fwd_mr);
 }
 
-sstables::shared_sstable
-table::make_streaming_sstable_for_write() {
+sstables::shared_sstable table::make_streaming_sstable_for_write(std::optional<sstring> subdir) {
     sstring dir = _config.datadir;
+    if (subdir) {
+        dir += "/" + *subdir;
+    }
     auto newtab = sstables::make_sstable(_schema,
             dir, calculate_generation_for_new_table(),
             get_highest_supported_format(),
