@@ -531,11 +531,11 @@ public:
     }
 
     void report_start(const sstring& formatted_msg) const override {
-        clogger.debug("Compacting {}", formatted_msg);
+        clogger.info("Compacting {}", formatted_msg);
     }
 
     void report_finish(const sstring& formatted_msg, std::chrono::time_point<db_clock> ended_at) const override {
-        clogger.debug("Compacted {}", formatted_msg);
+        clogger.info("Compacted {}", formatted_msg);
     }
 
     void backlog_tracker_adjust_charges() override {
