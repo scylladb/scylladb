@@ -1404,6 +1404,27 @@ class scylla_find(gdb.Command):
         for obj, off in find_in_live(mem_start, mem_size, value, 'g'):
             gdb.execute("scylla ptr 0x%x" % (obj + off))
 
+
+class std_unique_ptr:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def dereference(self):
+        return self.obj['_M_t']['_M_t']['_M_head_impl'].dereference()
+
+    def __getitem__(self, item):
+        return self.dereference()[item]
+
+    def address(self):
+        return self.dereference().address
+
+    def __nonzero__(self):
+        return bool(self.obj['_M_t']['_M_t']['_M_head_impl'])
+
+    def __bool__(self):
+        return self.__nonzero__()
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
