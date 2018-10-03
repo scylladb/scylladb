@@ -85,6 +85,31 @@ class intrusive_set:
         for n in self.__visit(self.root):
             yield n
 
+class std_map:
+    size_t = gdb.lookup_type('size_t')
+
+    def __init__(self, ref):
+        container_type = ref.type.strip_typedefs()
+        kt = container_type.template_argument(0)
+        vt = container_type.template_argument(1)
+        self.value_type = gdb.lookup_type('::std::pair<{} const, {} >'.format(str(kt), str(vt)))
+        self.root = ref['_M_t']['_M_impl']['_M_header']['_M_parent']
+
+    def __visit(self, node):
+        if node:
+            for n in self.__visit(node['_M_left']):
+                yield n
+
+            value = (node + 1).cast(self.value_type.pointer()).dereference()
+            yield value['first'], value['second']
+
+            for n in self.__visit(node['_M_right']):
+                yield n
+
+    def __iter__(self):
+        for n in self.__visit(self.root):
+            yield n
+
 class intrusive_set_external_comparator:
     size_t = gdb.lookup_type('size_t')
 
