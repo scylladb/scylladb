@@ -1924,6 +1924,7 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
         auto& ep_state = *es;
         ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
+        replicate(endpoint, ep_state).get();
         mark_dead(endpoint, ep_state);
         get_local_failure_detector().force_conviction(endpoint);
     }
