@@ -61,21 +61,22 @@ public:
     };
     using renames_type = std::vector<std::pair<shared_ptr<column_identifier::raw>,
                                                shared_ptr<column_identifier::raw>>>;
+    struct column_change {
+        shared_ptr<column_identifier::raw> name;
+        shared_ptr<cql3_type::raw> validator = nullptr;
+        bool is_static = false;
+    };
 private:
     const type _type;
-    const shared_ptr<column_identifier::raw> _raw_column_name;
-    const shared_ptr<cql3_type::raw> _validator;
+    const std::vector<column_change> _column_changes;
     const shared_ptr<cf_prop_defs> _properties;
     const renames_type _renames;
-    const bool _is_static;
 public:
     alter_table_statement(shared_ptr<cf_name> name,
                           type t,
-                          shared_ptr<column_identifier::raw> column_name,
-                          shared_ptr<cql3_type::raw> validator,
+                          std::vector<column_change> column_changes,
                           shared_ptr<cf_prop_defs> properties,
-                          renames_type renames,
-                          bool is_static);
+                          renames_type renames);
 
     virtual future<> check_access(const service::client_state& state) override;
     virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override;
