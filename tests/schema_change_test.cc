@@ -209,6 +209,56 @@ SEASTAR_TEST_CASE(test_static_column_is_dropped) {
     });
 }
 
+SEASTAR_TEST_CASE(test_multiple_columns_add_and_drop) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int, c3 int);").get();
+
+        e.execute_cql("alter table tests.table1 drop (c2);").get();
+        e.execute_cql("alter table tests.table1 add (s1 int);").get();
+        schema_ptr s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c3")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
+
+        e.execute_cql("alter table tests.table1 drop (c1, c3);").get();
+        e.execute_cql("alter table tests.table1 add (s2 int, s3 int);").get();
+        s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c3")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s2")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s3")));
+    });
+}
+
+SEASTAR_TEST_CASE(test_multiple_static_columns_add_and_drop) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create table tests.table1 (pk int, c1 int, c2 int static, c3 int, primary key(pk, c1));").get();
+
+        e.execute_cql("alter table tests.table1 drop (c2);").get();
+        e.execute_cql("alter table tests.table1 add (s1 int static);").get();
+        schema_ptr s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c3")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s1")));
+
+        e.execute_cql("alter table tests.table1 drop (c3, s1);").get();
+        e.execute_cql("alter table tests.table1 add (s2 int, s3 int static);").get();
+        s = e.db().local().find_schema("tests", "table1");
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("c1")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c2")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("c3")));
+        BOOST_REQUIRE(!s->columns_by_name().count(to_bytes("s1")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s2")));
+        BOOST_REQUIRE(s->columns_by_name().count(to_bytes("s3")));
+    });
+}
+
 SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
