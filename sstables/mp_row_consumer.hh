@@ -1219,8 +1219,7 @@ public:
         return proceed(!_reader->is_buffer_full());
     }
 
-    virtual proceed consume_partition_end() override {
-        sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
+    virtual void on_end_of_stream() override {
         if (_opened_range_tombstone) {
             if (!_mf_filter || _mf_filter->out_of_range()) {
                 throw sstables::malformed_sstable_exception("Unclosed range tombstone.");
@@ -1234,6 +1233,11 @@ public:
                 consume_range_tombstone_end(end_bound.prefix(), end_bound.kind(), _opened_range_tombstone->tomb);
             }
         }
+        consume_partition_end();
+    }
+
+    virtual proceed consume_partition_end() override {
+        sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", this);
         _is_mutation_end = true;
         _in_progress_row.reset();
         _stored.emplace<std::monostate>();
