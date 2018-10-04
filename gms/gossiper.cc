@@ -1175,11 +1175,13 @@ stdx::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_ad
     }
 }
 
-void gossiper::reset_endpoint_state_map() {
-    endpoint_state_map.clear();
+future<> gossiper::reset_endpoint_state_map() {
     _unreachable_endpoints.clear();
     _live_endpoints.clear();
     _live_endpoints_just_added.clear();
+    return container().invoke_on_all([] (gossiper& g) {
+        g.endpoint_state_map.clear();
+    });
 }
 
 std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() {
