@@ -2634,7 +2634,11 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
     });
 }
 
-#if 0
+// Test a view defined by a SELECT which filters by a non-primary key column.
+// This means that on some base-table updates, we can only determine whether
+// we need to update a view table after we read from the base table and have
+// at least enough columns that we need to test the select rule.
+// This reproduces issue #3430.
 SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b))").get();
@@ -2651,6 +2655,7 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
         e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 0, 0)").get();
         e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 1, 0)").get();
 
+        BOOST_TEST_PASSPOINT();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
         assert_that(msg).is_rows().with_rows_ignore_order({
@@ -2660,6 +2665,98 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
                         { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
         });
 
+        // Insert new rows that do not match the filter c=1, so will cause no
+        // change to the view table:
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("insert into cf (a, b, c, d) values (2, 0, 0, 0)").get();
+        e.execute_cql("insert into cf (a, b, c, d) values (2, 1, 2, 0)").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // Insert two new base rows that do match the filter c=1, so will
+        // add new view rows as well. This test is superfluous, as above
+        // we already added 4 rows in the same fashion.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("insert into cf (a, b, c, d) values (1, 2, 1, 0)").get();
+        e.execute_cql("insert into cf (a, b, c, d) values (1, 3, 1, 0)").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // Delete one of the rows we just added which matches the filter,
+        // so a view row will also be removed.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("delete from cf where a = 1 and b = 2").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // Change the c on one of the rows we just added from 1 to 0.
+        // Because it previously had c=1, it had a matching view row, but
+        // now that it has c=0 this view row will have to be deleted.
+        // A row with a=1,b=3 will still exist in the base table, but not
+        // in the view table.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf set c = 0 where a = 1 and b = 3").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // Change the c on the row which now has c=0 back to c=1, should
+        // cause the view row to be added again.
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("update cf set c = 1 where a = 1 and b = 3").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // Finally delete this row that now has c=1. The view row should also
+        // get deleted (as we've already tested above).
+        BOOST_TEST_PASSPOINT();
+        e.execute_cql("delete from cf where a = 1 and b = 3").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
+        assert_that(msg).is_rows().with_rows_ignore_order({
+                        { {int32_type->decompose(0)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
+                        { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
+        });
+
+        // The following update creates a new base row, which doesn't have c=1
+        // (it has an empty c) so it will not create a new view row or change
+        // any existing view row.
+        BOOST_TEST_PASSPOINT();
         e.execute_cql("update cf set d = 1 where a = 0 and b = 2").get();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
@@ -2670,7 +2767,11 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
                         { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
         });
 
+        // This sets d=1 on a base row which already exists and has c=1,
+        // matching the view's filter, so the data also appears in the view
+        // row:
         e.execute_cql("update cf set d = 1 where a = 1 and b = 1").get();
+        BOOST_TEST_PASSPOINT();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
         assert_that(msg).is_rows().with_rows_ignore_order({
@@ -2680,7 +2781,11 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
                         { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
         });
 
+        // This deletes a base row we created above which didn't have c=1
+        // so a view row was not created for it, c is still not 1 and now
+        // now we don't need to delete any view row.
         e.execute_cql("delete from cf where a = 0 and b = 2").get();
+        BOOST_TEST_PASSPOINT();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
         assert_that(msg).is_rows().with_rows_ignore_order({
@@ -2690,7 +2795,10 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
                         { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
         });
 
+        // This deletes a row which does have c=1, so it matches the view
+        // filter and has a corresponding view row which should be deleted
         e.execute_cql("delete from cf where a = 1 and b = 1").get();
+        BOOST_TEST_PASSPOINT();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
         assert_that(msg).is_rows().with_rows_ignore_order({
@@ -2699,7 +2807,10 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
                         { {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} }});
         });
 
+        // Delete an entire partition. This partition has two rows, both match
+        // the view filter c=1, and cause two view rows to also be deleted.
         e.execute_cql("delete from cf where a = 0").get();
+        BOOST_TEST_PASSPOINT();
         eventually([&] {
         auto msg = e.execute_cql("select a, b, c, d from vcf").get0();
         assert_that(msg).is_rows().with_rows_ignore_order({
@@ -2707,9 +2818,8 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions) {
         });
     });
 }
-#endif
 
-#if 0
+// Test reproducing https://issues.apache.org/jira/browse/CASSANDRA-10910
 SEASTAR_TEST_CASE(test_restricted_regular_column_timestamp_updates) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (k int primary key, c int, val int)").get();
@@ -2728,7 +2838,6 @@ SEASTAR_TEST_CASE(test_restricted_regular_column_timestamp_updates) {
         });
     });
 }
-#endif
 
 SEASTAR_TEST_CASE(test_old_timestamps_with_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
