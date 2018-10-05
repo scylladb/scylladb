@@ -18,6 +18,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
 #include <seastar/core/future.hh>
 #include <seastar/core/distributed.hh>
 #include <seastar/core/reactor.hh>
