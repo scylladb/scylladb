@@ -380,7 +380,7 @@ future<timespec> manager::end_point_hints_manager::sender::get_last_file_modific
     });
 }
 
-future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation m, const std::vector<gms::inet_address>& natural_endpoints) noexcept {
+future<> manager::end_point_hints_manager::sender::do_send_one_mutation(frozen_mutation_and_schema m, const std::vector<gms::inet_address>& natural_endpoints) noexcept {
     return futurize_apply([this, m = std::move(m), &natural_endpoints] () mutable -> future<> {
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
@@ -392,7 +392,8 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
             // FIXME: using 1h as infinite timeout. If a node is down, we should get an
             // unavailable exception.
             auto timeout = db::timeout_clock::now() + 1h;
-            return _proxy.mutate({std::move(m)}, consistency_level::ALL, timeout, nullptr);
+            //FIXME: Add required frozen_mutation overloads
+            return _proxy.mutate({m.fm.unfreeze(m.s)}, consistency_level::ALL, timeout, nullptr);
         }
     });
 }
@@ -418,7 +419,7 @@ bool manager::end_point_hints_manager::sender::can_send() noexcept {
     }
 }
 
-mutation manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char>& buf) {
+frozen_mutation_and_schema manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, temporary_buffer<char>& buf) {
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
@@ -428,11 +429,9 @@ mutation manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<se
         mutation m(schema, fm.decorated_key(*schema));
         converting_mutation_partition_applier v(cm, *schema, m.partition());
         fm.partition().accept(cm, v);
-
-        return std::move(m);
-    } else {
-        return fm.unfreeze(schema);
+        return {freeze(m), std::move(schema)};
     }
+    return {std::move(hr).mutation(), std::move(schema)};
 }
 
 const column_mapping& manager::end_point_hints_manager::sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
@@ -630,10 +629,11 @@ void manager::end_point_hints_manager::sender::start() {
     });
 }
 
-future<> manager::end_point_hints_manager::sender::send_one_mutation(mutation m) {
-    keyspace& ks = _db.find_keyspace(m.schema()->ks_name());
+future<> manager::end_point_hints_manager::sender::send_one_mutation(frozen_mutation_and_schema m) {
+    keyspace& ks = _db.find_keyspace(m.s->ks_name());
     auto& rs = ks.get_replication_strategy();
-    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
+    auto token = dht::global_partitioner().get_token(*m.s, m.fm.key(*m.s));
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(std::move(token));
 
     return do_send_one_mutation(std::move(m), natural_endpoints);
 }
@@ -651,8 +651,8 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                mutation m = this->get_mutation(ctx_ptr, buf);
-                gc_clock::duration gc_grace_sec = m.schema()->gc_grace_seconds();
+                auto m = this->get_mutation(ctx_ptr, buf);
+                gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
                 // The hint is too old - drop it.
                 //
