@@ -422,16 +422,16 @@ mutation manager::end_point_hints_manager::sender::get_mutation(lw_shared_ptr<se
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
     auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
-    auto& cf = _db.find_column_family(fm.column_family_id());
+    auto schema = _db.find_schema(fm.column_family_id());
 
-    if (cf.schema()->version() != fm.schema_version()) {
-        mutation m(cf.schema(), fm.decorated_key(*cf.schema()));
-        converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
+    if (schema->version() != fm.schema_version()) {
+        mutation m(schema, fm.decorated_key(*schema));
+        converting_mutation_partition_applier v(cm, *schema, m.partition());
         fm.partition().accept(cm, v);
 
         return std::move(m);
     } else {
-        return fm.unfreeze(cf.schema());
+        return fm.unfreeze(schema);
     }
 }
 
