@@ -171,10 +171,13 @@ public:
 class shared_mutation : public mutation_holder {
     lw_shared_ptr<const frozen_mutation> _mutation;
 public:
-    shared_mutation(const mutation& m) : _mutation(make_lw_shared<const frozen_mutation>(freeze(m))) {
+    explicit shared_mutation(frozen_mutation_and_schema&& fm_a_s)
+            : _mutation(make_lw_shared<const frozen_mutation>(std::move(fm_a_s.fm))) {
         _size = _mutation->representation().size();
-        _schema = m.schema();
-    };
+        _schema = std::move(fm_a_s.s);
+    }
+    explicit shared_mutation(const mutation& m) : shared_mutation(frozen_mutation_and_schema{freeze(m), m.schema()}) {
+    }
     lw_shared_ptr<const frozen_mutation> get_mutation_for(gms::inet_address ep) override {
         return _mutation;
     }
