@@ -4476,6 +4476,14 @@ std::vector<view_ptr> table::affected_views(const schema_ptr& base, const mutati
     }));
 }
 
+static size_t memory_usage_of(const std::vector<frozen_mutation_and_schema>& ms) {
+    // Overhead of sending a view mutation, in terms of data structures used by the storage_proxy.
+    constexpr size_t base_overhead_bytes = 256;
+    return boost::accumulate(ms | boost::adaptors::transformed([] (const frozen_mutation_and_schema& m) {
+        return m.fm.representation().size();
+    }), size_t{base_overhead_bytes * ms.size()});
+}
+
 /**
  * Given some updates on the base table and the existing values for the rows affected by that update, generates the
  * mutations to be applied to the base table's views, and sends them to the paired view replicas.
@@ -4500,7 +4508,7 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
             std::move(views),
             flat_mutation_reader_from_mutations({std::move(m)}),
             std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
-        return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
+        return seastar::get_units(*_config.view_update_concurrency_semaphore, memory_usage_of(updates), timeout).then(
                 [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
             db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
         });

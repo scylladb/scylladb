@@ -1172,6 +1172,7 @@ private:
     static const size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
+    size_t max_memory_pending_view_updates() const { return _dbcfg.available_memory * 0.1; }
 
     struct db_stats {
         uint64_t total_writes = 0;
@@ -1208,7 +1209,7 @@ private:
 
     semaphore _sstable_load_concurrency_sem{max_concurrent_sstable_loads()};
 
-    db::timeout_semaphore _view_update_concurrency_sem{100}; // Stand-in hack for #2538
+    db::timeout_semaphore _view_update_concurrency_sem{max_memory_pending_view_updates()};
 
     cache_tracker _row_cache_tracker;
 
