@@ -908,6 +908,7 @@ class mp_row_consumer_m : public consumer_m {
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
+            _reader->on_end_of_stream();
             _stored.emplace<clustering_row>(std::move(cr));
             return proceed::no;
         }
@@ -927,6 +928,7 @@ class mp_row_consumer_m : public consumer_m {
             }
             break;
         case mutation_fragment_filter::result::store_and_finish:
+            _reader->on_end_of_stream();
             _stored.emplace<range_tombstone>(std::move(rt));
             return proceed::no;
         }
