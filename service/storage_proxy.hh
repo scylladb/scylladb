@@ -262,6 +262,13 @@ private:
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
     future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, bool);
+
+    future<> send_to_endpoint(
+            std::unique_ptr<mutation_holder> m,
+            gms::inet_address target,
+            std::vector<gms::inet_address> pending_endpoints,
+            db::write_type type,
+            write_stats& stats);
 public:
     storage_proxy(distributed<database>& db, config cfg);
     ~storage_proxy();
@@ -334,6 +341,8 @@ public:
     // send_to_live_endpoints() - another take on the same original function.
     future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
     future<> send_to_endpoint(mutation m, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type, write_stats& stats);
+    future<> send_to_endpoint(frozen_mutation_and_schema fm_a_s, gms::inet_address target, std::vector<gms::inet_address> pending_endpoints, db::write_type type);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
