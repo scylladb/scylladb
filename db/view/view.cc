@@ -929,7 +929,8 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 future<> mutate_MV(
         const dht::token& base_token,
         std::vector<frozen_mutation_and_schema> view_updates,
-        db::view::stats& stats)
+        db::view::stats& stats,
+        db::timeout_semaphore_units pending_view_updates)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
     fs->reserve(view_updates.size());
@@ -939,7 +940,7 @@ future<> mutate_MV(
         auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
-        auto maybe_account_failure = [&stats] (
+        auto maybe_account_failure = [&stats, units = pending_view_updates.split(mut.fm.representation().size())] (
                 future<>&& f,
                 gms::inet_address target,
                 bool is_local,
