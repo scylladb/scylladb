@@ -4607,7 +4607,7 @@ future<> table::populate_views(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token), this] (auto&& updates) {
+            { }).then([base_token = std::move(base_token), this] (std::vector<mutation>&& updates) mutable {
         return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
     });
 }
