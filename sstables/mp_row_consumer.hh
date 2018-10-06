@@ -979,18 +979,17 @@ public:
             return proceed::no;
         }
 
-        std::visit(overloaded_functor{
+        return std::visit(overloaded_functor{
             [this] (clustering_row&& cr) {
-                maybe_push_row(std::move(cr));
+                return maybe_push_row(std::move(cr));
             },
             [this] (range_tombstone&& rt) {
-                maybe_push_range_tombstone(std::move(rt));
+                return maybe_push_range_tombstone(std::move(rt));
             },
             [] (std::monostate) {
+                return proceed::yes;
             }
         }, std::exchange(_stored, std::monostate{}));
-
-        return proceed::yes;
     }
 
     std::optional<position_in_partition_view> maybe_skip() {
