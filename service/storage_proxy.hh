@@ -254,10 +254,6 @@ private:
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state,
             uint64_t max_size, clock_type::time_point timeout);
 
-    struct frozen_mutation_and_schema {
-        frozen_mutation fm;
-        schema_ptr s;
-    };
     future<> mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state);
     future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
