@@ -927,6 +927,7 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
+    fs->reserve(mutations.size());
     for (auto& mut : mutations) {
         auto view_token = mut.token();
         auto& keyspace_name = mut.schema()->ks_name();
