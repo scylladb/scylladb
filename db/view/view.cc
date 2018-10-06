@@ -58,6 +58,7 @@
 #include "cql3/util.hh"
 #include "db/view/view.hh"
 #include "db/view/view_builder.hh"
+#include "frozen_mutation.hh"
 #include "gms/inet_address.hh"
 #include "keys.hh"
 #include "locator/network_topology_strategy.hh"
@@ -226,10 +227,11 @@ public:
             , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view)) {
     }
 
-    void move_to(std::vector<mutation>& mutations) && {
+    void move_to(std::vector<frozen_mutation_and_schema>& mutations) && {
         auto& partitioner = dht::global_partitioner();
         std::transform(_updates.begin(), _updates.end(), std::back_inserter(mutations), [&, this] (auto&& m) {
-            return mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
+            auto mut = mutation(_view, partitioner.decorate_key(*_view, std::move(m.first)), std::move(m.second));
+            return frozen_mutation_and_schema{freeze(mut), std::move(_view)};
         });
     }
 
@@ -627,7 +629,7 @@ public:
             , _now(gc_clock::now()) {
     }
 
-    future<std::vector<mutation>> build();
+    future<std::vector<frozen_mutation_and_schema>> build();
 
 private:
     void generate_update(clustering_row&& update, stdx::optional<clustering_row>&& existing);
@@ -664,7 +666,7 @@ private:
     }
 };
 
-future<std::vector<mutation>> view_update_builder::build() {
+future<std::vector<frozen_mutation_and_schema>> view_update_builder::build() {
     return advance_all().then([this] (auto&& ignored) {
         assert(_update && _update->is_partition_start());
         _key = std::move(std::move(_update)->as_partition_start().key().key());
@@ -679,7 +681,7 @@ future<std::vector<mutation>> view_update_builder::build() {
             });
         });
     }).then([this] {
-        std::vector<mutation> mutations;
+        std::vector<frozen_mutation_and_schema> mutations;
         for (auto&& update : _view_updates) {
             std::move(update).move_to(mutations);
         }
@@ -787,7 +789,7 @@ future<stop_iteration> view_update_builder::on_results() {
     return stop();
 }
 
-future<std::vector<mutation>> generate_view_updates(
+future<std::vector<frozen_mutation_and_schema>> generate_view_updates(
         const schema_ptr& base,
         std::vector<view_ptr>&& views_to_update,
         flat_mutation_reader&& updates,
@@ -924,13 +926,17 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // to a modification of a single base partition, and apply them to the
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
-future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
+future<> mutate_MV(
+        const dht::token& base_token,
+        std::vector<frozen_mutation_and_schema> view_updates,
+        db::view::stats& stats)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
-    fs->reserve(mutations.size());
-    for (auto& mut : mutations) {
-        auto view_token = mut.token();
-        auto& keyspace_name = mut.schema()->ks_name();
+    fs->reserve(view_updates.size());
+    auto& partitioner = dht::global_partitioner();
+    for (frozen_mutation_and_schema& mut : view_updates) {
+        auto view_token = partitioner.get_token(*mut.s, mut.fm.key(*mut.s));
+        auto& keyspace_name = mut.s->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
         auto maybe_account_failure = [&stats] (
@@ -968,9 +974,11 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // send_to_endpoint() below updates statistics on pending
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).then_wrapped(
+                auto mut_ptr = std::make_unique<frozen_mutation>(std::move(mut.fm));
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut.s, *mut_ptr).then_wrapped(
                         [&stats,
-                         maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
+                         maybe_account_failure = std::move(maybe_account_failure),
+                         mut_ptr = std::move(mut_ptr)] (future<>&& f) {
                     --stats.writes;
                     return maybe_account_failure(std::move(f), utils::fb_utilities::get_broadcast_address(), true, 0);
                 }));

@@ -4495,10 +4495,11 @@ future<> table::generate_and_propagate_view_updates(const schema_ptr& base,
         flat_mutation_reader_opt existings,
         db::timeout_clock::time_point timeout) const {
     auto base_token = m.token();
-    return db::view::generate_view_updates(base,
-                        std::move(views),
-                        flat_mutation_reader_from_mutations({std::move(m)}),
-                        std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (auto&& updates) mutable {
+    return db::view::generate_view_updates(
+            base,
+            std::move(views),
+            flat_mutation_reader_from_mutations({std::move(m)}),
+            std::move(existings)).then([this, timeout, base_token = std::move(base_token)] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         return seastar::get_units(*_config.view_update_concurrency_semaphore, 1, timeout).then(
                 [this, base_token = std::move(base_token), updates = std::move(updates)] (auto units) mutable {
             db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats).handle_exception([units = std::move(units)] (auto ignored) { });
@@ -4607,7 +4608,7 @@ future<> table::populate_views(
             schema,
             std::move(views),
             std::move(reader),
-            { }).then([base_token = std::move(base_token), this] (std::vector<mutation>&& updates) mutable {
+            { }).then([base_token = std::move(base_token), this] (std::vector<frozen_mutation_and_schema>&& updates) mutable {
         return db::view::mutate_MV(std::move(base_token), std::move(updates), _view_stats);
     });
 }
