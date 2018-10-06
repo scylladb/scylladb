@@ -924,8 +924,6 @@ get_view_natural_endpoint(const sstring& keyspace_name,
 // to a modification of a single base partition, and apply them to the
 // appropriate paired replicas. This is done asynchronously - we do not wait
 // for the writes to complete.
-// FIXME: I dropped a lot of parameters the Cassandra version had,
-// we may need them back: writeCommitLog, baseComplete, queryStartNanoTime.
 future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations, db::view::stats& stats)
 {
     auto fs = std::make_unique<std::vector<future<>>>();
@@ -934,6 +932,21 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
         auto& keyspace_name = mut.schema()->ks_name();
         auto paired_endpoint = get_view_natural_endpoint(keyspace_name, base_token, view_token);
         auto pending_endpoints = service::get_local_storage_service().get_token_metadata().pending_endpoints_for(view_token, keyspace_name);
+        auto maybe_account_failure = [&stats] (
+                future<>&& f,
+                gms::inet_address target,
+                bool is_local,
+                size_t remotes) {
+            if (f.failed()) {
+                stats.view_updates_failed_local += is_local;
+                stats.view_updates_failed_remote += remotes;
+                auto ep = f.get_exception();
+                vlogger.error("Error applying view update to {}: {}", target, ep);
+                return make_exception_future<>(std::move(ep));
+            } else {
+                return make_ready_future<>();
+            }
+        };
         if (paired_endpoint) {
             // When paired endpoint is the local node, we can just apply
             // the mutation locally, unless there are pending endpoints, in
@@ -954,16 +967,11 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // send_to_endpoint() below updates statistics on pending
                 // writes but mutate_locally() doesn't, so we need to do that here.
                 ++stats.writes;
-                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).then_wrapped([&stats] (auto&& fut) {
+                fs->push_back(service::get_local_storage_proxy().mutate_locally(mut).then_wrapped(
+                        [&stats,
+                         maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
                     --stats.writes;
-                    if (fut.failed()) {
-                        auto ep = fut.get_exception();
-                        vlogger.error("Error applying local view update: {}", ep);
-                        ++stats.view_updates_failed_local;
-                        return make_exception_future<>(std::move(ep));
-                    } else {
-                        return make_ready_future<>();
-                    }
+                    return maybe_account_failure(std::move(f), utils::fb_utilities::get_broadcast_address(), true, 0);
                 }));
             } else {
                 vlogger.debug("Sending view update to endpoint {}, with pending endpoints = {}", *paired_endpoint, pending_endpoints);
@@ -974,14 +982,17 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                 // to send the update there. Currently, we do this from *each* of
                 // the base replicas, but this is probably excessive - see
                 // See https://issues.apache.org/jira/browse/CASSANDRA-14262/
-                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(std::move(mut), *paired_endpoint, std::move(pending_endpoints), db::write_type::VIEW, stats)
-                        .handle_exception([paired_endpoint, is_endpoint_local, updates_pushed_remote, &stats] (auto ep) {
-                            stats.view_updates_failed_local += is_endpoint_local;
-                            stats.view_updates_failed_remote += updates_pushed_remote;
-                            vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
-                            return make_exception_future<>(std::move(ep));
-                        })
-                );
+                fs->push_back(service::get_local_storage_proxy().send_to_endpoint(
+                        std::move(mut),
+                        *paired_endpoint,
+                        std::move(pending_endpoints),
+                        db::write_type::VIEW, stats).then_wrapped(
+                                [paired_endpoint,
+                                 is_endpoint_local,
+                                 updates_pushed_remote,
+                                 maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) mutable {
+                    return maybe_account_failure(std::move(f), std::move(*paired_endpoint), is_endpoint_local, updates_pushed_remote);
+                }));
             }
         } else if (!pending_endpoints.empty()) {
             // If there is no paired endpoint, it means there's a range movement going on (decommission or move),
@@ -1001,10 +1012,11 @@ future<> mutate_MV(const dht::token& base_token, std::vector<mutation> mutations
                     std::move(mut),
                     target,
                     std::move(pending_endpoints),
-                    db::write_type::VIEW).handle_exception([target, updates_pushed_remote, &stats] (auto ep) {
-                stats.view_updates_failed_remote += updates_pushed_remote;
-                vlogger.error("Error applying view update to {}: {}", target, ep);
-                return make_exception_future<>(std::move(ep));
+                    db::write_type::VIEW).then_wrapped(
+                            [target,
+                             updates_pushed_remote,
+                             maybe_account_failure = std::move(maybe_account_failure)] (future<>&& f) {
+                return maybe_account_failure(std::move(f), std::move(target), false, updates_pushed_remote);
             }));
         }
     }
