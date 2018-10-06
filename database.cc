@@ -3859,6 +3859,8 @@ database::stop() {
             return val_pair.second->stop();
         });
     }).then([this] {
+        return _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
+    }).then([this] {
         if (_commitlog != nullptr) {
             return _commitlog->release();
         }
