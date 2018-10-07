@@ -672,7 +672,8 @@ indexed_table_select_statement::prepare(database& db,
                                         ordering_comparator_type ordering_comparator,
                                         ::shared_ptr<term> limit, cql_stats &stats)
 {
-    auto index_opt = find_idx(db, schema, restrictions);
+    auto& sim = db.find_column_family(schema).get_index_manager();
+    auto index_opt = restrictions->find_idx(sim);
     if (!index_opt) {
         throw std::runtime_error("No index found.");
     }
@@ -694,24 +695,6 @@ indexed_table_select_statement::prepare(database& db,
             *index_opt,
             view_schema);
 
-}
-
-
-stdx::optional<secondary_index::index> indexed_table_select_statement::find_idx(database& db,
-                                                                                schema_ptr schema,
-                                                                                ::shared_ptr<restrictions::statement_restrictions> restrictions)
-{
-    auto& sim = db.find_column_family(schema).get_index_manager();
-    for (::shared_ptr<cql3::restrictions::restrictions> restriction : restrictions->index_restrictions()) {
-        for (const auto& cdef : restriction->get_column_defs()) {
-            for (auto index : sim.list_indexes()) {
-                if (index.depends_on(*cdef)) {
-                    return stdx::make_optional<secondary_index::index>(std::move(index));
-                }
-            }
-        }
-    }
-    return stdx::nullopt;
 }
 
 indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,

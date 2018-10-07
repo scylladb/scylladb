@@ -337,6 +337,19 @@ const std::vector<::shared_ptr<restrictions>>& statement_restrictions::index_res
     return _index_restrictions;
 }
 
+std::optional<secondary_index::index> statement_restrictions::find_idx(secondary_index::secondary_index_manager& sim) const {
+    for (::shared_ptr<cql3::restrictions::restrictions> restriction : index_restrictions()) {
+        for (const auto& cdef : restriction->get_column_defs()) {
+            for (auto index : sim.list_indexes()) {
+                if (index.depends_on(*cdef)) {
+                    return std::make_optional<secondary_index::index>(std::move(index));
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 void statement_restrictions::process_partition_key_restrictions(bool has_queriable_index, bool for_view, bool allow_filtering) {
     // If there is a queriable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
