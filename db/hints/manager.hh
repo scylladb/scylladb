@@ -426,6 +426,9 @@ private:
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
 
+    size_t _max_backlog_size;
+    size_t _backlog_size;
+
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
     virtual ~manager();
@@ -506,6 +509,14 @@ public:
     void allow_hints();
     void forbid_hints();
     void forbid_hints_for_eps_with_pending_hints();
+
+    size_t max_backlog_size() const {
+        return _max_backlog_size;
+    }
+
+    size_t backlog_size() const {
+        return _backlog_size;
+    }
 
     /// \brief Rebalance hints segments among all present shards.
     ///
