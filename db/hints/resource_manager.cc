@@ -158,7 +158,7 @@ void space_watchdog::on_timer() {
                         for (manager& shard_manager : per_device_limits.managers) {
                             shard_manager.allow_hints();
                         }
-    }
+                    }
                 });
             });
         }).handle_exception([this] (auto eptr) {
