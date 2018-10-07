@@ -97,11 +97,12 @@ public:
     bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 
     /**
-     * Adds a new <code>Selector.Factory</code> for a column that is needed only for ORDER BY purposes.
+     * Adds a new <code>Selector.Factory</code> for a column that is needed only for ORDER BY or post
+     * processing purposes.
      * @param def the column that is needed for ordering
      * @param index the index of the column definition in the Selection's list of columns
      */
-    void add_selector_for_ordering(const column_definition& def, uint32_t index);
+    void add_selector_for_post_processing(const column_definition& def, uint32_t index);
 
     /**
      * Checks if this <code>SelectorFactories</code> contains only factories for aggregates.

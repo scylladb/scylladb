@@ -1252,7 +1252,7 @@ select_statement::get_ordering_comparator(schema_ptr schema,
         }
         auto index = selection->index_of(*def);
         if (index < 0) {
-            index = selection->add_column_for_ordering(*def);
+            index = selection->add_column_for_post_processing(*def);
         }
 
         sorters.emplace_back(index, def->type);
