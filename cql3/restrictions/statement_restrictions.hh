@@ -164,6 +164,13 @@ public:
     }
 
     /**
+     * Builds a possibly empty collection of column definitions that will be used for filtering
+     * @param db - the database context
+     * @return A list with the column definitions needed for filtering.
+     */
+    std::vector<const column_definition*> get_column_defs_for_filtering(database& db) const;
+
+    /**
      * Determines the index to be used with the restriction.
      * @param db - the database context (for extracting index manager)
      * @return If an index can be used, an optional containing this index, otherwise an empty optional.
