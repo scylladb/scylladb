@@ -71,7 +71,15 @@ space_watchdog::space_watchdog(shard_managers_set& managers, per_device_limits_m
 void space_watchdog::start() {
     _started = seastar::async([this] {
         while (!_as.abort_requested()) {
-            on_timer();
+            try {
+                on_timer();
+            } catch (...) {
+                resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
+                // Stop all hint generators if space_watchdog callback failed
+                for (manager& shard_manager : _shard_managers) {
+                    shard_manager.forbid_hints();
+                }
+            }
             seastar::sleep_abortable(_watchdog_period, _as).get();
         }
     }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });
@@ -96,78 +104,70 @@ future<> space_watchdog::scan_one_ep_dir(boost::filesystem::path path, manager& 
     });
 }
 
+// Called from the context of a seastar::thread.
 void space_watchdog::on_timer() {
-        futurize_apply([this] {
-            _total_size = 0;
-            return do_for_each(_shard_managers, [this] (manager& shard_manager) {
-                shard_manager.clear_eps_with_pending_hints();
+    // The hints directories are organized as follows:
+    // <hints root>
+    //    |- <shard1 ID>
+    //    |  |- <EP1 address>
+    //    |     |- <hints file1>
+    //    |     |- <hints file2>
+    //    |     |- ...
+    //    |  |- <EP2 address>
+    //    |     |- ...
+    //    |  |-...
+    //    |- <shard2 ID>
+    //    |  |- ...
+    //    ...
+    //    |- <shardN ID>
+    //    |  |- ...
+    //
 
-                // The hints directories are organized as follows:
-                // <hints root>
-                //    |- <shard1 ID>
-                //    |  |- <EP1 address>
-                //    |     |- <hints file1>
-                //    |     |- <hints file2>
-                //    |     |- ...
-                //    |  |- <EP2 address>
-                //    |     |- ...
-                //    |  |-...
-                //    |- <shard2 ID>
-                //    |  |- ...
-                //    ...
-                //    |- <shardN ID>
-                //    |  |- ...
+    for (auto& per_device_limits : _per_device_limits_map | boost::adaptors::map_values) {
+        _total_size = 0;
+        for (manager& shard_manager : per_device_limits.managers) {
+            shard_manager.clear_eps_with_pending_hints();
+            lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (lister::path dir, directory_entry de) {
+                _files_count = 0;
+                // Let's scan per-end-point directories and enumerate hints files...
                 //
-                return lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (lister::path dir, directory_entry de) {
-                    _files_count = 0;
-                    // Let's scan per-end-point directories and enumerate hints files...
-                    //
-                    // Let's check if there is a corresponding end point manager (may not exist if the corresponding DC is
-                    // not hintable).
-                    // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
-                    // continue to enumeration - there is no one to change them.
-                    auto it = shard_manager.find_ep_manager(de.name);
-                    if (it != shard_manager.ep_managers_end()) {
-                        return with_lock(it->second.file_update_mutex(), [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)]() mutable {
-                             return scan_one_ep_dir(dir / ep_name.c_str(), shard_manager, ep_key_type(ep_name));
-                        });
-                    } else {
-                        return scan_one_ep_dir(dir / de.name.c_str(), shard_manager, ep_key_type(de.name));
-                    }
-                });
-            }).then([this] {
-                return do_for_each(_per_device_limits_map, [this](per_device_limits_map::value_type& per_device_limits_entry) {
-                    space_watchdog::per_device_limits& per_device_limits = per_device_limits_entry.second;
-
-                    size_t adjusted_quota = 0;
-                    size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
-                        return sum + shard_manager.ep_managers_size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
+                // Let's check if there is a corresponding end point manager (may not exist if the corresponding DC is
+                // not hintable).
+                // If exists - let's take a file update lock so that files are not changed under our feet. Otherwise, simply
+                // continue to enumeration - there is no one to change them.
+                auto it = shard_manager.find_ep_manager(de.name);
+                if (it != shard_manager.ep_managers_end()) {
+                    return with_lock(it->second.file_update_mutex(), [this, &shard_manager, dir = std::move(dir), ep_name = std::move(de.name)]() mutable {
+                        return scan_one_ep_dir(dir / ep_name.c_str(), shard_manager, ep_key_type(ep_name));
                     });
-                    if (per_device_limits.max_shard_disk_space_size > delta) {
-                        adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
-                    }
+                } else {
+                    return scan_one_ep_dir(dir / de.name.c_str(), shard_manager, ep_key_type(de.name));
+                }
+            }).get();
+        }
 
-                    bool can_hint = _total_size < adjusted_quota;
-                    resource_manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
+        // Adjust the quota to take into account the space we guarantee to every end point manager
+        size_t adjusted_quota = 0;
+        size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
+            return sum + shard_manager.ep_managers_size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
+        });
+        if (per_device_limits.max_shard_disk_space_size > delta) {
+            adjusted_quota = per_device_limits.max_shard_disk_space_size - delta;
+        }
 
-                    if (!can_hint) {
-                        for (manager& shard_manager : per_device_limits.managers) {
-                            shard_manager.forbid_hints_for_eps_with_pending_hints();
-                        }
-                    } else {
-                        for (manager& shard_manager : per_device_limits.managers) {
-                            shard_manager.allow_hints();
-                        }
-                    }
-                });
-            });
-        }).handle_exception([this] (auto eptr) {
-            resource_manager_logger.trace("space_watchdog: unexpected exception - stop all hints generators");
-            // Stop all hint generators if space_watchdog callback failed
-            for (manager& shard_manager : _shard_managers) {
-                shard_manager.forbid_hints();
+        bool can_hint = _total_size < adjusted_quota;
+        resource_manager_logger.trace("space_watchdog: total_size ({}) {} max_shard_disk_space_size ({})", _total_size, can_hint ? "<" : ">=", adjusted_quota);
+
+        if (!can_hint) {
+            for (manager& shard_manager : per_device_limits.managers) {
+                shard_manager.forbid_hints_for_eps_with_pending_hints();
             }
-        }).get();
+        } else {
+            for (manager& shard_manager : per_device_limits.managers) {
+                shard_manager.allow_hints();
+            }
+        }
+    }
 }
 
 future<> resource_manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr<gms::gossiper> gossiper_ptr, shared_ptr<service::storage_service> ss_ptr) {
