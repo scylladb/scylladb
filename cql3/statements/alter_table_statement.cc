@@ -297,6 +297,12 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
         if (!schema->is_cql3_table()) {
             throw exceptions::invalid_request_exception("Cannot drop columns from a non-CQL3 table");
         }
+        if (!cf.views().empty()) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "Cannot drop columns from base table %s.%s with materialized views",
+                    keyspace(), column_family()));
+        }
+
         if (!def) {
             throw exceptions::invalid_request_exception(sprint("Column %s was not found in table %s", column_name, column_family()));
         }
@@ -310,12 +316,6 @@ future<shared_ptr<cql_transport::event::schema_change>> alter_table_statement::a
                     break;
                 }
             }
-        }
-
-        if (!cf.views().empty()) {
-            throw exceptions::invalid_request_exception(sprint(
-                    "Cannot drop column %s on base table %s.%s with materialized views",
-                    column_name, keyspace(), column_family()));
         }
         break;
     }
