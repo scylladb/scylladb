@@ -137,6 +137,9 @@ public:
         , _space_watchdog(_shard_managers, _per_device_limits_map)
     {}
 
+    resource_manager(resource_manager&&) = delete;
+    resource_manager& operator=(resource_manager&&) = delete;
+
     future<semaphore_units<semaphore_default_exception_factory>> get_send_units_for(size_t buf_size);
 
     bool too_many_hints_in_progress() const {
